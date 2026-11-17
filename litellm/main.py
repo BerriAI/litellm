@@ -1793,6 +1793,8 @@ def _complete_text_completion_openai(
         or get_secret("OPENAI_API_BASE")
         or "https://api.openai.com/v1"
     )
+    if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
+        raise missing_key_error
 
     openai.api_version = None
     # set API KEY
