@@ -59,6 +59,32 @@
         "generateContent": true
       }
     },
+    "llamay": {
+      "display_name": "llamay (`llamay`)",
+      "url": "https://docs.litellm.ai/docs/providers/llamay",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": false,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": false,
+        "systemone": false,
+        "a2a": false,
+        "generateContent": false
+      }
+    },
     "a2a": {
       "display_name": "A2A (Agent-to-Agent) (`a2a`)",
       "url": "https://docs.litellm.ai/docs/providers/a2a",

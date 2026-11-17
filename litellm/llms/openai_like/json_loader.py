@@ -25,6 +25,10 @@ class SimpleProviderConfig:
         self.base_url = data["base_url"]
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
+        # A local server that needs no key still has to be sent one: the OpenAI
+        # client refuses a request without it. Used only when neither the call
+        # nor api_key_env supplies a key, as LM Studio's "fake-api-key" is.
+        self.default_api_key: str | None = data.get("default_api_key")
         self.base_class = data.get("base_class", "openai_gpt")
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
