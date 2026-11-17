@@ -156,6 +156,30 @@ def test_regional_catalog_rows_price_the_requested_region(
     ) == pytest.approx((row["input_cost_per_token"], row["output_cost_per_token"]))
 
 
+@pytest.mark.parametrize("service_tier", ("priority", "flex"))
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_service_tier(
+    provider: str, region: str, model: str, service_tier: str, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"{provider}/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider=provider,
+        region_name=region,
+        service_tier=service_tier,
+        prompt_tokens=1,
+        completion_tokens=1,
+    ) == pytest.approx(
+        (row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"])
+    )
+
+
 def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
     return tuple(key for key, row in prices.items() if "max_tokens" in row)
 
