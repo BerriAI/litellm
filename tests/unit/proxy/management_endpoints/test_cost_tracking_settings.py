@@ -1068,8 +1068,9 @@ class TestEstimateCostBillingMinimum:
         [({}, 600), ({"min_billed_input_tokens": 0}, 100), ({"min_billed_input_tokens": "1000"}, 1000)],
         ids=["inherits_cost_map_minimum", "waives_the_minimum", "raises_the_minimum"],
     )
+    @pytest.mark.parametrize("custom_rates", [False, True])
     async def test_a_custom_priced_deployment_estimates_the_minimum_live_billing_uses(
-        self, monkeypatch, model_info: dict[str, object], billed_input_tokens: int
+        self, monkeypatch, model_info: dict[str, object], billed_input_tokens: int, custom_rates: bool
     ):
         monkeypatch.setitem(
             litellm.model_cost,
@@ -1085,12 +1086,14 @@ class TestEstimateCostBillingMinimum:
 
         response = await _estimate(
             _router_pricing(
-                model=A_MAPPED_MODEL, model_info=model_info, input_cost_per_token=1e-6, output_cost_per_token=2e-6
+                model=A_MAPPED_MODEL,
+                model_info=model_info,
+                **({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6} if custom_rates else {}),
             ),
             input_tokens=100,
         )
 
-        assert response.input_cost_per_request == pytest.approx(billed_input_tokens * 1e-6)
+        assert response.input_cost_per_request == pytest.approx(billed_input_tokens * (1e-6 if custom_rates else 5e-6))
 
 
 class TestEstimateCostCacheAndReasoningTokens:

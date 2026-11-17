@@ -21,7 +21,10 @@ from litellm._internal_context import current_billing_time, pinned_billing_time
 from litellm._logging import verbose_proxy_logger
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.cost_discount import parse_cost_discount_key
-from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_billed_input_token_minimum
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    deployment_billed_input_token_minimum,
+    deployment_billing_model_info,
+)
 from litellm.proxy._types import (
     CommonProxyErrors,
     CostEstimateRequest,
@@ -50,6 +53,7 @@ class ResolvedCostModel:
     model: str
     provider: str | None
     custom_cost_per_token: CostPerToken | None
+    model_info: ModelInfo | None = None
 
 
 def _configured_price(key: str, sources: tuple[Mapping[str, object], ...]) -> float | None:
@@ -128,7 +132,12 @@ def _resolve_model_for_cost_lookup(model: str) -> ResolvedCostModel:
                     custom_cost_per_token: Final = _extract_custom_pricing(
                         litellm_params, model_info, _lookup_model_info(str(resolved_model), provider)
                     )
-                    return ResolvedCostModel(str(resolved_model), provider, custom_cost_per_token)
+                    return ResolvedCostModel(
+                        str(resolved_model),
+                        provider,
+                        custom_cost_per_token,
+                        deployment_billing_model_info(str(resolved_model), model_info, provider),
+                    )
         except Exception as e:
             verbose_proxy_logger.debug("Could not resolve model '%s' from router: %s", model, e)
 
@@ -636,6 +645,7 @@ async def estimate_cost(
                 model=resolved_model,
                 custom_llm_provider=resolved_provider,
                 custom_cost_per_token=resolved.custom_cost_per_token,
+                requested_model_info_override=resolved.model_info,
                 litellm_logging_obj=litellm_logging_obj,
             )
         except Exception as e:  # noqa: BLE001  # completion_cost raises a bare Exception for an unpriceable model

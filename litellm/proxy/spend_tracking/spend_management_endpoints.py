@@ -2452,7 +2452,10 @@ async def calculate_spend(request: SpendCalculateRequest):
     try:
         from litellm import completion_cost
         from litellm.cost_calculator import CostPerToken
-        from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_billed_input_token_minimum
+        from litellm.litellm_core_utils.llm_cost_calc.utils import (
+            deployment_billed_input_token_minimum,
+            deployment_billing_model_info,
+        )
         from litellm.proxy.proxy_server import llm_router
 
         _cost = None
@@ -2509,6 +2512,9 @@ async def calculate_spend(request: SpendCalculateRequest):
                     model=_litellm_model_name,
                     messages=request.messages,
                     custom_cost_per_token=cost_per_token,
+                    requested_model_info_override=deployment_billing_model_info(
+                        _litellm_model_name, _model_in_llm_router.get("model_info") or {}
+                    ),
                 )
             else:
                 _cost = completion_cost(model=request.model, messages=request.messages)

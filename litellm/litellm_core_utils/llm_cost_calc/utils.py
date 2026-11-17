@@ -687,6 +687,19 @@ def deployment_billed_input_token_minimum(model_info: Mapping[str, object]) -> i
     return None if model_info.get("min_billed_input_tokens") is None else billed_input_token_minimum(model_info)
 
 
+def deployment_billing_model_info(
+    model: str, model_info: Mapping[str, object], custom_llm_provider: str | None = None
+) -> ModelInfo | None:
+    minimum: Final = deployment_billed_input_token_minimum(model_info)
+    if minimum is None:
+        return None
+    try:
+        builtin: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return None
+    return {**builtin, "min_billed_input_tokens": minimum}
+
+
 def unbilled_minimum_input_tokens(model_info: ModelInfo, prompt_tokens: int) -> int:
     if prompt_tokens <= 0:
         return 0
