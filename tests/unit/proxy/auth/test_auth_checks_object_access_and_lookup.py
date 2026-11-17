@@ -11261,9 +11261,9 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
         ("/v1/chat/completions", None, "free", True),
         ("/v1/chat/completions", None, "paid", False),
         ("/mcp", {"method": "tools/list"}, "paid", True),
-        ("/mcp", {"method": "tools/call"}, "paid", False),
+        ("/mcp", {"method": "tools/call"}, "paid", True),
         ("/mcp", None, "paid", False),
-        ("/mcp/tools/call", {"method": "initialize"}, "paid", False),
+        ("/mcp/tools/call", {"method": "initialize"}, "paid", True),
         ("/health/services", None, "paid", False),
     ],
 )

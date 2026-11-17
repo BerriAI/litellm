@@ -7674,7 +7674,14 @@ async def _run_bulk_update_on_one_key(
     from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
 
     key_in_db = LiteLLM_VerificationToken(
-        token=_BULK_UPDATE_TOKEN, user_id="test-user", team_id="team-1", max_budget=100.0, budget_id="budget-1"
+        token=_BULK_UPDATE_TOKEN,
+        user_id="test-user",
+        team_id="team-1",
+        max_budget=100.0,
+        budget_id="budget-1",
+        budget_duration="30d",
+        budget_reset_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        metadata={"purpose": "unchanged"},
     )
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
@@ -7733,7 +7740,7 @@ async def test_bulk_update_keys_item_without_a_field_leaves_that_column_alone(mo
     written = _written_key_row(await _bulk_update_one_key(monkeypatch, {"tags": ["team-a"]}))
 
     assert written["metadata"]["tags"] == ["team-a"]
-    assert not {"max_budget", "team_id", "budget_id"} & written.keys()
+    assert not {"max_budget", "team_id", "budget_id", "user_id", "budget_duration", "budget_reset_at"} & written.keys()
 
 
 @pytest.mark.asyncio
@@ -7743,6 +7750,56 @@ async def test_bulk_update_keys_explicit_null_still_clears_the_field(monkeypatch
 
     assert written["max_budget"] is None
     assert not {"team_id", "budget_id"} & written.keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("item_payload", "expected_changes"),
+    [
+        ({"user_id": "new-owner"}, {"user_id": "new-owner"}),
+        ({"user_id": None}, {"user_id": None}),
+        ({"budget_duration": None}, {"budget_duration": None, "budget_reset_at": None}),
+    ],
+)
+async def test_bulk_update_keys_applies_owner_and_period_changes_without_overwriting_other_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    item_payload: Mapping[str, object],
+    expected_changes: Mapping[str, object],
+) -> None:
+    written: Final = _written_key_row(await _bulk_update_one_key(monkeypatch, item_payload))
+
+    assert written == {"token": _BULK_UPDATE_TOKEN, "metadata": {"purpose": "unchanged"}, **expected_changes}
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_new_period_reschedules_the_budget_without_changing_its_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written: Final = _written_key_row(await _bulk_update_one_key(monkeypatch, {"budget_duration": "7d"}))
+
+    assert isinstance(written["budget_reset_at"], datetime)
+    assert {field: value for field, value in written.items() if field != "budget_reset_at"} == {
+        "token": _BULK_UPDATE_TOKEN,
+        "budget_duration": "7d",
+        "metadata": {"purpose": "unchanged"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m", "invalid"])
+async def test_bulk_update_keys_rejects_invalid_period_without_writing_the_key(
+    monkeypatch: pytest.MonkeyPatch, bad_duration: str
+) -> None:
+    response, prisma = await _run_bulk_update_on_one_key(monkeypatch, {"budget_duration": bad_duration})
+
+    assert response.successful_updates == []
+    assert [(update.key, update.failed_reason) for update in response.failed_updates] == [
+        (
+            _BULK_UPDATE_TOKEN,
+            f"Invalid budget_duration '{bad_duration}'. Use a format like '1h', '24h', '7d', or '30d'.",
+        )
+    ]
+    prisma.update_data.assert_not_awaited()
 
 
 @pytest.mark.asyncio

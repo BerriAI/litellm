@@ -13760,6 +13760,27 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
         assert "No connected db" in error.value.message
 
 
+def _register_a_charging_mcp_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "config_mcp_servers",
+        {
+            "paid-id": MCPServer(
+                server_id="paid-id",
+                name="paid_tools",
+                alias="paid_tools",
+                url="https://example.invalid/mcp",
+                transport=MCPTransport.http,
+                mcp_info={"server_name": "paid_tools", "mcp_server_cost_info": {"default_cost_per_query": 0.5}},
+            )
+        },
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "route, request_data, expect_blocked",
@@ -13774,9 +13795,11 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
     ],
 )
 async def test_exhausted_key_budget_spares_only_zero_spend_mcp_discovery(
-    route: str, request_data: dict[str, object], expect_blocked: bool
+    monkeypatch: pytest.MonkeyPatch, route: str, request_data: dict[str, object], expect_blocked: bool
 ) -> None:
     from litellm.proxy.utils import hash_token
+
+    _register_a_charging_mcp_server(monkeypatch)
 
     api_key: Final = "sk-exhausted-mcp-discovery"
     hashed_token: Final = hash_token(api_key)
@@ -14061,9 +14084,11 @@ async def test_exhausted_key_budget_is_waived_only_when_the_served_model_is_free
     ],
 )
 async def test_should_skip_budget_checks_spares_only_zero_spend_mcp_discovery(
-    route: str, request_data: dict[str, object], expected: bool
+    monkeypatch: pytest.MonkeyPatch, route: str, request_data: dict[str, object], expected: bool
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+    _register_a_charging_mcp_server(monkeypatch)
 
     assert (
         await _should_skip_budget_checks(
