@@ -3332,9 +3332,16 @@ def _completion_image_tokens(usage: Usage) -> int:
 def _batch_cost_rates(
     model: str, model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None
 ) -> BatchCostRates:
-    if custom_llm_provider != "openai" and custom_llm_provider != "anthropic":
+    config: Final = (
+        resolved_model_config(model, "openai", model_info)
+        if custom_llm_provider == "openai"
+        else resolved_model_config(model, "anthropic", model_info)
+        if custom_llm_provider == "anthropic"
+        else None
+    )
+    if config is None:
         return get_batch_cost_rates(model_info, usage, custom_llm_provider)
-    prices: Final = resolved_model_config(model, custom_llm_provider, model_info).batch_prices(usage.prompt_tokens)
+    prices: Final = config.batch_prices(usage.prompt_tokens)
     return BatchCostRates(
         input=prices.input,
         output=prices.output,
