@@ -20,6 +20,8 @@ from starlette.testclient import TestClient
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.guard_middleware import (
     GuardMiddleware,
+    _networks,
+    _resolve_client,
     guard_enabled,
 )
 
@@ -519,3 +521,114 @@ def test_probes_are_not_rate_limited_but_other_health_routes_are(monkeypatch):
     assert probe_codes == [200, 200, 200, 200]
     assert details_codes == [200, 200, 429]
     assert metrics_codes == [429, 429, 429]
+
+
+def _ws_scope_lines(peer, *forwarded_for_lines):
+    headers: Final = [(b"x-forwarded-for", line.encode()) for line in forwarded_for_lines]
+    return {"type": "websocket", "path": "/v1/realtime", "headers": headers, "client": (peer, 50000)}
+
+
+def _allow_198_51_100_through_10_8(monkeypatch):
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_ALLOWED_IPS", "198.51.100.0/24")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "10.0.0.0/8")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", "1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lines", "admitted"),
+    [
+        pytest.param(("198.51.100.9", "203.0.113.7"), False, id="proxy-line-names-a-blocked-client"),
+        pytest.param(("203.0.113.7", "198.51.100.9"), True, id="proxy-line-names-an-allowed-client"),
+    ],
+)
+async def test_websocket_reads_every_forwarded_for_line_in_order(monkeypatch, lines, admitted):
+    """A proxy that adds its own X-Forwarded-For line instead of appending
+    leaves two lines; fastapi-guard joins them in order and reads the chain
+    from the right, so the last line decides."""
+    _allow_198_51_100_through_10_8(monkeypatch)
+    reached, sent = await _run_websocket(_ws_scope_lines("10.1.1.1", *lines))
+    assert reached is admitted
+    if not admitted:
+        assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+@pytest.mark.parametrize(
+    ("lines", "status"),
+    [
+        pytest.param(("198.51.100.9", "203.0.113.7"), 403, id="proxy-line-names-a-blocked-client"),
+        pytest.param(("203.0.113.7", "198.51.100.9"), 200, id="proxy-line-names-an-allowed-client"),
+    ],
+)
+def test_probe_reads_every_forwarded_for_line_in_order(monkeypatch, lines, status):
+    _allow_198_51_100_through_10_8(monkeypatch)
+    client: Final = _client("10.1.1.1", _build_health_app())
+    response: Final = client.get("/health/readiness", headers=[("x-forwarded-for", line) for line in lines])
+    assert response.status_code == status
+
+
+def test_metacharacter_entry_is_not_a_client_address():
+    """guard-core reads the selected entry as an address first
+    (ip_extraction.py _extract_from_forwarded_header, :76-80, and
+    _resolve_forwarded_chain_right_to_left, :125-132) and refuses one that holds
+    a metacharacter, so a wildcard never becomes a client: it resolves to the
+    connecting peer."""
+    scope: Final = _ws_scope_lines("10.1.1.1", "198.51.100.9", "198.51.100.*")
+    resolved: Final = _resolve_client(scope, _networks(("10.0.0.0/8",)), 1)
+    assert str(resolved) == "10.1.1.1"
+
+
+_PARITY_CASES: Final = [
+    pytest.param("10.1.1.1", ("198.51.100.9",), 1, id="one-line"),
+    pytest.param("10.1.1.1", ("203.0.113.7", "198.51.100.9"), 1, id="two-lines-depth-1"),
+    pytest.param("10.1.1.1", ("203.0.113.7", "198.51.100.9"), 2, id="two-lines-depth-2"),
+    pytest.param("10.1.1.1", ("203.0.113.7", "198.51.100.9", "10.2.2.2"), 1, id="three-lines-trusted-last"),
+    pytest.param("10.1.1.1", ("203.0.113.7", "198.51.100.9", "10.2.2.2"), 2, id="three-lines-depth-2"),
+    pytest.param("10.1.1.1", ("203.0.113.7, 198.51.100.9", "10.2.2.2"), 3, id="comma-inside-a-line"),
+    pytest.param("10.1.1.1", ("198.51.100.9",), 3, id="chain-shorter-than-depth"),
+    pytest.param("10.1.1.1", ("::ffff:198.51.100.9",), 1, id="ipv4-mapped-entry"),
+    pytest.param("10.1.1.1", ("2001:db8::1",), 1, id="ipv6-entry"),
+    pytest.param("10.1.1.1", ("[2001:db8::1]:443",), 1, id="bracketed-ipv6-with-port"),
+    pytest.param("10.1.1.1", ("[2001:db8::1]",), 1, id="bracketed-ipv6"),
+    pytest.param("10.1.1.1", ("198.51.100.9:8080",), 1, id="ipv4-with-port"),
+    pytest.param("10.1.1.1", ("198.51.100.9:abc",), 1, id="ipv4-with-bad-port"),
+    pytest.param("10.1.1.1", ("[2001:db8::1]junk",), 1, id="bracketed-ipv6-with-junk"),
+    pytest.param("10.1.1.1", ("not-an-ip",), 1, id="malformed-entry"),
+    pytest.param("10.1.1.1", ("198.51.100.9", "not-an-ip"), 1, id="malformed-last-entry"),
+    pytest.param("10.1.1.1", ("not-an-ip", "198.51.100.9"), 2, id="malformed-entry-left-of-depth"),
+    pytest.param("10.1.1.1", ("198.51.100.9", "not-an-ip"), 2, id="malformed-entry-selected"),
+    pytest.param("10.1.1.1", ("198.51.100.*",), 1, id="wildcard-entry"),
+    pytest.param("10.1.1.1", ("198.51.100.9", "198.51.100.*", "10.2.2.2"), 2, id="wildcard-selected-behind-proxy"),
+    pytest.param("10.1.1.1", ("198.51.100.9\\",), 1, id="backslash-entry"),
+    pytest.param("10.1.1.1", ("198.51.100.9?",), 1, id="question-mark-entry"),
+    pytest.param("10.1.1.1", ("203.0.113.7", "198.51.100.9"), 3, id="depth-over-chain"),
+    pytest.param("10.1.1.1", ("::ffff:10.2.2.2", "198.51.100.9"), 2, id="mapped-trusted-entry"),
+    pytest.param("::ffff:10.1.1.1", ("198.51.100.9",), 1, id="ipv4-mapped-peer"),
+    pytest.param("203.0.113.7", ("198.51.100.9",), 1, id="untrusted-peer"),
+    pytest.param("10.1.1.1", (), 1, id="no-header"),
+]
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("peer", "lines", "depth"), _PARITY_CASES)
+async def test_resolve_client_matches_guard_core(peer, lines, depth):
+    """The wrapper resolves the client exactly as guard-core does for the same
+    peer, header lines (joined as fastapi-guard joins them) and config."""
+    from types import SimpleNamespace
+
+    from guard.adapters import _join_repeated_header_lines
+    from guard_core._utils.ip_extraction import extract_client_ip
+    from starlette.datastructures import Headers
+
+    trusted: Final = ["10.0.0.0/8"]
+    raw: Final = [(b"x-forwarded-for", line.encode("latin-1")) for line in lines]
+    request: Final = SimpleNamespace(
+        client_host=peer, headers=_join_repeated_header_lines(Headers(raw=raw)), state=SimpleNamespace()
+    )
+    config: Final = SimpleNamespace(trusted_proxies=trusted, trusted_proxy_depth=depth)
+    expected: Final = await extract_client_ip(request, config)
+    scope: Final = {"type": "http", "path": "/x", "headers": raw, "client": (peer, 50000)}
+    resolved: Final = _resolve_client(scope, _networks(trusted), depth)
+    assert str(resolved) == expected

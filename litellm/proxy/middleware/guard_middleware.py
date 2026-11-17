@@ -112,21 +112,38 @@ IPNetwork: TypeAlias = IPv4Network | IPv6Network
 WS_POLICY_VIOLATION: Final = 1008
 
 
+def _strip_bracketed_port(candidate: str) -> str:
+    closing: Final = candidate.find("]")
+    if closing == -1:
+        return candidate
+    remainder: Final = candidate[closing + 1 :]
+    if remainder and not (remainder.startswith(":") and remainder[1:].isdigit()):
+        return candidate
+    return candidate[1:closing]
+
+
 def _strip_forwarded_port(raw: str) -> str:
+    """guard-core's ``_strip_forwarded_entry_port``: a port is dropped only
+    when it is all digits, anything else is left for the address parse to
+    refuse."""
     candidate: Final = raw.strip()
     if candidate.startswith("["):
-        return candidate[1:].partition("]")[0]
-    if candidate.count(":") == 1:
-        return candidate.partition(":")[0]
-    return candidate
+        return _strip_bracketed_port(candidate)
+    host, _, port = candidate.partition(":")
+    return host if candidate.count(":") == 1 and port.isdigit() else candidate
 
 
 def _parse_ip(raw: str) -> IPAddress | None:
     try:
-        address: Final = ip_address(_strip_forwarded_port(raw))
+        return ip_address(_strip_forwarded_port(raw))
     except ValueError:
         return None
-    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+
+
+def _canonical(address: IPAddress | None) -> IPAddress | None:
+    """guard-core's ``_canonical_ip_text``: an IPv4-mapped address without a
+    scope id is the IPv4 address."""
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None and address.scope_id is None:
         return address.ipv4_mapped
     return address
 
@@ -159,9 +176,11 @@ _CLIENT_SCOPE_VIEW: Final = TypeAdapter(_ClientScopeView)
 def _peer_and_forwarded_for(scope: Scope) -> tuple[str | None, str | None]:
     view: Final = _CLIENT_SCOPE_VIEW.validate_python(scope)
     client: Final = view.get("client")
-    forwarded_for: Final = next(
-        (value.decode("latin-1") for name, value in view["headers"] if name == b"x-forwarded-for"), None
-    )
+    # fastapi-guard joins every line of a repeated header in order (adapters.py
+    # _join_repeated_header_lines), so a proxy that adds its own line instead of
+    # appending to the client's is read as one chain.
+    lines: Final = [value.decode("latin-1") for name, value in view["headers"] if name == b"x-forwarded-for"]
+    forwarded_for: Final = ", ".join(lines) if lines else None
     return (client[0] if client else None), forwarded_for
 
 
@@ -171,10 +190,15 @@ def _resolve_client(scope: Scope, trusted: Sequence[IPNetwork], depth: int) -> I
     ``X-Forwarded-For`` entry ``depth`` from the right (the rightmost
     untrusted entry when proxies to its right are not all listed)."""
     peer_text, forwarded_for = _peer_and_forwarded_for(scope)
-    peer: Final = _parse_ip(peer_text) if peer_text is not None else None
-    if peer is None or not _in_any(peer, trusted) or not forwarded_for:
+    peer_address: Final = _parse_ip(peer_text) if peer_text is not None else None
+    if peer_address is None:
+        return None
+    peer: Final = _canonical(peer_address)
+    # guard-core tests trust on the peer as the server reports it (an
+    # IPv4-mapped peer is not inside an IPv4 range), the chain entries canonical.
+    if not _in_any(peer_address, trusted) or not forwarded_for:
         return peer
-    chain: Final = [_parse_ip(entry) for entry in forwarded_for.split(",")]
+    chain: Final = [_canonical(_parse_ip(entry)) for entry in forwarded_for.split(",")]
     if len(chain) < depth:
         return peer
     right_of_selected: Final = chain[len(chain) - depth + 1 :]
@@ -200,7 +224,10 @@ def _ip_lists_permit(scope: Scope) -> bool:
         or (allowed and (client is None or not _in_any(client, allowed)))
     )
     if not permitted and _env_bool("LITELLM_GUARD_PASSIVE_MODE"):
-        verbose_proxy_logger.warning("guard passive mode: WebSocket client %s would be rejected", client)
+        verbose_proxy_logger.warning(
+            "guard passive mode: client %s would be rejected by the guard IP lists (WebSocket handshake or health probe)",
+            client,
+        )
         return True
     return permitted
 
