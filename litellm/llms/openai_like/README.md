@@ -125,6 +125,20 @@ The provider inherits all request/response handling from OpenAI's Responses API 
 
 If `supported_endpoints` is omitted, it defaults to `[]` (only chat completions, which is always enabled for JSON providers).
 
+When only some models serve an endpoint natively, list them under `model_supported_endpoints`. Every other model reaches `/v1/responses` and `/v1/messages` through chat completions:
+
+```json
+{
+  "your_provider": {
+    "supported_endpoints": ["/v1/chat/completions"],
+    "model_supported_endpoints": {
+      "model-a": ["/v1/messages"],
+      "model-b": ["/v1/responses"]
+    }
+  }
+}
+```
+
 ### How It Works
 
 1. `json_loader.py` checks `supported_endpoints` for `/v1/responses`

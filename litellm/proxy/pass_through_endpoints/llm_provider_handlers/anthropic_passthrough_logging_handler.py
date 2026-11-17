@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.core_helpers import (
+    json_contains,
     native_messages_reported_cost,
     override_stamped_response_cost,
     response_cost_in_hidden_params,
@@ -21,13 +22,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.anthropic import get_anthropic_config
-from litellm.llms.anthropic.pass_through.stream_assembly import (
+from litellm.llms.anthropic.messages.stream_assembly import (
     build_complete_streaming_response,
     build_complete_streaming_response_legacy,
     build_usage_only_response_from_chunks,
     collapse_pure_text_chunks,
     split_sse_chunk_into_events,
 )
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -56,11 +59,12 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
     data_lines: Final = tuple(
-        line.strip()[len("data:") :].strip() for line in event.splitlines() if line.strip().startswith("data:")
+        line.strip()[len("data:") :].strip() for line in split_sse_lines(event) if line.strip().startswith("data:")
     )
     if not data_lines or data_lines[0] in ("", "[DONE]"):
         return None
@@ -68,6 +72,17 @@ def _event_payload(event: str) -> Mapping[str, object] | None:
         return _JSON_OBJECT.validate_json(data_lines[0])
     except ValidationError:
         return None
+
+
+def _bedrock_trace_payload(all_chunks: Sequence[str | bytes]) -> Mapping[str, object] | None:
+    payloads: Final = (
+        _event_payload(event)
+        for chunk in reversed(all_chunks)
+        for event in reversed(split_sse_chunk_into_events(chunk))
+    )  # comprehension-ok: chunk then event, read newest first
+    return next(
+        (payload for payload in payloads if payload is not None and BEDROCK_INVOKE_TRACE_FIELD in payload), None
+    )
 
 
 def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]:
@@ -141,6 +156,7 @@ class AnthropicPassthroughLoggingHandler:
             json_mode=False,
             litellm_params={},
         )
+        logging_obj.record_native_bedrock_guardrail(response_body)  # pyright: ignore[reportUnknownArgumentType]  # response_body is an untyped dict param
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=litellm_model_response,
@@ -349,7 +365,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> str | None:
         for raw in all_chunks:
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            for line in text.splitlines():
+            for line in split_sse_lines(text):
                 if not line.startswith("data:"):
                     continue
                 try:
@@ -389,7 +405,7 @@ class AnthropicPassthroughLoggingHandler:
         """
         for raw in reversed(all_chunks):
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            for line in reversed(text.splitlines()):
+            for line in reversed(split_sse_lines(text)):
                 if not line.startswith("data:"):
                     continue
                 try:
@@ -546,6 +562,7 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        litellm_logging_obj.record_native_bedrock_guardrail(_bedrock_trace_payload(all_chunks))
         kwargs: Final = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
@@ -594,10 +611,10 @@ class AnthropicPassthroughLoggingHandler:
         from litellm.types.utils import Choices, SpecialEnums
 
         try:
-            _json_response: Final = httpx_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(httpx_response.json())
 
             # Only handle successful batch job creation (POST requests with 201 status)
-            if httpx_response.status_code == 200 and "id" in _json_response:
+            if httpx_response.status_code == 200 and json_contains(_json_response, "id"):
                 # Transform Anthropic response to LiteLLM batch format
                 anthropic_batches_config: Final = AnthropicBatchesConfig()
                 litellm_batch_response: Final = anthropic_batches_config.transform_retrieve_batch_response(
@@ -611,7 +628,7 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_batch_response.status = "validating"
 
                 # Extract batch ID from the response
-                batch_id: Final = _json_response.get("id", "")
+                batch_id: Final = litellm_batch_response.id
 
                 # Get model from request body (batch response doesn't include model)
                 request_body = request_body or {}
@@ -854,8 +871,7 @@ class AnthropicPassthroughLoggingHandler:
 
         if llm_router is not None:
             # Try to find the model in the router by the model name
-            # Use the existing get_model_ids method from router
-            model_ids: Final = llm_router.get_model_ids(model_name=model_name)
+            model_ids: Final = llm_router.registry().names(model_name, kind="ids")
             if model_ids and len(model_ids) > 0:
                 # Use the first model ID found
                 actual_model_id = model_ids[0]

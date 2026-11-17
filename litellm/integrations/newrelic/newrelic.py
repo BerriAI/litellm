@@ -56,6 +56,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.types.utils import Message, ModelResponse, StandardLoggingPayload
@@ -479,11 +480,11 @@ class NewRelicLogger(CustomLogger):
         content: Final = message.get("content")
 
         # Handle tool calls
-        if message.get("tool_calls"):
+        if tool_calls := tool_calls_with_server_tool_calls(message):
             try:
-                return json.dumps(message["tool_calls"])
+                return json.dumps([tool_call.model_dump() for tool_call in tool_calls])
             except Exception:
-                return str(message["tool_calls"])
+                return str(tool_calls)
 
         # Handle None or missing content
         if content is None:

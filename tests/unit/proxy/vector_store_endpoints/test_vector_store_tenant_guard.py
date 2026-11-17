@@ -13,6 +13,7 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
     VectorStoreFileStatus,
 )
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _mock_request() -> MagicMock:
@@ -174,7 +175,7 @@ async def test_vector_store_file_list_resolves_managed_ids_and_cursors():
     request.query_params = {"after": managed_file_id, "limit": "10"}
     request.url.path = f"/v1/vector_stores/{vector_store_id}/files"
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     def get_credentials(model_id):
         return {
@@ -441,19 +442,16 @@ async def test_vertex_discovery_denies_other_team_vector_store_credentials():
         "team_id": "team-b",
     }
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-        new=AsyncMock(return_value=UserAPIKeyAuth(team_id="team-a")),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _base_vertex_proxy_route(
-                endpoint="projects/p/locations/us-central1/dataStores/vs_other_team",
-                request=request,
-                fastapi_response=Response(),
-                get_vertex_pass_through_handler=MagicMock(),
-                general_settings={},
-                router_credentials=vector_store_credentials,
-            )
+    with pytest.raises(HTTPException) as exc_info:
+        await _base_vertex_proxy_route(
+            endpoint="projects/p/locations/us-central1/dataStores/vs_other_team",
+            request=request,
+            fastapi_response=Response(),
+            get_vertex_pass_through_handler=MagicMock(),
+            general_settings={},
+            user_api_key_dict=UserAPIKeyAuth(team_id="team-a"),
+            router_credentials=vector_store_credentials,
+        )
 
     assert exc_info.value.status_code == 403
 
@@ -541,6 +539,7 @@ async def test_vertex_discovery_allows_unregistered_provider_native_datastore_id
             endpoint="projects/p/locations/us-central1/dataStores/vs_unknown",
             request=request,
             fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(),
         )
 
     assert response == {"ok": True}

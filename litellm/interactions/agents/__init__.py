@@ -3,11 +3,11 @@ litellm.interactions.agents
 
 Full CRUD SDK for provider-side managed agents (e.g. Gemini v1beta/agents).
 
-    litellm.interactions.agents.create(name=..., ...)
+    litellm.interactions.agents.create(id=..., ...)
     litellm.interactions.agents.list(api_key=...)
-    litellm.interactions.agents.get(name=..., ...)
-    litellm.interactions.agents.delete(name=..., ...)
-    litellm.interactions.agents.list_versions(name=..., ...)
+    litellm.interactions.agents.get(id=..., ...)
+    litellm.interactions.agents.delete(id=..., ...)
+    litellm.interactions.agents.list_versions(id=..., ...)
 
 Async counterparts: acreate, alist, aget, adelete, alist_versions
 """

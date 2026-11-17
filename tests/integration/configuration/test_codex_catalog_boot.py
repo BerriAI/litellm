@@ -18,7 +18,7 @@ from tests.integration._support.process import owned_proxy, owned_proxy_process
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
-CLIENT_VERSION: Final = "0.159.3"
+CLIENT_VERSION: Final = "0.166.0"
 FRESH_CONNECTION: Final = {"Connection": "close"}
 CONSISTENT_READS: Final = 8
 CONVERGENCE_SECONDS: Final = 60
@@ -130,7 +130,7 @@ def test_yaml_tiers_and_alias_in_owned_proxy(gateway: Gateway, tmp_path: Path) -
 
 
 ROOT: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
-BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_bundled_models_0.159.3.json"
+BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_bundled_models_0.166.0.json"
 STOCK_UPSTREAM: Final = "gpt-5.5"
 
 
