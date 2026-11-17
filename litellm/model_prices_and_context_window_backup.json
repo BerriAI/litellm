@@ -49566,13 +49566,16 @@
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "source": "https://api.topxai.xyz/pricing/claude-sonnet-5-5",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "topxai/claude-opus-5-5": {
@@ -49586,13 +49589,16 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "source": "https://api.topxai.xyz/pricing/claude-opus-5-5",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "topxai/claude-fable-5-2": {
@@ -49606,13 +49612,16 @@
         "mode": "chat",
         "output_cost_per_token": 2e-05,
         "source": "https://api.topxai.xyz/pricing/claude-fable-5-2",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "topxai/gpt-6.1-terra": {
@@ -49623,15 +49632,22 @@
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_above_272k_tokens": 1e-06,
         "litellm_provider": "topxai",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
         "output_cost_per_token_above_272k_tokens": 3.75e-06,
         "source": "https://api.topxai.xyz/pricing/gpt-6.1-terra",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "topxai/gpt-6.2-sol": {
@@ -49648,8 +49664,12 @@
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://api.topxai.xyz/pricing/gpt-6.2-sol",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
-        "supports_pdf_input": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -49670,8 +49690,12 @@
         "output_cost_per_token": 2e-05,
         "output_cost_per_token_above_272k_tokens": 3e-05,
         "source": "https://api.topxai.xyz/pricing/gpt-6.2-astra",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
-        "supports_pdf_input": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -49686,6 +49710,10 @@
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "source": "https://api.topxai.xyz/pricing/grok-4.7",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
@@ -49723,10 +49751,16 @@
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "source": "https://api.topxai.xyz/pricing/kimi-k3.1-pro",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "topxai/GLM-5.3-Abliterated": {
@@ -49738,6 +49772,9 @@
         "mode": "chat",
         "output_cost_per_token": 6e-06,
         "source": "https://api.topxai.xyz/pricing/glm-5.3-abliterated",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
@@ -49755,6 +49792,10 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
         "source": "https://api.topxai.xyz/pricing/glm-5.3-flash-abliterated",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
@@ -49772,11 +49813,16 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
         "source": "https://api.topxai.xyz/pricing/deepseek-flash-abliterated",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "topxai/deepseek-flash-fast": {
@@ -49788,10 +49834,16 @@
         "mode": "chat",
         "output_cost_per_token": 1.6e-07,
         "source": "https://api.topxai.xyz/pricing/deepseek-flash-fast",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "snowflake/claude-3-5-sonnet": {

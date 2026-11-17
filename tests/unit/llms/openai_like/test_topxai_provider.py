@@ -36,7 +36,7 @@ class TestTopxAIProviderConfig:
         assert topxai.base_url == TOPXAI_BASE_URL
         assert topxai.api_key_env == "TOPXAI_API_KEY"
         assert topxai.api_base_env == "TOPXAI_API_BASE"
-        assert "/v1/responses" in topxai.supported_endpoints
+        assert "/v1/chat/completions" in topxai.supported_endpoints
 
     def test_topxai_in_openai_compatible_providers(self):
         from litellm.constants import openai_compatible_providers
@@ -157,6 +157,8 @@ class TestTopxAIProviderConfig:
         "model",
         (
             "gpt-6.2-sol",
+            "gpt-6.2-astra",
+            "grok-4.7",
             "gpt-6.1-terra",
             "kimi-k3.1-pro",
             "deepseek-flash-Abliterated",
@@ -298,6 +300,10 @@ class TestTopxAIModelMetadata:
             assert info is not None, f"{model} missing from model_prices_and_context_window.json"
             assert info["litellm_provider"] == "topxai"
             assert info["mode"] == "chat"
+            native_responses = litellm.ProviderConfigManager.get_provider_responses_api_config(
+                litellm.LlmProviders.TOPXAI, model
+            )
+            assert (native_responses is not None) is ("/v1/responses" in info["supported_endpoints"])
             assert info["input_cost_per_token"] > 0
             assert info["output_cost_per_token"] > 0
             assert info["supports_function_calling"] is True

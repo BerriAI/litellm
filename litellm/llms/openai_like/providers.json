@@ -337,9 +337,16 @@
     "special_handling": {
       "require_provider_api_key": true
     },
-    "supported_endpoints": [
-      "/v1/chat/completions",
-      "/v1/responses"
-    ]
+    "supported_endpoints": ["/v1/chat/completions"],
+    "model_supported_endpoints": {
+      "GLM-5.3-Flash-Abliterated": ["/v1/responses"],
+      "deepseek-flash-Abliterated": ["/v1/responses"],
+      "deepseek-flash-fast": ["/v1/responses"],
+      "gpt-6.1-terra": ["/v1/responses"],
+      "gpt-6.2-astra": ["/v1/responses"],
+      "gpt-6.2-sol": ["/v1/responses"],
+      "grok-4.7": ["/v1/responses"],
+      "kimi-k3.1-pro": ["/v1/responses"]
+    }
   }
 }
