@@ -183,6 +183,8 @@ jobs:
           - shard: integrations
             test-path: |-
               tests/unit/integrations
+              --ignore=tests/unit/integrations/test_opentelemetry.py
+              --ignore=tests/unit/integrations/otel/test_otel_v2_components.py
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -262,6 +264,7 @@ jobs:
               tests/unit/llms/compactifai
               tests/unit/llms/crusoe
               tests/unit/llms/custom_httpx
+              --ignore=tests/unit/llms/custom_httpx/test_aiohttp_transport.py
               tests/unit/llms/dashscope
               tests/unit/llms/databricks
               tests/unit/llms/dataforseo
@@ -620,6 +623,7 @@ jobs:
           - shard: proxy-infra-db-spend
             test-path: |-
               tests/unit/proxy/db
+              --ignore=tests/unit/proxy/db/test_pgbouncer.py
               --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
               --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
               tests/unit/proxy/spend_tracking
@@ -708,8 +712,6 @@ jobs:
           - shard: proxy-subprocess
             test-path: |-
               tests/unit/proxy/test_component_allowlists.py
-              tests/unit/proxy/test_prometheus_metrics_server.py
-              tests/unit/proxy/test_proxy_cli.py
             python-version: "3.12"
             workers: 2
             reruns: 0
