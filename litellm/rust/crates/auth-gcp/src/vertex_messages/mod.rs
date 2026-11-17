@@ -208,7 +208,13 @@ impl VertexMessagesAuth {
     ) -> Result<Arc<Login>, GoogleLoginFailure> {
         let (source, credential_project) = match credentials {
             Some(text) => {
-                let json = load_vertex_credentials_source(&text)?;
+                // The source may be a file to read, which must not block the runtime.
+                let json =
+                    tokio::task::spawn_blocking(move || load_vertex_credentials_source(&text))
+                        .await
+                        .map_err(|_| {
+                            value_failure("The `vertex_credentials` file read did not finish")
+                        })??;
                 (self.explicit_source(&json)?, json.credentials.project())
             }
             None => {
