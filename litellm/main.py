@@ -2616,6 +2616,16 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _require_provider_own_api_key(ctx: CompletionDispatchContext) -> None:
+    json_provider: Final = JSONProviderRegistry.get(ctx.custom_llm_provider)
+    if json_provider is not None and _dispatch_client_http(ctx) is None and not (ctx.api_key or litellm.api_key):
+        raise litellm.AuthenticationError(
+            message=f"Set {json_provider.api_key_env} or pass api_key",
+            llm_provider=ctx.custom_llm_provider,
+            model=ctx.model,
+        )
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2643,6 +2653,7 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
+    _require_provider_own_api_key(ctx)
     organization = (
         organization
         or litellm.organization
