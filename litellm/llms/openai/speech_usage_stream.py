@@ -95,6 +95,8 @@ class _UsageAsyncByteStream(httpx.AsyncByteStream):
         async for chunk in self._stream:
             if audio := _decoded_audio(self._decoder, self._speech_response, chunk):
                 yield audio
+        if last_audio := _decoded_audio(self._decoder, self._speech_response, b"\n"):
+            yield last_audio
 
     async def aclose(self) -> None:
         await self._stream.aclose()
@@ -110,6 +112,8 @@ class _UsageSyncByteStream(httpx.SyncByteStream):
         for chunk in self._stream:
             if audio := _decoded_audio(self._decoder, self._speech_response, chunk):
                 yield audio
+        if last_audio := _decoded_audio(self._decoder, self._speech_response, b"\n"):
+            yield last_audio
 
     def close(self) -> None:
         self._stream.close()
@@ -130,6 +134,10 @@ def _caller_extra_body(optional_params: Mapping[str, object]) -> Mapping[str, ob
     return _EXTRA_BODY.validate_python(optional_params.get("extra_body") or {})
 
 
+def _caller_extra_headers(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    return _EXTRA_BODY.validate_python(optional_params.get("extra_headers") or {})
+
+
 def wants_usage_stream(model: str, optional_params: Mapping[str, object]) -> bool:
     caller_asked: Final = _STREAM_FORMAT_KEY in optional_params or _STREAM_FORMAT_KEY in _caller_extra_body(
         optional_params
@@ -141,13 +149,19 @@ def with_usage_stream(model: str, optional_params: Mapping[str, object]) -> Mapp
     """Asks OpenAI for the SSE form of the audio, the only form that reports the audio tokens it bills."""
     if not wants_usage_stream(model, optional_params):
         return optional_params
-    return {**optional_params, "extra_body": {**_caller_extra_body(optional_params), _STREAM_FORMAT_KEY: "sse"}}
+    return {
+        **optional_params,
+        "extra_body": {**_caller_extra_body(optional_params), _STREAM_FORMAT_KEY: "sse"},
+        "extra_headers": {**_caller_extra_headers(optional_params), "Accept-Encoding": "identity"},
+    }
 
 
 def _audio_headers(headers: httpx.Headers, response_format: object) -> httpx.Headers:
     media_type: Final = _AUDIO_MEDIA_TYPES.get(str(response_format), _AUDIO_MEDIA_TYPES["mp3"])
     kept: Final = tuple(
-        (name, value) for name, value in headers.multi_items() if name.lower() not in ("content-type", "content-length")
+        (name, value)
+        for name, value in headers.multi_items()
+        if name.lower() not in ("content-type", "content-length", "content-encoding")
     )
     return httpx.Headers((*kept, ("content-type", media_type)))
 

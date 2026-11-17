@@ -128,10 +128,14 @@ class _SpeechSseStream(httpx.SyncByteStream, httpx.AsyncByteStream):
             yield frame
 
 
-def _sse_transport(requests: list[dict[str, object]], frame_size: int) -> httpx.MockTransport:
+def _sse_transport(
+    requests: list[dict[str, object]], frame_size: int, sse: bytes = _SPEECH_SSE, encodings: list[str] | None = None
+) -> httpx.MockTransport:
     def _respond(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
-        frames: Final = [_SPEECH_SSE[start : start + frame_size] for start in range(0, len(_SPEECH_SSE), frame_size)]
+        if encodings is not None:
+            encodings.append(request.headers["accept-encoding"])
+        frames: Final = [sse[start : start + frame_size] for start in range(0, len(sse), frame_size)]
         return httpx.Response(
             status_code=200,
             headers={"content-type": "text/event-stream; charset=utf-8"},
@@ -284,3 +288,40 @@ async def test_speech_model_priced_per_character_is_not_asked_for_sse():
 
     assert requests == [{"model": "tts-1", "voice": "alloy", "input": "hello"}]
     assert response.content == b"audio"
+
+
+def _sync_streamed_speech(transport: httpx.MockTransport):
+    return OpenAIChatCompletion().audio_speech(
+        model="gpt-4o-mini-tts",
+        input="hello",
+        voice="alloy",
+        optional_params={},
+        api_key="fake-key",
+        api_base=None,
+        organization=None,
+        project=None,
+        max_retries=0,
+        timeout=10.0,
+        logging_obj=Mock(),
+        client=OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport)),
+        stream=True,
+    )
+
+
+def test_streamed_speech_keeps_the_usage_of_a_last_event_with_no_trailing_newline():
+    response: Final = _sync_streamed_speech(
+        _sse_transport([], 64, sse=_SPEECH_SSE.removesuffix(b"\n\ndata: [DONE]\n\n"))
+    )
+
+    assert b"".join(response.iter_bytes()) == b"first-half|second-half"
+    assert response.usage is not None
+    assert response.usage.completion_tokens == 50
+
+
+def test_token_priced_speech_asks_the_provider_not_to_compress_the_events_it_decodes():
+    encodings: Final[list[str]] = []
+
+    response: Final = _sync_streamed_speech(_sse_transport([], 64, encodings=encodings))
+
+    assert b"".join(response.iter_bytes()) == b"first-half|second-half"
+    assert encodings == ["identity"]
