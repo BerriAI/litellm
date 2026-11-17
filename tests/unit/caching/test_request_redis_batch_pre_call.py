@@ -19,6 +19,7 @@ from litellm.caching.redis_batch import Batch, active_request_redis_batches, req
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
+from litellm.proxy.auth.user_api_key_auth import arm_routing_cooldowns
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores._route import route
 from litellm.redis.stores.router_cooldowns import ActiveCooldowns, RouterCooldownStore
@@ -266,9 +267,26 @@ async def test_simple_shuffle_cooldown_prefetch_does_not_arm_usage_reads_or_read
     router = _router(redis_cache, routing_strategy="simple-shuffle")
 
     with request_redis_batch_scope() as request:
-        RoutingContext(router).arm_cooldown_prefetch()
+        RoutingContext(router).arm_cooldown_prefetch(_MODEL_GROUP)
         assert set(request.prefetched) == {"routing_cooldowns"}
         deployment = await _route(router)
+
+    assert deployment in {"dep-a", "dep-b"}
+    assert redis_cache.alone == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "prefetched"), [(None, ()), (_MODEL_GROUP, ("routing_cooldowns",))])
+async def test_auth_prefetch_requires_a_request_model_and_keeps_routing_reads_batched(
+    model: str | None, prefetched: tuple[str, ...]
+):
+    redis_cache: Final = FakeRedisCache()
+    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
+
+    with patch("litellm.proxy.proxy_server.llm_router", router), request_redis_batch_scope() as request:
+        arm_routing_cooldowns(model)
+        assert set(request.prefetched) == set(prefetched)
+        deployment: Final = await _route(router)
 
     assert deployment in {"dep-a", "dep-b"}
     assert redis_cache.alone == []
