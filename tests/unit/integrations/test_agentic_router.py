@@ -120,9 +120,14 @@ def test_hook_active_mode_rewrites_model(tmp_path):
 def test_hook_shadow_mode_keeps_model(tmp_path):
     hook = AgenticRouterHook(mode="shadow", home=str(tmp_path),
                              tier_models={"fast": "f", "mid": "m", "strong": "s"})
-    data = {"model": "m", "messages": [{"role": "user", "content": "请帮我重构这个模块并做性能优化"}]}
+    data = {"model": "m", "litellm_call_id": "call-s",
+            "messages": [{"role": "user", "content": "请帮我重构这个模块并做性能优化"}]}
     out = asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
     assert out["model"] == "m"  # shadow never rewrites
+    asyncio.run(hook.async_post_call_success_hook(
+        None, {"litellm_call_id": "call-s"}, None, start_time=None, end_time=None))
+    assert hook.stats()["pending"] == 0  # settled observations still drain
+    assert hook.stats()["linSamples"] == 0  # shadow outcomes do not train the flywheel
 
 
 class _Key:
@@ -155,7 +160,7 @@ def test_hook_respects_key_model_restrictions(tmp_path):
 
 def test_hook_finds_call_id_nested(tmp_path):
     """The proxy passes the request dict under data/request_obj, not flat kwargs."""
-    hook = AgenticRouterHook(mode="shadow", home=str(tmp_path),
+    hook = AgenticRouterHook(mode="active", home=str(tmp_path),
                              tier_models={"fast": "f", "mid": "m", "strong": "s"})
     data = {"model": "m", "litellm_call_id": "call-n",
             "messages": [{"role": "user", "content": "你好"}]}

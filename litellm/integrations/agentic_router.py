@@ -697,6 +697,8 @@ class AgenticRouterHook(CustomLogger):
         decision_id = self._take(kwargs, kw)
         if decision_id is None:
             return
+        if self.router.mode != "active":
+            return  # shadow: outcome belongs to the original model, do not train
         dt_ms = None
         if start_time is not None and end_time is not None:
             dt_ms = (end_time - start_time).total_seconds() * 1000
@@ -712,6 +714,8 @@ class AgenticRouterHook(CustomLogger):
         decision_id = self._take(request_obj, kwargs)
         if decision_id is None:
             return
+        if self.router.mode != "active":
+            return  # shadow: outcome belongs to the original model, do not train
         with self._lock:
             self.router.settle(decision_id, success=False)
 
