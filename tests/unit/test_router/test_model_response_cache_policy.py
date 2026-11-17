@@ -466,3 +466,48 @@ async def test_prompt_management_direct_call_enforces_cache_opt_out():
         assert direct_call_kwargs["caching"] is False
         assert direct_call_kwargs["cache"]["no-cache"] is True
         assert direct_call_kwargs["cache"]["no-store"] is True
+
+
+def test_deployment_cache_namespace_preserved_with_model_ttl():
+    """Deployment-level cache namespace in litellm_params is preserved when model defines cache_ttl."""
+    deployment = {
+        "model_name": "tenant-model",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "cache": {"namespace": "tenant-a"},
+        },
+        "model_info": {"cache_ttl": 60},
+    }
+    kwargs = {}
+    caching = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs)
+    assert caching is True
+    assert kwargs["cache"]["namespace"] == "tenant-a"
+    assert kwargs["cache"]["ttl"] == 60
+
+
+@pytest.mark.asyncio
+async def test_router_preserves_deployment_cache_namespace():
+    """Router preserves litellm_params.cache.namespace in provider kwargs when cache_ttl is set."""
+    model_list = [
+        {
+            "model_name": "tenant-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "cache": {"namespace": "tenant-a"},
+            },
+            "model_info": {"cache_ttl": 60},
+        },
+    ]
+
+    router = Router(model_list=model_list, cache_responses=True)
+    try:
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+            mock_acompletion.return_value = {"id": "1", "choices": [{"message": {"content": "ok"}}]}
+
+            await router.acompletion(model="tenant-model", messages=[{"role": "user", "content": "hi"}])
+            assert mock_acompletion.call_count == 1
+            call_kw = mock_acompletion.call_args.kwargs
+            assert call_kw["cache"]["namespace"] == "tenant-a"
+            assert call_kw["cache"]["ttl"] == 60
+    finally:
+        router.retire()

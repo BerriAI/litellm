@@ -914,14 +914,31 @@ def _resolve_deployment_cache_policy(
     If response_cache is explicitly False, forces caching=False, kwargs["caching"]=False,
     and sets cache={"no-cache": True, "no-store": True} so client requests cannot bypass it.
     """
+    model_info: Final = as_dict(deployment.get("model_info"))
+    litellm_params: Final = as_dict(deployment.get("litellm_params"))
+
+    # Seed kwargs["cache"] by merging default_litellm_params, deployment-level cache
+    # (namespace, etc.), and request cache options so namespaces are preserved when adding TTL
+    merged_cache: dict[str, object] = {}
     if default_litellm_params:
         default_cache: Final = as_dict(default_litellm_params.get("cache"))
         if default_cache:
-            existing_cache: Final = as_dict(kwargs.get("cache"))
-            kwargs["cache"] = {**default_cache, **existing_cache}
+            merged_cache.update(default_cache)
 
-    model_info: Final = as_dict(deployment.get("model_info"))
-    litellm_params: Final = as_dict(deployment.get("litellm_params"))
+    deployment_cache_params: Final = as_dict(litellm_params.get("cache"))
+    if deployment_cache_params:
+        merged_cache.update(deployment_cache_params)
+
+    deployment_cache_info: Final = as_dict(model_info.get("cache"))
+    if deployment_cache_info:
+        merged_cache.update(deployment_cache_info)
+
+    existing_request_cache: Final = as_dict(kwargs.get("cache"))
+    if existing_request_cache:
+        merged_cache.update(existing_request_cache)
+
+    if merged_cache:
+        kwargs["cache"] = merged_cache
 
     raw_response_cache: object = model_info.get("response_cache")
     if raw_response_cache is None:
