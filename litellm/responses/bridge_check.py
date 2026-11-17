@@ -357,7 +357,7 @@ def needs_empty_user_turn_back(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object],
 ) -> bool:
-    if litellm_params.get("ensure_alternating_roles") or not is_empty_user_message(caller_last_message):
+    if not is_empty_user_message(caller_last_message):
         return False
     if sent_messages and message_field(sent_messages[-1], "role") in _USER_TURN_ROLES:
         return False

@@ -8304,7 +8304,7 @@ _EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
             None,
             {"role": "user"},
             {"ensure_alternating_roles": True},
-            [_HELLO],
+            [_HELLO, _EMPTY_USER_TURN],
             id="gemini_with_ensure_alternating_roles",
         ),
         pytest.param(
