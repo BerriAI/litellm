@@ -55,7 +55,7 @@ async def router_redis(
     from unittest.mock import patch
 
     from fakeredis import FakeRedis, FakeServer
-    from fakeredis.aioredis import FakeConnection
+    from fakeredis.aioredis import FakeAsyncRedisConnection
     from opentelemetry import trace
     from redis.asyncio import BlockingConnectionPool
     from redis.exceptions import ConnectionError
@@ -66,7 +66,7 @@ async def router_redis(
     commands: Final[asyncio.Queue[tuple[tuple[object, ...], str | None, str | None]]] = asyncio.Queue()
     started, released, unavailable = redis_write_gate
 
-    class ObservedConnection(FakeConnection):
+    class ObservedConnection(FakeAsyncRedisConnection):
         async def send_command(self, *args: object, **kwargs: object) -> None:  # kwargs-ok: Redis transport signature
             commands.put_nowait((args, current_service_target(), getattr(trace.get_current_span(), "name", None)))
             await super().send_command(*args, **kwargs)
