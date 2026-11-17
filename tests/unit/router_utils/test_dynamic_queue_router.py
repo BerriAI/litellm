@@ -31,6 +31,7 @@ from litellm.router_utils.dynamic_queue import (
     QueueSettings,
     QueueTimeout,
     Succeeded,
+    Waiting,
     WaitRequest,
 )
 from litellm.router_utils.dynamic_queue_router import (
@@ -48,6 +49,7 @@ from litellm.router_utils.dynamic_queue_router import (
     rejection_error,
 )
 from litellm.types.router import RouterRateLimitError
+from tests.unit.conftest import redis_cache_double
 from tests.unit.router_utils.test_dynamic_queue import ManualTimer, _finished, _reap
 from tests.unit.router_utils.test_dynamic_queue_redis import UnreachableRedis
 
@@ -636,6 +638,23 @@ class _HoldsAbandon:
         return await self.inner.abandon(capacity, waiter_id)
 
 
+def _least_busy_on(host: _QueueHost) -> litellm.Router:
+    return _on_the_clock(
+        host,
+        model_list=[
+            {
+                "model_name": "group",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "deployment-key"},
+                "model_info": {"id": "only"},
+            }
+        ],
+        routing_strategy="least-busy",
+        default_priority=0,
+        num_retries=0,
+        dynamic_queue={"enabled": True, "max_waiting": 8, "queue_timeout": 30},
+    )
+
+
 async def test_a_probe_cancelled_again_while_giving_its_turn_back_still_releases_its_in_flight_count(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -650,20 +669,7 @@ async def test_a_probe_cancelled_again_while_giving_its_turn_back_still_releases
     _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=never_answers)
     timer: Final = ManualTimer()
     holding: Final = _HoldsAbandon(LocalQueueBackend(QueueSettings(max_waiting=8), clock=timer.now))
-    router: Final = _on_the_clock(
-        _QueueHost(timer, lambda settings: holding),
-        model_list=[
-            {
-                "model_name": "group",
-                "litellm_params": {"model": "openai/gpt-x", "api_key": "deployment-key"},
-                "model_info": {"id": "only"},
-            }
-        ],
-        routing_strategy="least-busy",
-        default_priority=0,
-        num_retries=0,
-        dynamic_queue={"enabled": True, "max_waiting": 8, "queue_timeout": 30},
-    )
+    router: Final = _least_busy_on(_QueueHost(timer, lambda settings: holding))
     await holding.inner.report("deployment:only", "in-flight", PassThrough(0), MatchingFailure(retry_after_ms=0))
     timer.advance(1.0)
     probing: Final = asyncio.create_task(router.acompletion(model="group", messages=MESSAGES))
@@ -681,6 +687,49 @@ async def test_a_probe_cancelled_again_while_giving_its_turn_back_still_releases
 
     assert in_flight == 1
     assert isinstance(outcome, asyncio.CancelledError)
+    assert not router.cache.get_cache(key="group_request_count:only")
+
+
+@pytest.mark.parametrize(("probing", "probe_in_ms"), [(False, 1_000), (True, 2_000)], ids=["healthy", "probe"])
+async def test_a_request_cancelled_while_releasing_a_failed_attempt_still_reports_the_failure_and_settles_its_turn(
+    probing: bool, probe_in_ms: int, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(429, json={"error": {"message": "rate limited", "type": "rate_limit_error"}})
+    )
+    releasing: Final = asyncio.Event()
+    gate: Final = asyncio.Event()
+
+    async def shared_count(key: str, value: int, ttl: int) -> int:
+        if value < 0:
+            releasing.set()
+            await gate.wait()
+        return 0
+
+    redis: Final = redis_cache_double()
+    redis.async_increment_with_floor = shared_count
+    timer: Final = ManualTimer()
+    host: Final = _QueueHost(timer)
+    router: Final = _least_busy_on(host)
+    router.update_redis_cache(redis)
+    if probing:
+        await _congest_directly(host, "deployment:only")
+        timer.advance(60.0)
+    failing: Final = asyncio.create_task(router.acompletion(model="group", messages=MESSAGES))
+    try:
+        await asyncio.wait_for(releasing.wait(), 10)
+        _ = failing.cancel()
+        gate.set()
+        outcome: Final = (await asyncio.wait_for(asyncio.gather(failing, return_exceptions=True), 10))[0]
+    finally:
+        gate.set()
+        await _reap(failing)
+    observed: Final = await host.backend.admit(WaitRequest("deployment:only", "observer", 0), 60_000)
+
+    assert isinstance(outcome, asyncio.CancelledError)
+    assert observed == Waiting(probe_in_ms=probe_in_ms)
+    assert timer.pending() == 0
     assert not router.cache.get_cache(key="group_request_count:only")
 
 

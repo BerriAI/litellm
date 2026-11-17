@@ -5492,7 +5492,11 @@ class _Driver:
             raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
             if call is not None:
-                await released(self._release(call, attempt, refund_io_tokens=True))
+                try:
+                    await released(self._release(call, attempt, refund_io_tokens=True))
+                except asyncio.CancelledError:
+                    _ = await self._queue_terminal(admission, error)
+                    raise
             return await self._attempt_failure(
                 step, deployment, call, error, admission, reading_stream, logs_failure=logs_failure, in_call=in_call
             )
