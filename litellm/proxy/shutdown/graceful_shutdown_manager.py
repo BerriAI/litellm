@@ -86,6 +86,12 @@ class GracefulShutdownManager:
         )
 
     @classmethod
+    def remaining(cls, cap: float | None = None, *, clock: Callable[[], float] = time.monotonic) -> float:
+        elapsed: Final = 0.0 if cls._shutdown_started_at is None else clock() - cls._shutdown_started_at
+        remaining: Final = max(0.0, cls.get_timeout() - elapsed)
+        return remaining if cap is None else min(max(0.0, cap), remaining)
+
+    @classmethod
     async def wait_for_drain(
         cls,
         timeout: float | None = None,

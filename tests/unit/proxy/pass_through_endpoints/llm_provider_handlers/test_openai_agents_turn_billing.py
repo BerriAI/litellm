@@ -5,7 +5,7 @@ import logging
 import math
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 import pytest
@@ -35,6 +35,9 @@ SESSIONS_URL: Final = "https://api.openai.com/v1/agents/sessions"
 SESSION_ID: Final = "sess_6a0b0f8e2c1d4e5f"
 EVENTS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/events"
 TURNS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/turns?order=desc&limit=100"
+SUBAGENTS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/subagents?order=desc&limit=100"
+SUBAGENT_TURNS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/subagents/subagent_1/turns?order=desc&limit=100"
+ROOT_ITEMS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?limit=100"
 CALL_TIME: Final = datetime(2026, 10, 29, 9, 12, 41)
 CALL_STARTED_AT: Final = math.floor(CALL_TIME.timestamp())
 AGENT_MODEL: Final = "gpt-5.4-mini"
@@ -75,6 +78,10 @@ def _turn(turn_id: str, created_at: int, status: str, usage: Mapping[str, object
     return {"id": turn_id, "object": "agent.session.turn", "created_at": created_at, "status": status, "usage": usage}
 
 
+def _page(*data: Mapping[str, object]) -> dict[str, object]:
+    return {"object": "list", "data": list(data)}
+
+
 def _expected_cost(usage: Mapping[str, object], service_tier: str = "auto") -> float:
     rates: Final = litellm.model_cost[AGENT_MODEL]
     suffix: Final = "" if service_tier == "auto" else f"_{service_tier}"
@@ -100,6 +107,9 @@ class _Clock:
         await asyncio.sleep(0)
 
 
+_Reply: TypeAlias = Mapping[str, object] | int | httpx.HTTPError
+
+
 class _AgentsApi:
     def __init__(
         self,
@@ -107,13 +117,24 @@ class _AgentsApi:
         session: Mapping[str, object] | None = None,
         status_code: int = 200,
         unreachable: bool = False,
+        replies: Mapping[str, Sequence[_Reply]] | None = None,
     ) -> None:
         self._turn_pages: Final = turn_pages
         self._session: Final = session
         self._status_code: Final = status_code
         self._unreachable: Final = unreachable
+        self._replies: Final = replies or {}
         self.urls: Final[list[str]] = []
         self.turn_polls = 0
+
+    def _reply(self, url: str, request: httpx.Request) -> httpx.Response:
+        replies: Final = self._replies[url]
+        reply: Final = replies[min(self.urls.count(url), len(replies)) - 1]
+        if isinstance(reply, httpx.HTTPError):
+            raise reply
+        if isinstance(reply, int):
+            return httpx.Response(reply, json={"error": {"message": "upstream"}}, request=request)
+        return httpx.Response(200, json=dict(reply), request=request)
 
     async def get(self, base_url: str, path: str, scope_headers: Mapping[str, str]) -> httpx.Response:
         url: Final = f"{base_url}/{path}"
@@ -123,12 +144,16 @@ class _AgentsApi:
             raise httpx.ConnectError("connection refused", request=request)
         if self._status_code != 200:
             return httpx.Response(self._status_code, json={"error": {"message": "upstream"}}, request=request)
+        if url in self._replies:
+            return self._reply(url, request)
         if url == TURNS_URL:
             page: Final = self._turn_pages[min(self.turn_polls, len(self._turn_pages) - 1)]
             self.turn_polls += 1
             return httpx.Response(200, json={"object": "list", "data": list(page)}, request=request)
         if url == f"{SESSIONS_URL}/{SESSION_ID}" and self._session is not None:
             return httpx.Response(200, json=dict(self._session), request=request)
+        if url == SUBAGENTS_URL or "/items?" in url:
+            return httpx.Response(200, json=_page(), request=request)
         return httpx.Response(404, json={"error": {"message": "not found"}}, request=request)
 
 
@@ -166,6 +191,7 @@ class _SpendRows(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.rows: Final[list[SpendLogsPayload]] = []
+        self.standard_logging_objects: Final[list[object]] = []
         self.logged: Final = asyncio.Event()
 
     async def async_log_success_event(
@@ -174,6 +200,7 @@ class _SpendRows(CustomLogger):
         self.rows.append(
             get_logging_payload(kwargs=kwargs, response_obj=response_obj, start_time=start_time, end_time=end_time)
         )
+        self.standard_logging_objects.append(kwargs.get("standard_logging_object"))
         self.logged.set()
 
     async def only_row(self) -> SpendLogsPayload:
@@ -184,8 +211,12 @@ class _SpendRows(CustomLogger):
         return self.rows[0]
 
 
+def _litellm_params(request_headers: Mapping[str, str] | None = None) -> dict[str, object]:
+    return {"metadata": {}, "proxy_server_request": {"headers": dict(request_headers or {})}}
+
+
 def _logging_obj(
-    rows: _SpendRows, litellm_call_id: str, stream: bool, request_headers: Mapping[str, str] | None = None
+    rows: _SpendRows, litellm_call_id: str, stream: bool, api_base: str, litellm_params: dict[str, object]
 ) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="unknown",
@@ -201,9 +232,10 @@ def _logging_obj(
         model="unknown",
         user="unknown",
         optional_params={},
-        litellm_params={"proxy_server_request": {"headers": dict(request_headers or {})}},
+        litellm_params=litellm_params,
         call_type="pass_through_endpoint",
     )
+    logging_obj.pre_call(input=[], api_key="", additional_args={"api_base": api_base})
     logging_obj.model_call_details["custom_llm_provider"] = "openai"
     return logging_obj
 
@@ -222,10 +254,13 @@ async def _relay_call(
     status_code: int = 200,
     request_headers: Mapping[str, str] | None = None,
 ) -> None:
+    litellm_params: Final = _litellm_params(request_headers)
     await PassThroughEndpointLogging(agents_turn_biller=biller).pass_through_async_success_handler(
         httpx_response=httpx.Response(status_code, json=response_body, request=httpx.Request("POST", url_route)),
         response_body=response_body,
-        logging_obj=_logging_obj(rows, litellm_call_id, stream=False, request_headers=request_headers),
+        logging_obj=_logging_obj(
+            rows, litellm_call_id, stream=False, api_base=url_route, litellm_params=litellm_params
+        ),
         url_route=url_route,
         result="",
         start_time=CALL_TIME,
@@ -236,6 +271,7 @@ async def _relay_call(
             url=url_route, request_body=request_body, request_method="POST"
         ),
         custom_llm_provider="openai",
+        litellm_params=litellm_params,
     )
 
 
@@ -253,7 +289,12 @@ async def test_an_input_message_bills_its_turn_once_usage_arrives(local_model_co
     rows: Final = _SpendRows()
 
     await _relay_call(
-        _biller(api, _Clock()), rows, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "9b1d3f5a-7c9e-4b2d-8f4a-6c8e0a2b4d61"
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "9b1d3f5a-7c9e-4b2d-8f4a-6c8e0a2b4d61",
     )
     row: Final = await rows.only_row()
 
@@ -285,7 +326,7 @@ async def test_a_session_create_with_input_bills_its_first_turn_at_the_agent_ser
     row: Final = await rows.only_row()
 
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE, service_tier))
-    assert api.urls == [TURNS_URL]
+    assert f"{SESSIONS_URL}/{SESSION_ID}" not in api.urls
 
 
 @pytest.mark.asyncio
@@ -303,8 +344,12 @@ async def test_two_calls_on_one_session_bill_two_different_turns(local_model_cos
     first: Final = _SpendRows()
     second: Final = _SpendRows()
 
-    await _relay_call(biller, first, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "3c5e7a9c-1d3f-4a6b-9e2c-4b6d8f0a2c38")
-    await _relay_call(biller, second, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "5e7a9c1e-3f5b-4c8d-ae4c-6d8f0b2c4e59")
+    await _relay_call(
+        biller, first, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "3c5e7a9c-1d3f-4a6b-9e2c-4b6d8f0a2c38"
+    )
+    await _relay_call(
+        biller, second, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "5e7a9c1e-3f5b-4c8d-ae4c-6d8f0b2c4e59"
+    )
     billed: Final = sorted([(await first.only_row())["total_tokens"], (await second.only_row())["total_tokens"]])
 
     assert billed == sorted([TURN_USAGE["total_tokens"], SECOND_TURN_USAGE["total_tokens"]])
@@ -406,7 +451,12 @@ async def test_a_turn_created_before_the_call_is_never_billed_to_it(local_model_
     rows: Final = _SpendRows()
 
     await _relay_call(
-        _biller(api, _Clock()), rows, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "7a9c1e3a-5b7d-4e0f-8a6e-8f0b2d4e6a70"
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "7a9c1e3a-5b7d-4e0f-8a6e-8f0b2d4e6a70",
     )
 
     assert (await rows.only_row())["total_tokens"] == TURN_USAGE["total_tokens"]
@@ -417,7 +467,9 @@ async def test_a_turn_created_before_the_call_is_never_billed_to_it(local_model_
     ("turn_pages", "status_code", "unreachable"),
     [
         pytest.param(((_turn("turn_1", CALL_STARTED_AT + 1, "in_progress", None),),), 200, False, id="turn_never_ends"),
-        pytest.param(((_turn("turn_1", CALL_STARTED_AT + 1, "completed", None),),), 200, False, id="usage_never_arrives"),
+        pytest.param(
+            ((_turn("turn_1", CALL_STARTED_AT + 1, "completed", None),),), 200, False, id="usage_never_arrives"
+        ),
         pytest.param(
             ((_turn("turn_old", CALL_STARTED_AT - 1, "completed", TURN_USAGE),),), 200, False, id="no_turn_to_claim"
         ),
@@ -525,14 +577,20 @@ async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed
     created_event: Final = {"type": "agent.session.created", "session": _session()}
 
     await PassThroughStreamingHandler.route_streaming_logging_to_handler(
-        litellm_logging_obj=_logging_obj(rows, "6a8c0e2a-4c6e-4f8a-9b2c-5a7c9e1a3c46", stream=True),
+        litellm_logging_obj=_logging_obj(
+            rows,
+            "6a8c0e2a-4c6e-4f8a-9b2c-5a7c9e1a3c46",
+            stream=True,
+            api_base=SESSIONS_URL,
+            litellm_params=_litellm_params(),
+        ),
         passthrough_success_handler_obj=PassThroughEndpointLogging(agents_turn_biller=_biller(api, _Clock())),
         url_route=SESSIONS_URL,
         request_body={"agent": {"model": AGENT_MODEL}, "input": "Say hi in one word", "stream": True},
         endpoint_type=EndpointType.OPENAI,
         start_time=CALL_TIME,
         raw_bytes=(
-            b": keep-alive\n\nevent: agent.session.queued\ndata: {\"type\": \"agent.session.queued\"}\n\n",
+            b': keep-alive\n\nevent: agent.session.queued\ndata: {"type": "agent.session.queued"}\n\n',
             f"event: agent.session.created\ndata: {json.dumps(created_event)}\n\n".encode(),
             b'event: agent.turn.completed\ndata: {"type": "agent.turn.completed", "usage": null}\n\n',
         ),
@@ -540,7 +598,7 @@ async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed
     )
     row: Final = await rows.only_row()
 
-    assert api.urls == [TURNS_URL]
+    assert f"{SESSIONS_URL}/{SESSION_ID}" not in api.urls
     assert row["model"] == AGENT_MODEL
     assert row["total_tokens"] == TURN_USAGE["total_tokens"]
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
@@ -620,6 +678,8 @@ async def test_the_polls_send_the_passthrough_key_and_the_callers_openai_scope(
     with respx.mock(assert_all_called=True) as upstream:
         turns: Final = upstream.get(TURNS_URL).respond(json=turns_page)
         session: Final = upstream.get(f"{SESSIONS_URL}/{SESSION_ID}").respond(json=_session())
+        subagents: Final = upstream.get(SUBAGENTS_URL).respond(json=_page())
+        items: Final = upstream.get(ROOT_ITEMS_URL).respond(json=_page())
         await _relay_call(
             OpenAIAgentsTurnBiller(get=live_agents_api_get, sleep=clock.sleep, clock=clock),
             rows,
@@ -637,7 +697,7 @@ async def test_the_polls_send_the_passthrough_key_and_the_callers_openai_scope(
         row: Final = await rows.only_row()
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    for poll in (turns.calls.last.request, session.calls.last.request):
+    for poll in (route.calls.last.request for route in (turns, session, subagents, items)):
         assert poll.headers["authorization"] == "Bearer sk-agents-turns-poll"
         assert poll.headers["openai-beta"] == "agents=v1"
         assert poll.headers["openai-project"] == "proj_agents_scoped"
@@ -681,3 +741,254 @@ async def test_a_billing_task_that_dies_reports_the_lost_row(
 
     assert rows.rows == []
     assert any(f"turn billing {lost_reason}, the call logged no row" in message for message in caplog.messages)
+
+
+@pytest.mark.asyncio
+async def test_a_billed_row_keeps_the_upstream_api_base(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),), session=_session()
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "1a3c5e7a-9c1e-4a3c-8e5a-7c9e1a3c5e71",
+    )
+    row: Final = await rows.only_row()
+    standard_logging_object: Final = rows.standard_logging_objects[0]
+
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+    assert row["api_base"] == EVENTS_URL
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["api_base"] == EVENTS_URL
+
+
+async def _blocked_sleep(seconds: float) -> None:
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("turn", "billed_usage"),
+    [
+        pytest.param(_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE), TURN_USAGE, id="settled"),
+        pytest.param(
+            _turn("turn_1", CALL_STARTED_AT + 1, "in_progress", SECOND_TURN_USAGE), SECOND_TURN_USAGE, id="running"
+        ),
+        pytest.param(_turn("turn_1", CALL_STARTED_AT + 1, "in_progress", None), None, id="no_usage_yet"),
+    ],
+)
+async def test_a_proxy_shutdown_logs_a_waiting_row_with_the_usage_reported_so_far(
+    local_model_cost_map: None,
+    caplog: pytest.LogCaptureFixture,
+    turn: Mapping[str, object],
+    billed_usage: Mapping[str, object] | None,
+):
+    api: Final = _AgentsApi(turn_pages=((turn,),), session=_session())
+    rows: Final = _SpendRows()
+    biller: Final = OpenAIAgentsTurnBiller(get=api.get, sleep=_blocked_sleep, clock=_Clock())
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await _relay_call(
+            biller, rows, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "2b4d6f8b-0d2f-4b4d-9f6b-8d0f2b4d6f82"
+        )
+        await biller.drain(timeout=5)
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == (0 if billed_usage is None else billed_usage["total_tokens"])
+    assert (row["spend"] or 0.0) == pytest.approx(0.0 if billed_usage is None else _expected_cost(billed_usage))
+    assert (billed_usage == TURN_USAGE) != any(SESSION_ID in message for message in caplog.messages)
+
+
+@pytest.mark.asyncio
+async def test_transient_poll_failures_still_bill_the_turn(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=((),),
+        session=_session(),
+        replies={
+            TURNS_URL: (
+                503,
+                500,
+                httpx.ConnectError("connection refused"),
+                429,
+                408,
+                _page(_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE)),
+            )
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "3c5e7a9c-1e3a-4c5e-8a7c-9e1a3c5e7a93",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403, 404])
+async def test_a_poll_the_upstream_refuses_logs_the_call_at_zero_without_retrying(
+    local_model_cost_map: None, status_code: int
+):
+    api: Final = _AgentsApi(turn_pages=((),), session=_session(), replies={TURNS_URL: (status_code,)})
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "4d6f8b0d-2f4b-4d6f-9b8d-0f2b4d6f8ba4",
+    )
+    row: Final = await rows.only_row()
+
+    assert api.urls.count(TURNS_URL) == 1
+    assert not row["spend"]
+
+
+@pytest.mark.asyncio
+async def test_usage_that_arrives_minutes_after_the_turn_completes_is_billed(local_model_cost_map: None):
+    completed_without_usage: Final = (_turn("turn_1", CALL_STARTED_AT + 1, "completed", None),)
+    api: Final = _AgentsApi(
+        turn_pages=(*(completed_without_usage,) * 10, (_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),)),
+        session=_session(),
+    )
+    clock: Final = _Clock()
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, clock), rows, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "5e7a9c1e-3a5c-4e7a-8c9e-1a3c5e7a9cb5"
+    )
+    row: Final = await rows.only_row()
+
+    assert clock.now > 300
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
+async def test_a_turn_still_running_at_the_deadline_bills_the_usage_it_reported(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "in_progress", SECOND_TURN_USAGE),),), session=_session()
+    )
+    rows: Final = _SpendRows()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await _relay_call(
+            _biller(api, _Clock()),
+            rows,
+            EVENTS_URL,
+            {"events": [INPUT_MESSAGE]},
+            None,
+            "6f8b0d2f-4b6d-4f8b-9d0f-2b4d6f8b0dc6",
+        )
+        row: Final = await rows.only_row()
+
+    assert row["spend"] == pytest.approx(_expected_cost(SECOND_TURN_USAGE))
+    assert any(SESSION_ID in message and "did not settle" in message for message in caplog.messages)
+
+
+def _subagent_api(subagent_turns: Sequence[Mapping[str, object]]) -> _AgentsApi:
+    return _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        session=_session(),
+        replies={
+            SUBAGENTS_URL: (_page({"id": "subagent_1", "object": "agent.session.subagent"}),),
+            SUBAGENT_TURNS_URL: tuple(_page(turn) for turn in subagent_turns),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "subagent_turns",
+    [
+        pytest.param((_turn("subturn_1", CALL_STARTED_AT + 3, "completed", SECOND_TURN_USAGE),), id="settled"),
+        pytest.param(
+            (
+                _turn("subturn_1", CALL_STARTED_AT + 3, "in_progress", None),
+                _turn("subturn_1", CALL_STARTED_AT + 3, "completed", SECOND_TURN_USAGE),
+            ),
+            id="still_running",
+        ),
+    ],
+)
+async def test_subagent_turns_the_call_started_are_billed_at_the_session_agent_model(
+    local_model_cost_map: None, subagent_turns: Sequence[Mapping[str, object]]
+):
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(_subagent_api(subagent_turns), _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "7a9c1e3a-5c7e-4a9c-8e1a-3c5e7a9c1ed7",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["model"] == AGENT_MODEL
+    assert row["prompt_tokens"] == TURN_USAGE["input_tokens"] + SECOND_TURN_USAGE["input_tokens"]
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"] + SECOND_TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE) + _expected_cost(SECOND_TURN_USAGE))
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_turn_from_before_the_call_is_never_billed_to_it(local_model_cost_map: None):
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(_subagent_api((_turn("subturn_0", CALL_STARTED_AT - 5, "completed", SECOND_TURN_USAGE),)), _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "8b0d2f4b-6d8f-4b0d-9f2b-4d6f8b0d2fe8",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
+async def test_web_searches_in_a_billed_turn_add_their_per_call_price(local_model_cost_map: None):
+    web_search: Final = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        session=_session(),
+        replies={
+            ROOT_ITEMS_URL: (
+                {"object": "list", "data": [web_search, {"type": "message"}], "has_more": True, "last_id": "item_2"},
+            ),
+            f"{ROOT_ITEMS_URL}&after=item_2": (_page(web_search),),
+        },
+    )
+    rows: Final = _SpendRows()
+    per_search: Final = litellm.model_cost[AGENT_MODEL]["search_context_cost_per_query"]["search_context_size_medium"]
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "9c1e3a5c-7e9a-4c1e-8a3c-5e7a9c1e3af9",
+    )
+    row: Final = await rows.only_row()
+
+    assert per_search > 0
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE) + 2 * per_search)

@@ -2,11 +2,11 @@ import asyncio
 import math
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias
+from typing import Final, Protocol, TypeAlias, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -16,14 +16,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    OPENAI_AGENTS_LIST_PAGE_LIMIT,
     OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS,
     OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE,
-    OPENAI_AGENTS_TURN_MAX_CONSECUTIVE_POLL_FAILURES,
     OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS,
     OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS,
     OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS,
-    OPENAI_AGENTS_TURN_USAGE_SETTLE_SECONDS,
-    OPENAI_AGENTS_TURNS_PAGE_LIMIT,
     PASS_THROUGH_HEADER_PREFIX,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -36,7 +34,12 @@ from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    InputTokensDetails,
+    OutputTokensDetails,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 
 from .transcribe_passthrough_logging_handler import PassThroughLogDispatch
 
@@ -45,6 +48,8 @@ _TERMINAL_TURN_STATUSES: Final = frozenset({"completed", "failed", "cancelled"})
 _TURN_STARTING_EVENT_TYPE: Final = "agent.session.input.message"
 _SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project"})
 _TURN_CLAIM_KEY_PREFIX: Final = "openai_agents_turn_claim:"
+_RETRYABLE_STATUS_CODES: Final = frozenset({408, 409, 429})
+_WEB_SEARCH_CALL: Final = "web_search_call"
 
 
 class AgentSpec(BaseModel):
@@ -100,6 +105,35 @@ class _TurnsPage(BaseModel):
     data: tuple[_Turn, ...]
 
 
+class _Subagent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _SubagentsPage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: tuple[_Subagent, ...]
+
+
+class _Item(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+
+
+class _ItemsPage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: tuple[_Item, ...]
+    has_more: bool = False
+    last_id: str | None = None
+
+
+_PageT: Final = TypeVar("_PageT", _TurnsPage, _SubagentsPage, _ItemsPage, _Session)
+
+
 @dataclass(frozen=True, slots=True)
 class AgentsTurnStart:
     base_url: str
@@ -122,9 +156,55 @@ class DeferredAgentsRow:
 
 
 @dataclass(frozen=True, slots=True)
+class _ClaimedTurn:
+    turn: _Turn
+    turns_path: str
+
+    @property
+    def settled(self) -> bool:
+        return self.turn.status in _TERMINAL_TURN_STATUSES and self.turn.usage is not None
+
+
+@dataclass(frozen=True, slots=True)
+class _Claimed:
+    root: _ClaimedTurn | None = None
+    subagent_turns: tuple[_ClaimedTurn, ...] = ()
+
+    @property
+    def turns(self) -> tuple[_ClaimedTurn, ...]:
+        return self.subagent_turns if self.root is None else (self.root, *self.subagent_turns)
+
+    @property
+    def settled(self) -> bool:
+        return self.root is not None and all(claimed_turn.settled for claimed_turn in self.turns)
+
+
+_NOTHING_CLAIMED: Final = _Claimed()
+
+
+@dataclass(frozen=True, slots=True)
+class _FetchFailed:
+    reason: str
+    retryable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _Polled:
+    claimed: _Claimed
+    failure: _FetchFailed | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _BilledTurn:
     turn: _Turn
     usage: ResponseAPIUsage
+    items_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class _BilledTurns:
+    turns: tuple[_BilledTurn, ...]
+    unsettled_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +212,7 @@ class _UnbilledTurn:
     reason: str
 
 
-_TurnOutcome: TypeAlias = _BilledTurn | _UnbilledTurn
+_TurnOutcome: TypeAlias = _BilledTurns | _UnbilledTurn
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,17 +442,65 @@ def _report_lost_row(task: "asyncio.Task[None]") -> None:
         verbose_proxy_logger.error("OpenAI Agents passthrough: turn billing failed, the call logged no row: %s", error)
 
 
-def _turn_cost(agent: AgentSpec, turn: _Turn, usage: ResponseAPIUsage) -> float:
+def _is_retryable(status_code: int) -> bool:
+    return status_code >= 500 or status_code in _RETRYABLE_STATUS_CODES
+
+
+def _billed_turns(claimed: _Claimed) -> tuple[_BilledTurn, ...]:
+    return tuple(
+        _BilledTurn(
+            turn=claimed_turn.turn, usage=usage, items_path=f"{claimed_turn.turns_path}/{claimed_turn.turn.id}/items"
+        )
+        for claimed_turn in claimed.turns
+        if (usage := claimed_turn.turn.usage) is not None
+    )
+
+
+def _bill_reported(claimed: _Claimed, reason: str) -> _TurnOutcome:
+    reported: Final = _billed_turns(claimed)
+    return _BilledTurns(turns=reported, unsettled_reason=reason) if reported else _UnbilledTurn(reason=reason)
+
+
+def _listed_turns(turns_paths: Sequence[str], pages: Sequence[_TurnsPage | _FetchFailed]) -> Iterator[_ClaimedTurn]:
+    for turns_path, page in zip(turns_paths, pages, strict=True):
+        if isinstance(page, _TurnsPage):
+            yield from (_ClaimedTurn(turn=turn, turns_path=turns_path) for turn in page.data)
+
+
+def _cached_tokens(usage: ResponseAPIUsage) -> int:
+    return 0 if usage.input_tokens_details is None else usage.input_tokens_details.cached_tokens
+
+
+def _reasoning_tokens(usage: ResponseAPIUsage) -> int:
+    return 0 if usage.output_tokens_details is None else usage.output_tokens_details.reasoning_tokens or 0
+
+
+def _combined_usage(usages: Sequence[ResponseAPIUsage]) -> ResponseAPIUsage:
+    if len(usages) == 1:
+        return usages[0]
+    return ResponseAPIUsage(
+        input_tokens=sum(usage.input_tokens for usage in usages),
+        input_tokens_details=InputTokensDetails(cached_tokens=sum(_cached_tokens(usage) for usage in usages)),
+        output_tokens=sum(usage.output_tokens for usage in usages),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=sum(_reasoning_tokens(usage) for usage in usages)),
+        total_tokens=sum(usage.total_tokens for usage in usages),
+    )
+
+
+def _turn_cost(agent: AgentSpec, billed_turn: _BilledTurn, web_searches: int) -> float:
     try:
         return litellm.completion_cost(
             completion_response=ResponsesAPIResponse(
-                id=turn.id,
-                created_at=turn.created_at,
+                id=billed_turn.turn.id,
+                created_at=billed_turn.turn.created_at,
                 model=agent.model,
                 object="response",
-                status=turn.status,
-                output=[],
-                usage=usage,
+                status=billed_turn.turn.status,
+                output=[
+                    {"type": _WEB_SEARCH_CALL, "id": f"{billed_turn.turn.id}_{index}", "status": "completed"}
+                    for index in range(web_searches)
+                ],
+                usage=billed_turn.usage,
             ),
             model=agent.model,
             custom_llm_provider="openai",
@@ -381,7 +509,7 @@ def _turn_cost(agent: AgentSpec, turn: _Turn, usage: ResponseAPIUsage) -> float:
         )
     except Exception as e:  # noqa: BLE001  # an unpriced model must still log the turn's tokens
         verbose_proxy_logger.warning(
-            "OpenAI Agents passthrough: could not price turn %s for model %s: %s", turn.id, agent.model, e
+            "OpenAI Agents passthrough: could not price turn %s for model %s: %s", billed_turn.turn.id, agent.model, e
         )
         return 0.0
 
@@ -401,6 +529,7 @@ class OpenAIAgentsTurnBiller:
         self._claims: Final = claims if claims is not None else TurnClaims(shared_store=lambda: None)
         self._release_request_slot: Final = release_request_slot
         self._tasks: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio holds tasks weakly
+        self._stopping: Final = asyncio.Event()
 
     def schedule(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> "asyncio.Task[None]":
         task: Final = asyncio.create_task(self._bill(turn_start, row))
@@ -409,12 +538,24 @@ class OpenAIAgentsTurnBiller:
         task.add_done_callback(_report_lost_row)
         return task
 
+    async def drain(self, timeout: float) -> None:
+        self._stopping.set()
+        if self._tasks:
+            _ = await asyncio.wait(tuple(self._tasks), timeout=timeout)
+
     async def _bill(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
         await self._release_request_slot()
-        outcome: Final = await self._await_billable_turn(turn_start, row.logging_obj.litellm_call_id)
+        outcome: Final = await self._await_billable_turns(turn_start, row.logging_obj.litellm_call_id, self._clock())
         match outcome:
-            case _BilledTurn(turn=turn, usage=usage):
-                await self._log_billed(turn_start, row, turn, usage)
+            case _BilledTurns(turns=turns, unsettled_reason=None):
+                await self._log_billed(turn_start, row, turns)
+            case _BilledTurns(turns=turns, unsettled_reason=reason):
+                verbose_proxy_logger.warning(
+                    "OpenAI Agents passthrough: billing session %s with the usage its turns reported so far, %s",
+                    turn_start.session_id,
+                    reason,
+                )
+                await self._log_billed(turn_start, row, turns)
             case _UnbilledTurn(reason=reason):
                 verbose_proxy_logger.warning(
                     "OpenAI Agents passthrough: logging session %s call without cost, %s",
@@ -423,106 +564,207 @@ class OpenAIAgentsTurnBiller:
                 )
                 await self._log(row, row.kwargs)
 
-    async def _await_billable_turn(self, turn_start: AgentsTurnStart, claimant: str) -> _TurnOutcome:
-        started: Final = self._clock()
-        delay = OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS  # rebind-ok: poll-loop backoff
-        failures = 0  # rebind-ok: poll-loop state
-        claimed_turn_id: str | None = None  # rebind-ok: poll-loop state
-        settled_since: float | None = None  # rebind-ok: poll-loop state
-        while self._clock() - started < OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS:
-            await self._sleep(delay)
-            delay = min(delay * 2, OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS)
-            page = await self._fetch_turns(turn_start)
-            if page is None:
-                failures += 1
-                if failures >= OPENAI_AGENTS_TURN_MAX_CONSECUTIVE_POLL_FAILURES:
-                    return _UnbilledTurn(reason=f"{failures} turn list polls failed in a row")
-                continue
-            failures = 0
-            turn = (
-                await self._claim(page, turn_start, claimant)
-                if claimed_turn_id is None
-                else next((seen for seen in page.data if seen.id == claimed_turn_id), None)
-            )
-            if turn is None:
-                if claimed_turn_id is None and self._clock() - started >= OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS:
-                    return _UnbilledTurn(reason="no turn started by the call showed up")
-                continue
-            claimed_turn_id = turn.id
-            if turn.status not in _TERMINAL_TURN_STATUSES:
-                continue
-            if turn.usage is not None:
-                return _BilledTurn(turn=turn, usage=turn.usage)
-            settled_since = settled_since if settled_since is not None else self._clock()
-            if self._clock() - settled_since >= OPENAI_AGENTS_TURN_USAGE_SETTLE_SECONDS:
-                return _UnbilledTurn(reason=f"turn {turn.id} ended without reporting usage")
-        return _UnbilledTurn(reason=f"turn usage did not arrive within {OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS}s")
+    async def _await_billable_turns(
+        self,
+        turn_start: AgentsTurnStart,
+        claimant: str,
+        started: float,
+        delay: float = OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS,
+        claimed: _Claimed = _NOTHING_CLAIMED,
+    ) -> _TurnOutcome:
+        await self._wait(delay)
+        polled: Final = await self._poll(turn_start, claimant, claimed)
+        outcome: Final = self._outcome(polled, self._clock() - started)
+        if outcome is not None:
+            return outcome
+        return await self._await_billable_turns(
+            turn_start,
+            claimant,
+            started,
+            min(delay * 2, OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS),
+            polled.claimed,
+        )
 
-    async def _claim(self, page: _TurnsPage, turn_start: AgentsTurnStart, claimant: str) -> _Turn | None:
+    async def _wait(self, delay: float) -> None:
+        if self._stopping.is_set():
+            return
+        sleeping: Final = asyncio.ensure_future(self._sleep(delay))
+        stopping: Final = asyncio.ensure_future(self._stopping.wait())
+        try:
+            done, _ = await asyncio.wait((sleeping, stopping), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            _ = sleeping.cancel()
+            _ = stopping.cancel()
+        if sleeping in done:
+            sleeping.result()
+
+    def _outcome(self, polled: _Polled, elapsed: float) -> _TurnOutcome | None:
+        failure: Final = polled.failure
+        claimed: Final = polled.claimed
+        if failure is not None and not failure.retryable:
+            return _bill_reported(claimed, failure.reason)
+        if failure is None and claimed.settled:
+            return _BilledTurns(turns=_billed_turns(claimed))
+        if failure is None and claimed.root is None and elapsed >= OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS:
+            return _UnbilledTurn(reason="no turn started by the call showed up")
+        if self._stopping.is_set():
+            return _bill_reported(claimed, "the proxy is shutting down")
+        if elapsed >= OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS:
+            return _bill_reported(
+                claimed, f"its turns did not settle within {OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS:g}s"
+            )
+        return None
+
+    async def _poll(self, turn_start: AgentsTurnStart, claimant: str, claimed: _Claimed) -> _Polled:
+        root: Final = await self._refreshed_root(turn_start, claimant, claimed.root)
+        if isinstance(root, _FetchFailed):
+            return _Polled(claimed=claimed, failure=root)
+        if root is None or not root.settled:
+            return _Polled(claimed=_Claimed(root=root))
+        subagent_turns: Final = await self._refreshed_subagent_turns(turn_start, claimant, claimed.subagent_turns)
+        if isinstance(subagent_turns, _FetchFailed):
+            return _Polled(claimed=_Claimed(root=root, subagent_turns=claimed.subagent_turns), failure=subagent_turns)
+        return _Polled(claimed=_Claimed(root=root, subagent_turns=subagent_turns))
+
+    async def _refreshed_root(
+        self, turn_start: AgentsTurnStart, claimant: str, root: _ClaimedTurn | None
+    ) -> _ClaimedTurn | _FetchFailed | None:
+        if root is not None and root.settled:
+            return root
+        turns_path: Final = f"agents/sessions/{turn_start.session_id}/turns"
+        page: Final = await self._fetch_turns(turn_start, turns_path)
+        if isinstance(page, _FetchFailed):
+            return page
+        if root is None:
+            return await self._claim(page, turn_start, claimant, turns_path)
+        return next(
+            (_ClaimedTurn(turn=turn, turns_path=turns_path) for turn in page.data if turn.id == root.turn.id), root
+        )
+
+    async def _claim(
+        self, page: _TurnsPage, turn_start: AgentsTurnStart, claimant: str, turns_path: str
+    ) -> _ClaimedTurn | None:
         candidates: Final = sorted(
             (turn for turn in reversed(page.data) if turn.created_at >= turn_start.started_at),
             key=lambda turn: turn.created_at,
         )
         for turn in candidates:
             if await self._claims.claim(turn.id, claimant):
-                return turn
+                return _ClaimedTurn(turn=turn, turns_path=turns_path)
         return None
 
-    async def _fetch(self, turn_start: AgentsTurnStart, path: str) -> bytes | None:
+    async def _refreshed_subagent_turns(
+        self, turn_start: AgentsTurnStart, claimant: str, known: tuple[_ClaimedTurn, ...]
+    ) -> tuple[_ClaimedTurn, ...] | _FetchFailed:
+        session_path: Final = f"agents/sessions/{turn_start.session_id}"
+        subagents: Final = await self._fetch_page(
+            turn_start, f"{session_path}/subagents?order=desc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}", _SubagentsPage
+        )
+        if isinstance(subagents, _FetchFailed):
+            return subagents
+        turns_paths: Final = tuple(f"{session_path}/subagents/{subagent.id}/turns" for subagent in subagents.data)
+        pages: Final = await asyncio.gather(*(self._fetch_turns(turn_start, turns_path) for turns_path in turns_paths))
+        failure: Final = next((page for page in pages if isinstance(page, _FetchFailed)), None)
+        if failure is not None:
+            return failure
+        listed: Final = tuple(_listed_turns(turns_paths, pages))
+        latest: Final = MappingProxyType({claimed_turn.turn.id: claimed_turn for claimed_turn in listed})
+        known_ids: Final = frozenset(claimed_turn.turn.id for claimed_turn in known)
+        claimed_now: Final = tuple(
+            [
+                claimed_turn
+                for claimed_turn in listed
+                if claimed_turn.turn.id not in known_ids
+                and claimed_turn.turn.created_at >= turn_start.started_at
+                and await self._claims.claim(claimed_turn.turn.id, claimant)
+            ]
+        )
+        return (*(latest.get(claimed_turn.turn.id, claimed_turn) for claimed_turn in known), *claimed_now)
+
+    async def _fetch(self, turn_start: AgentsTurnStart, path: str) -> bytes | _FetchFailed:
         try:
             response: Final = await self._get(turn_start.base_url, path, turn_start.scope_headers)
         except httpx.HTTPError as e:
             verbose_proxy_logger.warning("OpenAI Agents passthrough: GET %s failed: %s", path, e)
-            return None
+            return _FetchFailed(reason=f"GET {path} failed: {e}", retryable=True)
         if not response.is_success:
             verbose_proxy_logger.warning("OpenAI Agents passthrough: GET %s returned %s", path, response.status_code)
-            return None
+            return _FetchFailed(
+                reason=f"GET {path} returned {response.status_code}", retryable=_is_retryable(response.status_code)
+            )
         return response.content
 
-    async def _fetch_turns(self, turn_start: AgentsTurnStart) -> _TurnsPage | None:
-        content: Final = await self._fetch(
-            turn_start,
-            f"agents/sessions/{turn_start.session_id}/turns?order=desc&limit={OPENAI_AGENTS_TURNS_PAGE_LIMIT}",
-        )
-        if content is None:
-            return None
+    async def _fetch_page(
+        self, turn_start: AgentsTurnStart, path: str, page_type: type[_PageT]
+    ) -> _PageT | _FetchFailed:
+        content: Final = await self._fetch(turn_start, path)
+        if isinstance(content, _FetchFailed):
+            return content
         try:
-            return _TurnsPage.model_validate_json(content)
+            return page_type.model_validate_json(content)
         except ValidationError as e:
-            verbose_proxy_logger.warning("OpenAI Agents passthrough: unreadable turns page: %s", e)
-            return None
+            verbose_proxy_logger.warning("OpenAI Agents passthrough: GET %s returned an unreadable body: %s", path, e)
+            return _FetchFailed(reason=f"GET {path} returned an unreadable body", retryable=False)
+
+    async def _fetch_turns(self, turn_start: AgentsTurnStart, turns_path: str) -> _TurnsPage | _FetchFailed:
+        return await self._fetch_page(
+            turn_start, f"{turns_path}?order=desc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}", _TurnsPage
+        )
+
+    async def _web_search_calls(self, turn_start: AgentsTurnStart, items_path: str, after: str | None = None) -> int:
+        cursor: Final = "" if after is None else f"&after={after}"
+        page: Final = await self._fetch_page(
+            turn_start, f"{items_path}?limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}{cursor}", _ItemsPage
+        )
+        if isinstance(page, _FetchFailed):
+            verbose_proxy_logger.warning(
+                "OpenAI Agents passthrough: billing session %s without the web searches of %s, %s",
+                turn_start.session_id,
+                items_path,
+                page.reason,
+            )
+            return 0
+        searches: Final = sum(1 for item in page.data if item.type == _WEB_SEARCH_CALL)
+        if not page.has_more or page.last_id is None:
+            return searches
+        return searches + await self._web_search_calls(turn_start, items_path, page.last_id)
 
     async def _agent(self, turn_start: AgentsTurnStart) -> AgentSpec | None:
         if turn_start.agent is not None:
             return turn_start.agent
-        content: Final = await self._fetch(turn_start, f"agents/sessions/{turn_start.session_id}")
-        if content is None:
-            return None
-        try:
-            return _Session.model_validate_json(content).agent
-        except ValidationError as e:
-            verbose_proxy_logger.warning("OpenAI Agents passthrough: unreadable session: %s", e)
-            return None
+        session: Final = await self._fetch_page(turn_start, f"agents/sessions/{turn_start.session_id}", _Session)
+        return None if isinstance(session, _FetchFailed) else session.agent
+
+    async def _response_cost(
+        self, turn_start: AgentsTurnStart, agent: AgentSpec, turns: tuple[_BilledTurn, ...]
+    ) -> float:
+        return sum(
+            [
+                _turn_cost(agent, billed_turn, await self._web_search_calls(turn_start, billed_turn.items_path))
+                for billed_turn in turns
+            ]
+        )
 
     async def _log_billed(
-        self, turn_start: AgentsTurnStart, row: DeferredAgentsRow, turn: _Turn, usage: ResponseAPIUsage
+        self, turn_start: AgentsTurnStart, row: DeferredAgentsRow, turns: tuple[_BilledTurn, ...]
     ) -> None:
         agent: Final = await self._agent(turn_start)
         if agent is None:
             verbose_proxy_logger.warning(
-                "OpenAI Agents passthrough: no agent model for session %s, logging turn %s without cost",
+                "OpenAI Agents passthrough: no agent model for session %s, logging its turns without cost",
                 turn_start.session_id,
-                turn.id,
             )
         billed: Final[Mapping[str, object]] = {
             **({} if agent is None else {"model": agent.model}),
             "custom_llm_provider": "openai",
-            "response_cost": 0.0 if agent is None else _turn_cost(agent, turn, usage),
-            "combined_usage_object": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage),
+            "response_cost": 0.0 if agent is None else await self._response_cost(turn_start, agent, turns),
+            "combined_usage_object": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
+                _combined_usage(tuple(billed_turn.usage for billed_turn in turns))
+            ),
         }
         row.logging_obj.model_call_details.update(billed)
         standard_logging_object: Final = get_standard_logging_object_payload(
-            kwargs={**row.logging_obj.model_call_details, **row.kwargs, **billed},
+            kwargs={**row.kwargs, **row.logging_obj.model_call_details, **billed},
             init_response_obj=row.response_object,
             start_time=row.start_time,
             end_time=row.end_time,

@@ -7,6 +7,7 @@ sleeping for a fixed worst-case duration.
 """
 
 import time
+from typing import Final
 
 import pytest
 
@@ -179,3 +180,20 @@ async def test_emits_periodic_drain_waiting_log_while_waiting():
         timeout=10, count_fn=count_fn, poll_interval=0, log_interval=0
     )
     assert drained == 3
+
+
+@pytest.mark.parametrize("elapsed, cap, expected", [(4, None, 26), (25, 2, 2), (29, 5, 1), (31, None, 0)])
+def test_remaining_budget_counts_time_since_shutdown_started(
+    monkeypatch: pytest.MonkeyPatch, elapsed: float, cap: float | None, expected: float
+) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    GracefulShutdownManager.start_shutdown()
+    started: Final = GracefulShutdownManager._shutdown_started_at
+    assert started is not None
+    assert GracefulShutdownManager.remaining(cap, clock=lambda: started + elapsed) == pytest.approx(expected)
+
+
+def test_remaining_budget_before_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    assert GracefulShutdownManager.remaining(clock=lambda: 100.0) == 30.0
+    assert GracefulShutdownManager.remaining(-1, clock=lambda: 100.0) == 0.0
