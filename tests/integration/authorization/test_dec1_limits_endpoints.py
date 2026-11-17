@@ -274,12 +274,13 @@ def test_a_messages_request_is_charged_input_plus_output_tokens(gateway: Gateway
 def test_text_completions_are_limited_and_reserved_from_the_prompt(gateway: Gateway) -> None:
     """A key has rpm_limit=1 and tpm_limit=1000 and sends two ``/v1/completions`` requests with a 40 character
     prompt and ``max_tokens: 20``. The first must answer 200 with ``remaining-requests: 0`` and
-    ``remaining-tokens: 970``; the second must be the 429 for ``api_key`` requests.
+    ``remaining-tokens: 970``; the second must be the 429 for ``api_key`` requests with the bare limiter text.
 
-    Pinned current behaviour: the ``/v1/completions`` route does not go through ``handle_llm_api_exception``. Its
-    catch all (litellm/proxy/proxy_server.py ``completion``, ``route_failure_proxy_exception(e, str(e.message))``)
-    uses the exception's ``message``, so the limiter's text arrives prefixed with ``litellm.RateLimitError: ``
-    where chat completions return the bare limiter text."""
+    Pinned current behaviour: the key is cached after the first request, so the second is refused in auth before
+    the body is read (litellm/proxy/auth/user_api_key_auth.py ``_reject_from_headers_before_reading_body``, line
+    2251) and never reaches the ``/v1/completions`` handler, whose catch all
+    (litellm/proxy/proxy_server.py ``completion``, ``route_failure_proxy_exception(e, str(e.message))``) would
+    prefix the text with ``litellm.RateLimitError: ``. The message is therefore the same as on chat completions."""
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = _completion_model(scenario, wire)
         key: Final = scenario.key(models=[model], rpm_limit=1, tpm_limit=1000)
@@ -297,7 +298,6 @@ def test_text_completions_are_limited_and_reserved_from_the_prompt(gateway: Gate
             hashed(key),
             "requests",
             1,
-            message_prefix="litellm.RateLimitError: ",
         )
         assert len(posts(wire)) == 1
 

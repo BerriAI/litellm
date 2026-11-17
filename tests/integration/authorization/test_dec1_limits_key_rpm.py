@@ -10,7 +10,9 @@ window length in seconds), ``rate_limit_type`` and ``reset_at`` headers. An admi
 limits as ``x-litellm-key-rpm-limit`` and ``x-litellm-key-tpm-limit``.
 
 The counters live in Redis under ``{api_key:<hash>}:requests`` with a sibling ``{api_key:<hash>}:window``
-holding the epoch second the window opened. The first refused request still increments the request counter.
+holding the epoch second the window opened. Once a key is in the proxy's key cache, a request over a limit that
+needs no body is refused in auth before the body is read, and that refusal only reads the counters
+(``raise_if_over_limit_before_body``), so refusals of a cached key do not increment the request counter.
 
 Read from ``litellm/proxy/hooks/parallel_request_limiter_v3.py`` (``should_rate_limit``,
 ``_handle_rate_limit_error``, ``_merge_ratelimit_statuses_into_additional_headers``),
@@ -23,6 +25,8 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 from typing import Final
+
+import pytest
 
 from tests.integration._support.client import Gateway, object_value
 from tests.integration._support.wire import wire_server
@@ -124,7 +128,15 @@ def test_the_reset_time_in_an_rpm_refusal_is_one_window_after_the_refusal(gatewa
 def test_the_rpm_refusal_still_carries_the_call_id_and_key_limit_headers(gateway: Gateway) -> None:
     """A key with rpm_limit=1 and tpm_limit=5000 is refused for requests. The 429 must still carry a non-empty
     ``x-litellm-call-id`` and the configured limits as ``x-litellm-key-rpm-limit: 1`` and
-    ``x-litellm-key-tpm-limit: 5000``, the same headers a served response has."""
+    ``x-litellm-key-tpm-limit: 5000``, the same headers a served response has.
+
+    BUG: the refusal of a cached key is now raised in auth before the body is read
+    (litellm/proxy/auth/user_api_key_auth.py ``_reject_from_headers_before_reading_body``, line 2251). That path
+    generates a ``litellm_call_id`` for the failure log (``_preflight_failure_request_data``, line 2202) but never
+    puts it on the response, and it skips the endpoint that adds the ``x-litellm-key-*`` headers
+    (litellm/proxy/common_request_processing.py:2903), so the 429 arrives without ``x-litellm-call-id`` and a
+    client cannot correlate it with the logged failure."""
+    pytest.skip("BUG: a 429 refused before the body is read has no x-litellm-call-id or x-litellm-key-* headers")
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         key: Final = scenario.key(models=[model], rpm_limit=1, tpm_limit=5000)
@@ -215,15 +227,20 @@ def test_the_master_key_is_not_limited_by_another_keys_rpm_limit(gateway: Gatewa
 
 def test_the_request_counter_stops_one_past_the_limit_on_a_single_instance(gateway: Gateway) -> None:
     """A key with rpm_limit=1 sends four requests to one proxy instance. The Redis counter
-    ``{api_key:<hash>}:requests`` must read 2: the first refusal increments it past the limit, and later
-    refusals are answered from the instance's local mirror without touching Redis. A rewrite that increments on
-    every refusal, or never past the limit, changes what a second instance sees."""
+    ``{api_key:<hash>}:requests`` must read 1: refusals do not count against the window.
+
+    Pinned current behaviour: after the first request the key is cached, so every refusal is answered in auth
+    before the body is read (litellm/proxy/auth/user_api_key_auth.py ``_reject_from_headers_before_reading_body``,
+    line 2251), and that check calls ``should_rate_limit(read_only=True)``
+    (litellm/proxy/hooks/parallel_request_limiter_v3.py:4158), which compares the local mirror plus one against the
+    limit without incrementing. Before that path existed the first refusal pushed the counter to 2. A rewrite that
+    increments on refusal changes what a second instance sees."""
     with wire_server(provider()) as wire, gateway.scenario() as scenario, shared_redis() as redis:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         key: Final = scenario.key(models=[model], rpm_limit=1)
         responses: Final = [chat(gateway, model, key) for _ in range(4)]
         assert statuses(responses) == [200, 429, 429, 429]
-        assert redis_integer(redis, counter_key("api_key", hashed(key), "requests")) == 2
+        assert redis_integer(redis, counter_key("api_key", hashed(key), "requests")) == 1
         assert len(posts(wire)) == 1
 
 

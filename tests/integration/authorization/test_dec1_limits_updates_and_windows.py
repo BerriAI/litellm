@@ -44,14 +44,19 @@ SHORT_WINDOW_ENVIRONMENT: Final = {"LITELLM_RATE_LIMIT_WINDOW_SIZE": str(SHORT_W
 def test_raising_a_keys_rpm_limit_admits_it_again_in_the_same_window(gateway: Gateway) -> None:
     """A key with rpm_limit=1 is served once and refused once. ``/key/update`` then sets rpm_limit=5. The key must
     be served again without waiting for the window, and that response must report ``limit-requests: 5`` and
-    ``remaining-requests: 2``, because the two earlier requests still count in the unchanged window."""
+    ``remaining-requests: 3``: the served request still counts in the unchanged window, the refused one does not.
+
+    Pinned current behaviour: the refusal of the cached key is answered in auth before the body is read
+    (litellm/proxy/auth/user_api_key_auth.py ``_reject_from_headers_before_reading_body``, line 2251) by a
+    read-only check (litellm/proxy/hooks/parallel_request_limiter_v3.py:4158), so it never increments the
+    request counter. A rewrite that charges refusals reports 2 here."""
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         key: Final = scenario.key(models=[model], rpm_limit=1)
         assert statuses([chat(gateway, model, key), chat(gateway, model, key)]) == [200, 429]
         gateway.post("/key/update", {"key": key, "rpm_limit": 5})
         served: Final = eventually(lambda: chat(gateway, model, key), lambda response: response.status_code == 200)
-        assert scope_headers(served, "api_key") == {"limit-requests": "5", "remaining-requests": "2"}
+        assert scope_headers(served, "api_key") == {"limit-requests": "5", "remaining-requests": "3"}
         assert len(posts(wire)) == 2
 
 

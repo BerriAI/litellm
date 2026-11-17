@@ -286,18 +286,12 @@ def assert_limited(
     kind: str,
     limit: int,
     remaining: int = 0,
-    *,
-    message_prefix: str = "",
 ) -> None:
-    """The response is the v3 limiter's OpenAI-shaped 429 for exactly this scope, limit kind and limit.
-
-    ``message_prefix`` is text an endpoint puts in front of the limiter's message (see the text completions
-    test, which pins the ``litellm.RateLimitError: `` prefix that route adds).
-    """
+    """The response is the v3 limiter's OpenAI-shaped 429 for exactly this scope, limit kind and limit."""
     assert response.status_code == 429, f"{response.status_code} {response.text}"
     error: Final = error_of(response)
     message: Final = string_value(error["message"])
-    prefix: Final = message_prefix + limit_message(scope, value, kind, limit, remaining)
+    prefix: Final = limit_message(scope, value, kind, limit, remaining)
     assert message.startswith(prefix), message
     assert RESET_AT.match(message.removeprefix(prefix)), message
     assert {name: error[name] for name in ("type", "param", "code")} == {

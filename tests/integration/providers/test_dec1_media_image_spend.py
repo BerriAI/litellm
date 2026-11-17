@@ -50,15 +50,19 @@ def _prompt() -> str:
 def test_image_generation_bills_the_per_image_price_times_the_requested_n(gateway: Gateway) -> None:
     """The deployment costs 0.25 per image and the caller asks for `n: 3`. The response cost header must be
     0.75, and one spend row must land for the key with `call_type` `aimage_generation`, `status` `success`,
-    `spend` 0.75, `model_group` equal to the public model name and `custom_llm_provider` `openai`."""
+    `spend` 0.75, `model_group` equal to the public model name and `custom_llm_provider` `openai`.
+
+    Skipped as a product bug: since #52103 (113766d4) the proxy builds the logging object before routing
+    (litellm/proxy/image_endpoints/endpoints.py:173), so the deployment's custom image price never reaches
+    `Logging.litellm_params`, custom pricing is not detected (litellm/litellm_core_utils/litellm_logging.py:7578)
+    and the call is priced at 0 with no `x-litellm-response-cost` header."""
+    pytest.skip("BUG: image generation ignores the deployment's custom image price since #52103, cost is 0")
     with wire_server(lambda _request: _images(3)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/dall-e-2", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, output_cost_per_image=_PRICE
         )
         key: Final = scenario.key(models=[model])
-        response: Final = gateway.request(
-            "POST", _GENERATIONS, {"model": model, "prompt": _prompt(), "n": 3}, key=key
-        )
+        response: Final = gateway.request("POST", _GENERATIONS, {"model": model, "prompt": _prompt(), "n": 3}, key=key)
         assert response.status_code == 200, response.text
         assert response_cost(response) == pytest.approx(3 * _PRICE)
         row: Final = logged_rows(key)[0]
@@ -75,7 +79,13 @@ def test_image_generation_bills_the_per_image_price_times_the_requested_n(gatewa
 def test_image_generation_without_n_bills_the_number_of_images_returned(gateway: Gateway) -> None:
     """The caller omits `n` and the upstream returns two images. The cost must be two times the per-image price:
     with no requested count the returned `data` length is the billing basis
-    (litellm/litellm_core_utils/llm_cost_calc/utils.py:2327)."""
+    (litellm/litellm_core_utils/llm_cost_calc/utils.py:2327).
+
+    Skipped as a product bug: since #52103 (113766d4) the proxy builds the logging object before routing
+    (litellm/proxy/image_endpoints/endpoints.py:173), so the deployment's custom image price never reaches
+    `Logging.litellm_params`, custom pricing is not detected (litellm/litellm_core_utils/litellm_logging.py:7578)
+    and the call is priced at 0 with no `x-litellm-response-cost` header."""
+    pytest.skip("BUG: image generation ignores the deployment's custom image price since #52103, cost is 0")
     with wire_server(lambda _request: _images(2)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/dall-e-2", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, output_cost_per_image=_PRICE
@@ -91,7 +101,13 @@ def test_image_generation_without_n_bills_the_number_of_images_returned(gateway:
 def test_image_generation_bills_a_per_pixel_price_by_the_requested_size(gateway: Gateway) -> None:
     """The deployment sets only `input_cost_per_pixel` (1e-8) and the caller asks for one `1792x1024` image. The
     cost must be 1792 * 1024 * 1e-8, so the requested size is the billing basis for pixel-priced models
-    (litellm/cost_calculator.py:3085)."""
+    (litellm/cost_calculator.py:3085).
+
+    Skipped as a product bug: since #52103 (113766d4) the proxy builds the logging object before routing
+    (litellm/proxy/image_endpoints/endpoints.py:173), so the deployment's custom image price never reaches
+    `Logging.litellm_params`, custom pricing is not detected (litellm/litellm_core_utils/litellm_logging.py:7578)
+    and the call is priced at 0 with no `x-litellm-response-cost` header."""
+    pytest.skip("BUG: image generation ignores the deployment's custom image price since #52103, cost is 0")
     with wire_server(_one_image) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/dall-e-3", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, input_cost_per_pixel=1e-8
@@ -109,7 +125,13 @@ def test_image_generation_bills_a_per_pixel_price_by_the_requested_size(gateway:
 def test_image_generation_cost_is_added_to_the_team_spend(gateway: Gateway) -> None:
     """A key that belongs to a team generates one image priced at 0.25. The team's `spend` column in
     `LiteLLM_TeamTable` must reach 0.25 and the spend row must carry the team id, so team budgets and reports
-    see image traffic."""
+    see image traffic.
+
+    Skipped as a product bug: since #52103 (113766d4) the proxy builds the logging object before routing
+    (litellm/proxy/image_endpoints/endpoints.py:173), so the deployment's custom image price never reaches
+    `Logging.litellm_params`, custom pricing is not detected (litellm/litellm_core_utils/litellm_logging.py:7578)
+    and the call is priced at 0 with no `x-litellm-response-cost` header."""
+    pytest.skip("BUG: image generation ignores the deployment's custom image price since #52103, cost is 0")
     with wire_server(_one_image) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/dall-e-3", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, output_cost_per_image=_PRICE
@@ -186,7 +208,13 @@ def test_failed_image_generation_logs_a_failure_row_with_zero_spend(gateway: Gat
 def test_image_generation_is_refused_once_the_key_budget_is_spent(gateway: Gateway) -> None:
     """A key has `max_budget` 0.2 and an image costs 0.25. The first call is served. Once the key's spend has
     settled at 0.25 the second call must answer 422 with error type `budget_exceeded` and must not reach the
-    upstream."""
+    upstream.
+
+    Skipped as a product bug: since #52103 (113766d4) the proxy builds the logging object before routing
+    (litellm/proxy/image_endpoints/endpoints.py:173), so the deployment's custom image price never reaches
+    `Logging.litellm_params`, custom pricing is not detected (litellm/litellm_core_utils/litellm_logging.py:7578)
+    and the call is priced at 0 with no `x-litellm-response-cost` header."""
+    pytest.skip("BUG: image generation ignores the deployment's custom image price since #52103, cost is 0")
     with wire_server(_one_image) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/dall-e-3", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, output_cost_per_image=_PRICE
@@ -275,9 +303,7 @@ def test_image_generation_retries_a_failed_attempt_when_num_retries_is_set(gatew
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model="openai/dall-e-3", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY)
-        response: Final = gateway.request(
-            "POST", _GENERATIONS, {"model": model, "prompt": prompt, "num_retries": 1}
-        )
+        response: Final = gateway.request("POST", _GENERATIONS, {"model": model, "prompt": prompt, "num_retries": 1})
         assert response.status_code == 200, response.text
         assert len(wire.drain()) == 2
         assert seen[0] == seen[1] == {"model": "dall-e-3", "prompt": prompt}

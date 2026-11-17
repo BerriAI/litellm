@@ -176,11 +176,13 @@ class IdentityProvider:
         omit: tuple[str, ...] = (),
         headers: Mapping[str, JsonValue] | None = None,
         algorithm: str | None = None,
+        without_kid: bool = False,
         **claims: JsonValue,
     ) -> str:
         """A token signed by `key` (default: the first published key) with `iat` now and `exp` in five minutes.
 
-        `claims` override the defaults, `omit` drops claims, `headers` override the JOSE header (`kid` included).
+        `claims` override the defaults, `omit` drops claims, `headers` override the JOSE header (`kid` included),
+        and `without_kid` leaves the `kid` header out altogether (PyJWT refuses to encode a null `kid`).
         """
         signer: Final = key or self.key
         now: Final = int(time.time())
@@ -191,7 +193,7 @@ class IdentityProvider:
             payload,
             signer.private,
             algorithm=algorithm or signer.algorithm,
-            headers={"kid": signer.kid, **(headers or {})},
+            headers={**({} if without_kid else {"kid": signer.kid}), **(headers or {})},
         )
 
 

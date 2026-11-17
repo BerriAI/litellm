@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from tests.integration._support.client import Gateway, list_value, object_value
+from tests.integration._support.client import Gateway, list_value, object_value, string_value
 from tests.integration.authorization.dec1_keys_support import (
     assert_denied,
     assert_served,
@@ -371,13 +371,31 @@ def test_a_key_without_limits_omits_each_limit_header(gateway: Gateway) -> None:
 
 
 def test_guardrails_given_at_key_creation_are_stored_in_key_metadata(gateway: Gateway) -> None:
-    """A key is generated with `guardrails: [<name>]` and its row is read.
+    """A guardrail is registered through `POST /guardrails` (not default-on, so no other test sees it), then a key
+    is generated with `guardrails: [<name>]` and its row is read.
 
     The row's `metadata.guardrails` must equal that list. Auth reads guardrails from key metadata on every
-    request, so this stored location is the contract between key management and the request path.
+    request, so this stored location is the contract between key management and the request path. Key writes
+    refuse names that are neither loaded nor stored (litellm/proxy/guardrails/guardrail_helpers.py:187), so the
+    guardrail has to exist first.
     """
     with gateway.scenario() as scenario:
         name: Final = f"guardrail-{marker()}"
+        created: Final = gateway.post(
+            "/guardrails",
+            {
+                "guardrail": {
+                    "guardrail_name": name,
+                    "litellm_params": {
+                        "guardrail": "litellm_content_filter",
+                        "mode": "pre_call",
+                        "default_on": False,
+                        "blocked_words": [{"keyword": f"blocked-{marker()}", "action": "BLOCK"}],
+                    },
+                }
+            },
+        )
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/guardrails/{string_value(created['guardrail_id'])}")
         key: Final = scenario.key(guardrails=[name])
         assert object_value(key_row(gateway, key)["metadata"])["guardrails"] == [name]
 

@@ -240,20 +240,22 @@ def test_a_reserved_priority_reports_its_share_of_the_model_rpm(gateway: Gateway
 
 
 def test_below_saturation_a_priority_may_borrow_beyond_its_reserved_share(gateway: Gateway, tmp_path: Path) -> None:
-    """The dynamic limiter is on with ``priority_reservation: {"premium": 0.5}`` and a model has ``rpm: 10``, so
-    ``premium`` is reserved 5 requests. With no other traffic a ``premium`` key sends 7 requests. All 7 must be
-    served: the model is below the 80% saturation threshold (7 of 10), where only total capacity is enforced.
-    UNVERIFIED: assumes the saturation read is not ahead of the counters; see ``_check_model_saturation``."""
+    """The dynamic limiter is on with ``priority_reservation: {"premium": 0.2}`` and a model has ``rpm: 10``, so
+    ``premium`` is reserved 2 requests. With no other traffic a ``premium`` key sends 5 requests. All 5 must be
+    served: before each one the model is at most 40% saturated (4 of 10), below the default 50%
+    ``saturation_threshold`` (litellm/types/utils.py:5449), where only total capacity is enforced
+    (litellm/proxy/hooks/dynamic_rate_limiter_v3.py:1228). The saturation read is the model counter before the
+    request, so a stale read can only be lower."""
     with (
         wire_server(provider()) as wire,
-        _dynamic_proxy(gateway, tmp_path, {"premium": 0.5}) as candidate,
+        _dynamic_proxy(gateway, tmp_path, {"premium": 0.2}) as candidate,
         candidate.scenario() as scenario,
     ):
         model: Final = scenario.model(api_base=f"{wire.url}/v1", rpm=10)
         key: Final = scenario.key(models=[model], metadata={"priority": "premium"})
-        responses: Final = [chat(candidate, model, key) for _ in range(7)]
-        assert statuses(responses) == [200] * 7, [response.text for response in responses]
-        assert len(posts(wire)) == 7
+        responses: Final = [chat(candidate, model, key) for _ in range(5)]
+        assert statuses(responses) == [200] * 5, [response.text for response in responses]
+        assert len(posts(wire)) == 5
 
 
 def test_the_key_limit_and_the_model_capacity_are_both_enforced(gateway: Gateway, tmp_path: Path) -> None:

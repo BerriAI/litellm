@@ -31,7 +31,7 @@ import pytest
 import yaml
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually
-from tests.integration._support.process import owned_proxy_process, refused_boot_log
+from tests.integration._support.process import owned_proxy_process, proxy_database_environment, refused_boot_log
 from tests.integration.database.dec1_failures_rig import (
     CHAT,
     DISCONNECTED_BODY,
@@ -61,8 +61,12 @@ Call = Callable[[Gateway, str, str], httpx.Response]
 
 
 def _unreachable_environment() -> dict[str, str]:
+    """Both database URLs the proxy would get point at a refused port. On a replica profile the harness hands the
+    proxy `DATABASE_URL_READ_REPLICA` from `INTEGRATION_PROXY_READ_REPLICA_URL`, so the reader is checked in the
+    environment the proxy inherits, not only in this process's own `DATABASE_URL_READ_REPLICA`."""
     unreachable: Final = unreachable_database_url(os.environ["DATABASE_URL"])
-    reader: Final = {"DATABASE_URL_READ_REPLICA": unreachable} if os.environ.get("DATABASE_URL_READ_REPLICA") else {}
+    inherited: Final = {**os.environ, **proxy_database_environment()}
+    reader: Final = {"DATABASE_URL_READ_REPLICA": unreachable} if inherited.get("DATABASE_URL_READ_REPLICA") else {}
     return {"DATABASE_URL": unreachable, **reader}
 
 
@@ -99,7 +103,8 @@ def test_the_proxy_refuses_to_start_on_an_unreachable_database_even_with_schema_
 ) -> None:
     """`general_settings.disable_prisma_schema_update: true` skips the migration step, and the database is
     unreachable. The proxy must still exit non-zero instead of becoming ready: without the availability flag
-    a failed connect at startup is fatal.
+    a failed connect at startup is fatal. The read replica is made unreachable too: with only the writer down
+    the proxy deliberately boots and serves reads from the replica (litellm/proxy/db/routing_prisma_wrapper.py:213).
     UNVERIFIED: read from `_initialize_prisma_client`, where `handle_db_exception` re-raises the connect
     error unless `allow_requests_on_db_unavailable` is on; the exit code and log text are not asserted."""
     with healthy_provider() as provider:

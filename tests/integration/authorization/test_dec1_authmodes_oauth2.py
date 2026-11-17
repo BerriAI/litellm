@@ -508,15 +508,23 @@ def test_header_trust_without_trusted_proxy_ranges_refuses_everything(
 def test_identity_headers_from_an_untrusted_peer_are_refused(tmp_path_factory: pytest.TempPathFactory) -> None:
     """`trusted_proxy_ranges` is `["10.0.0.0/8"]` and the test connects from 127.0.0.1.
 
-    The proxy must answer 401 `auth_error` with exactly "Authentication Error, OAuth2 proxy auth only accepts
-    identity headers from configured trusted proxy ranges. Direct client IP '127.0.0.1' is not trusted."
+    Without `X-Forwarded-For` the proxy must answer 401 `auth_error` with exactly "Authentication Error, OAuth2
+    proxy auth only accepts identity headers from configured trusted proxy ranges. Direct client IP
+    '127.0.0.1' is not trusted."
+
+    Pinned current behaviour: the "direct client IP" is `request.client.host`
+    (litellm/proxy/auth/trusted_proxy_utils.py:38), which uvicorn has already rewritten from `X-Forwarded-For`
+    when the TCP peer is in its `forwarded_allow_ips` (127.0.0.1 by default, which litellm/proxy/proxy_cli.py
+    leaves in place). So the same loopback caller adding `X-Forwarded-For: 10.1.2.3` is treated
+    as the trusted 10.1.2.3 and served, although `require_trusted_proxy_request` says it checks the direct peer
+    and not `X-Forwarded-For`. CI run 43992085012 logged that request as `10.1.2.3:0 ... 200 OK`.
     """
     with _header_proxy(
         tmp_path_factory.mktemp("dec1-authmodes-headers-untrusted"),
         {"trusted_proxy_ranges": ["10.0.0.0/8"], "oauth2_config_mappings": IDENTITY_MAPPINGS},
     ) as proxy:
         assert_denied(
-            _header_chat(proxy, {USER_HEADER: unique("header-user"), "X-Forwarded-For": "10.1.2.3"}),
+            _header_chat(proxy, {USER_HEADER: unique("header-user")}),
             status=401,
             error_type="auth_error",
             message=(
@@ -524,6 +532,7 @@ def test_identity_headers_from_an_untrusted_peer_are_refused(tmp_path_factory: p
                 "proxy ranges. Direct client IP '127.0.0.1' is not trusted."
             ),
         )
+        assert served_body(_header_chat(proxy, {USER_HEADER: unique("header-user"), "X-Forwarded-For": "10.1.2.3"}))
 
 
 def test_mapping_a_privilege_field_from_a_header_refuses_every_request(

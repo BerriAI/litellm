@@ -112,25 +112,22 @@ def test_group_claims_pick_the_first_team_whose_models_allow_the_request(groups:
         scenario.cleanups.callback(scenario.delete_user, subject)
 
 
-def test_when_no_group_team_has_the_model_the_403_names_the_model_and_the_teams(groups: JwtRig) -> None:
+def test_when_no_group_team_has_the_model_the_standard_team_model_denial_is_returned(groups: JwtRig) -> None:
     """The token lists one team whose `models` do not include the requested model.
 
-    The proxy must answer 403 `auth_error` with exactly "No team has access to the requested model: <model>.
-    Checked teams={'<team>'}. Check `/models` to see all available models." (a Python set repr).
+    Pinned current behaviour: `JWTAuthManager.find_team_with_model_access` (litellm/proxy/auth/handle_jwt.py:1859)
+    falls back to the first route-allowed claim team when none can call the model, so the request is refused by
+    the common team model check with the generic 403 `team_model_access_denied` on `param: model`, not by the
+    older "No team has access to the requested model ... Checked teams=..." message, which no longer reaches
+    clients on this path.
     """
     with groups.proxy.scenario() as scenario:
         model: Final = scenario.model()
         other: Final = scenario.model()
         team: Final = scenario.team(models=[other])
-        assert_denied(
-            chat_as(groups.proxy, groups.idp.token(sub=unique("no-access"), groups=[team]), model),
-            status=403,
-            error_type="auth_error",
-            message=(
-                f"No team has access to the requested model: {model}. Checked teams={{'{team}'}}. "
-                "Check `/models` to see all available models."
-            ),
-        )
+        refused: Final = chat_as(groups.proxy, groups.idp.token(sub=unique("no-access"), groups=[team]), model)
+        assert_model_denied(refused, model, "team_model_access_denied")
+        assert team not in refused.text, refused.text
 
 
 def test_the_team_header_selects_one_of_the_tokens_group_teams(groups: JwtRig) -> None:

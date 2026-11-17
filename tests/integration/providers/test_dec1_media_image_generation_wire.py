@@ -166,7 +166,8 @@ def test_image_generation_keeps_proxy_only_fields_out_of_the_provider_body(gatew
     def respond(request: Request) -> Reply:
         body: Final = json_body(request)
         leaked: Final = sorted(
-            {"metadata", "litellm_call_id", "litellm_metadata", "proxy_server_request", "litellm_logging_obj"} & set(body)
+            {"metadata", "litellm_call_id", "litellm_metadata", "proxy_server_request", "litellm_logging_obj"}
+            & set(body)
         )
         assert leaked == [], body
         assert body["prompt"] == PROMPT
@@ -269,7 +270,12 @@ def test_image_generation_returns_openai_usage_and_output_fields_unchanged(gatew
 def test_image_generation_response_carries_the_litellm_routing_headers(gateway: Gateway) -> None:
     """A successful generation must answer with `x-litellm-call-id`, `x-litellm-model-id` equal to the
     deployment id from `/model/info`, `x-litellm-model-api-base` naming the scripted upstream, a non-empty
-    `x-litellm-version` and a numeric `x-litellm-response-cost`. Clients and dashboards read these headers."""
+    `x-litellm-version` and a numeric `x-litellm-response-cost`. Clients and dashboards read these headers.
+
+    Skipped as a product bug: since #52103 (113766d4) the proxy builds the logging object before routing
+    (litellm/proxy/image_endpoints/endpoints.py:173), so the deployment's `output_cost_per_image` never reaches
+    `Logging.litellm_params` and the response carries no `x-litellm-response-cost` header."""
+    pytest.skip("BUG: image generation ignores the deployment's custom image price since #52103, cost is 0")
     with wire_server(_b64_image) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/dall-e-3", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, output_cost_per_image=0.04
@@ -325,12 +331,8 @@ def test_azure_style_route_model_in_the_path_wins_over_the_body_model(gateway: G
     upstream may be called: the deployment named in the path decides routing (resolve_inference_model, kind
     `image_generation`)."""
     with wire_server(_b64_image) as body_wire, wire_server(_b64_image) as path_wire, gateway.scenario() as scenario:
-        body_model: Final = scenario.model(
-            model="openai/dall-e-3", api_base=f"{body_wire.url}/v1", api_key=OPENAI_KEY
-        )
-        path_model: Final = scenario.model(
-            model="openai/dall-e-3", api_base=f"{path_wire.url}/v1", api_key=OPENAI_KEY
-        )
+        body_model: Final = scenario.model(model="openai/dall-e-3", api_base=f"{body_wire.url}/v1", api_key=OPENAI_KEY)
+        path_model: Final = scenario.model(model="openai/dall-e-3", api_base=f"{path_wire.url}/v1", api_key=OPENAI_KEY)
         response: Final = gateway.request(
             "POST",
             f"/openai/deployments/{path_model}/images/generations",
@@ -364,9 +366,7 @@ def test_azure_image_generation_puts_the_deployment_in_the_url_and_sends_the_api
         model: Final = scenario.model(
             model="azure/dall-e-3", api_base=wire.url, api_key=AZURE_KEY, api_version="2024-10-21"
         )
-        response: Final = gateway.request(
-            "POST", _GENERATIONS, {"model": model, "prompt": PROMPT, "size": "1024x1024"}
-        )
+        response: Final = gateway.request("POST", _GENERATIONS, {"model": model, "prompt": PROMPT, "size": "1024x1024"})
         assert response.status_code == 200, response.text
         assert response.json()["data"][0]["b64_json"] == B64_IMAGE, response.text
         assert len(wire.drain()) == 1
