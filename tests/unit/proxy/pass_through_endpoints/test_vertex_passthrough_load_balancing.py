@@ -67,10 +67,6 @@ async def test_vertex_passthrough_load_balancing():
         patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route,
-        patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-            new_callable=AsyncMock,
-        ) as mock_auth,
     ):
 
         # Setup additional mocks to avoid side effects
@@ -84,7 +80,6 @@ async def test_vertex_passthrough_load_balancing():
 
         mock_endpoint_func = AsyncMock()
         mock_create_route.return_value = mock_endpoint_func
-        mock_auth.return_value = {}
 
         # Execute
         await _base_vertex_proxy_route(
@@ -93,6 +88,7 @@ async def test_vertex_passthrough_load_balancing():
             fastapi_response=mock_response,
             get_vertex_pass_through_handler=mock_handler,
             general_settings={},
+            user_api_key_dict=UserAPIKeyAuth(),
         )
 
         # Verify
@@ -375,10 +371,6 @@ async def test_vertex_passthrough_drops_anthropic_beta_only_on_count_tokens(
         patch(  # test-quality-ok: the upstream call is captured here, the route offers no injection point
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route,
-        patch(  # test-quality-ok: the route calls auth directly rather than through Depends
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-            new_callable=AsyncMock,
-        ) as mock_auth,
         patch(  # test-quality-ok: the route reads the request body for this, a MagicMock request has none
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
             new_callable=AsyncMock,
@@ -397,7 +389,6 @@ async def test_vertex_passthrough_drops_anthropic_beta_only_on_count_tokens(
             "global",
         )
         mock_create_route.return_value = AsyncMock()
-        mock_auth.return_value = UserAPIKeyAuth(api_key="sk-litellm-secret-key")
 
         await _base_vertex_proxy_route(
             endpoint=f"{VERTEX_ANTHROPIC_MODELS_PREFIX}{model_segment}",
@@ -405,6 +396,7 @@ async def test_vertex_passthrough_drops_anthropic_beta_only_on_count_tokens(
             fastapi_response=MagicMock(),
             get_vertex_pass_through_handler=VertexAIPassThroughHandler(),
             general_settings={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-secret-key"),
         )
 
         upstream_headers = mock_create_route.call_args.kwargs["custom_headers"]
@@ -723,10 +715,6 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route,
-        patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-            new_callable=AsyncMock,
-        ) as mock_auth,
     ):
 
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
@@ -738,7 +726,6 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         )
         mock_endpoint_func = AsyncMock()
         mock_create_route.return_value = mock_endpoint_func
-        mock_auth.return_value = {}
 
         mock_handler.get_default_base_target_url.return_value = (
             "https://global-aiplatform.googleapis.com"
@@ -750,6 +737,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
             fastapi_response=mock_response,
             get_vertex_pass_through_handler=mock_handler,
             general_settings={},
+            user_api_key_dict=UserAPIKeyAuth(),
         )
 
         # Verify the router was called with the custom model name (extracted from URL)
@@ -825,11 +813,6 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
             return_value=relay_returning_logging_kwargs,
         ),
-        patch(  # test-quality-ok: the route calls auth directly rather than through Depends
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-            new_callable=AsyncMock,
-            return_value=UserAPIKeyAuth(api_key="hashed-key"),
-        ),
     ):
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
 
@@ -839,6 +822,7 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
             fastapi_response=MagicMock(),
             get_vertex_pass_through_handler=mock_handler,
             general_settings={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
         )
 
     assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"

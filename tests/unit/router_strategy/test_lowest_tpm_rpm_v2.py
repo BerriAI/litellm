@@ -2,32 +2,45 @@
 #    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
 
 import asyncio
+import base64
 import importlib
+import io
 import os
 import time
 import traceback
+from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RouterRateLimitError
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
+
+
+def _memory_usage() -> RouterUsageStore:
+    return RouterUsageStore(connect(None).router_usage())
+
 
 """
 - Given 2 deployments, make sure it's shuffling deployments correctly.
@@ -45,8 +58,8 @@ def restore_verbose_logger_level() -> Iterator[None]:
 def test_tpm_rpm_updated():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     deployment = "azure/gpt-4.1-mini"
@@ -86,11 +99,11 @@ def test_tpm_rpm_updated():
     )
     dt = get_utc_datetime()
     current_minute = dt.strftime("%H-%M")
-    tpm_count_api_key = f"{deployment_id}:{deployment}:tpm:{current_minute}"
-    rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:{current_minute}"
+    tpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "tpm", current_minute)
+    rpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "rpm", current_minute)
 
-    assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(key=tpm_count_api_key)
-    assert 1 == test_cache.get_cache(key=rpm_count_api_key)
+    assert response_obj["usage"]["total_tokens"] == test_cache.get_local(tpm_counter)
+    assert 1 == test_cache.get_local(rpm_counter)
 
 
 # test_tpm_rpm_updated()
@@ -100,7 +113,7 @@ def test_tpm_rpm_updated():
 def test_get_available_deployments():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
+    test_cache = _memory_usage()
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
@@ -113,7 +126,7 @@ def test_get_available_deployments():
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     total_tokens = 50
@@ -347,6 +360,55 @@ def test_router_skip_rate_limited_deployments():
         print(f"An exception occurred! {str(e)}")
 
 
+def _embedding_image_uri() -> str:
+    image: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(image, format="PNG", compress_level=0)
+    return f"data:image/png;base64,{base64.b64encode(image.getvalue()).decode()}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["usage-based-routing", "usage-based-routing-v2", "latency-based-routing", "cost-based-routing"],
+)
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info", "admitted"),
+    [
+        ({"model": "vertex_ai/gemini-embedding-2"}, {}, True),
+        (
+            {"model": "openai/team-embedder", "api_base": "https://embedder.invalid"},
+            {"base_model": "vertex_ai/gemini-embedding-2"},
+            True,
+        ),
+        ({"model": "text-embedding-3-small"}, {}, False),
+    ],
+    ids=["image-model", "image-base-model", "text-model"],
+)
+async def test_deployment_tpm_counts_embedding_image_as_media_only_on_image_models(
+    routing_strategy: str, litellm_params: Dict[str, str], model_info: Dict[str, str], admitted: bool
+) -> None:
+    uri: Final = _embedding_image_uri()
+    assert len(uri) // 4 > 75_000
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embedder",
+                "litellm_params": {**litellm_params, "tpm": 75_000},
+                "model_info": {**model_info, "id": f"embedder-{index}"},
+            }
+            for index in range(2)
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    if not admitted:
+        with pytest.raises((litellm.RateLimitError, RouterRateLimitError)):
+            await router.select("embedder", {}, input=[uri])
+        return
+    deployment: Final = await router.select("embedder", {}, input=[uri])
+    assert deployment["model_info"]["id"] in ("embedder-0", "embedder-1")
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_multiple_potential_deployments(sync_mode):
@@ -518,8 +580,8 @@ def test_return_potential_deployments():
     Assert deployment at limit is filtered out
     """
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
 
     args: Dict = {
         "healthy_deployments": [
@@ -672,7 +734,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -717,3 +779,266 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+_OVER_TPM_MESSAGES: Final = [{"role": "user", "content": "word " * 500}]
+
+
+def _deployment_with_tpm(deployment_id: str, tpm: int) -> DeploymentTypedDict:
+    return {
+        "model_name": "limited",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "api_key": "fake-key",
+            "api_base": f"https://{deployment_id}.example.com/v1",
+            "tpm": tpm,
+        },
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _record_usage(router: Router, deployment_id: str, total_tokens: int) -> None:
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    payload: Final = create_standard_logging_payload()
+    payload["model_group"] = "limited"
+    payload["model_id"] = deployment_id
+    payload["total_tokens"] = total_tokens
+    payload["hidden_params"]["litellm_model_name"] = "openai/gpt-4o"
+    router.lowesttpm_logger_v2.log_success_event(
+        response_obj={"usage": {"total_tokens": total_tokens}},
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "limited"}, "model_info": {"id": deployment_id}},
+            "standard_logging_object": payload,
+        },
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+
+def _assert_names_size_and_largest_limit(refused: litellm.RequestOverDeploymentTpmError) -> None:
+    message: Final = str(refused)
+    assert "No deployments available" in message
+    assert f"estimated at {litellm.token_counter(messages=_OVER_TPM_MESSAGES)} input tokens" in message
+    assert "largest tpm limit of 200" in message
+    assert refused.status_code == 429
+    assert refused.category == "litellm_rate_limit"
+    assert refused.rate_limit_type == "tokens"
+    assert "retry-after" not in refused.response.headers
+    assert PrometheusLogger._get_exception_class_name(refused) == "RateLimitError"
+    assert StandardLoggingPayloadSetup.get_error_information(refused)["error_class"] == "RateLimitError"
+
+
+def _cool_down(router: Router, deployment_id: str) -> None:
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id=deployment_id, original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=60
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_request_over_every_tpm_limit_names_its_size_and_is_not_retried():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("smaller", 200)],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=1,
+    )
+
+    metadata: Final = {"caller": "test"}
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES, metadata=metadata)
+
+    _assert_names_size_and_largest_limit(refused.value)
+    assert metadata["attempted_retries"] == 0
+
+
+def test_sync_request_over_every_tpm_limit_names_its_size_and_the_largest_limit_while_it_cools():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("smaller", 200)],
+        routing_strategy="usage-based-routing-v2",
+    )
+    _cool_down(router, "smaller")
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    _assert_names_size_and_largest_limit(refused.value)
+    assert isinstance(refused.value, ValueError)
+
+
+@pytest.mark.asyncio
+async def test_request_over_every_tpm_limit_still_takes_the_group_fallback():
+    router: Final = Router(
+        model_list=[
+            _deployment_with_tpm("small", 100),
+            {
+                "model_name": "unlimited",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key", "mock_response": "fallback answer"},
+            },
+        ],
+        routing_strategy="usage-based-routing-v2",
+        fallbacks=[{"limited": ["unlimited"]}],
+    )
+
+    response: Final = await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    assert response.choices[0].message.content == "fallback answer"
+
+
+@pytest.mark.parametrize("spare_tokens", [0, 400])
+@pytest.mark.asyncio
+async def test_request_within_the_largest_tpm_limit_refused_on_usage_stays_retryable(spare_tokens: int):
+    estimated_tokens: Final = litellm.token_counter(messages=_OVER_TPM_MESSAGES)
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("busy", estimated_tokens + spare_tokens)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with patch(
+        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+        return_value=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    ):
+        _record_usage(router, deployment_id="busy", total_tokens=spare_tokens + 1)
+        with pytest.raises(litellm.RateLimitError) as refused:
+            await router.async_get_available_deployment(
+                model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {}}
+            )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert refused.value.response.headers["retry-after"] == "60"
+
+
+def _team_deployment_with_tpm(deployment_id: str, tpm: int) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {
+        **deployment,
+        "model_name": f"team-{deployment_id}",
+        "model_info": {"id": deployment_id, "team_id": "team-1", "team_public_model_name": "limited"},
+    }
+
+
+@pytest.mark.parametrize("deployment_with_tpm", [_deployment_with_tpm, _team_deployment_with_tpm])
+@pytest.mark.asyncio
+async def test_request_within_a_cooling_deployments_tpm_limit_stays_retryable(
+    deployment_with_tpm: Callable[[str, int], DeploymentTypedDict],
+):
+    router: Final = Router(
+        model_list=[deployment_with_tpm("small", 100), deployment_with_tpm("big", 200_000)],
+        routing_strategy="usage-based-routing-v2",
+    )
+    _cool_down(router, "big")
+
+    with pytest.raises(litellm.RateLimitError) as refused:
+        await router.async_get_available_deployment(
+            model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {"user_api_key_team_id": "team-1"}}
+        )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert "retry-after" in refused.value.response.headers
+
+
+def _deployment_with_tpm_at_order(deployment_id: str, tpm: int, order: int) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "order": order}}
+
+
+@pytest.mark.asyncio
+async def test_request_within_a_later_order_deployments_tpm_limit_stays_retryable():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm_at_order("small", 100, 1), _deployment_with_tpm_at_order("big", 200_000, 2)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with pytest.raises(litellm.RateLimitError) as refused:
+        await router.async_get_available_deployment(
+            model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {}}
+        )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert "retry-after" in refused.value.response.headers
+
+
+def _tagged_deployment_with_tpm(deployment_id: str, tpm: int) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "tags": [deployment_id]}}
+
+
+@pytest.mark.asyncio
+async def test_request_over_every_tpm_limit_its_tags_allow_is_not_retried_while_an_excluded_one_cools():
+    router: Final = Router(
+        model_list=[_tagged_deployment_with_tpm("free", 100), _tagged_deployment_with_tpm("paid", 200_000)],
+        routing_strategy="usage-based-routing-v2",
+        enable_tag_filtering=True,
+        num_retries=1,
+    )
+    _cool_down(router, "paid")
+    metadata: Final = {"tags": ["free"]}
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES, metadata=metadata)
+
+    assert "largest tpm limit of 100" in str(refused.value)
+    assert metadata["attempted_retries"] == 0
+
+
+def _deployment_with_tpm_in(deployment_id: str, location: str, tpm: int | str) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, 50)
+    params_without_tpm: Final = {key: value for key, value in deployment["litellm_params"].items() if key != "tpm"}
+    match location:
+        case "top level over litellm_params":
+            return {**deployment, "tpm": tpm}
+        case "model_info":
+            return {**deployment, "litellm_params": params_without_tpm, "model_info": {"id": deployment_id, "tpm": tpm}}
+        case _:
+            return {**deployment, "litellm_params": {**params_without_tpm, "tpm": tpm}}
+
+
+@pytest.mark.parametrize(
+    ("location", "tpm"),
+    [("top level over litellm_params", 200), ("litellm_params", 200), ("model_info", 200), ("model_info", "200")],
+)
+def test_request_over_a_tpm_limit_set_anywhere_on_the_deployment_names_that_limit(location: str, tpm: int | str):
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm_in("smaller", location, tpm)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    _assert_names_size_and_largest_limit(refused.value)
+
+
+def test_a_tpm_that_is_not_a_number_counts_as_no_limit():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm_in("unlimited", "model_info", "lots")],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    picked: Final = router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    assert picked["model_info"]["id"] == "unlimited"
+
+
+def _deployment_with_tpm_in_region(deployment_id: str, tpm: int, region: str) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "region_name": region}}
+
+
+@pytest.mark.asyncio
+async def test_request_over_every_tpm_limit_in_its_region_is_refused_while_another_regions_deployment_cools():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm_in_region("small", 100, "eu"), _deployment_with_tpm_in_region("big", 200_000, "us")],
+        routing_strategy="usage-based-routing-v2",
+        enable_pre_call_checks=True,
+    )
+    _cool_down(router, "big")
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        await router.async_get_available_deployment(
+            model="limited",
+            messages=_OVER_TPM_MESSAGES,
+            request_kwargs={"metadata": {}, "allowed_model_region": "eu"},
+        )
+
+    assert "largest tpm limit of 100" in str(refused.value)

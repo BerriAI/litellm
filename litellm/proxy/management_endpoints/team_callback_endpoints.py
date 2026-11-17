@@ -46,6 +46,7 @@ from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy 
     encrypt_callback_vars,
     is_sensitive_callback_key,
 )
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     _get_validated_callback_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     convert_key_logging_metadata_to_callback,
@@ -57,9 +58,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  #
     _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     refresh_cached_team,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
-from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
+from litellm.types.utils import OTEL_DESTINATION_VARS
 
 router: Final = APIRouter()
 
@@ -163,7 +165,9 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
         for entry in logging_entries if isinstance(logging_entries, list) else ():
             if not isinstance(entry, dict):
                 continue
-            callback = get_validated_callback_metadata(item=entry, source="team-level read")
+            callback = get_validated_callback_metadata(
+                item=_DECODED_JSON.validate_python(entry), source="team-level read"
+            )
             if callback is None:
                 continue
             resolved = convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=resolved)
@@ -225,16 +229,19 @@ async def _emit_team_callback_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                object_id=team_id,
-                action="updated",
-                updated_values=json.dumps({"metadata": redacted_after}, default=str),
-                before_value=json.dumps({"metadata": redacted_before}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=team_id,
+                    action="updated",
+                    updated_values=json.dumps({"metadata": redacted_after}, default=str),
+                    before_value=json.dumps({"metadata": redacted_before}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )
@@ -298,11 +305,15 @@ async def add_team_callbacks(
         - langfuse_secret: The secret for the Langfuse callback
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
-        - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+        - langfuse_span_scope: For langfuse_otel, "full" sends the whole request trace,
+          "llm_only" sends only model-call spans.
+          Omitted follows LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE (default "full"), also configurable as
+          callback_settings.otel.langfuse_destination_span_scope.
         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
         - excluded_services: For OTel v2 callbacks, a comma-separated list of datastore names such as "redis,postgres", or "none" to exclude nothing. An explicit value replaces the global exclusions; omitted follows them
+        - baggage_metadata_keys: For OTel v2 callbacks, a comma-separated list of request metadata keys such as "requester_metadata.correlation_id", exported as litellm.metadata.<key> on this destination's spans only, on top of the global LITELLM_OTEL_BAGGAGE_METADATA_KEYS. At most 20 keys; names of proxy identity fields (user_api_key_*, requester_ip_address) and request headers (requester_metadata.headers.*) are rejected
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback
@@ -375,7 +386,7 @@ async def add_team_callbacks(
         destination_setting_error: Final = next(
             (
                 error
-                for variable_name in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR)
+                for variable_name in OTEL_DESTINATION_VARS
                 if (
                     error := conflicting_callback_var_error(
                         data.callback_name, variable_name, data.callback_vars, stored_callbacks
@@ -463,7 +474,7 @@ async def add_team_callbacks(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -606,7 +617,7 @@ async def delete_team_callback(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     else:
@@ -747,7 +758,7 @@ async def disable_team_logging(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -838,7 +849,7 @@ async def get_team_callbacks(
             raise ProxyException(
                 message=getattr(e, "detail", f"Internal Server Error({e})"),
                 type=ProxyErrorTypes.internal_server_error.value,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -846,6 +857,6 @@ async def get_team_callbacks(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

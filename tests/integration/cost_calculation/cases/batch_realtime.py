@@ -46,8 +46,8 @@ GPT_5_6_BATCH_CACHED_INPUT_HALVED: Final = BatchCostCase(
     ),
 )
 
-GPT_5_4_BATCH_EXPLICIT_BATCH_RATES_BILL_CACHED_AT_BATCH_INPUT_RATE: Final = BatchCostCase(
-    name="gpt-5.4-batch-explicit_batch_rates_bill_cached_at_batch_input_rate",
+GPT_5_4_BATCH_NO_BATCH_CACHE_RATE_BILLS_CACHED_AT_STANDARD_CACHE_RATE: Final = BatchCostCase(
+    name="gpt-5.4-batch-no_batch_cache_rate_bills_cached_at_standard_cache_rate",
     covers="quota_management.spend_tracking.batch_costs.explicit_rates",
     model="gpt-5.4",
     litellm_model="openai/gpt-5.4",
@@ -56,8 +56,8 @@ GPT_5_4_BATCH_EXPLICIT_BATCH_RATES_BILL_CACHED_AT_BATCH_INPUT_RATE: Final = Batc
         BatchOutputLine(status_code=200, prompt_tokens=120, completion_tokens=30),
     ),
     expected=ExactExpected(
-        spend=0.000875,
-        input_cost=0.000275,
+        spend=0.000835,
+        input_cost=0.000235,
         output_cost=0.0006,
         prompt_tokens=220,
         completion_tokens=80,
@@ -188,7 +188,7 @@ GPT_REALTIME_MINI_2025_12_15_REALTIME_SESSION_WITHOUT_TURNS_ZERO_SPEND: Final = 
 BATCH_CASES: Final[tuple[BatchCostCase, ...]] = (
     GPT_5_6_BATCH_HALVED_RATES_WHEN_MAP_HAS_NO_BATCH_KEYS,
     GPT_5_6_BATCH_CACHED_INPUT_HALVED,
-    GPT_5_4_BATCH_EXPLICIT_BATCH_RATES_BILL_CACHED_AT_BATCH_INPUT_RATE,
+    GPT_5_4_BATCH_NO_BATCH_CACHE_RATE_BILLS_CACHED_AT_STANDARD_CACHE_RATE,
     GPT_5_6_BATCH_ALL_REQUESTS_FAILED_ZERO_SPEND,
 )
 

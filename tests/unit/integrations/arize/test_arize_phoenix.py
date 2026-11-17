@@ -17,7 +17,7 @@ from litellm.integrations.arize.arize_phoenix import (
 )
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -971,6 +971,23 @@ def test_arize_phoenix_client_get_prompt_version_rejects_traversal():
         client.get_prompt_version("../../projects")
 
 
+def test_arize_phoenix_client_error_does_not_echo_prompt_content():
+    import httpx
+    import respx
+
+    from litellm.integrations.arize.arize_phoenix_client import ArizePhoenixClient
+
+    client = ArizePhoenixClient(api_key="test-key", api_base="https://phoenix.test")
+    with respx.mock:
+        respx.get("https://phoenix.test/v1/prompt_versions/pv-1").mock(
+            return_value=httpx.Response(200, json={"data": "secret system prompt text"})
+        )
+        with pytest.raises(Exception, match="Error fetching prompt version 'pv-1'") as exc_info:
+            client.get_prompt_version("pv-1")
+
+    assert "secret system prompt text" not in str(exc_info.value)
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
@@ -1027,7 +1044,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),

@@ -16,7 +16,7 @@ import httpx
 import psycopg
 import pytest
 import yaml
-from integration._support.client import Gateway, delete_key_if_present, eventually, string_value
+from integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
@@ -25,7 +25,6 @@ from psycopg import sql
 REQUESTS_WHILE_BLOCKED: Final = 6
 CANCEL_LOG_LINE: Final = "in-flight scheduled job(s) for shutdown"
 BATCH_DRAINED_LOG_LINE: Final = f"flushed {REQUESTS_WHILE_BLOCKED} daily spend update items from in-memory queue"
-MODEL_INSERT_ARRIVED_LOG_LINE: Final = "path=/model/new"
 COMMIT_DELAY_SECONDS: Final = 15
 BURST_REQUESTS: Final = 30
 
@@ -95,14 +94,19 @@ def _tagged_chat(gateway: Gateway, key: str, tags: tuple[str, str]) -> None:
     assert response.status_code == 200, response.text
 
 
+def _assert_requests_and_spend(table: str, count: str, key: str, requests: int) -> None:
+    hashed: Final = hashlib.sha256(key.encode()).hexdigest()
+    rows: Final = read_rows(
+        f'SELECT ({count})::int AS requests, sum(spend) AS spend FROM "{table}" WHERE api_key=%s', (hashed,)
+    )
+    assert rows[0]["requests"] == requests, (table, rows)
+    assert rows[0]["spend"] == pytest.approx(requests * 0.05, abs=1e-9), (table, rows)
+
+
 def _assert_shutdown_accounting(key: str, tags: tuple[str, str], requests: int) -> None:
     hashed: Final = hashlib.sha256(key.encode()).hexdigest()
-    for table, count in (("LiteLLM_SpendLogs", "count(*)"), ("LiteLLM_DailyUserSpend", "sum(api_requests)")):
-        rows: Final = read_rows(
-            f'SELECT ({count})::int AS requests, sum(spend) AS spend FROM "{table}" WHERE api_key=%s', (hashed,)
-        )
-        assert rows[0]["requests"] == requests, (table, rows)
-        assert rows[0]["spend"] == pytest.approx(requests * 0.05, abs=1e-9), (table, rows)
+    _assert_requests_and_spend("LiteLLM_SpendLogs", "count(*)", key, requests)
+    _assert_requests_and_spend("LiteLLM_DailyUserSpend", "sum(api_requests)", key, requests)
     key_rows: Final = read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashed,))
     assert key_rows[0]["spend"] == pytest.approx(requests * 0.05, abs=1e-9)
     for tag in tags:
@@ -138,7 +142,7 @@ def test_tagged_request_survives_shutdown_before_the_tag_timer(
 
 @pytest.mark.parametrize("redis_buffer", [False, True])
 @pytest.mark.parametrize("overflow", [False, True])
-def test_callback_backlog_is_accounted_before_shutdown_disconnects(
+def test_callback_backlog_is_logged_before_shutdown_disconnects_and_accounted_once_by_the_next_start(
     gateway: Gateway, tmp_path: Path, redis_buffer: bool, overflow: bool
 ) -> None:
     release: Final = threading.Event()
@@ -149,19 +153,15 @@ def test_callback_backlog_is_accounted_before_shutdown_disconnects(
         wire_server(lambda _: Reply(chunks=(b"{}",), gate_before_first=release)) as logger,
     ):
         config: Final = _tag_shutdown_config(tmp_path, wire.url, redis_buffer, gated=True)
-        with owned_proxy_process(
-            gateway,
-            tmp_path,
-            {
-                "DATABASE_URL": os.environ["DATABASE_URL"],
-                "LOGGING_WORKER_CONCURRENCY": "2",
-                "LOGGING_WORKER_MAX_QUEUE_SIZE": "2" if overflow else "50000",
-                "SHUTDOWN_CALLBACK_URL": logger.url,
-                "GRACEFUL_SHUTDOWN_TIMEOUT": "15",
-                "LITELLM_LOG": "DEBUG",
-            },
-            config=config,
-        ) as owned:
+        overrides: Final = {
+            "DATABASE_URL": os.environ["DATABASE_URL"],
+            "LOGGING_WORKER_CONCURRENCY": "2",
+            "LOGGING_WORKER_MAX_QUEUE_SIZE": "2" if overflow else "50000",
+            "SHUTDOWN_CALLBACK_URL": logger.url,
+            "GRACEFUL_SHUTDOWN_TIMEOUT": "15",
+            "LITELLM_LOG": "DEBUG",
+        }
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config) as owned:
             key: Final = string_value(
                 owned.gateway.post("/key/generate", {"user_id": f"backlog-{uuid.uuid4().hex}"})["key"]
             )
@@ -180,9 +180,13 @@ def test_callback_backlog_is_accounted_before_shutdown_disconnects(
                 )
                 release.set()
                 owned.process.wait(timeout=90)
-                _assert_shutdown_accounting(key, tags, requests)
             finally:
                 release.set()
+        _assert_requests_and_spend("LiteLLM_SpendLogs", "count(*)", key, requests)
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config) as restarted:
+            restarted.begin_shutdown()
+            restarted.process.wait(timeout=90)
+        _assert_shutdown_accounting(key, tags, requests)
 
 
 @pytest.mark.parametrize("gunicorn", [False, True])
@@ -356,8 +360,15 @@ class _Shutdown:
             for outcome in pool.map(lambda _: self.chat(), range(requests)):
                 assert outcome is None
 
-    def logged(self, line: str, times: int = 1) -> bool:
-        return self.owned.log.read_text(errors="replace").count(line) >= times
+    def logged(self, line: str) -> bool:
+        return line in self.owned.log.read_text(errors="replace")
+
+    def other_requests_in_flight(self) -> int:
+        response: Final = self.owned.gateway.request("GET", "/health/backlog")
+        assert response.status_code == 200, response.text
+        in_flight: Final = object_value(response.json())["in_flight_requests"]
+        assert isinstance(in_flight, int)
+        return in_flight - 1
 
     def chat_while_spend_update_is_blocked(self, blocker: psycopg.Connection, table: str) -> None:
         blocker.execute(f'LOCK TABLE "{table}" IN EXCLUSIVE MODE')
@@ -390,17 +401,18 @@ class _Shutdown:
         self.owned.process.wait(timeout=120)
 
 
-def _config_with_pool_limit(tmp_path: Path, pool_limit: int) -> Path:
+def _legacy_spend_queue_config_with_pool_limit(tmp_path: Path, pool_limit: int) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["general_settings"]["database_connection_pool_limit"] = pool_limit
     config["general_settings"]["database_connection_pool_timeout"] = 60
+    config["general_settings"]["use_spend_logs_ledger"] = False
     path: Final = tmp_path / f"pool-{pool_limit}.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
 
 
 @contextmanager
-def _proxy_with_one_seeded_row(
+def _legacy_spend_queue_proxy_with_one_seeded_row(
     gateway: Gateway,
     tmp_path: Path,
     pool_limit: int,
@@ -423,7 +435,7 @@ def _proxy_with_one_seeded_row(
                 "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS": "1",
                 "SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS": str(cancel_timeout_seconds),
             },
-            config=_config_with_pool_limit(tmp_path, pool_limit),
+            config=_legacy_spend_queue_config_with_pool_limit(tmp_path, pool_limit),
             remove_environment=("DATABASE_URL_READ_REPLICA",),
             workers=workers,
         ) as owned:
@@ -454,7 +466,7 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_writ
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with (
-        _proxy_with_one_seeded_row(gateway, tmp_path, pool_limit=2) as shutdown,
+        _legacy_spend_queue_proxy_with_one_seeded_row(gateway, tmp_path, pool_limit=2) as shutdown,
         psycopg.connect(os.environ["DATABASE_URL"]) as models,
         psycopg.connect(os.environ["DATABASE_URL"]) as memberships,
     ):
@@ -463,7 +475,7 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_writ
         eventually(lambda: _waiting_on("LiteLLM_ProxyModelTable"), lambda waiting: waiting == 1, seconds=30)
         shutdown.chat_while_spend_update_is_blocked(memberships, "LiteLLM_TeamMembership")
         second: Final = shutdown.start_blocked_model_insert()
-        eventually(lambda: shutdown.logged(MODEL_INSERT_ARRIVED_LOG_LINE, times=2), lambda seen: seen, seconds=30)
+        eventually(shutdown.other_requests_in_flight, lambda in_flight: in_flight == 2, seconds=30)
         memberships.rollback()
         eventually(lambda: _waiting_on("LiteLLM_ProxyModelTable"), lambda waiting: waiting == 2, seconds=30)
         shutdown.terminate_once(lambda: shutdown.logged(BATCH_DRAINED_LOG_LINE), models.rollback)
@@ -476,7 +488,7 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_row_lock_is_written_exa
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with (
-        _proxy_with_one_seeded_row(gateway, tmp_path, pool_limit=10) as shutdown,
+        _legacy_spend_queue_proxy_with_one_seeded_row(gateway, tmp_path, pool_limit=10) as shutdown,
         psycopg.connect(os.environ["DATABASE_URL"]) as holder,
         psycopg.connect(os.environ["DATABASE_URL"]) as memberships,
     ):
@@ -502,7 +514,7 @@ def test_daily_spend_batch_cancelled_while_postgres_is_committing_it_is_written_
     gateway: Gateway, tmp_path: Path, cancel_timeout_seconds: int, commit_fails_once: bool
 ) -> None:
     with (
-        _proxy_with_one_seeded_row(
+        _legacy_spend_queue_proxy_with_one_seeded_row(
             gateway, tmp_path, pool_limit=10, cancel_timeout_seconds=cancel_timeout_seconds, settle_seconds=90
         ) as shutdown,
         psycopg.connect(os.environ["DATABASE_URL"]) as memberships,
@@ -522,7 +534,7 @@ def test_daily_spend_batch_cancelled_while_postgres_is_committing_it_is_written_
 def test_daily_spend_burst_across_two_workers_survives_shutdown_during_commit_exactly_once(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    with _proxy_with_one_seeded_row(
+    with _legacy_spend_queue_proxy_with_one_seeded_row(
         gateway, tmp_path, pool_limit=10, settle_seconds=120, requests=BURST_REQUESTS, workers=2
     ) as shutdown:
         suffix: Final = _install_slow_commit(shutdown.owner, fails_once=False)
