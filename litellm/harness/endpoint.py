@@ -14,10 +14,11 @@ import contextlib
 import itertools
 import json
 import logging
+import math
 import secrets
-from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType, ModuleType
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
@@ -36,16 +37,18 @@ from litellm.constants import (
 from litellm.harness.context import GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import JSONResponse, Response, StreamingResponse
     from starlette.routing import Route
-    from uvicorn import Server
+    from uvicorn import Config, Server
 
 verbose_logger: Final = logging.getLogger("LiteLLM")
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object, config=ConfigDict(strict=True))
@@ -110,9 +113,22 @@ class _ResponsesModule(Protocol):
     StreamingResponse: type[StreamingResponse]
 
 
+class _UvicornModule(Protocol):
+    Config: type[Config]
+    Server: type[Server]
+
+
+class _CapturesSignals(Protocol):
+    capture_signals: Callable[[], contextlib.AbstractContextManager[None]]
+
+
+class _InstallsSignalHandlers(Protocol):
+    install_signal_handlers: Callable[[], None]
+
+
 @dataclass(frozen=True)
 class _ServerDeps:
-    uvicorn: ModuleType
+    uvicorn: _UvicornModule
     applications: _ApplicationsModule
     routing: _RoutingModule
     responses: _ResponsesModule
@@ -335,6 +351,32 @@ def hidden_cost(response: object) -> float | None:
         return None
 
 
+def _cost_value(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    try:
+        cost: Final = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return cost if math.isfinite(cost) else None
+
+
+def response_cost(response: ModelResponse) -> float | None:
+    hidden: Final = json_object(getattr(response, "_hidden_params", None))
+    additional_headers: Final = json_object(hidden.get("additional_headers"))
+    gateway_cost: Final = _cost_value(additional_headers.get("llm_provider-x-litellm-response-cost"))
+    if gateway_cost is not None:
+        return gateway_cost
+    recorded_cost: Final = _cost_value(hidden.get("response_cost"))
+    if recorded_cost is not None:
+        return recorded_cost
+    try:
+        calculated_cost: Final[object] = litellm.completion_cost(completion_response=response)
+    except Exception:  # noqa: BLE001  # Price lookup raises bare Exception for unknown models.
+        return None
+    return _cost_value(calculated_cost)
+
+
 def extract_token(headers: Mapping[str, str]) -> str | None:
     auth = headers.get("authorization") or ""
     if auth.lower().startswith("bearer "):
@@ -438,6 +480,14 @@ def _noop() -> None:
     return None
 
 
+def _signal_capture(server: object) -> _CapturesSignals | None:
+    return server if has_attributes(server, _CapturesSignals, "capture_signals") else None
+
+
+def _signal_handler_installer(server: object) -> _InstallsSignalHandlers | None:
+    return server if has_attributes(server, _InstallsSignalHandlers, "install_signal_handlers") else None
+
+
 class ModelEndpoint:
     """Local HTTP endpoint for one harness session. Use as an async context manager."""
 
@@ -521,7 +571,7 @@ class ModelEndpoint:
             await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
 
     def _build_server(self, deps: _ServerDeps) -> Server:
-        config = deps.uvicorn.Config(
+        config: Final = deps.uvicorn.Config(
             self._build_app(deps),
             host=HARNESS_ENDPOINT_HOST,
             port=0,
@@ -529,14 +579,16 @@ class ModelEndpoint:
             log_level="warning",
             access_log=False,
             lifespan="off",
-            timeout_graceful_shutdown=HARNESS_PROCESS_KILL_GRACE_SECONDS,
+            timeout_graceful_shutdown=math.ceil(HARNESS_PROCESS_KILL_GRACE_SECONDS),
         )
-        server = deps.uvicorn.Server(config)
+        server: Final = deps.uvicorn.Server(config)
         # Never touch the host process's signal handlers.
-        if hasattr(server, "capture_signals"):
-            server.capture_signals = contextlib.nullcontext
-        if hasattr(server, "install_signal_handlers"):
-            server.install_signal_handlers = _noop
+        signal_capture: Final = _signal_capture(server)
+        if signal_capture is not None:
+            signal_capture.capture_signals = contextlib.nullcontext
+        handler_installer: Final = _signal_handler_installer(server)
+        if handler_installer is not None:
+            handler_installer.install_signal_handlers = _noop
         return server
 
     def _build_app(self, deps: _ServerDeps) -> Starlette:
@@ -697,7 +749,7 @@ class ModelEndpoint:
             return await litellm.anthropic.messages.acreate(**kwargs)
         if route == ROUTE_CHAT:
             if not kwargs.get("stream"):
-                return await litellm.acompletion(**kwargs)
+                return await litellm.acompletion(**decoded_json_object(kwargs))
             stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
             return await litellm.acompletion(
                 **{
@@ -706,7 +758,7 @@ class ModelEndpoint:
                     STREAM_USAGE_INJECTED_FIELD: "include_usage" not in stream_options,
                 }
             )
-        return await litellm.aresponses(**kwargs)
+        return await litellm.aresponses(**decoded_json_object(kwargs))
 
     async def _call_sdk(self, route: str, body: Mapping[str, object]) -> Response:
         kwargs = self._sdk_kwargs(body)

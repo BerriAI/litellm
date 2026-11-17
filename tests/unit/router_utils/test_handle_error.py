@@ -1,6 +1,6 @@
 import asyncio
 import importlib
-from typing import List
+from typing import Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -38,6 +38,37 @@ async def test_send_llm_exception_alert_success():
 
     # Assert that the slack_alerting_logger's send_alert method was called
     slack_alerting_logger.send_alert.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception", "alerts_sent"),
+    [
+        (
+            litellm.MissingMessageRoleError(
+                message="Missing required parameter: 'messages[0].role'.", model="gpt-5.6", llm_provider="openai"
+            ),
+            0,
+        ),
+        (
+            litellm.MalformedRequestFieldError(
+                message="tools: Input should be a valid list", model="gpt-5.6", llm_provider="openai"
+            ),
+            1,
+        ),
+    ],
+)
+async def test_send_llm_exception_alert_skips_only_a_role_less_request(exception: Exception, alerts_sent: int):
+    slack_alerting_logger: Final = AsyncMock()
+    ctx: Final = MagicMock()
+    ctx.observers.return_value = RoutingObservers(slack_alerting_logger=slack_alerting_logger)
+    request_kwargs: Final = {"model": "gpt-5.6", "messages": [{"content": "Hello"}]}
+
+    from litellm.router_utils.handle_error import send_llm_exception_alert
+
+    await send_llm_exception_alert(ctx, request_kwargs, "Traceback", exception)
+
+    assert slack_alerting_logger.send_alert.call_count == alerts_sent
 
 
 @pytest.mark.asyncio
@@ -273,3 +304,10 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
+
+@pytest.mark.asyncio
+async def test_send_llm_exception_alert_without_a_router_does_nothing():
+    from litellm.router_utils.handle_error import send_llm_exception_alert
+
+    assert await send_llm_exception_alert(None, {"model": "gpt-5-mini"}, "traceback", Exception("boom")) is None

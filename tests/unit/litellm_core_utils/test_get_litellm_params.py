@@ -340,6 +340,13 @@ class TestGetLitellmParamsDataResidency:
         )
         assert result["data_residency"] == "us"
 
+    def test_fedramp_host_resolves_to_fedramp(self):
+        result = get_litellm_params(
+            custom_llm_provider="openai",
+            api_base="https://gov.api.openai.com/v1",
+        )
+        assert result["data_residency"] == "fedramp"
+
     def test_global_host_resolves_to_none(self):
         result = get_litellm_params(
             custom_llm_provider="openai",

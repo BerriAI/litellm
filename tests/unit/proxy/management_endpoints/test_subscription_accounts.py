@@ -11,8 +11,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from litellm.models.subscription_account import LiteLLM_SubscriptionAccountTable
-from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import allowed_routes_check
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLMRoutes, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.subscription_accounts import (
@@ -331,12 +330,10 @@ _SUBSCRIPTION_ROUTES: Final = (
 
 
 def test_routes_follow_the_admin_route_policy():
-    jwt_admin_defaults = LiteLLM_JWTAuth()
+    jwt_admin_route_groups: Final = LiteLLM_JWTAuth().admin_allowed_routes
 
     for route in _SUBSCRIPTION_ROUTES:
-        assert allowed_routes_check(
-            user_role=LitellmUserRoles.PROXY_ADMIN, user_route=route, litellm_proxy_roles=jwt_admin_defaults
-        )
+        assert any(route in LiteLLMRoutes[group].value for group in jwt_admin_route_groups)
         assert RouteChecks.is_management_route(route)
 
 

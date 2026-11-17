@@ -75,24 +75,24 @@ def _router() -> Router:
     return Router(model_list=ROUTER_MODEL_LIST)
 
 
-class RecordingRouter(Router):
+def _recording_router(classified_tier: str) -> tuple[Router, list[dict]]:
     """A real router that records the classifier calls the endpoint makes instead of sending them.
 
     Injected at the same `proxy_server.llm_router` boundary the endpoint reads, so model resolution
     and the key's model-access checks still run against a genuine Router.
     """
+    recorded_calls: Final[list[dict]] = []
 
-    def __init__(self, classified_tier: str) -> None:
-        super().__init__(model_list=ROUTER_MODEL_LIST)
-        self.classified_tier = classified_tier
-        self.recorded_calls: list[dict] = []
-
-    async def acompletion(self, model, messages, stream=False, **kwargs):
-        self.recorded_calls.append({"model": model, "messages": messages, **kwargs})
+    async def record(model, messages, stream=False, **kwargs):
+        recorded_calls.append({"model": model, "messages": messages, **kwargs})
         return ModelResponse(
-            choices=[Choices(message=Message(content=f'{{"tier": "{self.classified_tier}"}}'))],
+            choices=[Choices(message=Message(content=f'{{"tier": "{classified_tier}"}}'))],
             model=model,
         )
+
+    router: Final = Router(model_list=ROUTER_MODEL_LIST)
+    router.acompletion = AsyncMock(side_effect=record)
+    return router, recorded_calls
 
 
 def _request_from(body: Mapping[str, object], **config_overrides: object) -> AutoRouterRoutingTestRequest:
@@ -137,7 +137,7 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
     """The variable half of the classifier call this body produces."""
     from litellm.proxy import proxy_server
 
-    router = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     await preview_auto_router_routing(
@@ -145,7 +145,7 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
         data=_request_from(body, classifier_type="llm", classifier_llm_config={"model": "classifier-model"}),
         user_api_key_dict=ADMIN,
     )
-    return router.recorded_calls[0]["messages"][1]["content"]
+    return recorded_calls[0]["messages"][1]["content"]
 
 
 @pytest.mark.parametrize(
@@ -1339,6 +1339,7 @@ class TestAutoRouterSession:
             "turns": turns,
             "last_model": "anthropic/claude-sonnet-5",
             "spend": spend,
+            "total_spend": None,
             "saved_spend": 0.24,
             "savings_estimated_turns": 3 if estimated else 0,
             "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
@@ -1349,6 +1350,42 @@ class TestAutoRouterSession:
             "baseline_model": "anthropic/claude-opus-5",
             "baseline_models": {"anthropic/claude-opus-5": 3},
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("recorded", "expected"), [((0.5, 0.25), 0.75), ((), None)], ids=["counted", "none"])
+    async def test_the_session_reports_the_spend_billed_to_its_key_under_the_session(
+        self, monkeypatch: pytest.MonkeyPatch, recorded: tuple[float, ...], expected: float | None
+    ) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
+        from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+
+        class _Redis:
+            def __init__(self) -> None:
+                self.values: dict[str, float] = {}  # mutable-ok: stands in for Redis state
+
+            async def async_increment(
+                self, key: str, value: float, ttl: int | None = None, refresh_ttl: bool = False
+            ) -> float:
+                self.values[key] = self.values.get(key, 0.0) + value
+                return self.values[key]
+
+            async def async_get_cache(self, key: str) -> object:
+                return self.values.get(key)
+
+        redis: Final = _Redis()
+        totals: Final = SessionSpendTotals(lambda: redis)
+        caller = UserAPIKeyAuth(api_key="sk-caller")
+        for spend in recorded:
+            await totals.record(caller.api_key or "", "sess-1", spend)
+        await totals.record(UserAPIKeyAuth(api_key="sk-other").api_key or "", "sess-1", 9.0)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "session_spend_totals", totals)
+        self._rig(monkeypatch, [{**self.ROW, "api_key": caller.api_key, "session_id": "sess-1"}])
+
+        response = await get_auto_router_session(user_api_key_dict=caller, session_id="sess-1")
+
+        assert response.total_spend == expected
+        assert response.spend == self.ROW["spend"]
 
     @pytest.mark.asyncio
     async def test_another_keys_session_is_a_404_even_for_an_admin(self, monkeypatch: pytest.MonkeyPatch):
@@ -2710,7 +2747,7 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
 async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typesafe(
     monkeypatch: pytest.MonkeyPatch, denial: str | None
 ) -> None:
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.test")
@@ -2765,7 +2802,7 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
             assert response.routing_decision["cause"] == "jev_classifier"
             assert response.routed_model == "cheap-model"
             assert evaluation.call_count == 1
-        assert router.recorded_calls == []
+        assert recorded_calls == []
         await handler.client.aclose()
 
 
@@ -2775,7 +2812,7 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
     ["allowed", "credential-free", "team-admin-environment", "missing", "blocked", "key", "budget", "team", "not-router"],
 )
 async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     stored_key: Final = "synthetic-server-jev-key"
     monkeypatch.setenv("SAVED_JEV_KEY", stored_key)
     monkeypatch.setenv("SAVED_JEV_BASE", "https://saved-jev.test")
@@ -2876,7 +2913,7 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
             assert stored_key not in result.model_dump_json()
         assert evaluation.call_count == (1 if case in ("allowed", "credential-free", "team-admin-environment") else 0)
-        assert router.recorded_calls == []
+        assert recorded_calls == []
         await handler.client.aclose()
 
 
@@ -3513,7 +3550,7 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
 
     auth_module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
     actor: Final = _configure_member_preview(monkeypatch).model_copy(update={"metadata": {"tags": ["key-tag"]}})
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     async def check_and_tag(
@@ -3547,13 +3584,13 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
     if over_budget:
         with pytest.raises(litellm.BudgetExceededError):
             await preview_auto_router_routing(data, actor, http_request)
-        assert router.recorded_calls == []
+        assert recorded_calls == []
     else:
         await preview_auto_router_routing(data, actor, http_request)
-        assert len(router.recorded_calls) == 1
-        assert router.recorded_calls[0]["metadata"]["user_api_key_team_id"] == "member-preview-team"
-        assert router.recorded_calls[0]["metadata"]["user_api_key_user_id"] == "preview-member"
-        assert set(router.recorded_calls[0]["metadata"]["tags"]) == {"key-tag", "header-tag"}
+        assert len(recorded_calls) == 1
+        assert recorded_calls[0]["metadata"]["user_api_key_team_id"] == "member-preview-team"
+        assert recorded_calls[0]["metadata"]["user_api_key_user_id"] == "preview-member"
+        assert set(recorded_calls[0]["metadata"]["tags"]) == {"key-tag", "header-tag"}
     checks.assert_awaited_once()
     assert checks.await_args.kwargs["user_api_key_auth_obj"].team_id == "member-preview-team"
     assert checks.await_args.kwargs["route"] == "/auto_router/test_routing"
@@ -3794,7 +3831,9 @@ async def test_get_shadow_eval_job_sums_funnel_rows_across_legs(monkeypatch: pyt
         legs=[_leg_record(), _leg_record(id="leg-2", target_id="key-hash-2")],
         agg_rows=tier_rows,
     )
-    prisma.funnel_rows = [{"legs_with_rows": 2, "not_sampled": 30, "unjudgeable": 5, "shed": 2, "withheld": 3}]
+    prisma.funnel_rows = [
+        {"legs_with_rows": 2, "not_sampled": 30, "same_model": 0, "unjudgeable": 5, "shed": 2, "withheld": 3}
+    ]
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     response = await get_shadow_eval_job("job-1", VIEWER)
@@ -3829,7 +3868,9 @@ async def test_partially_seeded_funnel_reads_as_unknown_coverage(monkeypatch: py
         legs=[_leg_record(), _leg_record(id="leg-2", target_id="key-hash-2")],
         agg_rows=tier_rows,
     )
-    prisma.funnel_rows = [{"legs_with_rows": 1, "not_sampled": 30, "unjudgeable": 5, "shed": 2, "withheld": 0}]
+    prisma.funnel_rows = [
+        {"legs_with_rows": 1, "not_sampled": 30, "same_model": 4, "unjudgeable": 5, "shed": 2, "withheld": 0}
+    ]
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     response = await get_shadow_eval_job("job-1", VIEWER)
@@ -3837,6 +3878,110 @@ async def test_partially_seeded_funnel_reads_as_unknown_coverage(monkeypatch: py
     assert response.results.not_sampled_count is None
     assert response.results.unjudgeable_count is None
     assert response.results.shed_count is None
+    assert response.same_model_skipped_count is None
+
+
+_SKIP_TIER_ROWS: Final = (
+    {
+        "grp": "SIMPLE",
+        "turn_count": 4,
+        "real_wins": 1,
+        "shadow_wins": 2,
+        "ties": 1,
+        "avg_confidence": 0.8,
+        "real_spend": 0.05,
+        "shadow_spend": 0.02,
+        "cache_hit_turns": 0,
+    },
+)
+
+
+def _funnel_row(same_model: int) -> Mapping[str, int]:
+    return {"legs_with_rows": 1, "not_sampled": 3, "same_model": same_model, "unjudgeable": 0, "shed": 0, "withheld": 0}
+
+
+def _skipping_leg() -> MagicMock:
+    return _leg_record(direction="reverse", baseline_model="openai/gpt-4o", skip_same_model=True)
+
+
+def test_start_request_pins_skip_same_model_to_reverse():
+    with pytest.raises(ValidationError, match="skip_same_model"):
+        _start_request(skip_same_model=True)
+    assert _start_request().skip_same_model is False
+    assert _start_request(direction="reverse", baseline_model="cheap").skip_same_model is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", [{"skip_same_model": True}, {}], ids=["opted-in", "default"])
+async def test_start_shadow_eval_persists_and_echoes_skip_same_model(monkeypatch: pytest.MonkeyPatch, requested):
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma: Final = _shadow_prisma(legs=[])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    expected: Final = requested.get("skip_same_model", False)
+
+    response: Final = await start_shadow_eval(
+        _start_request(
+            api_key_ids=("key-hash", "key-hash-2"), direction="reverse", baseline_model="openai/gpt-4o", **requested
+        ),
+        ADMIN,
+    )
+
+    rows: Final = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert [row["skip_same_model"] for row in rows] == [expected, expected]
+    assert response.skip_same_model is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("leg", "expected"),
+    [(_skipping_leg, True), (partial(_leg_record, direction="reverse", baseline_model="openai/gpt-4o"), False)],
+    ids=["opted-in-row", "row-from-before-the-column"],
+)
+async def test_get_shadow_eval_job_echoes_skip_same_model(monkeypatch: pytest.MonkeyPatch, leg, expected):
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(legs=[leg()]))
+
+    response: Final = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.skip_same_model is expected
+
+
+@pytest.mark.asyncio
+async def test_a_job_whose_every_sample_was_skipped_still_reports_the_skips(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma: Final = _shadow_prisma(legs=[_skipping_leg()])
+    prisma.funnel_rows = [_funnel_row(same_model=7)]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    response: Final = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.results is None
+    assert response.same_model_skipped_count == 7
+    funnel_reads: Final = [call for call in prisma.db.query_raw.await_args_list if "ShadowEvalFunnel" in call.args[0]]
+    assert len(funnel_reads) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_model_skips_stay_out_of_the_verdict_rates(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma: Final = _shadow_prisma(legs=[_skipping_leg()], agg_rows=list(_SKIP_TIER_ROWS))
+    prisma.funnel_rows = [_funnel_row(same_model=4)]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    response: Final = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.same_model_skipped_count == 4
+    assert response.results.overall_shadow_win_rate_pct == 50.0
+    assert response.results.overall_tie_rate_pct == 25.0
+    assert response.results.not_sampled_count == 3
+    funnel_reads: Final = [call for call in prisma.db.query_raw.await_args_list if "ShadowEvalFunnel" in call.args[0]]
+    assert len(funnel_reads) == 1
 
 
 @pytest.mark.asyncio
