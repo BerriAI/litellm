@@ -7869,7 +7869,10 @@ async def test_spend_calc_model_on_router_messages(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_minimum(monkeypatch):
+@pytest.mark.parametrize("custom_rates", [{}, {"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}])
+async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_minimum(
+    monkeypatch, custom_rates: dict[str, float]
+):
     backend_model: Final = "openai/deployment-minimum-fixture"
     monkeypatch.setitem(
         litellm.model_cost,
@@ -7882,7 +7885,6 @@ async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_mi
             "min_billed_input_tokens": 600,
         },
     )
-    custom_rates: Final = {"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}
     temp_llm_router: Final = Router(
         model_list=[
             {
@@ -7911,9 +7913,10 @@ async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_mi
 
     assert costs == pytest.approx(
         {
-            "inherits-minimum": 600 * 2e-6,
-            "waives-minimum": litellm.token_counter(model=backend_model, messages=messages) * 2e-6,
-            "raises-minimum": 1000 * 2e-6,
+            "inherits-minimum": 600 * custom_rates.get("input_cost_per_token", 1e-6),
+            "waives-minimum": litellm.token_counter(model=backend_model, messages=messages)
+            * custom_rates.get("input_cost_per_token", 1e-6),
+            "raises-minimum": 1000 * custom_rates.get("input_cost_per_token", 1e-6),
         }
     )
 

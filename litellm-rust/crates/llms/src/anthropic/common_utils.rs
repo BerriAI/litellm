@@ -415,6 +415,15 @@ pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> 
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
 }
 
+fn is_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Thinking)
+        && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
+pub fn strip_unsigned_thinking_blocks(messages: Vec<Message>) -> Vec<Message> {
+    retain_blocks(messages, |block| !is_unsigned_thinking_block(block))
+}
+
 fn is_advisor_use(block: &ContentBlock) -> bool {
     block.is_type(ContentBlockType::ServerToolUse)
         && block.name.as_deref() == Some("advisor")

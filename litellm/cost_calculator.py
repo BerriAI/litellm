@@ -463,6 +463,7 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    requested_model_info_override: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -561,6 +562,21 @@ def cost_per_token(
 
     if response_cost is not None:
         return response_cost[0], response_cost[1]
+
+    if requested_model_info_override is not None:
+        if custom_llm_provider == "anthropic":
+            return anthropic_cost_per_token(
+                model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
+            )
+        return generic_cost_per_token(
+            model=model,
+            usage=usage_block,
+            custom_llm_provider=custom_llm_provider or "",
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            model_info=requested_model_info_override,
+        )
 
     model_cost_ref: Final = litellm.model_cost
     # Only callers that explicitly pass `custom_llm_provider` get the
@@ -1583,6 +1599,7 @@ def completion_cost(
     data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
+    requested_model_info_override: ModelInfo | None = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -1635,6 +1652,7 @@ def completion_cost(
                         quality=quality,
                         n=n,
                         custom_cost_per_token=custom_cost_per_token,
+                        requested_model_info_override=requested_model_info_override,
                         custom_cost_per_second=custom_cost_per_second,
                         optional_params=optional_params,
                         custom_pricing=custom_pricing,
@@ -2083,6 +2101,7 @@ def completion_cost(
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
+                    requested_model_info_override=requested_model_info_override,
                     prompt_characters=prompt_characters,
                     completion_characters=completion_characters,
                     cache_creation_input_tokens=cache_creation_input_tokens,
