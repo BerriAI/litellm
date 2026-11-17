@@ -2,6 +2,7 @@
 Constants for Copilot integration
 """
 
+import os
 from collections.abc import MutableMapping
 from typing import Final
 from uuid import uuid4
@@ -16,6 +17,19 @@ EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
 USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
+DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
+
+
+def custom_github_app_hint() -> str | None:
+    """Explain the GitHub App permission a custom Copilot sign-in app needs, or None for the default app."""
+    if os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID) in ("", DEFAULT_GITHUB_CLIENT_ID):
+        return None
+    return (
+        "LiteLLM signs in to GitHub Copilot with a custom GitHub App (GITHUB_COPILOT_CLIENT_ID). Check that the "
+        "app's 'Copilot Requests' permission is set to 'Read-only' and that the app's installation accepted it: "
+        "open https://github.com/settings/apps (or your organization's Settings > Developer settings > GitHub Apps), "
+        "select the app, then Permissions & events > Organization permissions > Copilot Requests."
+    )
 
 
 class GithubCopilotError(BaseLLMException):

@@ -321,6 +321,14 @@ def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
     return response if response is not None and (response.headers or response.content) else None
 
 
+def _github_copilot_custom_app_hint(custom_llm_provider: str) -> str | None:
+    if custom_llm_provider != "github_copilot":
+        return None
+    from litellm.llms.github_copilot.common_utils import custom_github_app_hint
+
+    return custom_github_app_hint()
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -361,6 +369,10 @@ def _map_openai_exception(
         exception_provider = "OpenAI" + "Exception"
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
+    copilot_app_hint: Final = _github_copilot_custom_app_hint(custom_llm_provider)
+    if copilot_app_hint is not None and getattr(original_exception, "status_code", None) in (400, 401, 403):
+        if "model_not_supported" not in error_str:
+            message = f"{message} {copilot_app_hint}"
 
     if ExceptionCheckers.is_error_str_rate_limit(
         error_str, status_code=getattr(original_exception, "status_code", None)
@@ -385,7 +397,9 @@ def _map_openai_exception(
             message=(
                 f"{exception_provider} - GitHub Copilot rejected model '{model}' because it is not available for "
                 "this GitHub Copilot account. Ask your GitHub admin to enable it in the Copilot model policy, or "
-                "use a model your Copilot plan includes. This is not a LiteLLM error. "
+                "use a model your Copilot plan includes. "
+                f"{'' if copilot_app_hint is None else copilot_app_hint + ' '}"
+                "This is not a LiteLLM error. "
                 f"GitHub Copilot response: {message}"
             ),
             model=model,

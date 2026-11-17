@@ -3578,3 +3578,85 @@ def test_openai_model_not_supported_keeps_the_upstream_message():
             extra_kwargs={},
         )
     assert "GitHub Copilot" not in caught.value.message, caught.value.message
+
+
+_COPILOT_APP_HINT: Final = "Check that the app's 'Copilot Requests' permission is set to 'Read-only'"
+
+
+def _copilot_error(status_code: int, body: dict[str, str]) -> OpenAIError:
+    request: Final = httpx.Request("POST", "https://api.githubcopilot.com/chat/completions")
+    return OpenAIError(
+        status_code=status_code,
+        message=json.dumps({"error": body}),
+        request=request,
+        response=httpx.Response(status_code, request=request),
+        body=body,
+    )
+
+
+@pytest.mark.parametrize(
+    ("client_id", "hint_expected"),
+    [(None, False), ("Iv1.b507a08c87ecfe98", False), ("Iv23liCustomApp", True)],
+    ids=["default_app", "default_app_set_explicitly", "custom_github_app"],
+)
+def test_github_copilot_model_not_supported_tells_custom_app_users_to_check_copilot_requests(
+    monkeypatch, client_id: str | None, hint_expected: bool
+):
+    if client_id is None:
+        monkeypatch.delenv("GITHUB_COPILOT_CLIENT_ID", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", client_id)
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="claude-sonnet-4.5",
+            original_exception=_copilot_error(
+                400, {"message": "The requested model is not supported.", "code": "model_not_supported"}
+            ),
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert caught.value.status_code == 400
+    assert "GitHub Copilot rejected model 'claude-sonnet-4.5'" in caught.value.message, caught.value.message
+    assert (_COPILOT_APP_HINT in caught.value.message) is hint_expected, caught.value.message
+    assert caught.value.message.count(_COPILOT_APP_HINT) == (1 if hint_expected else 0), caught.value.message
+
+
+def test_github_copilot_integration_mismatch_tells_custom_app_users_where_the_permission_lives(monkeypatch):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
+    upstream_text: Final = (
+        "bad request: the Copilot-Integration-Id header does not match the GitHub App that issued this "
+        "installation access token"
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-4o",
+            original_exception=_copilot_error(400, {"message": upstream_text}),
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert caught.value.status_code == 400
+    assert upstream_text in caught.value.message, caught.value.message
+    assert _COPILOT_APP_HINT in caught.value.message, caught.value.message
+    assert "https://github.com/settings/apps" in caught.value.message, caught.value.message
+
+
+def test_openai_error_never_mentions_the_copilot_app_permission(monkeypatch):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=400,
+        message='{"error": {"message": "The requested model is not supported.", "code": "model_not_supported"}}',
+        request=request,
+        response=httpx.Response(400, request=request),
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-5.4",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert "Copilot Requests" not in caught.value.message, caught.value.message
