@@ -38,6 +38,7 @@ from litellm.proxy.a2a.agent_card import (
 )
 from litellm.proxy.agent_endpoints.agent_registry import (
     AgentIdWhere,
+    AgentRegistry,
     parse_agent_kill_switch,
     parse_agent_litellm_params,
     redact_sensitive_agent_litellm_params,
@@ -1187,6 +1188,16 @@ def _set_public_agent_groups(public_agent_groups: tuple[str, ...]) -> None:
     litellm.public_agent_groups = list(public_agent_groups)
 
 
+async def _missing_agent_ids(
+    prisma_client: PrismaClient, registry: AgentRegistry, agent_ids: Sequence[str]
+) -> frozenset[str]:
+    unregistered: Final = frozenset(a for a in agent_ids if registry.get_agent_by_id(agent_id=a) is None)
+    if not unregistered:
+        return unregistered
+    stored: Final = await find_many_in(agents_table(prisma_client), "agent_id", unregistered)
+    return unregistered.difference(agent.agent_id for agent in stored)
+
+
 @router.post(
     "/v1/agents/{agent_id}/make_public",
     tags=["[beta] A2A Agents"],
@@ -1345,23 +1356,20 @@ async def make_agents_public(
                 },
             )
 
-        for agent_id in request.agent_ids:
-            agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
-            if agent is None:
-                # check if agent exists in DB
-                agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
-                if agent is not None:
-                    agent = AgentResponse(**agent.model_dump())
-
-                if agent is None:
-                    raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+        missing: Final = await _missing_agent_ids(
+            prisma_client, AGENT_REGISTRY, (*request.agent_ids, *(litellm.public_agent_groups or ()))
+        )
+        previously_listed: Final = frozenset(request.previous_agent_ids or ())
+        unknown: Final = next((a for a in request.agent_ids if a in missing and a not in previously_listed), None)
+        if unknown is not None:
+            raise HTTPException(status_code=404, detail=f"Agent with ID {unknown} not found")
 
         if request.previous_agent_ids is not None:
             stored_public_agent_groups: Final = await proxy_config.apply_list_setting_delta(
                 section_name="litellm_settings",
                 key="public_agent_groups",
-                requested=request.agent_ids,
-                previous=request.previous_agent_ids,
+                requested=tuple(a for a in request.agent_ids if a not in missing),
+                previous=(*request.previous_agent_ids, *missing),
                 on_written=_set_public_agent_groups,
                 aliases=AGENT_REGISTRY.ids_for_agent,
             )

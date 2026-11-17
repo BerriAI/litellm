@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Final
@@ -28,6 +28,17 @@ class ConfigRows:
 
     def stored(self, name: str) -> dict[str, object]:
         return json.loads(self.serialized_rows[name])
+
+
+class RowsWithIds:
+
+    def __init__(self, id_field: str, ids: Iterable[str]) -> None:
+        self._id_field: Final = id_field
+        self._ids: Final = frozenset(ids)
+
+    async def find_many(self, *, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[SimpleNamespace]:
+        requested: Final = where[self._id_field]["in"]
+        return [SimpleNamespace(**{self._id_field: row_id}) for row_id in requested if row_id in self._ids]
 
 
 class SectionLockedTransaction:

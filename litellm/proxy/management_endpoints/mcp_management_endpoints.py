@@ -222,6 +222,7 @@ if MCP_AVAILABLE:
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
+        existing_mcp_server_ids,
         get_all_mcp_servers,
         get_draft_mcp_server,
         get_mcp_server,
@@ -3384,7 +3385,7 @@ if MCP_AVAILABLE:
             from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
-            from litellm.proxy.proxy_server import proxy_config
+            from litellm.proxy.proxy_server import prisma_client, proxy_config
 
             # Check if user has admin permissions
             if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -3395,20 +3396,37 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            for server_id in request.mcp_server_ids:
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
-                if server is None:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"MCP Server with ID {server_id} not found",
-                    )
+            unregistered: Final = frozenset(
+                server_id
+                for server_id in (*request.mcp_server_ids, *(litellm.public_mcp_servers or ()))
+                if global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id) is None
+            )
+            missing: Final = (
+                unregistered
+                if prisma_client is None or not unregistered
+                else unregistered.difference(await existing_mcp_server_ids(prisma_client, unregistered))
+            )
+            previously_listed: Final = frozenset(request.previous_mcp_server_ids or ())
+            unknown: Final = next(
+                (
+                    server_id
+                    for server_id in request.mcp_server_ids
+                    if server_id in missing and server_id not in previously_listed
+                ),
+                None,
+            )
+            if unknown is not None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"MCP Server with ID {unknown} not found",
+                )
 
             if request.previous_mcp_server_ids is not None:
                 stored_public_mcp_servers: Final = await proxy_config.apply_list_setting_delta(
                     section_name="litellm_settings",
                     key="public_mcp_servers",
-                    requested=request.mcp_server_ids,
-                    previous=request.previous_mcp_server_ids,
+                    requested=tuple(server_id for server_id in request.mcp_server_ids if server_id not in missing),
+                    previous=(*request.previous_mcp_server_ids, *missing),
                     on_written=_set_public_mcp_servers,
                 )
                 return {

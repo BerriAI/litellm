@@ -2238,6 +2238,32 @@ async def test_update_useful_links_from_the_dashboard_keeps_a_link_another_admin
             },
             id="a link edited at a taken position goes after the last link",
         ),
+        pytest.param(
+            {
+                "Docs": {"url": "https://docs.example.com/v2", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {"Docs": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            {
+                "Documentation": {"url": "https://docs.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {
+                "Documentation": {"url": "https://docs.example.com/v2", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            id="a stale rename keeps another admin's url edit",
+        ),
+        pytest.param(
+            {"B": {"url": "https://b.example.com", "index": 1}},
+            {"Docs": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            {
+                "Documentation": {"url": "https://docs.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {"B": {"url": "https://b.example.com", "index": 1}},
+            id="a stale rename of a link another admin removed keeps it removed",
+        ),
     ],
 )
 @pytest.mark.asyncio

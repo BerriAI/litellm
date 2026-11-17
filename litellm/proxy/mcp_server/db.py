@@ -938,6 +938,13 @@ async def get_mcp_servers(prisma_client: PrismaClient, server_ids: Iterable[str]
     return list(_readable_mcp_servers(_mcp_servers))
 
 
+async def existing_mcp_server_ids(prisma_client: PrismaClient, server_ids: Iterable[str]) -> frozenset[str]:
+    servers: Final = await _mcp_server_table_actions(prisma_client).find_many(
+        where={"server_id": {"in": list(server_ids)}}
+    )
+    return frozenset(server.server_id for server in servers)
+
+
 async def get_mcp_servers_by_verificationtoken(prisma_client: PrismaClient, token: str) -> list[str]:
     """
     Returns the mcp servers from the db for the verification token

@@ -3811,22 +3811,53 @@ def _at_index(link: JsonValue, index: int) -> JsonValue:
     return {**link, "index": index} if isinstance(link, dict) else {"url": link, "index": index}
 
 
+def _names_with_url(names: tuple[str, ...], links: Mapping[str, JsonValue], url: str) -> tuple[str, ...]:
+    return tuple(name for name in names if _link_url(links[name]) == url)
+
+
+def _renamed_links(requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue]) -> Mapping[str, str]:
+    removed: Final = tuple(name for name in previous if name not in requested)
+    added: Final = tuple(name for name in requested if name not in previous)
+    removed_urls: Final = frozenset(
+        url for url in (_link_url(previous[name]) for name in removed) if isinstance(url, str)
+    )
+    return MappingProxyType(
+        dict(
+            itertools.chain.from_iterable(
+                zip(_names_with_url(added, requested, url), _names_with_url(removed, previous, url))
+                for url in removed_urls
+            )
+        )
+    )
+
+
 def _merged_useful_links(
     stored: Mapping[str, JsonValue], *, requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue]
 ) -> Mapping[str, JsonValue]:
+    renamed_from: Final = _renamed_links(requested, previous)
+    renamed: Final = {
+        name: _at_index(stored[old_name], _link_index(requested[name]))
+        for name, old_name in renamed_from.items()
+        if old_name in stored
+    }
     edited: Final = {
         name: link
         for name, link in requested.items()
-        if name not in previous or _link_url(link) != _link_url(previous[name])
+        if name not in renamed_from and (name not in previous or _link_url(link) != _link_url(previous[name]))
     }
     moved: Final = {
         name: _at_index(stored[name], _link_index(link))
         for name, link in requested.items()
-        if name in stored and name not in edited and _link_index(link) != _link_index(previous[name])
+        if name in stored
+        and name in previous
+        and name not in edited
+        and _link_index(link) != _link_index(previous[name])
     }
     removed: Final = frozenset(previous).difference(requested)
     kept: Final = {name: link for name, link in stored.items() if name not in removed}
-    return _changed_links_after_taken_positions({**kept, **moved, **edited}, changed=frozenset(moved).union(edited))
+    return _changed_links_after_taken_positions(
+        {**kept, **moved, **edited, **renamed}, changed=frozenset(moved).union(edited, renamed)
+    )
 
 
 def _changed_links_after_taken_positions(

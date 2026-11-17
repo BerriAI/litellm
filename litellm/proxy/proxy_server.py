@@ -37,7 +37,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from itertools import chain
+from itertools import accumulate, chain
 from types import MappingProxyType, TracebackType, UnionType
 from typing import (
     TYPE_CHECKING,
@@ -5964,26 +5964,29 @@ def _with_list_delta(
     aliases: Callable[[str], frozenset[str]],
 ) -> Mapping[str, JsonValue]:
     current: Final = _listed_items(section, key)
-    requested_ids: Final = frozenset(chain.from_iterable(aliases(item) for item in requested))
-    previous_ids: Final = frozenset(chain.from_iterable(aliases(item) for item in previous))
+    alias_sets: Final = MappingProxyType(
+        {item: aliases(item) for item in frozenset(chain(current, requested, previous))}
+    )
+    requested_ids: Final = frozenset(chain.from_iterable(alias_sets[item] for item in requested))
+    previous_ids: Final = frozenset(chain.from_iterable(alias_sets[item] for item in previous))
     removed: Final = previous_ids.difference(requested_ids)
     kept: Final = tuple(item for item in current if item not in removed)
+    kept_ids: Final = frozenset(kept)
     added: Final = tuple(
         item
-        for item in _first_of_each_alias_set(requested, aliases)
-        if aliases(item).isdisjoint(previous_ids) and aliases(item).isdisjoint(kept)
+        for item in _first_of_each_alias_set(requested, alias_sets)
+        if alias_sets[item].isdisjoint(previous_ids) and alias_sets[item].isdisjoint(kept_ids)
     )
     if (*kept, *added) == current:
         return section
     return MappingProxyType({**section, key: [*kept, *added]})
 
 
-def _first_of_each_alias_set(items: tuple[str, ...], aliases: Callable[[str], frozenset[str]]) -> tuple[str, ...]:
-    return tuple(
-        item
-        for index, item in enumerate(items)
-        if all(aliases(item).isdisjoint(aliases(earlier)) for earlier in items[:index])
+def _first_of_each_alias_set(items: tuple[str, ...], alias_sets: Mapping[str, frozenset[str]]) -> tuple[str, ...]:
+    seen: Final = tuple(
+        accumulate((alias_sets[item] for item in items), lambda earlier, ids: earlier | ids, initial=frozenset[str]())
     )
+    return tuple(item for item, earlier in zip(items, seen) if alias_sets[item].isdisjoint(earlier))
 
 
 def _with_merged_mapping(
