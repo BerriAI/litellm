@@ -1886,7 +1886,11 @@ def test_vertex_ai_map_tools_declares_a_member_a_namespace_lists_twice_once_from
             [("get_weather", None), ("get_weather", None), ("weather__get_weather", None)],
         ),
     ],
-    ids=["top_level_function_has_the_qualified_name", "namespaces_build_one_qualified_name", "client_repeats_a_function"],
+    ids=[
+        "top_level_function_has_the_qualified_name",
+        "namespaces_build_one_qualified_name",
+        "client_repeats_a_function",
+    ],
 )
 def test_vertex_ai_map_tools_never_repeats_a_generated_name(
     tools: list[dict], declared: list[tuple[str, str | None]]
@@ -7857,6 +7861,36 @@ def test_invalid_reasoning_effort_surfaces_as_400_through_completion(custom_llm_
     assert not isinstance(exc_info.value, litellm.APIConnectionError)
 
 
+@pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini/gemini-4-hydrogen", "vertex_ai/gemini-4-hydrogen"])
+def test_xhigh_reasoning_effort_maps_to_the_xhigh_thinking_level_for_a_model_that_supports_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    result: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {"thinkingLevel": "xhigh", "includeThoughts": True}
+
+
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-3.8-flash", "gemini-3-pro-preview"])
+def test_xhigh_reasoning_effort_is_a_400_for_a_gemini_model_that_does_not_support_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "xhigh" in str(exc_info.value)
+
+
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-3-pro-preview"])
 def test_supported_reasoning_efforts_still_map(model):
     """Guards the fix against over-rejecting: every advertised value must still produce a config."""
@@ -8177,6 +8211,41 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
     assert resp.choices[0].finish_reason == "content_filter"
     assert resp.choices[0].message.content is None
     assert resp.choices[0].provider_specific_fields["native_finish_reason"] == "NO_IMAGE"
+
+
+@pytest.mark.parametrize(
+    ("google_signal", "expected_provider_specific_fields"),
+    [
+        ({"candidates": [{"finishReason": "RECITATION", "index": 0}]}, {"native_finish_reason": "RECITATION"}),
+        ({"candidates": [{"finishReason": "SAFETY", "index": 0}]}, {"native_finish_reason": "SAFETY"}),
+        ({"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]}, {"native_finish_reason": "IMAGE_SAFETY"}),
+        (
+            {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "blocked"}},
+            {"block_reason": "PROHIBITED_CONTENT"},
+        ),
+    ],
+)
+def test_non_streamed_content_filter_choice_keeps_google_reason(
+    google_signal: dict[str, object], expected_provider_specific_fields: dict[str, str]
+):
+    completion_response: Final = {
+        **google_signal,
+        "usageMetadata": {"promptTokenCount": 23, "candidatesTokenCount": 4, "totalTokenCount": 27},
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 1
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.choices[0].message.content is None
+    assert resp.choices[0].provider_specific_fields == expected_provider_specific_fields
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():

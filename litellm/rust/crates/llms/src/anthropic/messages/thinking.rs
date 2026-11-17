@@ -10,7 +10,12 @@ use litellm_llms_types::{
     recognized::Recognized,
 };
 use litellm_python_compat::{
-    Value as PythonValue, json::from_json, repr::repr, reprlib::reprlib, truthy::truthy,
+    BigInt, Value as PythonValue,
+    json::{from_json, type_name as python_type_name},
+    number,
+    repr::repr,
+    reprlib::reprlib,
+    truthy::truthy,
 };
 use serde_json::Value;
 
@@ -196,6 +201,7 @@ fn known_effort(request: &MessagesRequest) -> Option<&Recognized<EffortLevel>> {
         .as_ref()
         .and_then(Recognized::known)
         .and_then(|config| config.effort.as_ref())
+        .filter(|effort| !matches!(effort, Recognized::Unrecognized(Value::Null)))
 }
 
 fn with_default_effort(
@@ -365,39 +371,14 @@ fn numeric_budget_tokens(budget: &Recognized<u64>) -> Option<i64> {
     }
 }
 
-/// Python's `int(str)`: surrounding whitespace, a sign, and single underscores between digits.
+/// Python's `int(str)`, saturating at the `i64` bounds.
 fn python_int(text: &str) -> Option<i64> {
-    let trimmed = text.trim();
-    let digits = trimmed.trim_start_matches(['+', '-']);
-    let well_formed = trimmed.len() - digits.len() <= 1
-        && !digits.is_empty()
-        && !digits.starts_with('_')
-        && !digits.ends_with('_')
-        && !digits.contains("__")
-        && digits.chars().all(|ch| ch.is_ascii_digit() || ch == '_');
-    if !well_formed {
-        return None;
-    }
-    let cleaned: String = trimmed.chars().filter(|ch| *ch != '_').collect();
-    cleaned.parse::<i64>().ok().or_else(|| {
-        Some(if cleaned.starts_with('-') {
-            i64::MIN
-        } else {
-            i64::MAX
-        })
-    })
-}
-
-fn python_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
+    let value = number::int(text)?;
+    Some(i64::try_from(&value).unwrap_or(if value < BigInt::from(0) {
+        i64::MIN
+    } else {
+        i64::MAX
+    }))
 }
 
 fn kept_display(
@@ -787,6 +768,16 @@ mod tests {
         opus_4_7(),
         serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": "max"}}),
         serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "max"}})
+    )]
+    #[case::caller_null_output_config_effort_is_kept(
+        opus_4_7(),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": null}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": null}})
+    )]
+    #[case::null_output_config_effort_is_not_an_effort_on_non_adaptive_model(
+        opus_4_5(),
+        serde_json::json!({"max_tokens": 1024, "temperature": 0.5, "output_config": {"effort": null}}),
+        serde_json::json!({"max_tokens": 1024, "temperature": 0.5, "output_config": {"effort": null}})
     )]
     #[case::effort_merges_into_caller_output_config(
         opus_4_7(),

@@ -1,3 +1,4 @@
+import contextlib
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
@@ -8,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.completion.guardrail_translation.handler import OpenAITextCompletionHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan import grayswan as grayswan_module
@@ -967,8 +969,8 @@ async def test_application_errors_respect_failure_policy(
     ],
 )
 @pytest.mark.parametrize("legacy", [False, True])
-def test_invalid_decisions_are_errors(payload, legacy):
-    guardrail = GraySwanGuardrail(guardrail_name="invalid-decision", api_key="test-key")
+def test_invalid_decisions_are_errors(payload: object, legacy: bool) -> None:
+    guardrail: Final = GraySwanGuardrail(guardrail_name="invalid-decision", api_key="test-key")
     if legacy:
         with pytest.raises(GraySwanGuardrailAPIError):
             guardrail._process_grayswan_response(payload)
@@ -978,15 +980,15 @@ def test_invalid_decisions_are_errors(payload, legacy):
 
 
 @pytest.mark.parametrize("score", [0, 0.49, 0.5, 1])
-def test_valid_decisions_keep_threshold_semantics(score):
-    guardrail = GraySwanGuardrail(
+def test_valid_decisions_keep_threshold_semantics(score: float) -> None:
+    guardrail: Final = GraySwanGuardrail(
         guardrail_name="valid-decision",
         api_key="test-key",
         violation_threshold=0.5,
         on_flagged_action="block",
     )
-    inputs = {"texts": ["hello"]}
-    payload = {
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["hello"]}
+    payload: Final = {
         "violation": score,
         "error": False,
         "observe_violation": 1.0,
@@ -1029,3 +1031,25 @@ async def test_transport_errors_respect_failure_policy(
             await guardrail.apply_guardrail(inputs, request_data, "request")
     (failure_record,) = metadata["standard_logging_guardrail_information"]
     assert failure_record["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_open", [True, False])
+async def test_unreachable_api_failure_is_recorded_on_a_request_dict_that_starts_empty(fail_open: bool) -> None:
+    def refuse_connection(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    guardrail: Final = GraySwanGuardrail(
+        guardrail_name="grayswan-unreachable",
+        api_key="test-key",
+        fail_open=fail_open,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(refuse_connection))
+    request_data: Final[dict[str, object]] = {}
+
+    with contextlib.suppress(Exception):
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_status"] for record in recorded] == ["guardrail_failed_to_respond"]

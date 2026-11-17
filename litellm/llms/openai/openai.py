@@ -16,13 +16,14 @@ from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
+from openai._models import construct_type
 from openai._types import RequestOptions
 from openai.pagination import SyncCursorPage
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -37,7 +38,11 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import (
+    speech_create_params,
+    speech_request_body,
+    track_llm_api_timing,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.utils import (
@@ -390,11 +395,46 @@ _CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
 )
 
 
+class _ChatCompletionChunkDecoder:
+    """
+    Decodes stream chunks for the SDK's `ModelBuilderProtocol` hook in one compiled pydantic pass. Strict
+    validation only accepts payloads whose values already have the declared types, where it builds the same
+    chunk as the SDK's `construct_type`, and everything else keeps the SDK's lenient `construct_type` result.
+    """
+
+    @classmethod
+    def build(cls, *, response: httpx.Response, data: object) -> object:
+        try:
+            return ChatCompletionChunk.model_validate(data, strict=True)
+        except ValidationError:
+            return construct_type(type_=ChatCompletionChunk, value=data)
+
+
 def _raw_chat_response(
-    result: ChatCompletion | Stream[ChatCompletionChunk] | AsyncStream[ChatCompletionChunk],
+    result: ChatCompletion
+    | Stream[ChatCompletionChunk]
+    | AsyncStream[ChatCompletionChunk]
+    | Stream[_ChatCompletionChunkDecoder]
+    | AsyncStream[_ChatCompletionChunkDecoder],
 ) -> LegacyAPIResponse[ChatCompletion]:
     assert isinstance(result, LegacyAPIResponse)
     return result
+
+
+def _sync_chat_stream_cls(
+    client: OpenAI,
+) -> type[Stream[ChatCompletionChunk]] | type[Stream[_ChatCompletionChunkDecoder]]:
+    if client._strict_response_validation:  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+        return Stream[ChatCompletionChunk]
+    return Stream[_ChatCompletionChunkDecoder]
+
+
+def _async_chat_stream_cls(
+    client: AsyncOpenAI,
+) -> type[AsyncStream[ChatCompletionChunk]] | type[AsyncStream[_ChatCompletionChunkDecoder]]:
+    if client._strict_response_validation:  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+        return AsyncStream[ChatCompletionChunk]
+    return AsyncStream[_ChatCompletionChunkDecoder]
 
 
 def _request_without_sdk_transform(
@@ -569,7 +609,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=ChatCompletion,
                     options=options,
                     stream=bool(data.get("stream")),
-                    stream_cls=AsyncStream[ChatCompletionChunk],
+                    stream_cls=_async_chat_stream_cls(openai_aclient),
                 )
             )
             end_time = time.time()
@@ -625,7 +665,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=ChatCompletion,
                     options=options,
                     stream=bool(data.get("stream")),
-                    stream_cls=Stream[ChatCompletionChunk],
+                    stream_cls=_sync_chat_stream_cls(openai_client),
                 )
             )
 
@@ -1676,6 +1716,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         aspeech: bool | None = None,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
@@ -1693,6 +1734,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
                 client=client,
                 shared_session=shared_session,
+                stream=stream,
                 litellm_params=litellm_params,
             )
 
@@ -1717,14 +1759,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = sync_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, optional_params)
+        raw_response: Final = (
+            sync_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
+            if stream
+            else sync_client.audio.speech.create(**params).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
     async def async_audio_speech(
@@ -1742,6 +1784,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         openai_client: Final = cast(
@@ -1767,14 +1810,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = await openai_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, optional_params)
+        raw_response: Final = (
+            (await openai_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
+            if stream
+            else (await openai_client.audio.speech.create(**params)).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
 

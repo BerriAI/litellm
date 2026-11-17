@@ -1687,7 +1687,7 @@ async def test_customer_daily_usage_is_atomic_with_accounting_and_survives_budge
 def _seed_customer_hierarchy(parity_database: str) -> None:
     with psycopg.connect(parity_database) as connection:
         connection.execute(
-            "UPDATE \"LiteLLM_BudgetTable\" SET budget_duration='1d', budget_reset_at=%s WHERE budget_id='budget'", (_NOW,)
+            "UPDATE \"LiteLLM_BudgetTable\" SET max_budget=100, budget_duration='1d', budget_reset_at=%s WHERE budget_id='budget'", (_NOW,)
         )
         connection.execute(
             "INSERT INTO \"LiteLLM_CustomerOrganizationTable\" (customer_org_id, budget_id, created_by, updated_by) VALUES ('customer-org', 'budget', 'test', 'test')"
@@ -1752,8 +1752,8 @@ async def test_customer_member_reset_follows_an_active_override_window_else_the_
     now = datetime.now(timezone.utc)
     with psycopg.connect(parity_database) as connection:
         connection.execute(
-            'INSERT INTO "LiteLLM_BudgetTable" (budget_id, budget_duration, budget_reset_at, created_by, updated_by)'
-            " VALUES ('override', '1d', %s, 'test', 'test')",
+            'INSERT INTO "LiteLLM_BudgetTable" (budget_id, max_budget, budget_duration, budget_reset_at, created_by, updated_by)'
+            " VALUES ('override', 100, '1d', %s, 'test', 'test')",
             (now + timedelta(hours=1),),
         )
         connection.execute(

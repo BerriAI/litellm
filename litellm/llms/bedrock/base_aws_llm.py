@@ -181,14 +181,41 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     )
 
     _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_SESSION_POLICY
+    _configured_web_identity_session_policy_document: str | None = None
 
     @classmethod
     @cache
     def _web_identity_session_policy_document(cls) -> str:
         return session_policy_document(cls._web_identity_session_policy)
 
-    def __init__(self) -> None:
-        self.iam_cache = BaseAWSLLM._shared_iam_cache
+    @property
+    def _effective_web_identity_session_policy_document(self) -> str:
+        return self._configured_web_identity_session_policy_document or self._web_identity_session_policy_document()
+
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        *,
+        web_identity_session_policy: WebIdentitySessionPolicy | None,
+        credential_cache: DualCache | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(self, *, credential_cache: DualCache) -> None: ...
+
+    def __init__(
+        self,
+        *,
+        web_identity_session_policy: WebIdentitySessionPolicy | None = None,
+        credential_cache: DualCache | None = None,
+    ) -> None:
+        self._configured_web_identity_session_policy_document = (
+            None if web_identity_session_policy is None else session_policy_document(web_identity_session_policy)
+        )
+        self.iam_cache = credential_cache if credential_cache is not None else BaseAWSLLM._shared_iam_cache
         super().__init__()
         self.aws_authentication_params = [
             "aws_access_key_id",
@@ -402,7 +429,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_session_name,
         ):
             return self._get_or_set_cached_credentials(
-                {**args, "web_identity_session_policy": self._web_identity_session_policy_document()},
+                {**args, "web_identity_session_policy": self._effective_web_identity_session_policy_document},
                 lambda: self._auth_with_web_identity_token(
                     aws_web_identity_token=cast(str, aws_web_identity_token),
                     aws_role_name=cast(str, aws_role_name),
@@ -589,11 +616,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             # a malformed URL and cause botocore's EventStreamBuffer to receive
             # a JSON error body instead of a binary event-stream — surfaced as a
             # misleading ChecksumMismatch (0x223a7b22 == ':{"').
-            # Use strip_bedrock_routing_prefix (no break) so compound prefixes
+            # Use split_bedrock_region_path (no break) so compound prefixes
             # like "bedrock/invoke/arn:..." are fully stripped in one call.
-            from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+            from litellm.llms.bedrock.common_utils import split_bedrock_region_path
 
-            model_id = strip_bedrock_routing_prefix(model_id)
+            model_id = split_bedrock_region_path(model_id)[1]
             # URL-encode ARNs so colons and slashes are safe in the URL path.
             if model_id.startswith("arn:"):
                 model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
@@ -686,6 +713,14 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         return None
 
+    @staticmethod
+    def _get_aws_region_from_model_path(model: str | None) -> str | None:
+        if model is None:
+            return None
+        from litellm.llms.bedrock.common_utils import split_bedrock_region_path
+
+        return split_bedrock_region_path(model)[0]
+
     def _get_aws_region_name(
         self,
         optional_params: dict,
@@ -711,7 +746,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             if model_id is not None:
                 aws_region_name = self._get_aws_region_from_model_arn(model_id)
             else:
-                aws_region_name = self._get_aws_region_from_model_arn(model)
+                aws_region_name = self._get_aws_region_from_model_arn(model) or self._get_aws_region_from_model_path(
+                    model
+                )
             # check env #
             litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
 
@@ -1030,7 +1067,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": self._web_identity_session_policy_document(),
+            "Policy": self._effective_web_identity_session_policy_document,
         }
 
         # Add ExternalId parameter if provided

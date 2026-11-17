@@ -974,19 +974,25 @@ class TestFalAIVideoTransformation:
             "fal-ai/pixverse/extend",
         ],
     )
-    def test_pixverse_five_second_clip_prices(self, model: str) -> None:
+    def test_pixverse_five_and_eight_second_clip_prices(self, model: str) -> None:
         info: Final = litellm.get_model_info(model=model, custom_llm_provider="fal_ai")
         prices: Final = info.get("output_cost_per_video_clip")
         assert prices is not None
-        for resolution, price in prices["5s"].items():
+        assert prices["8s"].keys() == prices["5s"].keys() - {"1080p"}
+        for resolution, price in prices["8s"].items():
             assert price > 0
-            assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution=resolution) == pytest.approx(price)
-            assert video_generation_cost(
-                model, 5, "fal_ai", model_info=info, video_resolution=resolution
-            ) == pytest.approx(price)
-            assert fal_ai_passthrough_cost(
-                model, {"duration": "5", "resolution": resolution}
-            ) == pytest.approx(price)
+            assert price == pytest.approx(2 * prices["5s"][resolution])
+        for duration in (5, 8):
+            for resolution, price in prices[f"{duration}s"].items():
+                assert default_video_cost_calculator(
+                    model, duration, "fal_ai", video_resolution=resolution
+                ) == pytest.approx(price)
+                assert video_generation_cost(
+                    model, duration, "fal_ai", model_info=info, video_resolution=resolution
+                ) == pytest.approx(price)
+                assert fal_ai_passthrough_cost(
+                    model, {"duration": str(duration), "resolution": resolution}
+                ) == pytest.approx(price)
 
     def test_h3_video_cost_uses_model_info_tiers(self, local_model_cost_map):
         row = litellm.model_cost[f"fal_ai/{H3_TEXT_MODEL}"]

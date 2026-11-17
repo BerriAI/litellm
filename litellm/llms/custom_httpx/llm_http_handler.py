@@ -45,6 +45,12 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.fan_out import (
+    merge_billed_image_responses,
+    record_partial_image_spend,
+    run_concurrently,
+    split_outcomes,
+)
 from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
@@ -7549,38 +7555,44 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider uses multipart/form-data or JSON
+        def send() -> httpx.Response:
             if image_edit_provider_config.use_multipart_form_data():
-                # Use form-data (OpenAI style)
-                response = sync_httpx_client.post(
+                return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files=files,
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (Gemini style)
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_edit_provider_config,
+            return sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        responses, failure = split_outcomes(
+            run_concurrently(
+                image_edit_provider_config.get_request_count(
+                    model,
+                    image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                ),
+                send,
+            )
         )
-        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        served: Final = [
+            image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
+        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
     async def async_image_edit_handler(
@@ -7651,38 +7663,42 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider uses multipart/form-data or JSON
+        async def send() -> httpx.Response:
             if image_edit_provider_config.use_multipart_form_data():
-                # Use form-data (OpenAI style)
-                response = await async_httpx_client.post(
+                return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files=files,
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (Gemini style)
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_edit_provider_config,
+            return await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        request_count: Final = image_edit_provider_config.get_request_count(
+            model,
+            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        responses, failure = split_outcomes(
+            await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+        )
+        served: Final = [
+            image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
+        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
     def image_generation_handler(
@@ -7770,43 +7786,49 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = sync_httpx_client.post(
+                return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_generation_provider_config,
+            return sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        model_response: Final[ImageResponse] = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        responses, failure = split_outcomes(
+            run_concurrently(
+                image_generation_provider_config.get_request_count(
+                    model,
+                    image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                ),
+                send,
+            )
         )
-        set_provider_response_headers_in_hidden_params(model_response, response.headers)
+        served: Final = [
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
+        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
 
@@ -7878,45 +7900,47 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        async def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = await async_httpx_client.post(
+                return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_generation_provider_config,
+            return await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        model_response: Final[
-            ImageResponse
-        ] = await image_generation_provider_config.async_transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-            litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-            encoding=None,
+        request_count: Final = image_generation_provider_config.get_request_count(
+            model,
+            image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        set_provider_response_headers_in_hidden_params(model_response, response.headers)
+        responses, failure = split_outcomes(
+            await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+        )
+        served: Final = [
+            await image_generation_provider_config.async_transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                encoding=None,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
+        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
 
@@ -12755,6 +12779,7 @@ class BaseLLMHTTPHandler:
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
+        stream: bool = False,
     ) -> Union[
         "HttpxBinaryResponseContent",
         Coroutine[object, object, "HttpxBinaryResponseContent"],
@@ -12776,6 +12801,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 timeout=timeout,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
+                stream=stream,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -12823,6 +12849,8 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        should_stream: Final = stream and text_to_speech_provider_config.supports_streaming
+
         try:
             # Determine request body type and send appropriately
             if "dict_body" in request_data:
@@ -12831,6 +12859,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             elif "ssml_body" in request_data:
                 response = sync_httpx_client.post(
@@ -12838,6 +12867,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             else:
                 raise ValueError(
@@ -12871,6 +12901,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
+        stream: bool = False,
     ) -> "HttpxBinaryResponseContent":
         """
         Async version of the text-to-speech handler.
@@ -12924,6 +12955,8 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        should_stream: Final = stream and text_to_speech_provider_config.supports_streaming
+
         try:
             # Determine request body type and send appropriately
             if "dict_body" in request_data:
@@ -12932,6 +12965,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             elif "ssml_body" in request_data:
                 response = await async_httpx_client.post(
@@ -12939,6 +12973,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             else:
                 raise ValueError(

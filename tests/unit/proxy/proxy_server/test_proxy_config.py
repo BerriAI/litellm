@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import json
 import logging
 import os
@@ -1607,6 +1608,78 @@ def test_ProxyConfig__check_for_os_environ_vars_missing_env_returns_none(monkeyp
     out = pc._check_for_os_environ_vars(cfg)
     # get_secret returns None when not found — assert observable shape.
     assert out["a"] is None
+
+
+_POINTERS: Final = {
+    "anthropic_issuer_signing_key_ref": "os.environ/PROBE_SET",
+    "anthropic_keycloak_client_secret_ref": "os.environ/PROBE_SET",
+    "x": {"anthropic_issuer_signing_key_ref": "os.environ/PROBE_SET"},
+}
+
+
+# Twin of the `resolves_like_python` cases in litellm/rust/crates/config-load/src/environ.rs
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        pytest.param({"a": "os.environ/PROBE_SET"}, {"a": "set-value"}, id="set"),
+        pytest.param({"a": "os.environ/PROBE_UNSET"}, {"a": None}, id="unset"),
+        pytest.param({"a": "os.environ/PROBE_TRUE"}, {"a": True}, id="capitalized_true"),
+        pytest.param({"a": "os.environ/PROBE_FALSE"}, {"a": False}, id="false_text"),
+        pytest.param({"a": "os.environ/PROBE_SPACE"}, {"a": True}, id="padded_true"),
+        pytest.param({"a": "os.environ/PROBE_EMPTY"}, {"a": ""}, id="empty"),
+        pytest.param({"a": "os.environ/PROBE_NUM"}, {"a": "42"}, id="number_stays_text"),
+        pytest.param({"a": "os.environ/PROBE_YES"}, {"a": "yes"}, id="yes_stays_text"),
+        pytest.param({"a": "os.environ/"}, {"a": None}, id="bare_prefix"),
+        pytest.param(
+            {"a": " os.environ/PROBE_SET", "b": "OS.ENVIRON/PROBE_SET"},
+            {"a": " os.environ/PROBE_SET", "b": "OS.ENVIRON/PROBE_SET"},
+            id="not_a_prefix",
+        ),
+        pytest.param(
+            {"a": ["os.environ/PROBE_SET", {"b": "os.environ/PROBE_SET"}, ["os.environ/PROBE_SET"]]},
+            {"a": ["os.environ/PROBE_SET", {"b": "set-value"}, ["os.environ/PROBE_SET"]]},
+            id="only_mappings_inside_lists",
+        ),
+        pytest.param({"a": {"b": {"c": "os.environ/PROBE_SET"}}}, {"a": {"b": {"c": "set-value"}}}, id="nested"),
+        pytest.param(_POINTERS, _POINTERS, id="secret_pointers"),
+        pytest.param(
+            {"a": 1, "b": True, "c": None, "d": 1.5}, {"a": 1, "b": True, "c": None, "d": 1.5}, id="non_strings"
+        ),
+        pytest.param(
+            {"environment_variables": {"CFG_ONLY": "from-config", "CFG_REF": "os.environ/PROBE_SET"}},
+            {"environment_variables": {"CFG_ONLY": "from-config", "CFG_REF": "set-value"}},
+            id="environment_variables_read_the_process_environment",
+        ),
+    ],
+)
+def test_ProxyConfig__check_for_os_environ_vars_matches_rust_config_load(
+    monkeypatch: pytest.MonkeyPatch, config: dict[str, object], expected: dict[str, object]
+) -> None:
+    for name, value in {
+        "PROBE_SET": "set-value",
+        "PROBE_TRUE": "True",
+        "PROBE_FALSE": "false",
+        "PROBE_EMPTY": "",
+        "PROBE_NUM": "42",
+        "PROBE_SPACE": " true ",
+        "PROBE_YES": "yes",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("PROBE_UNSET", raising=False)
+
+    assert ProxyConfig()._check_for_os_environ_vars(config=config) == expected
+
+
+@pytest.mark.parametrize(("depth", "expected"), [(100, "set-value"), (101, "os.environ/PROBE_SET")])
+def test_ProxyConfig__check_for_os_environ_vars_depth_limit_matches_rust_config_load(
+    monkeypatch: pytest.MonkeyPatch, depth: int, expected: str
+) -> None:
+    monkeypatch.setenv("PROBE_SET", "set-value")
+    config: Final = {"leaf": "os.environ/PROBE_SET"}
+    nested: Final = functools.reduce(lambda inner, _: {"k": inner}, range(depth), config)
+
+    resolved: Final = ProxyConfig()._check_for_os_environ_vars(config=nested)
+    assert functools.reduce(lambda inner, _: inner["k"], range(depth), resolved)["leaf"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -5351,6 +5424,7 @@ async def test_ProxyConfig_add_deployment_rebuilds_pass_through_routes_only_from
     assert rebuild_routes.await_count == (1 if rebuilds_routes else 0)
 
 
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_config_from_db
 # ---------------------------------------------------------------------------
@@ -6003,50 +6077,58 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agents_source", ["config", "db", "api"])
 async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_registry(
-    clean_agent_registry, agents_source
+    clean_agent_registry, agents_source, monkeypatch
 ):
     """A JWT agent claim must resolve against every agent the proxy knows, including ones created after startup."""
+    import jwt
+
     from litellm.proxy import proxy_server
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy.auth import core
+    from litellm.proxy.auth import jwt as proxy_jwt
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.types.agents import AgentResponse
 
-    original_lookup = proxy_server.jwt_handler.agent_lookup
-    try:
-        proxy_server.ProxyStartupEvent._initialize_jwt_auth(
-            general_settings={"litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
-            prisma_client=None,
-            user_api_key_cache=UserApiKeyCache(),
+    jwks_url: Final = "https://idp.example/jwks"
+    signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk: Final = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    proxy_server.user_api_key_cache.set_cache(
+        key=f"litellm_jwt_auth_keys_{jwks_url}", value=[{**public_jwk, "kid": "k1"}]
+    )
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", proxy_server.litellm_jwtauth)
+    proxy_server.ProxyStartupEvent._initialize_jwt_auth(
+        general_settings={"enable_jwt_auth": True, "litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    if agents_source == "config":
+        await ProxyConfig()._init_non_llm_configs(
+            config={"agents": [_config_agent("loaded-agent")]},
+            config_file_path=None,
         )
-        if agents_source == "config":
-            await ProxyConfig()._init_non_llm_configs(
-                config={"agents": [_config_agent("loaded-agent")]},
-                config_file_path=None,
-            )
-        elif agents_source == "db":
-            prisma_client = MagicMock()
-            prisma_client.db.litellm_agentstable.find_many = AsyncMock(
-                return_value=[_agent_db_row("db-id", "loaded-agent")]
-            )
-            await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
-        else:
-            clean_agent_registry.register_agent(
-                agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
-            )
+    elif agents_source == "db":
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_agentstable.find_many = AsyncMock(
+            return_value=[_agent_db_row("db-id", "loaded-agent")]
+        )
+        await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+    else:
+        clean_agent_registry.register_agent(
+            agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
+        )
+    token: Final = jwt.encode(
+        {"sub": "agent-caller", "appid": "loaded-agent", "exp": 4102444800},
+        signing_key,
+        algorithm="RS256",
+        headers={"kid": "k1"},
+    )
 
-        resolved = JWTAuthManager.resolve_agent_id(
-            jwt_handler=proxy_server.jwt_handler,
-            jwt_valid_token={"appid": "loaded-agent"},
-            agent_registry=proxy_server.jwt_handler.agent_lookup,
-        )
-    finally:
-        proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
-        proxy_server.jwt_handler.update_environment(
-            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth()
-        )
+    result: Final = await proxy_jwt.authorize(
+        core.proxy_settings(), token, "/chat/completions", "POST", provisioning=False
+    )
 
-    assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
+    assert result["agent_id"] == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
 
 
 @pytest.mark.asyncio
