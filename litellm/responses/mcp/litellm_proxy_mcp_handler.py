@@ -933,7 +933,6 @@ class LiteLLM_Proxy_MCP_Handler:
                 server_name = tool_server_map[tool_name]
 
                 mcp_server, sanitized_tool_name = _served_tool(tool_name, server_name)
-                server_guardrails: Final = list(mcp_server.guardrails or ()) if mcp_server is not None else []
 
                 start_time = datetime.now()
                 logging_input: Sequence[Mapping[str, object]] = [
@@ -1040,7 +1039,9 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 if litellm_logging_obj:
                     litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = standard_logging_mcp_tool_call
-                    litellm_logging_obj.model_call_details[MCP_SERVER_GUARDRAILS_KEY] = server_guardrails
+                    litellm_logging_obj.model_call_details[MCP_SERVER_GUARDRAILS_KEY] = (
+                        list(mcp_server.guardrails or ()) if mcp_server else []
+                    )
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
@@ -1069,7 +1070,10 @@ class LiteLLM_Proxy_MCP_Handler:
                         request_data=(
                             litellm_logging_obj.model_call_details
                             if litellm_logging_obj
-                            else {"mcp_tool_name": tool_name, MCP_SERVER_GUARDRAILS_KEY: server_guardrails}
+                            else {
+                                "mcp_tool_name": tool_name,
+                                MCP_SERVER_GUARDRAILS_KEY: list(mcp_server.guardrails or ()) if mcp_server else [],
+                            }
                         ),
                         user_api_key_dict=typed_user_api_key_auth,
                     )
