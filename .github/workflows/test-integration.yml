@@ -14,10 +14,17 @@ on:
         options:
           - all
           - providers
+          - routing
+          - messages
           - extensions
           - accounting
+          - spend
           - management
           - management-replica
+          - authorization
+          - authorization-replica
+          - configuration
+          - configuration-replica
           - database
           - database-replica
           - mcp
@@ -43,15 +50,15 @@ jobs:
     name: integration ${{ matrix.suite }}
     if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
     environment: integration-license
-    runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
+    runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","routing":"ubuntu-latest-32-cores","messages":"ubuntu-latest-32-cores","accounting":"ubuntu-latest-32-cores","spend":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores","authorization":"ubuntu-latest-32-cores","authorization-replica":"ubuntu-latest-32-cores","configuration":"ubuntu-latest-32-cores","configuration-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","extensions","accounting","management","management-replica","database","database-replica","mcp","security","cost","sdk","browser"]' || format('["{0}"]', inputs.suite)) }}
+        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","routing","messages","extensions","accounting","spend","management","management-replica","authorization","authorization-replica","configuration","configuration-replica","database","database-replica","mcp","security","cost","sdk","browser"]' || format('["{0}"]', inputs.suite)) }}
     env:
       UV_PYTHON: "3.12"
-      INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"48","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
+      INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","routing":"16","messages":"16","extensions":"48","accounting":"16","spend":"16","management":"16","management-replica":"16","authorization":"16","authorization-replica":"16","configuration":"16","configuration-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
     services:
       postgres:
         image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
@@ -117,7 +124,7 @@ jobs:
         run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras
 
       - name: Install the Rust gateway
-        if: matrix.suite == 'management' || matrix.suite == 'management-replica'
+        if: contains(fromJSON('["management","management-replica","authorization","authorization-replica","configuration","configuration-replica"]'), matrix.suite)
         timeout-minutes: 15
         working-directory: litellm/packaging/litellm-proxy
         env:

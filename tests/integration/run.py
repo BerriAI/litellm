@@ -14,10 +14,15 @@ from typing import Final
 
 GROUPS: Final = MappingProxyType(
     {
-        "management": ("management", "authorization", "configuration"),
-        "accounting": ("pricing", "spend", "caching"),
+        "management": ("management",),
+        "authorization": ("authorization",),
+        "configuration": ("configuration",),
+        "accounting": ("pricing", "caching"),
+        "spend": ("spend",),
         "database": ("database",),
-        "providers": ("providers", "routing", "streaming", "messages_endpoint", "translation"),
+        "providers": ("providers",),
+        "routing": ("routing", "streaming"),
+        "messages": ("messages_endpoint", "translation"),
         "extensions": ("observability", "compatibility"),
         "mcp": ("mcp",),
         "sdk": ("sdk",),
@@ -38,7 +43,7 @@ GITHUB_FILES: Final = frozenset(
 )
 
 
-PEER_GROUPS: Final = frozenset({"management", "mcp", "accounting"})
+PEER_GROUPS: Final = frozenset({"management", "authorization", "configuration", "mcp", "accounting", "spend"})
 COST_MAP_GROUPS: Final = frozenset({"cost"})
 
 
