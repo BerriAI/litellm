@@ -1871,6 +1871,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 yield held_event
             _raise_stream_failure(attempt, stream_error, before_content=not output_started)
         finally:
+            attempt.explain_failure = None  # it holds the walk, which holds this stream
             with anyio.CancelScope(shield=True):
                 if hasattr(source_iterator, "aclose"):
                     try:
