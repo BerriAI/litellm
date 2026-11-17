@@ -261,7 +261,14 @@ def _activity(gateway: Gateway, path: str, params: dict[str, str]) -> dict[str, 
     def read() -> dict[str, JsonValue]:
         return object_value(get_json(gateway, path, {**params, "start_date": utc_day(0), "end_date": utc_day(0)}))
 
-    return eventually(read, lambda body: number(object_value(body["metadata"])["total_api_requests"]) >= 1, seconds=70)
+    def settled(body: dict[str, JsonValue]) -> bool:
+        # The route counts and lists the day rows in two concurrent queries (`asyncio.gather` in
+        # `DailyActivityRepository.daily_rows`, daily_activity_repository.py:411), so the read that races the
+        # row's insert can list it with a count of 0 (CI run 44161684479: total_pages 0); wait for both.
+        metadata: Final = object_value(body["metadata"])
+        return number(metadata["total_api_requests"]) >= 1 and number(metadata["total_pages"]) >= 1
+
+    return eventually(read, settled, seconds=70)
 
 
 def _assert_one_day_one_call(body: dict[str, JsonValue]) -> None:

@@ -188,21 +188,24 @@ def test_a_hit_counts_against_the_keys_model_rpm_limit(gateway: Gateway) -> None
 
 
 def test_a_hits_stored_tokens_count_against_the_keys_tpm_limit(gateway: Gateway) -> None:
-    """A key with ``tpm_limit: 3`` asks a model whose answer reports 2 total tokens: one fill and then hits for
-    the identical request. Within a few requests, and at the latest once the fill and one hit were charged
-    (4 tokens), a request must be refused with 429: the limiter charges a hit's stored usage like a provider
-    answer. UNVERIFIED: whether the v3 limiter skips token settlement for cache hits was not confirmed (no
-    ``cache_hit`` branch found in ``parallel_request_limiter_v3.py``); if hits are free for tpm this cell
-    shows it.
+    """A key with ``tpm_limit: 15`` asks, with ``max_tokens: 1``, a model whose answer reports 2 total tokens: one
+    fill and then hits for the identical request. The v3 limiter reserves an estimate before each call, prompt
+    characters / 4 plus the explicit ``max_tokens`` (``estimate_input_and_output_tokens``,
+    parallel_request_limiter_v3.py:2469-2566), here 11 + 1 = 12 for the 44 character prompt, and refuses when the
+    reservation does not fit what is left (CI run 44161684479: ``tpm_limit: 3`` refused the fill itself). So the fill
+    (0 + 12) and the first hit (2 + 12) fit, and once the fill and one hit are charged (4 tokens) the next request
+    (4 + 12 > 15) must be refused with 429: the limiter charges a hit's stored usage like a provider answer. If hits
+    are free the window stays at 2 and nothing is refused. UNVERIFIED: settlement runs in the success callback, after
+    the response, so a reservation still held when the next request arrives would also refuse it.
     """
     store: Final = redis_store()
     with gateway.scenario() as scenario:
         target: Final = route_probe(scenario, CHAT_ROUTE)
-        key: Final = scenario.key(models=[target.model], tpm_limit=3)
+        key: Final = scenario.key(models=[target.model], tpm_limit=15)
         text: Final = prompt()
-        first: Final = target.ask(text, key=key)
+        first: Final = target.ask(text, key=key, max_tokens=1)
         await_named_entry(store, target.needle(first))
-        statuses: Final = [target.ask(text, key=key).response.status_code for _ in range(4)]
+        statuses: Final = [target.ask(text, key=key, max_tokens=1).response.status_code for _ in range(4)]
         assert 429 in statuses, statuses
         assert target.calls() == 1
 

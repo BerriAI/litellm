@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, list_value, object_value
 from integration._support.wire import Reply, Request, wire_server
 from integration.pricing.dec1_costacc_support import (
     anthropic_message,
@@ -34,6 +34,7 @@ from integration.pricing.dec1_costacc_support import (
     assert_billed,
     json_reply,
     openai,
+    openai_chat,
     openai_reply,
     openai_usage,
 )
@@ -51,6 +52,7 @@ from integration.providers.dec1_batchfiles_support import (
     text_reply,
     unique,
 )
+from pydantic import JsonValue
 
 GPT54: Final = "gpt-5.4"
 AZURE_DEPLOYMENT: Final = "azure/dec1-costacc-prod"
@@ -157,10 +159,21 @@ def test_openai_audio_completion_tokens_bill_at_the_audio_output_rate(gateway: G
 
 def test_openai_web_search_options_add_the_search_context_fee(gateway: Gateway) -> None:
     """A `gpt-4o-mini` call (line 36308: 1.5e-07 in, 6e-07 out, `search_context_size_medium: 0.025`) sent with
-    `web_search_options: {search_context_size: medium}`: `1000 * 1.5e-07 + 500 * 6e-07 + 0.025 = 0.02545`
-    (`tool_call_cost_tracking.py:681`). UNVERIFIED: assumes the chat request's `web_search_options` reach
-    `standard_built_in_tools_params` for a non search model."""
-    answer: Final = openai_reply(openai_usage(1000, 500), model="gpt-4o-mini")
+    `web_search_options: {search_context_size: medium}`, whose answer carries a `url_citation` annotation:
+    `1000 * 1.5e-07 + 500 * 6e-07 + 0.025 = 0.02545` (`tool_call_cost_tracking.py:681`). The fee is charged only
+    when the answer shows a search was made: a chat answer counts as one through a `url_citation` annotation
+    (`response_object_includes_web_search_call`, tool_call_cost_tracking.py:550-556), so a plain answer bills
+    0.00045 whatever the request asked for (CI run 44161684479). UNVERIFIED: assumes the chat request's
+    `web_search_options` reach `standard_built_in_tools_params`; without them the medium rate is the default
+    (tool_call_cost_tracking.py:692-700), so the expected cost is the same."""
+    body: Final = openai_chat(openai_usage(1000, 500), model="gpt-4o-mini")
+    citation: Final[JsonValue] = {
+        "type": "url_citation",
+        "url_citation": {"start_index": 0, "end_index": 6, "url": "https://example.com/", "title": "example"},
+    }
+    choice: Final = object_value(list_value(body["choices"])[0])
+    cited: Final[JsonValue] = {**choice, "message": {**object_value(choice["message"]), "annotations": [citation]}}
+    answer: Final = json_reply({**body, "choices": [cited]})
     with openai(gateway, answer, backend="gpt-4o-mini") as rig:
         response: Final = rig.chat(web_search_options={"search_context_size": "medium"})
         assert_billed(gateway, rig.model, response, 0.02545)
@@ -201,7 +214,9 @@ def test_azure_base_model_prices_a_customer_named_deployment(gateway: Gateway) -
     """`azure/dec1-costacc-prod` with `model_info.base_model: azure/gpt-5.4` (line 8243) reports 1000 prompt and
     500 completion tokens: `0.01`."""
     with azure(
-        gateway, _always(_azure_answer(openai_usage(1000, 500))), model=AZURE_DEPLOYMENT,
+        gateway,
+        _always(_azure_answer(openai_usage(1000, 500))),
+        model=AZURE_DEPLOYMENT,
         model_info={"base_model": "azure/gpt-5.4"},
     ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.01)
@@ -211,7 +226,9 @@ def test_azure_base_model_wins_over_the_model_the_answer_names(gateway: Gateway)
     """The answer says `model: gpt-4o-mini` (a much cheaper row) but `base_model` is `azure/gpt-5.4`: the bill is
     `0.01`, not `1000 * 1.5e-07 + 500 * 6e-07 = 0.00045` (`cost_calculator.py:1099`)."""
     with azure(
-        gateway, _always(_azure_answer(openai_usage(1000, 500), model="gpt-4o-mini")), model=AZURE_DEPLOYMENT,
+        gateway,
+        _always(_azure_answer(openai_usage(1000, 500), model="gpt-4o-mini")),
+        model=AZURE_DEPLOYMENT,
         model_info={"base_model": "azure/gpt-5.4"},
     ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.01)
@@ -232,7 +249,9 @@ def test_azure_data_zone_base_model_bills_the_zone_premium(gateway: Gateway, zon
     """`base_model: azure/<zone>/gpt-5.4` (2.75e-06 in, 1.65e-05 out) with 1000 prompt and 500 completion:
     `0.00275 + 0.00825 = 0.011`, 10 percent above the global deployment row."""
     with azure(
-        gateway, _always(_azure_answer(openai_usage(1000, 500))), model=AZURE_DEPLOYMENT,
+        gateway,
+        _always(_azure_answer(openai_usage(1000, 500))),
+        model=AZURE_DEPLOYMENT,
         model_info={"base_model": f"azure/{zone}/gpt-5.4"},
     ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.011)
@@ -241,7 +260,9 @@ def test_azure_data_zone_base_model_bills_the_zone_premium(gateway: Gateway, zon
 def test_azure_cached_tokens_bill_at_the_cache_read_rate(gateway: Gateway) -> None:
     """base_model azure/gpt-5.4 with 600 of 1000 prompt tokens cached: `0.00865`."""
     with azure(
-        gateway, _always(_azure_answer(openai_usage(1000, 500, cached=600))), model=AZURE_DEPLOYMENT,
+        gateway,
+        _always(_azure_answer(openai_usage(1000, 500, cached=600))),
+        model=AZURE_DEPLOYMENT,
         model_info={"base_model": "azure/gpt-5.4"},
     ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.00865)
@@ -275,8 +296,12 @@ def test_azure_deployment_prices_win_over_base_model(gateway: Gateway) -> None:
     """A deployment with `base_model: azure/gpt-5.4` and `input_cost_per_token: 1e-05`, `output_cost_per_token:
     2e-05` bills `1000 * 1e-05 + 500 * 2e-05 = 0.02`: custom pricing is checked first (`cost_calculator.py:1090`)."""
     with azure(
-        gateway, _always(_azure_answer(openai_usage(1000, 500))), model=AZURE_DEPLOYMENT,
-        model_info={"base_model": "azure/gpt-5.4"}, input_cost_per_token=1e-05, output_cost_per_token=2e-05,
+        gateway,
+        _always(_azure_answer(openai_usage(1000, 500))),
+        model=AZURE_DEPLOYMENT,
+        model_info={"base_model": "azure/gpt-5.4"},
+        input_cost_per_token=1e-05,
+        output_cost_per_token=2e-05,
     ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.02)
 
@@ -348,7 +373,10 @@ def _batch_spend(gateway: Gateway, model_param: str, served_model: str, **pricin
     script.on("GET", f"/v1/files/file-out-{stem}/content", text_reply(output.decode()))
     with gateway.scenario() as scenario, wire_server(script) as wire:
         model: Final = scenario.model(
-            model=model_param, api_key="sk-dec1-costacc", api_base=f"{wire.url}/v1", **pricing  # pyright: ignore[reportArgumentType]
+            model=model_param,
+            api_key="sk-dec1-costacc",
+            api_base=f"{wire.url}/v1",
+            **pricing,  # pyright: ignore[reportArgumentType]
         )
         key: Final = scenario.key(models=[model])
         uploaded: Final = gateway.request_multipart(
@@ -361,7 +389,12 @@ def _batch_spend(gateway: Gateway, model_param: str, served_model: str, **pricin
         created: Final = gateway.request(
             "POST",
             "/v1/batches",
-            {"input_file_id": json_of(uploaded)["id"], "endpoint": "/v1/chat/completions", "completion_window": "24h", "model": model},
+            {
+                "input_file_id": json_of(uploaded)["id"],
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": model,
+            },
             key=key,
         )
         assert created.status_code == 200, created.text
@@ -391,5 +424,7 @@ def test_openai_batch_with_flat_deployment_prices_bills_half_of_them(gateway: Ga
     prices. `batch_cost_calculator` (`cost_calculator.py:3306`) sees the deployment entry with flat rates
     and no `*_batches` keys and halves them: `150 * 5e-06 + 30 * 1e-05 = 0.00105`.
     UNVERIFIED: assumes the deployment entry does not inherit the row's `*_batches` keys."""
-    spend: Final = _batch_spend(gateway, "openai/gpt-5.4", GPT54, input_cost_per_token=1e-05, output_cost_per_token=2e-05)
+    spend: Final = _batch_spend(
+        gateway, "openai/gpt-5.4", GPT54, input_cost_per_token=1e-05, output_cost_per_token=2e-05
+    )
     assert spend == pytest.approx(0.00105, rel=1e-6)

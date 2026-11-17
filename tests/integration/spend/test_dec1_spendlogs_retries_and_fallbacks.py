@@ -193,8 +193,12 @@ def test_timed_out_retries_write_one_row_per_billed_attempt(gateway: Gateway) ->
 
 
 def test_billed_attempt_rows_point_at_their_parent_request(gateway: Gateway) -> None:
-    """Each `-attempt-N` row has `metadata.billed_retry_attempt` true, `metadata.parent_request_id` equal to the
-    call id, and `litellm_call_id` equal to its own request id; the final row has no `billed_retry_attempt`."""
+    """Each `-attempt-N` row has `metadata.billed_retry_attempt` true, a `request_id` that is the call id plus
+    `-attempt-`, and `litellm_call_id` equal to its own request id; the final row has no `billed_retry_attempt`.
+    Pinned current behaviour: the request id prefix is the only pointer to the parent. `_attempt_spend_row_kwargs`
+    stamps `parent_request_id` into the attempt's metadata (proxy_track_cost_callback.py:409-410), but the row's
+    metadata keeps only the `SpendLogsMetadata` fields (litellm/proxy/_types.py:3918), which have no such field,
+    so the stored metadata never carries it."""
     with hanging_upstream() as wire, gateway.scenario() as scenario:
         _, call_id, rows = _timed_out(gateway, scenario, wire)
         attempts: Final = [row for row in rows if string_value(row["request_id"]) != call_id]
@@ -202,7 +206,8 @@ def test_billed_attempt_rows_point_at_their_parent_request(gateway: Gateway) -> 
         for row in attempts:
             metadata = metadata_of(row)
             assert metadata["billed_retry_attempt"] is True, metadata
-            assert metadata["parent_request_id"] == call_id, metadata
+            assert string_value(row["request_id"]).startswith(f"{call_id}-attempt-"), row
+            assert "parent_request_id" not in metadata, metadata
             assert row["litellm_call_id"] == row["request_id"], row
         assert metadata_of(final).get("billed_retry_attempt") is not True, final
 

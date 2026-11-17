@@ -199,14 +199,17 @@ def test_a_delivery_committed_by_a_stopped_proxy_is_projected_by_another(gateway
     """An owned proxy on the worker's database serves one call and is stopped as soon as the request row exists.
     The key's spend still reaches 0.02 and its daily row `api_requests` 1, projected by the suite proxy's ledger
     worker: committed deliveries outlive the process that wrote them (plan, "Failure semantics today"), which is
-    what lets a Rust writer hand off to the Python projector."""
-    with owned_spend_proxy(gateway, tmp_path) as (owned, scenario, wire):
-        model: Final = chat_model(scenario, wire)
-        key: Final = scenario.key(models=[model])
-        request_id: Final = served_id(ask(owned, model, key))
-        row_by_id(owned, request_id)
+    what lets a Rust writer hand off to the Python projector. The key is made on the suite proxy so it outlives the
+    owned proxy's scenario, whose cleanup deletes what it created (CI run 44161684479: the key row was gone, so its
+    spend read None)."""
+    with gateway.scenario() as outer:
+        with owned_spend_proxy(gateway, tmp_path) as (owned, scenario, wire):
+            model: Final = chat_model(scenario, wire)
+            key: Final = outer.key(models=[model])
+            request_id: Final = served_id(ask(owned, model, key))
+            row_by_id(owned, request_id)
         token: Final = hashed(key)
-    assert spend_reaches(gateway, "key", token, 0.02) == pytest.approx(0.02)
+        assert spend_reaches(gateway, "key", token, 0.02) == pytest.approx(0.02)
     counters: Final = eventually(
         lambda: gateway.rows(
             'SELECT COALESCE(SUM(api_requests), 0)::int AS n FROM "LiteLLM_DailyUserSpend" WHERE api_key = %s',

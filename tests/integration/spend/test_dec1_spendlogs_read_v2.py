@@ -204,17 +204,21 @@ def test_error_message_filter_is_a_substring_match(gateway: Gateway) -> None:
         assert _ids(_page(gateway, V2, key, error_message="nothing-like-this")) == []
 
 
-def test_key_alias_filter_is_a_substring_match_on_the_stored_alias(gateway: Gateway) -> None:
-    """A key with alias `dec1-sl-<hex>-alias` makes one call. `key_alias=<hex>` (no `api_key` filter) finds that
-    row, through `metadata->>'user_api_key_alias' LIKE %...%`."""
+def test_key_alias_filter_is_an_exact_match_on_the_keys_alias(gateway: Gateway) -> None:
+    """A key with alias `dec1-sl-<hex>-alias` makes one call. `key_alias=<full alias>` (no `api_key` filter) finds
+    that row and `key_alias=<hex>` finds none. Pinned current behaviour: since #47795 the filter is
+    `api_key IN (tokens whose key_alias = $p, live or deleted)` (spend_management_endpoints.py:3013 on main), an
+    exact match through the api_key index, no longer a substring match on `metadata.user_api_key_alias`."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         marker: Final = uuid.uuid4().hex
-        key: Final = scenario.key(models=[model], key_alias=f"dec1-sl-{marker}-alias")
+        alias: Final = f"dec1-sl-{marker}-alias"
+        key: Final = scenario.key(models=[model], key_alias=alias)
         identity: Final = served_id(ask(gateway, model, key))
         rows_of_key(gateway, key, 1)
-        page: Final = list_body(list_logs(gateway, V2, {**today_window(), "key_alias": marker}))
+        page: Final = list_body(list_logs(gateway, V2, {**today_window(), "key_alias": alias}))
         assert _ids(page) == [identity], page
+        assert _ids(list_body(list_logs(gateway, V2, {**today_window(), "key_alias": marker}))) == []
 
 
 def test_cache_hit_filter_separates_hits_from_misses(gateway: Gateway) -> None:

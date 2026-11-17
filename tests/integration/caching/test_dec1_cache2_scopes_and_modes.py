@@ -3,8 +3,9 @@ cache settings in metadata.
 
 ``cache_params.supported_call_types`` lists the call types that may read or write the cache
 (``LLMCachingHandler._is_call_type_supported_by_cache``, ``litellm/caching/caching_handler.py:1409``). The
-check uses the async function name (``acompletion``, ``aembedding``, ``atext_completion``, ``arerank``,
-``aanthropic_messages``) except for ``aresponses``, which is also covered by the plain name ``responses``. One
+check uses the cached function's name (``acompletion``, ``aembedding``, ``atext_completion``, ``arerank``, and
+``anthropic_messages``, whose async function has the plain name) and ``aresponses`` is also covered by the plain
+name ``responses``. One
 owned proxy runs with ``["acompletion", "responses", "anthropic_messages"]`` to pin both rules.
 
 ``mode: default_off`` makes every route opt-in with ``cache: {"use-cache": true}``; the chat and embedding cells
@@ -93,19 +94,18 @@ def test_the_plain_responses_name_covers_async_responses_calls(call_type_rig: Ca
         target.assert_hit(first, target.ask(text))
 
 
-def test_the_plain_anthropic_messages_name_does_not_cover_async_messages_calls(call_type_rig: CacheRig) -> None:
-    """On the same proxy two identical ``/v1/messages`` requests are sent. Both must reach the upstream and no
-    entry may name the message id: only ``aresponses`` has the plain-name alias, so ``anthropic_messages`` does
-    not cover the ``aanthropic_messages`` call the proxy makes. Pinned current behaviour; UNVERIFIED that the
-    Rust messages path consults the same list.
+def test_the_plain_anthropic_messages_name_covers_messages_calls(call_type_rig: CacheRig) -> None:
+    """On the same proxy two identical ``/v1/messages`` requests are sent. The second must be a hit. Pinned current
+    behaviour: the cached function behind ``/v1/messages`` is the ``@client`` decorated ``async def
+    anthropic_messages`` (litellm/llms/anthropic/messages/native/handler.py:552-553), so the call type checked
+    against the list is the plain ``anthropic_messages`` (``caching_handler.py:1425``), the name the spend rows
+    store too.
     """
     with call_type_rig.gateway.scenario() as scenario:
         target: Final = route_probe(scenario, MESSAGES_ROUTE)
         text: Final = prompt()
-        first: Final = target.ask(text)
-        target.assert_miss(first)
-        target.assert_miss(target.ask(text))
-        assert entry_keys_naming(call_type_rig.store(), target.needle(first)) == frozenset()
+        first, _ = target.fill(call_type_rig.store(), text)
+        target.assert_hit(first, target.ask(text))
 
 
 @pytest.mark.parametrize(

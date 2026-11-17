@@ -164,14 +164,17 @@ def test_stream_false_keys_like_an_omitted_stream(gateway: Gateway) -> None:
         assert not second.reached_upstream and second.id() == first.id(), second.response.text
 
 
-def test_streams_with_and_without_include_usage_are_separate_entries(gateway: Gateway) -> None:
+def test_streams_with_and_without_include_usage_share_one_entry(gateway: Gateway) -> None:
     """A chat stream with ``stream_options: {"include_usage": true}`` is repeated until replayed. The same stream
-    without ``stream_options`` must then reach the upstream: ``stream_options`` is an OpenAI chat parameter and is
-    hashed. UNVERIFIED: if the proxy injects ``include_usage`` into every stream itself the two keys coincide and
-    this cell shows it.
+    without ``stream_options`` is then replayed from that entry with 200 and no upstream call. Pinned current
+    behaviour: the proxy adds ``stream_options: {"include_usage": true}`` to every chat stream on a model that
+    supports ``stream_options`` before the cache key is built (``stream_usage_tracking_updates``,
+    common_request_processing.py:785-792), so both requests hash the same ``stream_options``.
     """
     with gateway.scenario() as scenario:
         target: Final = probe(scenario, CHAT_STREAM)
         text: Final = prompt()
         _replayed(lambda: target.chat(text, stream=True, stream_options={"include_usage": True}))
-        assert target.chat(text, stream=True).reached_upstream
+        plain: Final = target.chat(text, stream=True)
+        assert plain.response.status_code == 200, plain.response.text
+        assert not plain.reached_upstream, plain.response.text

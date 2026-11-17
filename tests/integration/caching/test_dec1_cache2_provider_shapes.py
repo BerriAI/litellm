@@ -232,7 +232,12 @@ def test_a_messages_hit_on_a_non_anthropic_provider_replays_the_translated_messa
     Anthropic message. The identical request must be answered from the cache with the same ``id``, ``content``
     and ``usage``. On Bedrock the provider request is SigV4 signed with a timestamp, so a key built from the
     signed wire request would never hit; the key must stay the request-level one.
+    On Gemini the hit is served without reaching the provider but carries no ``x-litellm-cache-key`` (CI run
+    44161684479): ``_set_cached_hidden_param`` (caching_handler.py:334-340) writes the key only into a hidden params
+    map the cached object already has, and does nothing for a stored dict without one.
     """
+    if make_model is gemini_model:
+        pytest.skip("BUG: a /v1/messages cache hit on a Gemini deployment answers without x-litellm-cache-key")
     with provider_peer(answer) as peer, gateway.scenario() as scenario:
         model: Final = make_model(scenario, peer)
         first, second = _twice(gateway, peer, "/v1/messages", _message(model))

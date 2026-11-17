@@ -64,27 +64,35 @@ def _always(reply: Reply):  # noqa: ANN202
 def test_vertex_claude_on_a_regional_location_bills_the_uplifted_price(gateway: Gateway) -> None:
     """`vertex_ai/claude-sonnet-4-5@20250929` (line 54076: 3e-06 in, 1.5e-05 out, uplift 1.1) at
     `vertex_location: us-east5` reports 1000 input and 500 output: `(0.003 + 0.0075) * 1.1 = 0.01155`."""
-    with vertex(gateway, _always(_claude(anthropic_usage(1000, 500))), backend=VERTEX_SONNET, vertex_location="us-east5") as rig:
+    with vertex(
+        gateway, _always(_claude(anthropic_usage(1000, 500))), backend=VERTEX_SONNET, vertex_location="us-east5"
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.01155)
 
 
 def test_vertex_claude_on_the_global_location_bills_list_price(gateway: Gateway) -> None:
     """The same call with `vertex_location: global` gets no uplift: `0.0105`."""
-    with vertex(gateway, _always(_claude(anthropic_usage(1000, 500))), backend=VERTEX_SONNET, vertex_location="global") as rig:
+    with vertex(
+        gateway, _always(_claude(anthropic_usage(1000, 500))), backend=VERTEX_SONNET, vertex_location="global"
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.0105)
 
 
 def test_vertex_claude_above_200k_on_global_bills_the_long_context_rates(gateway: Gateway) -> None:
     """250000 input and 500 output on global: `250000 * 6e-06 + 500 * 2.25e-05 = 1.51125` (line 54076
     `input_cost_per_token_above_200k_tokens` and `output_cost_per_token_above_200k_tokens`)."""
-    with vertex(gateway, _always(_claude(anthropic_usage(250000, 500))), backend=VERTEX_SONNET, vertex_location="global") as rig:
+    with vertex(
+        gateway, _always(_claude(anthropic_usage(250000, 500))), backend=VERTEX_SONNET, vertex_location="global"
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 1.51125)
 
 
 def test_vertex_claude_above_200k_on_a_region_stacks_the_uplift_on_the_long_context_rates(gateway: Gateway) -> None:
     """The same long call at us-east5 costs `1.51125 * 1.1 = 1.662375`: the uplift multiplies the already
     tiered cost."""
-    with vertex(gateway, _always(_claude(anthropic_usage(250000, 500))), backend=VERTEX_SONNET, vertex_location="us-east5") as rig:
+    with vertex(
+        gateway, _always(_claude(anthropic_usage(250000, 500))), backend=VERTEX_SONNET, vertex_location="us-east5"
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 1.662375)
 
 
@@ -100,7 +108,9 @@ def test_vertex_claude_cache_reads_on_a_region_are_uplifted(gateway: Gateway) ->
     """`vertex_ai/claude-haiku-4-5@20251001` (line 53070: 1e-06 in, 1e-07 cache read, 5e-06 out, uplift 1.1)
     at us-east5 with 1000 input, 4000 cache read and 500 output: `(0.001 + 0.0004 + 0.0025) * 1.1 = 0.00429`."""
     usage: Final = anthropic_usage(1000, 500, cache_read=4000)
-    with vertex(gateway, _always(_claude(usage, "claude-haiku-4-5-20251001")), backend=VERTEX_HAIKU, vertex_location="us-east5") as rig:
+    with vertex(
+        gateway, _always(_claude(usage, "claude-haiku-4-5-20251001")), backend=VERTEX_HAIKU, vertex_location="us-east5"
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.00429)
 
 
@@ -135,13 +145,17 @@ def test_vertex_claude_custom_prices_are_not_uplifted(gateway: Gateway) -> None:
 def test_vertex_gemini_on_a_region_bills_the_uplifted_price(gateway: Gateway) -> None:
     """`vertex_ai/gemini-3.8-flash` (line 31155: 7.5e-07 in, 3.75e-06 out, uplift 1.1) at us-central1 with
     1000 prompt and 100 candidate tokens: `(7.5e-04 + 3.75e-04) * 1.1 = 0.0012375`."""
-    with vertex(gateway, _always(_gemini(1000, 100, model=VERTEX_FLASH)), backend=VERTEX_FLASH, vertex_location="us-central1") as rig:
+    with vertex(
+        gateway, _always(_gemini(1000, 100, model=VERTEX_FLASH)), backend=VERTEX_FLASH, vertex_location="us-central1"
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.0012375)
 
 
 def test_vertex_gemini_on_global_bills_list_price(gateway: Gateway) -> None:
     """The same call at `vertex_location: global`: `0.001125`."""
-    with vertex(gateway, _always(_gemini(1000, 100, model=VERTEX_FLASH)), backend=VERTEX_FLASH, vertex_location="global") as rig:
+    with vertex(
+        gateway, _always(_gemini(1000, 100, model=VERTEX_FLASH)), backend=VERTEX_FLASH, vertex_location="global"
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.001125)
 
 
@@ -150,14 +164,21 @@ def test_vertex_gemini_with_no_location_is_priced_as_us_central1(gateway: Gatewa
     (`vertex_llm_base.py:194`), a regional endpoint, so it is uplifted: `0.0012375`.
     UNVERIFIED: `resolve_vertex_location_for_cost` (`litellm_logging.py:601`) sees no location on the proxy
     path and falls back to the same default."""
-    with vertex(gateway, _always(_gemini(1000, 100, model=VERTEX_FLASH)), backend=VERTEX_FLASH, vertex_location=None) as rig:
+    with vertex(
+        gateway, _always(_gemini(1000, 100, model=VERTEX_FLASH)), backend=VERTEX_FLASH, vertex_location=None
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.0012375)
 
 
 def test_vertex_gemini_without_an_uplift_key_bills_list_price_on_a_region(gateway: Gateway) -> None:
     """`gemini-2.5-pro` (line 30687) has no `regional_endpoint_uplift_multiplier`, so at us-central1 1000 prompt
     and 100 candidates cost `1000 * 1.25e-06 + 100 * 1e-05 = 0.00225`."""
-    with vertex(gateway, _always(_gemini(1000, 100, model="gemini-2.5-pro")), backend="gemini-2.5-pro", vertex_location="us-central1") as rig:
+    with vertex(
+        gateway,
+        _always(_gemini(1000, 100, model="gemini-2.5-pro")),
+        backend="gemini-2.5-pro",
+        vertex_location="us-central1",
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.00225)
 
 
@@ -201,7 +222,10 @@ def test_studio_audio_prompt_tokens_bill_at_the_audio_rate(gateway: Gateway) -> 
     """`gemini/gemini-2.5-flash` (line 31949: text 3e-07, audio 1e-06, out 2.5e-06) reports 1000 prompt tokens
     split `TEXT: 800`, `AUDIO: 200` in `promptTokensDetails`, and 100 candidates:
     `800 * 3e-07 + 200 * 1e-06 + 100 * 2.5e-06 = 0.00069`."""
-    details: Final[list[JsonValue]] = [{"modality": "TEXT", "tokenCount": 800}, {"modality": "AUDIO", "tokenCount": 200}]
+    details: Final[list[JsonValue]] = [
+        {"modality": "TEXT", "tokenCount": 800},
+        {"modality": "AUDIO", "tokenCount": 200},
+    ]
     with gemini(gateway, _always(_gemini(1000, 100, model=FLASH, promptTokensDetails=details)), backend=FLASH) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.00069)
 
@@ -209,14 +233,19 @@ def test_studio_audio_prompt_tokens_bill_at_the_audio_rate(gateway: Gateway) -> 
 def test_studio_image_prompt_tokens_without_an_image_rate_bill_as_text(gateway: Gateway) -> None:
     """The same model with `TEXT: 800`, `IMAGE: 200`: the row has no `input_cost_per_image_token`, so image
     tokens bill at the text rate (`_modality_token_cost`, `utils.py:1258`): `1000 * 3e-07 + 100 * 2.5e-06 = 0.00055`."""
-    details: Final[list[JsonValue]] = [{"modality": "TEXT", "tokenCount": 800}, {"modality": "IMAGE", "tokenCount": 200}]
+    details: Final[list[JsonValue]] = [
+        {"modality": "TEXT", "tokenCount": 800},
+        {"modality": "IMAGE", "tokenCount": 200},
+    ]
     with gemini(gateway, _always(_gemini(1000, 100, model=FLASH, promptTokensDetails=details)), backend=FLASH) as rig:
         assert_billed(gateway, rig.model, rig.chat(), 0.00055)
 
 
 def test_studio_priority_traffic_bills_priority_rates(gateway: Gateway) -> None:
     """`trafficType: ON_DEMAND_PRIORITY` on gemini/gemini-2.5-flash: `1000 * 5.4e-07 + 100 * 4.5e-06 = 0.00099`."""
-    with gemini(gateway, _always(_gemini(1000, 100, model=FLASH, trafficType="ON_DEMAND_PRIORITY")), backend=FLASH) as rig:
+    with gemini(
+        gateway, _always(_gemini(1000, 100, model=FLASH, trafficType="ON_DEMAND_PRIORITY")), backend=FLASH
+    ) as rig:
         assert_billed(gateway, rig.model, rig.chat(service_tier="priority"), 0.00099)
 
 
@@ -272,7 +301,7 @@ def test_studio_never_applies_the_vertex_regional_uplift(gateway: Gateway) -> No
     ("input_price", "output_price", "expected"),
     [
         pytest.param(1e-05, 2e-05, 0.012, id="both-flat-prices"),
-        pytest.param(1e-05, None, 0.01025, id="input-only-keeps-row-output"),
+        pytest.param(1e-05, None, 0.01, id="input-only-bills-no-output"),
     ],
 )
 def test_studio_deployment_prices_win_over_the_row(
@@ -280,8 +309,10 @@ def test_studio_deployment_prices_win_over_the_row(
 ) -> None:
     """A gemini/gemini-2.5-flash deployment priced `input_cost_per_token: 1e-05` and, in one cell,
     `output_cost_per_token: 2e-05`; 1000 prompt and 100 candidates cost `0.01 + 0.002 = 0.012`, or with only
-    an input price `0.01 + 100 * 2.5e-06 = 0.01025` (the row's output price is kept).
-    UNVERIFIED for the input-only cell: assumes the deployment entry falls back to the row's output rate."""
+    an input price `0.01`. Pinned current behaviour for the input-only cell: the deployment's cost entry is its own
+    custom prices plus only the inherited off-peak, cache, service tier and tiered output rates
+    (`deployment_model_cost_payload`, litellm/router_rust/surface/registry.py:427-455), never the row's plain
+    `output_cost_per_token`, so the 100 candidates bill 0 (CI run 44161684479)."""
     prices: Final[dict[str, JsonValue]] = {"input_cost_per_token": input_price}
     if output_price is not None:
         prices["output_cost_per_token"] = output_price
