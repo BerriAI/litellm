@@ -6917,6 +6917,39 @@ async def test_chatgpt_stored_response_calls_send_only_the_configured_token_over
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("call_name", tuple(_STORED_RESPONSE_CALLS))
+async def test_responses_after_a_stored_response_call_on_the_same_extra_headers_sends_its_own_key(
+    is_async: bool, call_name: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.route(url__regex=r"https://responses\.example\.com/.*").respond(
+        200, json={**_responses_body("gpt-6-luna"), "deleted": True, "data": [], "has_more": False}
+    )
+    reused_extra_headers: Final = {"x-default": "1"}
+    sync_call, async_call, call_kwargs = _STORED_RESPONSE_CALLS[call_name]
+    async with _responses_http_client(is_async) as client:
+        stored_kwargs: Final = {
+            **call_kwargs,
+            "custom_llm_provider": "openai",
+            "api_key": "fake-first-deployment-key",
+            "api_base": "https://responses.example.com/v1",
+            "extra_headers": reused_extra_headers,
+            "client": client,
+        }
+        await async_call(**stored_kwargs) if is_async else sync_call(**stored_kwargs)
+        create_kwargs: Final = {
+            "model": "openai/gpt-6-luna",
+            "input": "hello",
+            "api_key": "fake-second-deployment-key",
+            "api_base": "https://responses.example.com/v1",
+            "extra_headers": reused_extra_headers,
+            "client": client,
+        }
+        await litellm.aresponses(**create_kwargs) if is_async else litellm.responses(**create_kwargs)
+    assert route.calls[-1].request.headers.get_list("authorization") == ["Bearer fake-second-deployment-key"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
 async def test_responses_sends_a_bytes_caller_header_value_as_given(
     is_async: bool, respx_mock: respx.MockRouter
 ) -> None:
