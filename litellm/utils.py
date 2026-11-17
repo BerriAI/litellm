@@ -1118,6 +1118,54 @@ def _remove_thought_signatures_from_messages(messages: list, thought_signature_s
     return processed_messages
 
 
+_THOUGHT_SIGNATURE_CALL_TYPES: Final = frozenset(
+    {CallTypes.completion.value, CallTypes.acompletion.value, CallTypes.anthropic_messages.value}
+)
+
+
+def _field(value: object, name: str) -> object:
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _tool_call_ids(message: object) -> Iterator[object]:
+    yield _field(message, "tool_call_id")
+    tool_calls: Final = _field(message, "tool_calls")
+    if isinstance(tool_calls, list):
+        yield from (_field(call, "id") for call in tool_calls)
+
+
+def _target_provider(model: str, declared: object) -> str | None:
+    if isinstance(declared, str) and declared:
+        return declared
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
+    try:
+        return resolve_model_and_provider_for_metadata(model=model)[1]
+    except Exception:
+        return None
+
+
+def messages_without_foreign_thought_signatures(
+    call_type: str, model: object, kwargs: Mapping[str, object]
+) -> list[object] | None:
+    """Messages with Gemini thought signatures cut from tool call ids, or None when the call's target keeps them.
+
+    Must run per LLM call with the deployment's model, never on the proxy's alias before routing."""
+    from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
+
+    messages: Final = kwargs.get("messages")
+    if call_type not in _THOUGHT_SIGNATURE_CALL_TYPES or not isinstance(messages, list) or not isinstance(model, str):
+        return None
+    signed: Final = any(
+        isinstance(tool_call_id, str) and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
+        for tool_call_id in itertools.chain.from_iterable(map(_tool_call_ids, messages))
+    )
+    if not signed or _is_gemini_model(model, _target_provider(model, kwargs.get("custom_llm_provider"))):
+        return None
+    verbose_logger.debug("Removing thought signatures from tool call IDs for non-Gemini model %s", model)
+    return _remove_thought_signatures_from_messages(messages, THOUGHT_SIGNATURE_SEPARATOR)
+
+
 def _restore_correlation_context_if_supported(logging_obj: object) -> None:
     """Call logging_obj._restore_correlation_context() if it's actually there.
 
@@ -1492,55 +1540,6 @@ def function_setup(
                     input=buffer.getvalue(),
                     model=model,
                 )
-
-            ### REMOVE THOUGHT SIGNATURES FROM TOOL CALL IDS FOR NON-GEMINI MODELS ###
-            # Gemini models embed thought signatures in tool call IDs. When sending
-            # messages with tool calls to non-Gemini providers, we need to remove these
-            # signatures to ensure compatibility.
-            if isinstance(messages, list) and len(messages) > 0:
-                try:
-                    from litellm.litellm_core_utils.get_llm_provider_logic import (
-                        resolve_model_and_provider_for_metadata,
-                    )
-                    from litellm.litellm_core_utils.prompt_templates.factory import (
-                        THOUGHT_SIGNATURE_SEPARATOR,
-                    )
-
-                    # Get custom_llm_provider to determine target provider
-                    custom_llm_provider = kwargs.get("custom_llm_provider")
-
-                    # If custom_llm_provider not in kwargs, try to determine it from the model
-                    metadata_model: Final = _OPAQUE_VALUE.validate_python(model)
-                    if not custom_llm_provider and isinstance(metadata_model, str) and metadata_model:
-                        try:
-                            _, custom_llm_provider = resolve_model_and_provider_for_metadata(
-                                model=metadata_model,
-                                custom_llm_provider=custom_llm_provider,
-                            )
-                        except Exception:
-                            # If we can't determine the provider, skip this processing
-                            pass
-
-                    # Only process if target is NOT a Gemini model
-                    if not _is_gemini_model(model, custom_llm_provider):
-                        verbose_logger.debug("Removing thought signatures from tool call IDs for non-Gemini model")
-
-                        # Process messages to remove thought signatures
-                        processed_messages: Final = _remove_thought_signatures_from_messages(
-                            messages, THOUGHT_SIGNATURE_SEPARATOR
-                        )
-
-                        # Update messages in kwargs or args
-                        if "messages" in kwargs:
-                            kwargs["messages"] = processed_messages
-                        elif len(args) > 1:
-                            args_list: Final = list(args)
-                            args_list[1] = processed_messages
-                            args = tuple(args_list)
-
-                except Exception as e:
-                    # Log the error but don't fail the request
-                    verbose_logger.warning("Error removing thought signatures from tool call IDs: %s", e)
         elif call_type == CallTypes.embedding.value or call_type == CallTypes.aembedding.value:
             messages = args[1] if len(args) > 1 else kwargs.get("input", None)
         elif call_type == CallTypes.image_generation.value or call_type == CallTypes.aimage_generation.value:
@@ -2300,6 +2299,9 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            signature_free_messages: Final = messages_without_foreign_thought_signatures(call_type, model, kwargs)
+            if signature_free_messages is not None:
+                kwargs["messages"] = signature_free_messages
 
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs, call_type)
@@ -2569,6 +2571,9 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            signature_free_messages: Final = messages_without_foreign_thought_signatures(call_type, model, kwargs)
+            if signature_free_messages is not None:
+                kwargs["messages"] = signature_free_messages
             if not _is_litellm_internal_call:
                 bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 

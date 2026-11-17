@@ -227,3 +227,83 @@ def test_vertex_gemini_kwargs_extra_param_reaches_generation_config(gateway: Gat
         )
         assert response.status_code == 200, response.text
         assert response.json()["choices"][0]["message"]["content"] == "done"
+
+
+_REPLAYED_SIGNATURE: Final = "cmVwbGF5ZWQtc2lnbmF0dXJl"
+_SIGNED_CALL_ID: Final = f"call_7c1e__thought__{_REPLAYED_SIGNATURE}"
+_TOOL_TURN_MESSAGES: Final = [
+    {"role": "user", "content": "weather?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": _SIGNED_CALL_ID,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": json.dumps(_ARGS)},
+            }
+        ],
+    },
+    {"role": "tool", "tool_call_id": _SIGNED_CALL_ID, "content": "sunny"},
+]
+
+
+def _tool_turn_call(gateway: Gateway, model: str) -> None:
+    response: Final = gateway.client.post(
+        "/v1/chat/completions",
+        json={
+            "model": model,
+            "tools": [{"type": "function", "function": function} for function in _FUNCTIONS],
+            "messages": _TOOL_TURN_MESSAGES,
+        },
+        headers={"Authorization": f"Bearer {gateway.key}"},
+        timeout=30,
+    )
+    assert response.status_code == 200, response.text
+
+
+def _function_call_signatures(request: Request) -> tuple[JsonValue, ...]:
+    contents: Final = _JSON_OBJECT.validate_json(request.body)["contents"]
+    parts: Final = tuple(part for content in contents for part in content["parts"])
+    return tuple(part.get("thoughtSignature") for part in parts if "functionCall" in part)
+
+
+def _sent_tool_call_ids(request: Request) -> tuple[JsonValue, ...]:
+    messages: Final = _JSON_OBJECT.validate_json(request.body)["messages"]
+    calls: Final = tuple(call for message in messages for call in message.get("tool_calls") or ())
+    return (
+        *(call["id"] for call in calls),
+        *(message["tool_call_id"] for message in messages if "tool_call_id" in message),
+    )
+
+
+def test_vertex_gemini_alias_without_gemini_in_name_replays_tool_call_thought_signature(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _: Reply(body=json.dumps(_candidate(with_signature=False)).encode())) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _model(gateway, scenario, wire.url)
+        assert "gemini" not in model
+        _tool_turn_call(gateway, model)
+        (request,) = wire.drain()
+
+    assert request.target == f"{_MODEL_PATH}:generateContent"
+    assert _function_call_signatures(request) == (_REPLAYED_SIGNATURE,)
+
+
+def test_openai_target_receives_tool_call_ids_without_thought_signature(gateway: Gateway) -> None:
+    completion: Final = {
+        "id": "chatcmpl-scripted",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "gpt-4o-mini",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+    }
+    with wire_server(lambda _: Reply(body=json.dumps(completion).encode())) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=f"{wire.url}/v1")
+        _tool_turn_call(gateway, model)
+        (request,) = wire.drain()
+
+    assert request.target == "/v1/chat/completions"
+    assert _sent_tool_call_ids(request) == ("call_7c1e", "call_7c1e")
