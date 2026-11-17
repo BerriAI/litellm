@@ -62,7 +62,6 @@ from litellm.proxy.common_request_processing import (
     FirstChunkSseFraming,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
-    await_llm_call_cancelling_on_disconnect,
     _bill_partial_streamed_spend_on_disconnect,
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
@@ -76,6 +75,7 @@ from litellm.proxy.common_request_processing import (
     _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     attach_guardrail_information,
+    await_llm_call_cancelling_on_disconnect,
     create_response,
     include_guardrail_response_requested,
     is_azure_model_router_request,
@@ -9214,11 +9214,11 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             ProxyRateLimitError,
             saturation_fallbacks_exhausted,
         )
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache, hash_token
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
         cache = DualCache()
-        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        limiter = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
         key = ProxyKey(api_key=hash_token("sk-one-at-a-time"), max_parallel_requests=1)
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         refusal = HTTPException(status_code=400, detail="guardrail refused the fallback")
@@ -10259,11 +10259,11 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         from litellm.caching.caching import DualCache
         from litellm.proxy import proxy_server
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
         monkeypatch.setattr(proxy_server, "prisma_client", None)
-        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+        limiter = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter_models: list[str] = []
 
         async def run_limiter(
@@ -15653,18 +15653,16 @@ async def test_completed_synthetic_stream_reuses_capacity_without_freeing_anothe
     )
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.utils import InternalUsageCache, hash_token
     from litellm.redis.stores.rate_limits import RateLimitScope
     from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+    from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
     def clock() -> datetime.datetime:
         return datetime.datetime(2026, 1, 1)
 
     cache: Final = DualCache()
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(cache), time_provider=clock
-    )
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache), time_provider=clock)
     logger: Final = ProxyLogging(user_api_key_cache=cache)
     logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
     auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-synthetic-stream"), max_parallel_requests=2)

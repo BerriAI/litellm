@@ -159,6 +159,7 @@ from litellm.proxy.mcp_server.outbound_credentials.token_exchange_provider impor
 )
 from litellm.proxy.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
+    ApiKeyConfig,
     AuthResolution,
     IdJagConfig,
     PassthroughConfig,
@@ -1344,6 +1345,47 @@ def _server_auth_header_for(
         else None
     )
     return mcp_auth_header if server_specific is None else server_specific
+
+
+def _v1_default_key_header(auth_type: MCPAuthType) -> str | None:
+    match auth_type:
+        case (
+            MCPAuth.bearer_token
+            | MCPAuth.basic
+            | MCPAuth.authorization
+            | MCPAuth.oauth2
+            | MCPAuth.token
+            | MCPAuth.oauth2_token_exchange
+        ):
+            return "Authorization"
+        case MCPAuth.api_key:
+            return "X-API-Key"
+        case (
+            None
+            | MCPAuth.none
+            | MCPAuth.aws_sigv4
+            | MCPAuth.oauth2_id_jag
+            | MCPAuth.true_passthrough
+            | MCPAuth.oauth_delegate
+        ):
+            return None
+    assert_never(auth_type)  # pragma: no cover
+
+
+def _v1_key_occupies_authorization(server: MCPServer) -> bool:
+    if server.is_byok or not server.authentication_token:
+        return False
+    default_header: Final = _v1_default_key_header(server.auth_type)
+    if default_header is None:
+        return False
+    return (server.upstream_token_header or default_header).lower() == "authorization"
+
+
+def _server_key_occupies_authorization(server: MCPServer) -> bool:
+    spec: Final = to_server_spec(server)
+    if spec is None:
+        return _v1_key_occupies_authorization(server)
+    return isinstance(spec.config, ApiKeyConfig) and spec.config.header_name.lower() == "authorization"
 
 
 def listed_tools_caller_for(
@@ -4604,6 +4646,7 @@ class MCPServerManager:
                     and not has_static_authorization
                     and not mcp_auth_header
                     and not has_extra_authorization
+                    and not _server_key_occupies_authorization(server)
                 ):
                     extra_headers = await inject_mcp_jwt_headers_for_upstream(
                         user_api_key_dict=user_api_key_auth,
@@ -6888,9 +6931,11 @@ class MCPServerManager:
             hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
             existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
             server_auth_occupies_authorization: Final = (
-                any(k.lower() == "authorization" for k in server_auth_header)
+                _server_key_occupies_authorization(mcp_server)
+                if not server_auth_header
+                else any(k.lower() == "authorization" for k in server_auth_header)
                 if isinstance(server_auth_header, dict)
-                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+                else mcp_server.auth_type != MCPAuth.api_key
             )
             if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
                 # Mirror the tools/list signer guard: an upstream credential (user OAuth,

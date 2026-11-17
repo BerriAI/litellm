@@ -229,7 +229,7 @@ async fn managed_aws_credentials_sign_the_exact_native_request(
 
 #[rstest]
 #[tokio::test]
-async fn bedrock_invoke_keeps_the_region_path_and_signs_caller_headers_as_python_does(
+async fn bedrock_invoke_routes_by_the_region_path_and_signs_caller_headers_as_python_does(
     call: MessagesCall,
 ) {
     let upstream = upstream([message_response()]).await;
@@ -263,11 +263,11 @@ async fn bedrock_invoke_keeps_the_region_path_and_signs_caller_headers_as_python
     let auth = request.header("authorization").unwrap();
     assert_eq!(
         request.url.path(),
-        "/model/us-west-2/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
+        "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
     );
     assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=test-access/"));
     assert!(auth.contains(
-        "/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;date;host;x-amz-security-token, "
+        "/us-west-2/bedrock/aws4_request, SignedHeaders=content-type;date;host;x-amz-security-token, "
     ));
     assert_eq!(request.header("x-amz-security-token"), Some("caller-token"));
     assert_eq!(request.header("x-amz-date"), None);
