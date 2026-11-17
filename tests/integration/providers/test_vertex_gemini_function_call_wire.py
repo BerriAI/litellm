@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.factory import get_dummy_thought_signature
 
@@ -236,6 +237,152 @@ def test_vertex_gemini_kwargs_extra_param_reaches_generation_config(gateway: Gat
         )
         assert response.status_code == 200, response.text
         assert response.json()["choices"][0]["message"]["content"] == "done"
+
+
+_REPLAYED_SIGNATURE: Final = "cmVwbGF5ZWQtc2lnbmF0dXJl"
+_SIGNED_CALL_ID: Final = f"call_7c1e__thought__{_REPLAYED_SIGNATURE}"
+_TOOL_TURN_MESSAGES: Final = [
+    {"role": "user", "content": "weather?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": _SIGNED_CALL_ID,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": json.dumps(_ARGS)},
+            }
+        ],
+    },
+    {"role": "tool", "tool_call_id": _SIGNED_CALL_ID, "content": "sunny"},
+]
+
+
+def _tool_turn_call(gateway: Gateway, model: str, **extra: JsonValue) -> None:
+    response: Final = gateway.client.post(
+        "/v1/chat/completions",
+        json={
+            "model": model,
+            "tools": [{"type": "function", "function": function} for function in _FUNCTIONS],
+            "messages": _TOOL_TURN_MESSAGES,
+            **extra,
+        },
+        headers={"Authorization": f"Bearer {gateway.key}"},
+        timeout=30,
+    )
+    assert response.status_code == 200, response.text
+
+
+class _GeminiPart(TypedDict):
+    function_call: NotRequired[ReadOnly[JsonValue]]
+    thoughtSignature: NotRequired[ReadOnly[str]]
+
+
+class _GeminiContent(TypedDict):
+    parts: ReadOnly[tuple[_GeminiPart, ...]]
+
+
+class _GeminiRequest(TypedDict):
+    contents: ReadOnly[tuple[_GeminiContent, ...]]
+
+
+class _ToolCall(TypedDict):
+    id: ReadOnly[str]
+
+
+class _ChatMessage(TypedDict):
+    tool_calls: NotRequired[ReadOnly[tuple[_ToolCall, ...] | None]]
+    tool_call_id: NotRequired[ReadOnly[str]]
+
+
+class _ChatRequest(TypedDict):
+    messages: ReadOnly[tuple[_ChatMessage, ...]]
+
+
+_GEMINI_REQUEST: Final = TypeAdapter(_GeminiRequest)
+_CHAT_REQUEST: Final = TypeAdapter(_ChatRequest)
+
+
+def _function_call_signatures(request: Request) -> tuple[str | None, ...]:
+    contents: Final = _GEMINI_REQUEST.validate_json(request.body)["contents"]
+    parts: Final = itertools.chain.from_iterable(content["parts"] for content in contents)
+    return tuple(part.get("thoughtSignature") for part in parts if "function_call" in part)
+
+
+def _sent_tool_call_ids(request: Request) -> tuple[str, ...]:
+    messages: Final = _CHAT_REQUEST.validate_json(request.body)["messages"]
+    calls: Final = itertools.chain.from_iterable(message.get("tool_calls") or () for message in messages)
+    return (
+        *(call["id"] for call in calls),
+        *(message["tool_call_id"] for message in messages if "tool_call_id" in message),
+    )
+
+
+def test_vertex_gemini_alias_without_gemini_in_name_replays_tool_call_thought_signature(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _: Reply(body=json.dumps(_candidate(with_signature=False)).encode())) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _model(gateway, scenario, wire.url)
+        assert "gemini" not in model
+        _tool_turn_call(gateway, model)
+        (request,) = wire.drain()
+
+    assert request.target == f"{_MODEL_PATH}:generateContent"
+    assert _function_call_signatures(request) == (_REPLAYED_SIGNATURE,)
+
+
+def test_openai_target_receives_tool_call_ids_without_thought_signature(gateway: Gateway) -> None:
+    completion: Final = {
+        "id": "chatcmpl-scripted",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "gpt-4o-mini",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+    }
+    with wire_server(lambda _: Reply(body=json.dumps(completion).encode())) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=f"{wire.url}/v1")
+        _tool_turn_call(gateway, model)
+        (request,) = wire.drain()
+
+    assert request.target == "/v1/chat/completions"
+    assert _sent_tool_call_ids(request) == ("call_7c1e", "call_7c1e")
+
+
+def test_vertex_gemini_alias_without_gemini_in_name_replays_tool_call_thought_signature_streaming(
+    gateway: Gateway,
+) -> None:
+    payload: Final = json.dumps(_candidate(with_signature=False))
+    with (
+        wire_server(
+            lambda _: Reply(content_type="text/event-stream", chunks=(f"data: {payload}\n\n".encode(),))
+        ) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _model(gateway, scenario, wire.url)
+        _tool_turn_call(gateway, model, stream=True)
+        (request,) = wire.drain()
+
+    assert request.target == f"{_MODEL_PATH}:streamGenerateContent?alt=sse"
+    assert _function_call_signatures(request) == (_REPLAYED_SIGNATURE,)
+
+
+def test_fallback_from_openai_to_vertex_gemini_alias_strips_then_replays_thought_signature(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _: Reply(status=500, body=b'{"error": {"message": "scripted outage"}}')) as openai_wire,
+        wire_server(lambda _: Reply(body=json.dumps(_candidate(with_signature=False)).encode())) as vertex_wire,
+        gateway.scenario() as scenario,
+    ):
+        primary: Final = scenario.model(api_base=f"{openai_wire.url}/v1")
+        fallback: Final = _model(gateway, scenario, vertex_wire.url)
+        _tool_turn_call(gateway, primary, fallbacks=[fallback], num_retries=0)
+        openai_requests: Final = openai_wire.drain()
+        (vertex_request,) = vertex_wire.drain()
+
+    assert openai_requests, "the primary deployment was never tried"
+    assert {_sent_tool_call_ids(request) for request in openai_requests} == {("call_7c1e", "call_7c1e")}
+    assert _function_call_signatures(vertex_request) == (_REPLAYED_SIGNATURE,)
 
 
 Provider: TypeAlias = Literal["gemini", "vertex_ai"]
