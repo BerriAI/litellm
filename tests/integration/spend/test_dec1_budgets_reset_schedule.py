@@ -51,7 +51,7 @@ _FAST_RESET: Final = {"PROXY_BUDGET_RESCHEDULER_MIN_TIME": "2", "PROXY_BUDGET_RE
 
 def _key_reset_at(gateway: Gateway, key: str) -> datetime:
     rows: Final = gateway.rows(
-        "SELECT budget_reset_at AT TIME ZONE 'UTC' AS reset_at FROM \"LiteLLM_VerificationToken\" WHERE token = %s",
+        "SELECT to_char(budget_reset_at, 'YYYY-MM-DD HH24:MI:SS.US') AS reset_at FROM \"LiteLLM_VerificationToken\" WHERE token = %s",
         (hashed(key),),
     )
     value: Final = rows[0]["reset_at"]
@@ -141,7 +141,7 @@ def test_a_team_budget_duration_gets_the_same_calendar_reset(gateway: Gateway) -
         before: Final = datetime.now(timezone.utc)
         team: Final = scenario.team(max_budget=1.0, budget_duration="1d")
         rows: Final = gateway.rows(
-            "SELECT budget_reset_at AT TIME ZONE 'UTC' AS reset_at FROM \"LiteLLM_TeamTable\" WHERE team_id = %s",
+            "SELECT to_char(budget_reset_at, 'YYYY-MM-DD HH24:MI:SS.US') AS reset_at FROM \"LiteLLM_TeamTable\" WHERE team_id = %s",
             (team,),
         )
         assert datetime.fromisoformat(str(rows[0]["reset_at"])).replace(tzinfo=timezone.utc) == _midnight_after(before)
@@ -154,7 +154,7 @@ def test_a_customer_budget_duration_is_scheduled_on_its_budget_row(gateway: Gate
         before: Final = datetime.now(timezone.utc)
         customer: Final = new_customer(gateway, scenario, max_budget=1.0, budget_duration="1d")
         rows: Final = gateway.rows(
-            "SELECT b.budget_reset_at AT TIME ZONE 'UTC' AS reset_at FROM \"LiteLLM_EndUserTable\" e "
+            "SELECT to_char(b.budget_reset_at, 'YYYY-MM-DD HH24:MI:SS.US') AS reset_at FROM \"LiteLLM_EndUserTable\" e "
             'JOIN "LiteLLM_BudgetTable" b ON b.budget_id = e.budget_id WHERE e.user_id = %s',
             (customer,),
         )

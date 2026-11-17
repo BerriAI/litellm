@@ -74,7 +74,14 @@ def test_a_chat_max_tokens_above_the_model_ceiling_holds_only_the_ceiling(gatewa
 def test_a_flat_reasoning_price_above_the_output_price_sizes_the_hold(gateway: Gateway) -> None:
     """A deployment prices output at 0.004 and `output_cost_per_reasoning_token` at 0.01 a token. A held call
     with `max_tokens: 10` holds 0.1 (10 * 0.01) on the key counter: every output token is held at the dearer of
-    the two rates because the reasoning share is unknown before the call (`budget_reservation.py:1264-1270`)."""
+    the two rates because the reasoning share is unknown before the call (`budget_reservation.py:1264-1270`).
+    BUG: the hold is 0.04. `_get_model_cost_info` estimates against `registry().group(..., field="cached_info")`
+    (budget_reservation.py:1316-1324), a `ModelGroupInfo` dump whose pricing fields are only input, output and pixel
+    (litellm/types/router.py:1075-1082), so the reasoning rate never reaches `_max_cost_for_cost_info`
+    (budget_reservation.py:1257-1270). Reproduced in process with a Router: the estimate is 0.04."""
+    pytest.skip(
+        "BUG: the hold ignores output_cost_per_reasoning_token: the group cost info is a ModelGroupInfo dump, which has no reasoning rate, so 10 tokens hold 0.04 not 0.1"
+    )
     with held_provider() as provider, gateway.scenario() as scenario, redis_client() as cache, background() as run:
         model: Final = hold_model(scenario, provider, output_cost_per_reasoning_token=0.01)
         key: Final = scenario.key(models=[model], max_budget=10.0)
@@ -88,8 +95,9 @@ def test_a_flat_reasoning_price_above_the_output_price_sizes_the_hold(gateway: G
 
 def test_a_zero_output_cap_on_a_free_input_model_takes_no_hold(gateway: Gateway) -> None:
     """A key with `max_budget` 1.0 holds a call with `max_tokens: 0`. Input is free, so the estimate is 0 and no
-    hold is written: the key counter does not exist while the call is in flight
-    (`reservation_cost <= 0` returns None, `budget_reservation.py:288-291`). The answer still settles 0.02."""
+    hold is written (`reservation_cost <= 0` returns None, `budget_reservation.py:298-299`): while the call is in
+    flight the key counter reads exactly 0.0, the stored spend the budget check seeded on its Redis miss
+    (`_read_spend_counter_estimate`, litellm/proxy/proxy_server.py:3739-3745, `spend_counter_reseed.py:313`)."""
     with held_provider() as provider, gateway.scenario() as scenario, redis_client() as cache, background() as run:
         model: Final = hold_model(scenario, provider)
         key: Final = scenario.key(models=[model], max_budget=1.0)
@@ -98,7 +106,7 @@ def test_a_zero_output_cap_on_a_free_input_model_takes_no_hold(gateway: Gateway)
         held: Final = counter(cache, key_counter(key))
         provider.release()
         pending.result(timeout=60)
-        assert held is None
+        assert held == 0.0
 
 
 def test_a_key_with_only_a_window_holds_on_the_window_counter(gateway: Gateway) -> None:

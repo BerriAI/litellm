@@ -42,8 +42,11 @@ def _number(value: JsonValue) -> float:
 
 def test_key_info_reports_the_budget_settings_and_the_reset_time(gateway: Gateway) -> None:
     """A key is created with `max_budget` 1.0, `soft_budget` 0.5 and `budget_duration` `30d`, and makes one call.
-    `GET /key/info` reports `info.max_budget` 1.0, `info.soft_budget` 0.5, `info.budget_duration` `30d`, a
-    non-null `info.budget_reset_at` and, once the call is applied, `info.spend` 0.02."""
+    `GET /key/info` reports `info.max_budget` 1.0, `info.budget_duration` `30d`, a non-null `info.budget_reset_at`
+    and, once the call is applied, `info.spend` 0.02. The soft budget is not a key column: `/key/generate` stores it
+    on a budget row of its own (key_management_endpoints.py:1692-1707) and `/key/info` returns it under
+    `info.litellm_budget_table.soft_budget` (the row is loaded with `include={"litellm_budget_table": True}`,
+    key_management_endpoints.py:5257-5260), with no top level `info.soft_budget`."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model], max_budget=1.0, soft_budget=0.5, budget_duration="30d")
@@ -53,7 +56,9 @@ def test_key_info_reports_the_budget_settings_and_the_reset_time(gateway: Gatewa
             lambda found: _number(found["spend"] or 0.0) == pytest.approx(CHAT_COST),
             seconds=LANDING_SECONDS,
         )
-        assert (info["max_budget"], info["soft_budget"], info["budget_duration"]) == (1.0, 0.5, "30d"), info
+        assert (info["max_budget"], info["budget_duration"]) == (1.0, "30d"), info
+        assert "soft_budget" not in info, info
+        assert object_value(info["litellm_budget_table"])["soft_budget"] == 0.5, info
         assert info["budget_reset_at"] is not None, info
 
 
@@ -123,20 +128,24 @@ def test_organization_info_reports_the_budget_row_and_spend(gateway: Gateway) ->
         assert object_value(body["litellm_budget_table"])["max_budget"] == 1.0, body
 
 
-def test_tag_info_reports_the_tag_budget(gateway: Gateway) -> None:
-    """A tag created with `max_budget` 1.0 is carried by one call. `POST /tag/info` with `names: [<tag>]` returns
-    the tag with its budget (`litellm_budget_table.max_budget` 1.0) and, once applied, `spend` 0.02.
-    UNVERIFIED: the response is assumed to be a mapping from tag name to the tag object."""
+def test_tag_info_reports_the_tag_budget_but_not_its_spend(gateway: Gateway) -> None:
+    """A tag created with `max_budget` 1.0 is carried by one call, whose 0.02 lands in `LiteLLM_TagTable.spend`.
+    `POST /tag/info` with `names: [<tag>]` returns a mapping from tag name to the tag object, with its budget
+    (`litellm_budget_table.max_budget` 1.0) but no `spend` field: `info_tag` builds the object from name,
+    description, models, model_info, timestamps, creator and the budget row only
+    (litellm/proxy/management_endpoints/tag_management_endpoints.py:544-556)."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         tag: Final = new_tag(gateway, scenario, max_budget=1.0)
         key: Final = scenario.key(models=[model])
         served(ask(gateway, model, key, metadata={"tags": [tag]}))
-        body: Final = eventually(
-            lambda: object_value(gateway.post("/tag/info", {"names": [tag]})[tag]),
-            lambda found: _number(found.get("spend") or 0.0) == pytest.approx(CHAT_COST),
+        eventually(
+            lambda: gateway.rows('SELECT spend FROM "LiteLLM_TagTable" WHERE tag_name = %s', (tag,)),
+            lambda rows: bool(rows) and _number(rows[0]["spend"] or 0.0) == pytest.approx(CHAT_COST),
             seconds=LANDING_SECONDS,
         )
+        body: Final = object_value(gateway.post("/tag/info", {"names": [tag]})[tag])
+        assert "spend" not in body, body
         assert object_value(body["litellm_budget_table"])["max_budget"] == 1.0, body
 
 

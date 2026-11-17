@@ -64,11 +64,11 @@ class Due:
 
 
 _RESET_AT: Final[Mapping[tuple[str, str], LiteralString]] = {
-    Due.KEY: "SELECT budget_reset_at AT TIME ZONE 'UTC' AS reset_at FROM \"LiteLLM_VerificationToken\" WHERE token = %s",
-    Due.TEAM: "SELECT budget_reset_at AT TIME ZONE 'UTC' AS reset_at FROM \"LiteLLM_TeamTable\" WHERE team_id = %s",
-    Due.USER: "SELECT budget_reset_at AT TIME ZONE 'UTC' AS reset_at FROM \"LiteLLM_UserTable\" WHERE user_id = %s",
+    Due.KEY: "SELECT to_char(budget_reset_at, 'YYYY-MM-DD HH24:MI:SS.US') AS reset_at FROM \"LiteLLM_VerificationToken\" WHERE token = %s",
+    Due.TEAM: "SELECT to_char(budget_reset_at, 'YYYY-MM-DD HH24:MI:SS.US') AS reset_at FROM \"LiteLLM_TeamTable\" WHERE team_id = %s",
+    Due.USER: "SELECT to_char(budget_reset_at, 'YYYY-MM-DD HH24:MI:SS.US') AS reset_at FROM \"LiteLLM_UserTable\" WHERE user_id = %s",
     Due.BUDGET: (
-        "SELECT budget_reset_at AT TIME ZONE 'UTC' AS reset_at FROM \"LiteLLM_BudgetTable\" WHERE budget_id = %s"
+        "SELECT to_char(budget_reset_at, 'YYYY-MM-DD HH24:MI:SS.US') AS reset_at FROM \"LiteLLM_BudgetTable\" WHERE budget_id = %s"
     ),
 }
 
@@ -216,7 +216,7 @@ def expire_window(entity: str, identity: str, duration: str, *, age_spend_row: b
 
 def window_spend_row(gateway: Gateway, entity: str, identity: str, duration: str) -> dict[str, JsonValue] | None:
     rows: Final = gateway.rows(
-        "SELECT spend, window_start AT TIME ZONE 'UTC' AS window_start FROM \"LiteLLM_BudgetWindowSpend\" "
+        "SELECT spend, to_char(window_start, 'YYYY-MM-DD HH24:MI:SS.US') AS window_start FROM \"LiteLLM_BudgetWindowSpend\" "
         "WHERE entity_type = %s AND entity_id = %s AND window_duration = %s",
         (entity, identity, duration),
     )

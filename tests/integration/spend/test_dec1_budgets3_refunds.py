@@ -39,6 +39,7 @@ from tests.integration.spend.dec1_budgets_support import (
     redis_client,
 )
 from tests.integration.spend.dec1_spend_support import (
+    chat_model,
     failing,
     hashed,
     provider_calls,
@@ -151,7 +152,7 @@ def test_a_fallback_answer_settles_to_the_fallback_models_price(gateway: Gateway
     settles to 0.04: the hold estimated on the primary's price is settled to what was actually charged."""
     with wire_server(failing(500)) as broken, scripted_upstream() as working, gateway.scenario() as scenario:
         primary: Final = hold_model(scenario, broken)
-        fallback: Final = hold_model(scenario, working, output_cost_per_token=0.008)
+        fallback: Final = chat_model(scenario, working, input_cost_per_token=0.0, output_cost_per_token=0.008)
         key: Final = scenario.key(models=[primary, fallback], max_budget=1.0)
         with redis_client() as cache:
             assert served(call(gateway, primary, key, max_tokens=TOKENS, fallbacks=[fallback]))
@@ -159,27 +160,31 @@ def test_a_fallback_answer_settles_to_the_fallback_models_price(gateway: Gateway
 
 
 def test_a_call_for_a_model_the_key_may_not_use_takes_no_hold(gateway: Gateway) -> None:
-    """A key with `max_budget` 1.0 may only call model A and asks for model B. It is refused 401 by the model
-    access check, which runs before the reservation (`common_checks` precedes `_reserve_budget_after_common_checks`
-    at `user_api_key_auth.py:4310-4396`), and its counter never appears."""
+    """A key with `max_budget` 1.0 may only call model A and asks for model B. It is refused 403
+    `key_model_access_denied` with the generic message of `litellm/proxy/auth/model_access_denied.py:6`, before any
+    reservation, so no hold is written: the key counter is either absent or the 0.0 the budget read seeds from the
+    stored spend (`SpendCounterReseed.coalesced`, litellm/proxy/db/spend_counter_reseed.py:313), never the 0.04 hold."""
     with scripted_upstream() as wire, gateway.scenario() as scenario, redis_client() as cache:
         allowed: Final = hold_model(scenario, wire)
         other: Final = hold_model(scenario, wire)
         key: Final = scenario.key(models=[allowed], max_budget=1.0)
         response: Final = call(gateway, other, key, max_tokens=TOKENS)
-        assert response.status_code == 401, response.text
-        assert counter(cache, key_counter(key)) is None
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["type"] == "key_model_access_denied"
+        assert counter(cache, key_counter(key)) in (None, 0.0)
 
 
 def test_a_call_for_an_unknown_model_takes_no_hold(gateway: Gateway) -> None:
     """A key with `max_budget` 1.0 and no model restriction asks for a model name no deployment serves. No price
-    can be found, `estimate_request_max_cost` returns None and no hold is written (`budget_reservation.py:282-291`),
-    so the counter does not exist after the 400 the router answers."""
+    can be found, `estimate_request_max_cost` returns None and no hold is written (`budget_reservation.py:282-291`).
+    The key counter still exists at exactly 0.0 after the refusal: the budget check read it before the router
+    answered and, on a Redis miss, seeded it from the key's stored spend (`_read_spend_counter_estimate`,
+    litellm/proxy/proxy_server.py:3739-3745, `spend_counter_reseed.py:313`)."""
     with gateway.scenario() as scenario, redis_client() as cache:
         key: Final = scenario.key(max_budget=1.0)
         response: Final = call(gateway, "dec1-budgets3-no-such-model", key, max_tokens=TOKENS)
         assert response.status_code in (400, 401, 404), response.text
-        assert counter(cache, key_counter(key)) is None
+        assert counter(cache, key_counter(key)) == 0.0
 
 
 def test_a_non_streamed_call_the_client_abandons_does_not_pin_the_key(gateway: Gateway) -> None:

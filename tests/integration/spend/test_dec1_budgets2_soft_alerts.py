@@ -1,8 +1,8 @@
 """Contract: team soft budget emails and the key `projected_limit_exceeded` alert.
 
 Team soft budget emails. When a team's spend reaches its `soft_budget`, auth (`auth_checks.py::_team_soft_budget_check`)
-sends one email to the addresses in the team's `metadata.soft_budget_alerting_emails` (a list, or a comma separated
-string). This works even when `general_settings.alerting` is not set (`ProxyLogging.budget_alerts`,
+sends one email to each address in the team's `metadata.soft_budget_alerting_emails` (a list, or a comma
+separated string). This works even when `general_settings.alerting` is not set (`ProxyLogging.budget_alerts`,
 `is_soft_budget_with_alert_emails`), and is sent at most once per team per `EMAIL_BUDGET_ALERT_TTL`
 (`email_budget_alerts:soft_budget_crossed:<team_id>`). The subject is
 `LiteLLM: Soft Budget Crossed - Total Soft Budget: $<soft_budget>` and the body is
@@ -76,6 +76,13 @@ def _until_mail(proxy: Gateway, model: str, key: str, mailbox: Mailbox) -> tuple
     return eventually(attempt, lambda found: len(found) >= 1, seconds=LANDING_SECONDS)
 
 
+def _until_each_recipient(proxy: Gateway, model: str, key: str, mailbox: Mailbox) -> tuple[Delivery, ...]:
+    """Wait for the two soft budget emails: `SMTPEmailLogger.send_email` sends one message per address, each in
+    its own task (litellm/enterprise/litellm_enterprise/enterprise_callbacks/send_emails/smtp_email.py:39-47)."""
+    _until_mail(proxy, model, key, mailbox)
+    return eventually(mailbox.deliveries, lambda found: len(found) >= 2, seconds=LANDING_SECONDS)
+
+
 def _addresses() -> tuple[str, str]:
     suffix: Final = uuid.uuid4().hex[:10]
     return f"finance-{suffix}@integration.test", f"owner-{suffix}@integration.test"
@@ -84,8 +91,9 @@ def _addresses() -> tuple[str, str]:
 @pytest.mark.timeout(300)
 def test_a_team_over_its_soft_budget_emails_every_listed_address_once(gateway: Gateway, tmp_path: Path) -> None:
     """A team with `soft_budget` 0.01 and `metadata.soft_budget_alerting_emails` [<finance>, <owner>] calls until its
-    spend (0.02 a call) reaches the soft budget. One email arrives, addressed to exactly those two recipients, with
-    subject `LiteLLM: Soft Budget Crossed - Total Soft Budget: $0.01`. No `alerting` is configured on the proxy."""
+    spend (0.02 a call) reaches the soft budget. Each address gets exactly one email of its own, with subject
+    `LiteLLM: Soft Budget Crossed - Total Soft Budget: $0.01`: the SMTP logger sends one message per recipient
+    (smtp_email.py:39-47), not one message to both. No `alerting` is configured on the proxy."""
     finance, owner = _addresses()
     with scripted_upstream() as wire, _mail_proxy(gateway, tmp_path) as (proxy, mailbox), proxy.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
@@ -93,15 +101,15 @@ def test_a_team_over_its_soft_budget_emails_every_listed_address_once(gateway: G
             models=[model], soft_budget=SOFT, metadata={"soft_budget_alerting_emails": [finance, owner]}
         )
         key: Final = scenario.key(team_id=team_id, models=[model])
-        deliveries: Final = _until_mail(proxy, model, key, mailbox)
-        assert [set(delivery.recipients) for delivery in deliveries] == [{finance, owner}]
-        assert deliveries[0].subject == SUBJECT
+        deliveries: Final = _until_each_recipient(proxy, model, key, mailbox)
+        assert sorted(delivery.recipients for delivery in deliveries) == sorted([(finance,), (owner,)])
+        assert {delivery.subject for delivery in deliveries} == {SUBJECT}
 
 
 @pytest.mark.timeout(300)
 def test_a_comma_separated_address_string_is_split_into_recipients(gateway: Gateway, tmp_path: Path) -> None:
     """`metadata.soft_budget_alerting_emails` is the string `"<finance>, <owner>"`. The soft budget email goes to both
-    addresses, trimmed, exactly as if a list had been given."""
+    addresses, trimmed, exactly as if a list had been given (`auth_checks.py:7758-7760`): one message each."""
     finance, owner = _addresses()
     with scripted_upstream() as wire, _mail_proxy(gateway, tmp_path) as (proxy, mailbox), proxy.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
@@ -109,8 +117,8 @@ def test_a_comma_separated_address_string_is_split_into_recipients(gateway: Gate
             models=[model], soft_budget=SOFT, metadata={"soft_budget_alerting_emails": f"{finance}, {owner}"}
         )
         key: Final = scenario.key(team_id=team_id, models=[model])
-        deliveries: Final = _until_mail(proxy, model, key, mailbox)
-        assert set(deliveries[0].recipients) == {finance, owner}
+        deliveries: Final = _until_each_recipient(proxy, model, key, mailbox)
+        assert sorted(delivery.recipients for delivery in deliveries) == sorted([(finance,), (owner,)])
 
 
 @pytest.mark.timeout(300)

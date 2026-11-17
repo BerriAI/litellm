@@ -90,19 +90,20 @@ def test_every_level_settles_to_the_same_real_cost(gateway: Gateway) -> None:
             assert counter_settles(cache, name, COST) == pytest.approx(COST)
 
 
-def test_levels_without_a_budget_get_no_counter(gateway: Gateway) -> None:
-    """In the same tree only the key has a budget (5.0). After one served call `spend:key:<hash>` reads 0.02 and
-    none of `spend:team`, `spend:org`, `spend:project`, `spend:tag` or `spend:end_user` exists: a level is planned
-    only when its `max_budget` is above 0 (`budget_reservation.py:522-636`)."""
+def test_levels_without_a_budget_still_count_the_settled_cost(gateway: Gateway) -> None:
+    """In the same tree only the key has a budget (5.0). A level without a budget is not planned for the hold
+    (`budget_reservation.py:522-636`), but after one served call every level's counter reads exactly 0.02: the cost
+    callback charges `spend:team`, `spend:org`, `spend:project`, `spend:tag` and `spend:end_user` whenever the
+    request carries that entity, budget or not (`increment_spend_counters`, litellm/proxy/proxy_server.py:4170-4215,
+    each scope skipped only when its counter was reserved)."""
     with scripted_upstream() as wire, gateway.scenario() as scenario, redis_client() as cache:
         model: Final = hold_model(scenario, wire)
         tree: Final = levels(gateway, scenario, model, key_budget=ROOMY)
         served(tree.call())
         counter_settles(cache, key_counter(tree.key), COST)
         names: Final = tree.counters()
-        assert {level: counter(cache, names[level]) for level in ("team", "org", "project", "tag", "end_user")} == {
-            "team": None, "org": None, "project": None, "tag": None, "end_user": None,
-        }  # fmt: skip
+        for level in ("team", "org", "project", "tag", "end_user"):
+            assert counter_settles(cache, names[level], COST) == pytest.approx(COST), level
 
 
 def test_the_tightest_level_shrinks_the_hold_on_every_level(gateway: Gateway) -> None:

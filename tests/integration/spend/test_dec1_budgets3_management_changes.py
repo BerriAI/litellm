@@ -70,11 +70,13 @@ def test_setting_key_spend_to_zero_readmits_an_exhausted_key_at_once(gateway: Ga
 def test_reset_spend_readmits_an_exhausted_key_and_sets_the_counter_to_the_reset_value(gateway: Gateway) -> None:
     """A key with `max_budget` 0.03 spends 0.04 over two calls and is refused. `POST /key/<key>/reset_spend` with
     `reset_to: 0.01` leaves `spend:key:<hash>` at exactly 0.01 (a partial reset, not 0), and the next call is
-    served."""
+    served. The first call is settled before the second is sent: its 0.04 hold, shrunk to the 0.03 budget, would
+    otherwise still sit on the counter and refuse the second call at "Current cost: 0.03"."""
     with scripted_upstream() as wire, gateway.scenario() as scenario, redis_client() as cache:
         model: Final = hold_model(scenario, wire)
         key: Final = scenario.key(models=[model], max_budget=0.03)
         spend_once(gateway, model, key)
+        counter_settles(cache, key_counter(key), COST)
         spend_once(gateway, model, key)
         counter_settles(cache, key_counter(key), 0.04)
         assert refused(call(gateway, model, key, max_tokens=TOKENS))
@@ -135,9 +137,12 @@ def test_raising_a_team_budget_readmits_its_keys(gateway: Gateway) -> None:
 
 
 def test_raising_an_organization_budget_readmits_its_team_keys(gateway: Gateway) -> None:
-    """An organization with `max_budget` 0.01 is spent by one team key call. `/organization/update` with
-    `max_budget: 1.0` makes the next call served. UNVERIFIED: assumes the update evicts the
-    `org_id:<id>:with_budget` cache entry that the organization check and the reservation read."""
+    """An organization with `max_budget` 0.01 is spent by one team key call. After `/organization/update` with
+    `max_budget: 1.0` a call of the team key is served again once the cached organization expires.
+    `update_organization` writes the budget row but does not evict the `org_id:<id>:with_budget` auth cache entry
+    (litellm/proxy/management_endpoints/organization_endpoints.py:828-850), which the organization check reads
+    first and keeps for `DEFAULT_IN_MEMORY_TTL` (litellm/proxy/auth/auth_checks.py:4742-4782), so the call right
+    after the update is still refused with the old 0.01 and the test polls for up to 90 seconds."""
     with scripted_upstream() as wire, gateway.scenario() as scenario, redis_client() as cache:
         model: Final = hold_model(scenario, wire)
         organization: Final = scenario.organization(models=[model], max_budget=SMALL)
@@ -147,7 +152,12 @@ def test_raising_an_organization_budget_readmits_its_team_keys(gateway: Gateway)
         counter_settles(cache, org_counter(organization), COST)
         assert refused(call(gateway, model, key, max_tokens=TOKENS))
         gateway.request("PATCH", "/organization/update", {"organization_id": organization, "max_budget": 1.0})
-        assert served(call(gateway, model, key, max_tokens=TOKENS))
+        readmitted: Final = eventually(
+            lambda: call(gateway, model, key, max_tokens=TOKENS),
+            lambda response: response.status_code == 200,
+            seconds=90,
+        )
+        assert served(readmitted)
 
 
 def test_setting_organization_spend_to_zero_readmits_its_keys(gateway: Gateway) -> None:

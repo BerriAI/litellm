@@ -184,7 +184,9 @@ def owned(
 
 
 def metrics_text(gateway: Gateway) -> str:
-    response: Final = gateway.client.get("/metrics", headers={"Authorization": f"Bearer {gateway.key}"})
+    response: Final = gateway.client.get(
+        "/metrics", headers={"Authorization": f"Bearer {gateway.key}"}, follow_redirects=True
+    )
     assert response.status_code == 200, response.text
     return response.text
 

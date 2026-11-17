@@ -116,15 +116,17 @@ def test_a_key_with_fifteen_percent_left_gets_the_fifteen_percent_message(gatewa
 @pytest.mark.timeout(300)
 def test_a_key_far_from_its_budget_posts_no_budget_alert(gateway: Gateway, tmp_path: Path) -> None:
     """A key with `max_budget` 1.0 makes three calls (0.06, 94% left). No `threshold_crossed` or `budget_crossed`
-    event is posted for its token in the following three seconds."""
+    event is posted for its token in the following three seconds. Each call sends `max_tokens: 5`: without a cap
+    the hold is the model's 16384 output tokens priced past the budget and shrunk to all of the remaining 1.0, so
+    the next call, sent before that hold settles, would be refused at "Current cost: 1"."""
     with scripted_upstream() as wire, _alerting(gateway, tmp_path) as (owned, webhook), owned.scenario() as scenario:
         inbox: Final = _Inbox(webhook)
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model], max_budget=1.0)
         for _ in range(3):
-            served(ask(owned, model, key))
+            served(ask(owned, model, key, max_tokens=5))
         spend_reaches(owned, "key", hashed(key), 3 * CHAT_COST)
-        served(ask(owned, model, key))
+        served(ask(owned, model, key, max_tokens=5))
         assert (
             held(
                 lambda: [

@@ -132,11 +132,16 @@ def test_inside_the_last_five_percent_the_threshold_event_replaces_the_soft_budg
 
 
 @pytest.mark.timeout(300)
-def test_past_both_budgets_the_budget_crossed_event_carries_both_amounts(gateway: Gateway, tmp_path: Path) -> None:
-    """A key with `soft_budget` 0.01 and `max_budget` 0.02 is served once and refused on the next call. The webhook
-    gets one `budget_crossed` event for the key whose `event_message` is exactly
-    ``Key Budget: Total Soft Budget:`0.01`Budget Crossed\\n Total Budget:`0.02` ``, with `soft_budget` 0.01 and
-    `max_budget` 0.02 (`slack_alerting.py:663-672`, `WebhookEvent` fields `:604-623`)."""
+def test_past_both_budgets_the_budget_crossed_event_is_the_projected_limit_one(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """A key with `soft_budget` 0.01 and `max_budget` 0.02 is served once and refused on the next call. The first
+    `budget_crossed` event the webhook gets for the key is the projected limit alert of the served call, not the
+    auth refusal: `update_cache` projects the spend over the soft budget and calls `budget_alerts` with the soft
+    budget as `max_budget` (litellm/proxy/proxy_server.py:4881-4899), the 0.02 spend is at or above that 0.01, so
+    the event is `budget_crossed` with `event_message` exactly
+    ``Key Budget: Projected Limit ExceededBudget Crossed\n Total Budget:`0.01` `` and `max_budget` 0.01
+    (`budget_alert_types.py:73`, `slack_alerting.py:673-677`); no soft budget amount is carried."""
     seen: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: accumulates webhook deliveries across polls
     with scripted_upstream() as wire, _alerting(gateway, tmp_path) as (proxy, webhook), proxy.scenario() as scenario:
         model: Final = hold_model(scenario, wire)
@@ -149,8 +154,9 @@ def test_past_both_budgets_the_budget_crossed_event_carries_both_amounts(gateway
             lambda found: len(found) >= 1,
             seconds=LANDING_SECONDS,
         )
-        assert events[0]["event_message"] == "Key Budget: Total Soft Budget:`0.01`Budget Crossed\n Total Budget:`0.02`"
-        assert (events[0]["soft_budget"], events[0]["max_budget"]) == (pytest.approx(0.01), pytest.approx(CHAT_COST))
+        assert events[0]["event_message"] == "Key Budget: Projected Limit ExceededBudget Crossed\n Total Budget:`0.01`"
+        assert events[0]["max_budget"] == pytest.approx(0.01)
+        assert events[0].get("soft_budget") is None
 
 
 @pytest.mark.timeout(400)

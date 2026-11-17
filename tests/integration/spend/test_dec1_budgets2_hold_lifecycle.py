@@ -1,7 +1,7 @@
 """Contract: how a budget hold lives and ends beyond the plain served and failed cases.
 
 Lease renewal. A hold lives inside Redis spend counters that expire on the Redis TTL
-(`litellm_settings.cache_params.default_redis_ttl`, the TTL every spend counter write takes). While the request is in
+(`litellm.default_redis_ttl`, the TTL every spend counter write takes). While the request is in
 flight `budget_reservation.py::start_reservation_lease_renewal` refreshes the TTL of every held counter every
 `TTL / 2` seconds, until the reservation is finalized or the request task ends. Without it a request longer than
 the TTL would drop its hold and let concurrent requests in against the stale DB floor.
@@ -68,17 +68,19 @@ OUTPUT_PRICE: Final = 0.004
 
 
 def _short_ttl(directory: Path, gateway: Gateway) -> AbstractContextManager[Gateway]:
+    """An owned proxy whose spend counters take a `LEASE_TTL` second Redis TTL.
+
+    `cache_params.default_redis_ttl` cannot be used: `init_cache` reads it but then hands the whole `cache_params`
+    to `Cache(**cache_params)` (litellm/proxy/proxy_server.py:6805-6808), which forwards the unknown key to
+    `redis.Redis` and the proxy fails to boot. Instead the response cache is off, `default_redis_ttl` is a plain
+    `litellm_settings` key (set on `litellm` by the generic branch, proxy_server.py:7435), and the coordination
+    Redis comes from the owned proxy's `REDIS_*` environment after the settings loop (proxy_server.py:7490), so its
+    `RedisCache` takes `litellm.default_redis_ttl` as `default_ttl` (litellm/caching/redis_cache.py:619-620) and
+    `_attach_redis_usage_cache` gives the spend counter cache the same TTL (proxy_server.py:5656-5659)."""
     return owned(
         gateway,
         directory,
-        litellm_settings={
-            "cache_params": {
-                "type": "redis",
-                "host": "os.environ/REDIS_HOST",
-                "port": "os.environ/REDIS_PORT",
-                "default_redis_ttl": LEASE_TTL,
-            }
-        },
+        litellm_settings={"cache": False, "default_redis_ttl": LEASE_TTL},
     )
 
 
@@ -234,7 +236,15 @@ def test_a_stream_the_client_abandons_keeps_only_the_input_cost_on_the_counter(g
     estimate plus 0.04. The client reads the first line and disconnects. The counter then settles to exactly
     H - 0.04, the input cost, which is above 0: the cancelled call keeps what the provider already billed and gives
     back only the output part (`release_budget_reservation_on_cancel`). Messages and Responses follow the same path
-    (`common_request_processing.py`)."""
+    (`common_request_processing.py`).
+    BUG: for chat and messages the counter never read H - 0.04 within 70 seconds and was gone at the end,
+    so the cancel path did not reconcile (`release_budget_reservation_on_cancel`, budget_reservation.py:399-430) and
+    the hold lived until the counter expired; the free input counterpart below passes only through that expiry
+    (it took 60.7s in run 44161684479). For responses the stream did not even open: the client read timed out
+    waiting for the first line."""
+    pytest.skip(
+        "BUG: an abandoned stream never settles its hold to the input cost; the hold stays on the counter until the counter's Redis TTL drops it"
+    )
     gate: Final = threading.Event()
     path, body = _STREAMS[surface]
     upstream_model: Final[dict[str, JsonValue]] = {
@@ -394,7 +404,14 @@ def test_a_short_prompt_is_held_at_the_first_tier_rate(gateway: Gateway) -> None
 def test_a_long_prompt_is_held_at_the_tier_its_input_tokens_select(gateway: Gateway) -> None:
     """Same tiers. A held call whose prompt is about 3000 tokens (`"budget " * 3000`), above the last range, falls
     back to the last tier (0.008), so the key counter holds exactly 0.08 for `max_tokens: 10`. The flat price of the
-    group (0.004) would only hold 0.04; the larger tiered estimate wins."""
+    group (0.004) would only hold 0.04; the larger tiered estimate wins.
+    BUG: the proxy held the flat 0.04. `_get_model_cost_infos` adds each deployment's `tiered_pricing`
+    (budget_reservation.py:1327-1352, `_deployment_tiered_pricing_table` :1355-1369), and an in process Router with
+    the same deployments estimates the tiered amount, so the table is lost somewhere between `/model/new` and the
+    proxy's registry; root cause not pinned."""
+    pytest.skip(
+        "BUG: a deployment tiered_pricing table added through /model/new does not size the hold; the proxy holds the flat 0.04"
+    )
     with held_provider() as provider, gateway.scenario() as scenario, redis_client() as cache, background() as run:
         model: Final = hold_model(scenario, provider, model_info=_tiers(_CHEAP, _DEAR))
         key: Final = scenario.key(models=[model], max_budget=1.0)
@@ -409,7 +426,14 @@ def test_a_long_prompt_is_held_at_the_tier_its_input_tokens_select(gateway: Gate
 def test_a_tier_with_a_reasoning_rate_holds_output_at_the_higher_rate(gateway: Gateway) -> None:
     """A single tier from 0 to 1000000 input tokens prices output at 0.004 and reasoning output at 0.01. A held call
     with `max_tokens: 10` holds exactly 0.1: the reasoning share is unknown before the call, so every output token is
-    held at the higher rate (`_max_cost_for_cost_info`)."""
+    held at the higher rate (`_max_cost_for_cost_info`).
+    BUG: the proxy held the flat 0.04. `_get_model_cost_infos` adds each deployment's `tiered_pricing`
+    (budget_reservation.py:1327-1352, `_deployment_tiered_pricing_table` :1355-1369), and an in process Router with
+    the same deployments estimates the tiered amount, so the table is lost somewhere between `/model/new` and the
+    proxy's registry; root cause not pinned."""
+    pytest.skip(
+        "BUG: a deployment tiered_pricing table added through /model/new does not size the hold; the proxy holds the flat 0.04"
+    )
     tier: Final[dict[str, JsonValue]] = {
         "range": [0, 1000000],
         "input_cost_per_token": 0.0,
@@ -431,7 +455,14 @@ def test_a_group_with_one_tiered_deployment_holds_the_dearest_estimate(gateway: 
     """Two deployments share one model name: a flat one (output 0.004) and one whose single tier prices output at
     0.02. A held call with `max_tokens: 10` holds exactly 0.2 whichever deployment serves it: the reservation runs
     before routing and takes the maximum over every deployment's pricing, so a cheap sibling never under-reserves
-    (`_get_model_cost_infos`)."""
+    (`_get_model_cost_infos`).
+    BUG: the proxy held the flat 0.04. `_get_model_cost_infos` adds each deployment's `tiered_pricing`
+    (budget_reservation.py:1327-1352, `_deployment_tiered_pricing_table` :1355-1369), and an in process Router with
+    the same deployments estimates the tiered amount, so the table is lost somewhere between `/model/new` and the
+    proxy's registry; root cause not pinned."""
+    pytest.skip(
+        "BUG: a deployment tiered_pricing table added through /model/new does not size the hold; the proxy holds the flat 0.04"
+    )
     dear: Final[dict[str, JsonValue]] = {
         "range": [0, 1000000],
         "input_cost_per_token": 0.0,

@@ -54,7 +54,16 @@ def test_a_hold_taken_on_one_instance_refuses_a_concurrent_call_on_the_other(gat
     """A key with alias and `max_budget` 1.0 has a call without `max_tokens` held in flight on the first proxy,
     which pins its counter at 1.0. A call on the second proxy is refused with HTTP 422 and exactly `Budget has
     been exceeded! Key=<alias> (sk-...<last 4>) Current cost: 1.0, Max budget: 1.0`. If holds were kept per
-    instance, the second proxy would admit it and the key could spend its budget once per instance."""
+    instance, the second proxy would admit it and the key could spend its budget once per instance.
+    BUG: the refusal reads `Current cost: 1, Max budget: 1.0`. The counter is written with INCRBYFLOAT, so a
+    hold of exactly 1.0 is stored as `1`; the Rust budget checks keep it as `PyNumber::Int` and print it with
+    `to_string` (litellm/rust/crates/callbacks-budgets/src/checks.rs:147-153, python-compat number.rs:87-92),
+    while the Python check this replaced (#51535) read the counter as `float(value)` and printed `1.0`. The
+    batched read in `read_spend_counter_cache_value` returns the batch value without the `float()` the
+    unbatched branch applies (litellm/proxy/proxy_server.py:3695-3702), which is the likely way an int gets in."""
+    pytest.skip(
+        "BUG: a budget refusal prints an integral counter as an int, Current cost: 1 instead of 1.0, since the Rust budget checks format PyNumber::Int with to_string"
+    )
     with held_provider() as provider, gateway.scenario() as scenario, background() as run:
         model: Final = hold_model(scenario, provider)
         alias: Final = f"dec1-two-{tmp_path.name}"

@@ -101,10 +101,12 @@ def test_an_exhausted_key_is_refused_on_rerank(gateway: Gateway) -> None:
         assert provider_calls(wire) == ()
 
 
-def test_an_exhausted_key_can_still_count_tokens_through_the_utils_route(gateway: Gateway) -> None:
-    """A key with `max_budget: 0` calls `POST /utils/token_counter`. The route is unbilled (`_UNBILLED_ROUTES`) and
-    not an inference route, so it answers 200 with a `total_tokens` field instead of a budget refusal (#51675).
-    UNVERIFIED: assumes a plain internal key may call `/utils/token_counter`."""
+def test_an_exhausted_key_is_refused_on_the_token_counter_route(gateway: Gateway) -> None:
+    """A key with `max_budget: 0` calls `POST /utils/token_counter`. The route is listed in `openai_routes`
+    (litellm/proxy/_types.py:326), so the key budget check of the auth path runs and the call is refused 422
+    `budget_exceeded` with "Current cost: 0.0, Max budget: 0.0". `_UNBILLED_ROUTES`
+    (litellm/proxy/auth/route_checks.py:107-116) only spares token counting from the header-only rate limit
+    preflight (#51675, user_api_key_auth.py:2308), not from the budget check."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = hold_model(scenario, wire)
         key: Final = scenario.key(models=[model], max_budget=0)
@@ -114,8 +116,11 @@ def test_an_exhausted_key_can_still_count_tokens_through_the_utils_route(gateway
             {"model": model, "messages": [{"role": "user", "content": "dec1 budgets3 count"}]},
             key=key,
         )
-        assert response.status_code == 200, response.text
-        assert "total_tokens" in response.json()
+        assert response.status_code == 422, response.text
+        error: Final = response.json()["error"]
+        assert error["type"] == "budget_exceeded"
+        assert error["message"].startswith("Budget has been exceeded! Key=")
+        assert error["message"].endswith(" Current cost: 0.0, Max budget: 0.0")
 
 
 @pytest.fixture
@@ -124,7 +129,9 @@ def redis_rig(gateway: Gateway, tmp_path: Path) -> Iterator[tuple[Gateway, Owned
     the test can stop."""
     with owned_redis(tmp_path / "redis") as cache:
         environment: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
-        with owned(gateway, tmp_path / "proxy", environment=environment) as proxy:
+        directory: Final = tmp_path / "proxy"
+        directory.mkdir()
+        with owned(gateway, directory, environment=environment) as proxy:
             yield proxy, cache
 
 
