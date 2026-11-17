@@ -4765,7 +4765,6 @@ class _Driver:
         """The ``except`` around the regular fallbacks of ``async_function_with_fallbacks_common_utils``:
         it logs what the ``try`` raised, the last hop's error or the level's own. A level with no
         target raises its own error into it, except where no fallback list was set to search."""
-        import litellm.exceptions as litellm_exceptions
         from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 
         level: Final = event.get("level")
@@ -4774,11 +4773,9 @@ class _Driver:
         request: Final = self._request
         walked: Final = self._core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         if event.get("chain") is not True:
-            policy_list: Final = request.get("content_policy_fallbacks", walked["content_policy_fallbacks"])
-            if not isinstance(own, litellm_exceptions.ContentPolicyViolationError) or policy_list is None:
-                if request.get("fallbacks", walked["fallbacks"]) is None:
-                    return
-                self._explain_no_fallback_group(own, at)
+            if request.get("fallbacks", walked["fallbacks"]) is None:
+                return
+            self._explain_no_fallback_group(own, at)
         raised: Final = self._level_errors.get(at + 1, own) if event.get("last_hop") is True else own
         self.outcomes.failed_fallbacks(
             RoutingContext(self._core),  # pyright: ignore[reportArgumentType]  # the read uses registry() and health()
@@ -5710,19 +5707,19 @@ class _Driver:
                 model, group, self._fallback_detail(primary, failed_hop), skipped=self._walk.targets().skipped
             )
 
-        # `context_window_fallback_model_group`: only a chain the group matched takes precedence.
-        window_group: Final = (
-            group_of(window_list)[0]
-            if isinstance(primary, litellm_exceptions.ContextWindowExceededError) and window_list is not None
+        error_specific_list: Final = (
+            window_list
+            if isinstance(primary, litellm_exceptions.ContextWindowExceededError)
+            else policy_list
+            if isinstance(primary, litellm_exceptions.ContentPolicyViolationError)
             else None
         )
-        if window_group is None and check_non_standard_fallback_format(fallbacks=_as_list(fallbacks)):
+        # Only an error-specific chain the group matched takes precedence.
+        error_specific_group: Final = group_of(error_specific_list)[0] if error_specific_list is not None else None
+        if error_specific_group is not None:
+            return outcome(error_specific_group)
+        if check_non_standard_fallback_format(fallbacks=_as_list(fallbacks)):
             return outcome(_as_list(fallbacks))
-        if window_group is not None:
-            return outcome(window_group)
-        # A content-policy list decides on its own: one with no match raises into the `except`.
-        if isinstance(primary, litellm_exceptions.ContentPolicyViolationError) and policy_list is not None:
-            return outcome(group_of(policy_list)[0])
         if fallbacks is None or not lookup:
             return outcome(None)
         found, generic = group_of(fallbacks)
