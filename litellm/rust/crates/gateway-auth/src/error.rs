@@ -10,55 +10,32 @@ pub enum Error {
     InvalidToken,
     #[error("missing or invalid API key")]
     InvalidApiKey,
-    #[error("invalid UI credentials or session")]
-    InvalidSession,
     #[error("credential has expired")]
     Expired,
     #[error("operation is not permitted")]
     Forbidden,
     #[error("authentication service unavailable")]
     Unavailable(#[source] Source),
-    #[error("UI session unavailable")]
-    Session(#[from] tower_sessions::session::Error),
     #[error("gateway auth not configured")]
     Unconfigured,
-    #[error("UI_USERNAME and UI_PASSWORD must be nonempty")]
-    UiUnconfigured,
     #[error("authenticated request context is missing")]
     MissingIdentity,
-    #[error("UI session layer is not installed")]
-    MissingSessionLayer,
 }
 
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidToken | Self::InvalidApiKey | Self::InvalidSession | Self::Expired => {
-                StatusCode::UNAUTHORIZED
-            }
+            Self::InvalidToken | Self::InvalidApiKey | Self::Expired => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Session(_)
-            | Self::Unconfigured
-            | Self::UiUnconfigured
-            | Self::MissingIdentity
-            | Self::MissingSessionLayer => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unconfigured | Self::MissingIdentity => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     pub fn is_denied(&self) -> bool {
         match self {
-            Self::InvalidToken
-            | Self::InvalidApiKey
-            | Self::InvalidSession
-            | Self::Expired
-            | Self::Forbidden => true,
-            Self::Unavailable(_)
-            | Self::Session(_)
-            | Self::Unconfigured
-            | Self::UiUnconfigured
-            | Self::MissingIdentity
-            | Self::MissingSessionLayer => false,
+            Self::InvalidToken | Self::InvalidApiKey | Self::Expired | Self::Forbidden => true,
+            Self::Unavailable(_) | Self::Unconfigured | Self::MissingIdentity => false,
         }
     }
 }
