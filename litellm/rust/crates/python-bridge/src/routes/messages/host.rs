@@ -696,6 +696,7 @@ impl MessagesPythonHost {
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 global_drop_params: global_drop_params(py)?,
+                base_model: argument("base_model")?.and_then(|value| value.extract().ok()),
                 ..settings.settings
             },
         };

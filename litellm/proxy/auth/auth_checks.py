@@ -14,7 +14,7 @@ import math
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -33,6 +33,7 @@ from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SESSION_KEY_PREFIX,
+    CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -58,7 +59,6 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
-    RBAC_ROLES,
     UI_TEAM_ID,
     CallInfo,
     ConfigGeneralSettings,
@@ -66,7 +66,6 @@ from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     Litellm_EntityType,
-    LiteLLM_JWTAuth,
     LiteLLM_ManagedVectorStoresTable,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationMembershipTable,
@@ -114,9 +113,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_tags_from_request_body,
     safe_get_request_headers,
     safe_get_request_query_params,
 )
@@ -186,6 +187,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
+from litellm.rust_bridge._native import jwt_key_mapping_cache_key
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
@@ -1270,6 +1272,71 @@ def request_skips_budget_checks(
     return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
+_OPAQUE_CONTROL_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _opaque_control_items(value: object) -> Iterable[object]:
+    return _OPAQUE_CONTROL_ITEMS.validate_python(value) if isinstance(value, (list, tuple)) else ()
+
+
+def check_opaque_inference_controls(value: object, *, depth: int = 0) -> None:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify control nesting beyond the limit")
+    fields: Final = as_str_mapping(value)
+    if fields is None:
+        for item in _opaque_control_items(value):
+            check_opaque_inference_controls(item, depth=depth + 1)
+        return
+    for name, control in fields.items():
+        if control in (None, {}, [], ()):
+            continue
+        if name in {"models", "team_models", "allowed_models"} and "*" not in (_opaque_control_items(control)):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce model restrictions")
+        if name.endswith(("tpm_limit", "tpd_limit", "max_budget", "model_rpm_limit")) or name in {
+            "tpm_limit_per_model",
+            "rpm_limit_per_model",
+            "allowed_model_region",
+            "allowed_tools",
+            "guardrails",
+            "policies",
+        }:
+            raise HTTPException(status_code=403, detail=f"Opaque inference cannot enforce {name}")
+        check_opaque_inference_controls(control, depth=depth + 1)
+
+
+async def _check_opaque_team_member_budget(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    membership: LiteLLM_TeamMembership | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    check_opaque_inference_controls({"model_max_budget": valid_token.team_member_model_max_budget})
+    if team_object is None or valid_token.user_id is None:
+        return
+    metadata: Final = _KEY_METADATA_ADAPTER.validate_python(team_object.model_dump().get("metadata"))
+    budget_id: Final = metadata.get("team_member_budget_id") if metadata is not None else None
+    if not isinstance(budget_id, str):
+        return
+    try:
+        default_budget: Final = await get_team_member_default_budget(
+            budget_id=budget_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            raise_on_lookup_error=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify default member policies") from exc
+    if default_budget is None:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify default member policies")
+    effective_budget: Final = resolve_effective_team_member_budget(
+        member_budget=membership.litellm_budget_table if membership is not None else None,
+        team_default_budget=default_budget,
+        now=get_utc_datetime(),
+    )
+    check_opaque_inference_controls(default_budget.model_copy(update={"max_budget": effective_budget}).model_dump())
+
+
 async def common_checks(
     request_body: dict[str, object],
     team_object: LiteLLM_TeamTable | None,
@@ -1305,6 +1372,7 @@ async def common_checks(
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Final[str | list[str] | None] = get_model_from_request(
@@ -1329,8 +1397,11 @@ async def common_checks(
         )
     )
 
+    opaque_cursor: Final = route.startswith(f"{CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX}/")
     membership_user_id: Final = (
-        valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
+        valid_token.user_id
+        if valid_token is not None and (bool(_model) or not skip_all_budget_checks or opaque_cursor)
+        else None
     )
     team_membership_loaded: Final = team_object is not None and membership_user_id is not None
     loaded_team_membership: Final = (
@@ -1344,6 +1415,69 @@ async def common_checks(
         if team_object is not None and membership_user_id is not None
         else None
     )
+
+    if opaque_cursor and valid_token is not None:
+        if customer_usage_requested({}, customer_usage_key_fields(valid_token)):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce customer-bound key policies")
+        for customer_models in valid_token.customer_model_scopes:
+            check_opaque_inference_controls({"allowed_models": customer_models})
+        if valid_token.agent_id is not None:
+            raise HTTPException(
+                status_code=403, detail="Opaque inference does not support keys bound to LiteLLM agents"
+            )
+        if personal_key_team_model_access_applies(valid_token):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce inherited personal-key models")
+        if valid_token.user_id is not None and user_object is None:
+            raise HTTPException(status_code=403, detail="Opaque inference cannot verify the key owner's policies")
+        org_id: Final = valid_token.org_id or (team_object.organization_id if team_object is not None else None)
+        org_object: Final = (
+            await get_org_object(
+                org_id=org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if org_id is not None
+            else None
+        )
+        missing_project: Final = valid_token.project_id is not None and project_object is None
+        missing_org: Final = org_id is not None and org_object is None
+        if missing_project or missing_org:
+            raise HTTPException(status_code=403, detail="Opaque inference cannot verify inherited policies")
+        for source in (
+            valid_token,
+            team_object,
+            user_object,
+            project_object,
+            end_user_object,
+            loaded_team_membership,
+            org_object,
+        ):
+            if source is not None:
+                check_opaque_inference_controls(source.model_dump())
+        await _check_opaque_team_member_budget(
+            valid_token=valid_token,
+            team_object=team_object,
+            membership=loaded_team_membership,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        opaque_tags: Final = tuple(
+            dict.fromkeys(
+                (
+                    *get_tags_from_request_body(_typed_request_body(request_body)),
+                    *LiteLLMProxyRequestSetup.get_inherited_tags(valid_token),
+                )
+            )
+        )
+        if prisma_client is not None and opaque_tags:
+            opaque_tag_objects: Final = await read_tag_objects_batch(
+                tag_names=opaque_tags, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+            )
+            if isinstance(opaque_tag_objects, Exception):
+                raise HTTPException(status_code=403, detail="Opaque inference cannot verify tag policies")
+            for tag_object in opaque_tag_objects.values():
+                check_opaque_inference_controls(tag_object.model_dump())
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
@@ -1560,8 +1694,6 @@ async def common_checks(
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
-
         if valid_token is not None:
             for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_body):
                 LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
@@ -1796,60 +1928,6 @@ def is_user_proxy_admin(user_obj: LiteLLM_UserTable | None) -> bool:
 _is_user_proxy_admin: Final = is_user_proxy_admin
 
 
-def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
-    """
-    Return if a user is allowed to access route. Helper function for `allowed_routes_check`.
-
-    Parameters:
-    - user_route: str - the route the user is trying to call
-    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user. Entries are a route group name
-      (e.g. "openai_routes"), an exact route, or a trailing-wildcard prefix (e.g. "/internal-models/*").
-    """
-    from starlette.routing import compile_path
-
-    for allowed_route in allowed_routes:
-        if allowed_route in LiteLLMRoutes.__members__:
-            for template in LiteLLMRoutes[allowed_route].value:
-                regex, _, _ = compile_path(template)
-                if regex.match(user_route):
-                    return True
-        elif RouteChecks.route_matches_wildcard_pattern(route=user_route, pattern=allowed_route):
-            return True
-    return False
-
-
-def allowed_routes_check(
-    user_role: LitellmUserRoles,
-    user_route: str,
-    litellm_proxy_roles: LiteLLM_JWTAuth,
-) -> bool:
-    """
-    Check if user -> not admin - allowed to access these routes
-    """
-
-    if user_role == LitellmUserRoles.PROXY_ADMIN:
-        is_allowed = _allowed_routes_check(
-            user_route=user_route,
-            allowed_routes=litellm_proxy_roles.admin_allowed_routes,
-        )
-        return is_allowed
-
-    elif user_role == LitellmUserRoles.TEAM:
-        if litellm_proxy_roles.team_allowed_routes is None:
-            """
-            By default allow a team to call openai + info routes
-            """
-            is_allowed = _allowed_routes_check(user_route=user_route, allowed_routes=["openai_routes", "info_routes"])
-            return is_allowed
-        elif litellm_proxy_roles.team_allowed_routes is not None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route,
-                allowed_routes=litellm_proxy_roles.team_allowed_routes,
-            )
-            return is_allowed
-    return False
-
-
 def allowed_route_check_inside_route(
     user_api_key_dict: UserAPIKeyAuth,
     requested_user_id: str | None,
@@ -1864,21 +1942,6 @@ def allowed_route_check_inside_route(
         if user_api_key_dict.user_id == requested_user_id:
             ret_val = True
     return ret_val
-
-
-def get_actual_routes(allowed_routes: list) -> list:
-    actual_routes: Final[list] = []
-    for route_name in allowed_routes:
-        try:
-            route_value = LiteLLMRoutes[route_name].value
-            if isinstance(route_value, set):
-                actual_routes.extend(list(route_value))
-            else:
-                actual_routes.extend(route_value)
-
-        except KeyError:
-            actual_routes.append(route_name)
-    return actual_routes
 
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
@@ -3050,57 +3113,6 @@ def _update_last_db_access_time(key: str, value: object | None, last_db_access_t
 
 
 ROLE_BASED_PERMISSIONS_ADAPTER: Final[TypeAdapter[list[RoleBasedPermissions]]] = TypeAdapter(list[RoleBasedPermissions])
-
-
-def _get_role_based_permissions(
-    rbac_role: RBAC_ROLES,
-    general_settings: Mapping[str, object],
-    key: Literal["models", "routes"],
-) -> list[str] | None:
-    """
-    Get the role based permissions from the general settings.
-    """
-    configured: Final = general_settings.get("role_permissions")
-    if configured is None:
-        return None
-
-    for role_based_permission in ROLE_BASED_PERMISSIONS_ADAPTER.validate_python(configured):
-        if role_based_permission.role == rbac_role:
-            return role_based_permission.models if key == "models" else role_based_permission.routes
-
-    return None
-
-
-def get_role_based_models(
-    rbac_role: RBAC_ROLES,
-    general_settings: Mapping[str, object],
-) -> list[str] | None:
-    """
-    Get the models allowed for a user role.
-
-    Used by JWT Auth.
-    """
-
-    return _get_role_based_permissions(
-        rbac_role=rbac_role,
-        general_settings=general_settings,
-        key="models",
-    )
-
-
-def get_role_based_routes(
-    rbac_role: RBAC_ROLES,
-    general_settings: Mapping[str, object],
-) -> list[str] | None:
-    """
-    Get the routes allowed for a user role.
-    """
-
-    return _get_role_based_permissions(
-        rbac_role=rbac_role,
-        general_settings=general_settings,
-        key="routes",
-    )
 
 
 def read_email_verified(value: object) -> bool | None:
@@ -4519,20 +4531,6 @@ async def _fetch_key_object_from_db_unbounded(
                         proxy_logging_obj=proxy_logging_obj,
                     )
             raise
-
-
-def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None) -> str:
-    """Cache key under which a JWT-claim-to-key mapping is stored, scoped to one
-    issuer (or the issuer-agnostic/global scope when ``jwt_issuer`` is falsy).
-
-    Scoped by issuer (when one is configured) so a cached hit or ``__NO_MAPPING__`` miss
-    for one issuer's claim value can never be served to a different issuer whose claim
-    value happens to collide. Unchanged for the global scope, keeping the single-issuer
-    (no ``litellm_jwtauth.issuers`` configured) cache key format stable across this fix.
-    """
-    if not jwt_issuer:
-        return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
-    return f"jwt_key_mapping:{jwt_issuer}:{jwt_claim_name}:{jwt_claim_value}"
 
 
 @log_db_metrics

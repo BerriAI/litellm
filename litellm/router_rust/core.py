@@ -125,6 +125,7 @@ from litellm.router_rust.invoke.streaming import (
     continuation_routing,
     open_attempt_stream,
     open_attempt_stream_sync,
+    provider_error,
     register_continuation_prefill_check,
     shape_attempt_kwargs,
 )
@@ -5041,6 +5042,7 @@ class _Driver:
             attempted_retries=number("retry"),
             routed=routed if isinstance(routed, str) else None,
             slot=slot,
+            explain_failure=self._hop_failure_explainer(step),
         )
 
     def _failed(
@@ -5619,6 +5621,28 @@ class _Driver:
             primary.message += self._explanation(primary, model)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
         return primary
 
+    def _hop_failure_explainer(
+        self, step: Mapping[str, object]
+    ) -> "Callable[[BaseException], tuple[str, str] | None] | None":
+        level: Final = step.get("fallback_level")
+        on_fallback_hop: Final = self._base_level == 0 and isinstance(level, int) and level > 0
+        primary: Final = self._level_errors.get(self._base_level)
+        if not on_fallback_hop or primary is None:
+            return None
+        model: Final = str(self._request.get("model"))
+        primary_message: Final[object] = getattr(provider_error(primary), "message", None)
+
+        def explain(hop_error: BaseException) -> tuple[str, str] | None:
+            if (
+                not isinstance(primary_message, str)
+                or not self._explains_failure
+                or not self._core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # see above
+            ):
+                return None
+            return primary_message, self._explanation(primary, model, hop_error)
+
+        return explain
+
     def _hint_level_failure(self, error: BaseException | None, model: str) -> None:
         """A level that reaches its fallback handling on a context-window or content-policy error
         with no list of its own appends the hint to set one, before any hop runs, as every level of
@@ -5657,7 +5681,7 @@ class _Driver:
             return "\n" + format_content_policy_fallback_hint(model, None, fallbacks)  # pyright: ignore[reportArgumentType]  # the list as configured
         return ""
 
-    def _explanation(self, primary: BaseException, model: str) -> str:
+    def _explanation(self, primary: BaseException, model: str, failed_hop: BaseException | None = None) -> str:
         """What ``async_function_with_fallbacks_common_utils`` appends to the error it re-raises
         under ``expose_router_debug_in_errors``, from the resolved settings and what the call did."""
         import litellm.exceptions as litellm_exceptions
@@ -5680,7 +5704,7 @@ class _Driver:
 
         def outcome(group: Sequence[object] | None) -> str:
             return format_fallback_outcome_message(
-                model, group, self._fallback_detail(primary), skipped=self._walk.targets().skipped
+                model, group, self._fallback_detail(primary, failed_hop), skipped=self._walk.targets().skipped
             )
 
         # `context_window_fallback_model_group`: only a chain the group matched takes precedence.
@@ -5704,9 +5728,10 @@ class _Driver:
         )
         return format_no_fallback_group_message(lookup, _as_list(fallbacks)) if group is None else outcome(group)  # pyright: ignore[reportArgumentType]  # the fallbacks config shape
 
-    def _fallback_detail(self, primary: BaseException) -> str:
+    def _fallback_detail(self, primary: BaseException, failed_hop: BaseException | None = None) -> str:
         """``run_async_fallback`` raises its last hop's error, or the primary's when no hop ran."""
-        return truncate_fallback_error_detail(redact_string(str(self._level_errors.get(1, primary))))
+        hop: Final = failed_hop if failed_hop is not None else self._level_errors.get(1, primary)
+        return truncate_fallback_error_detail(redact_string(str(hop)))
 
 
 __all__ = [
