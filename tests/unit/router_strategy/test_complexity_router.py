@@ -14513,6 +14513,109 @@ class TestHeuristicFirstConfig:
         assert ComplexityRouterConfig(tiers=dict(HEURISTIC_FIRST_TIERS)).uses_llm_classifier is False
 
 
+@pytest.mark.parametrize("limit", (0, -1, 1.5, True))
+def test_heuristic_context_limit_rejects_invalid_values(limit: object) -> None:
+    with pytest.raises(ValidationError, match="heuristic_first_max_context_tokens"):
+        _heuristic_first_router(MagicMock(), heuristic_first_max_context_tokens=limit)
+
+
+def test_heuristic_context_limit_requires_heuristic_first() -> None:
+    with pytest.raises(ValidationError, match="heuristic_first_max_context_tokens"):
+        ComplexityRouterConfig(tiers=dict(HEURISTIC_FIRST_TIERS), heuristic_first_max_context_tokens=8000)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "history_content",
+    (
+        "trace " * 6000,
+        [{"type": "text", "text": "trace " * 6000}],
+        [{"type": "tool_result", "tool_use_id": "call_1", "content": "trace " * 6000}],
+        [{"type": "tool_result", "tool_use_id": "call_1", "content": [{"type": "text", "text": "trace " * 6000}]}],
+    ),
+    ids=("plain", "text-parts", "tool-result", "nested-tool-result"),
+)
+async def test_short_followup_in_long_conversation_reaches_classifier(
+    mock_router_instance: MagicMock, history_content: object
+) -> None:
+    mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+    router: Final = _heuristic_first_router(mock_router_instance, heuristic_first_max_context_tokens=8000)
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "debug this failure"},
+        {"role": "user", "content": history_content},
+        {"role": "user", "content": "why did that fail?"},
+    ]
+    result: Final = await router.async_pre_routing_hook(
+        model="test-complexity-router", messages=messages, request_kwargs={}
+    )
+    assert result is not None
+    assert result.model == HEURISTIC_FIRST_TIERS["COMPLEX"]
+    assert result.routing_decision["cause"] == "llm_classifier"
+    mock_router_instance.acompletion.assert_awaited_once()
+    classifier_messages: Final = mock_router_instance.acompletion.call_args.kwargs["messages"]
+    assert "Conversation so far: ~9008 tokens" in str(classifier_messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit, history_chars, cause",
+    (
+        (None, 40000, "heuristic_first_short_circuit"),
+        (10, 35, "heuristic_first_short_circuit"),
+        (10, 36, "heuristic_first_short_circuit"),
+        (10, 40, "llm_classifier"),
+    ),
+)
+async def test_heuristic_context_limit_boundary_and_disabled(
+    mock_router_instance: MagicMock, limit: int | None, history_chars: int, cause: str
+) -> None:
+    mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+    router: Final = _heuristic_first_router(mock_router_instance, heuristic_first_max_context_tokens=limit)
+    messages: Final = [{"role": "system", "content": "x" * history_chars}, {"role": "user", "content": "hi!!"}]
+    outcome: Final = await router.aclassify("hi!!", messages=messages)
+    assert outcome.cause == cause
+    assert mock_router_instance.acompletion.await_count == int(cause == "llm_classifier")
+
+
+@pytest.mark.asyncio
+async def test_long_context_preserves_tool_pin_then_classifies_next_human_ask(mock_router_instance: MagicMock) -> None:
+    mock_router_instance.health.return_value.session_pins = memory_pins()
+    mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+    router: Final = _heuristic_first_router(
+        mock_router_instance,
+        heuristic_first_max_context_tokens=8000,
+        classification_mode="user_turn",
+        session_affinity=False,
+    )
+    first: Final[list[dict[str, object]]] = [{"role": "user", "content": "hi"}]
+    continuation: Final[list[dict[str, object]]] = [
+        *first,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "trace " * 6000},
+    ]
+    for messages, cause, model in (
+        (first, "heuristic_first_short_circuit", HEURISTIC_FIRST_TIERS["SIMPLE"]),
+        (continuation, "user_turn_continuation", HEURISTIC_FIRST_TIERS["SIMPLE"]),
+        (
+            [*continuation, {"role": "user", "content": "why did that fail?"}],
+            "llm_classifier",
+            HEURISTIC_FIRST_TIERS["COMPLEX"],
+        ),
+    ):
+        result: Final = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            messages=messages,
+            request_kwargs={"metadata": {"session_id": "context-test"}},
+        )
+        assert result is not None
+        assert (result.model, result.routing_decision["cause"]) == (model, cause)
+    mock_router_instance.acompletion.assert_awaited_once()
+
+
 class TestHeuristicFirst:
     """Behavior of the heuristic-first chain: when the classifier call is skipped, and when it is not."""
 

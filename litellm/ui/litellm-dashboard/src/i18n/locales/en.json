@@ -17809,7 +17809,11 @@
         "empty": "Type to add a keyword"
       },
       "scoringRulesAllowance": "Custom scoring rules",
-      "keywordOverridesTitle": "Heuristic Keyword Overrides"
+      "keywordOverridesTitle": "Heuristic Keyword Overrides",
+      "contextLimit": {
+        "label": "Max conversation tokens before judge",
+        "help": "Above this estimated size, ask the judge even for short follow-ups. Counts text and tool results. Existing session and tool-continuation pins still apply. Leave blank to disable."
+      }
     },
     "autoRouterClassifierTabs": {
       "option": {
@@ -18391,7 +18395,8 @@
       "selectClassifierOrHeuristic": "Please select a classifier model, or switch back to Heuristic",
       "reasoningEffortUnsupported": "{{effort}} reasoning effort is not supported by every deployment in {{model}}. Choose Default or a supported value.",
       "selectEmbeddingModel": "Select an embedding model to use semantic keyword matching",
-      "addKeywordRuleForSemantic": "Add at least one keyword tier rule to use semantic keyword matching"
+      "addKeywordRuleForSemantic": "Add at least one keyword tier rule to use semantic keyword matching",
+      "contextLimitPositiveInteger": "Conversation limit must be a positive whole number"
     },
     "adaptiveRoutingConfig": {
       "enable": "Enable adaptive bandit selection",

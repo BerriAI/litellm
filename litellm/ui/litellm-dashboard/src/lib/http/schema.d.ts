@@ -45853,6 +45853,11 @@ export interface components {
              */
             fallback_tier?: string | null;
             /**
+             * Heuristic First Max Context Tokens
+             * @description Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. Unset preserves the local shortcut. Existing session and user-turn pins still take precedence.
+             */
+            heuristic_first_max_context_tokens?: number | null;
+            /**
              * Heuristic First Max Tier
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', the predicted tier must meet its success threshold. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
              */

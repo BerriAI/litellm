@@ -22,6 +22,7 @@ import json
 import random
 import re
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -552,6 +553,27 @@ def _message_text(content: object) -> str:
         parts = tuple(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
         return " ".join(parts).strip()
     return content if isinstance(content, str) else ""
+
+
+def _conversation_text_lengths(content: object) -> Iterator[int]:
+    pending: Final[deque[object]] = deque((content,))  # mutable-ok: explicit stack avoids recursive content traversal
+    while pending:
+        part = pending.pop()
+        if isinstance(part, str):
+            yield len(part)
+        elif isinstance(part, list):
+            parts = cast(Sequence[object], part)  # cast-ok: every list element is an object
+            pending.extend(parts)
+        elif isinstance(part, Mapping):
+            block = cast(Mapping[object, object], part)  # cast-ok: mapping keys and values are objects
+            if block.get("type") == "text":
+                pending.append(block.get("text"))
+            elif block.get("type") == "tool_result":
+                pending.append(block.get("content"))
+
+
+def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
+    return sum(sum(_conversation_text_lengths(message.get("content"))) // 4 for message in messages or ())
 
 
 def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:
@@ -2206,10 +2228,12 @@ class ComplexityRouter(CustomLogger):
         """
         scored: Final = self._classify_locally(prompt, system_prompt)
         threshold: Final = self.config.heuristic_first_max_tier
+        context_limit: Final = self.config.heuristic_first_max_context_tokens
         decided_cheaply: Final = (
             threshold is not None
             and self._local_outcome_is_decided(scored)
             and not self._classifier_image_parts(messages)
+            and (context_limit is None or _estimated_conversation_tokens(messages) <= context_limit)
             and self._active_tier_severity(scored.tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
@@ -3091,7 +3115,7 @@ class ComplexityRouter(CustomLogger):
             else ()
         )
 
-        cumulative_tokens: Final = sum(len(_message_text(msg.get("content"))) // 4 for msg in messages or ())
+        cumulative_tokens: Final = _estimated_conversation_tokens(messages)
         trajectory_block: Final = (
             (f"\nConversation so far: ~{cumulative_tokens} tokens across the request",)
             if has_prior_conversation
