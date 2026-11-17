@@ -45,6 +45,7 @@ from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
+from ..llms.openai_like.common_utils import missing_json_provider_key_error
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
@@ -118,6 +119,9 @@ def _get_realtime_http_provider_config(
 
     raw_api_base: Final = dynamic_api_base or litellm_params.api_base
     raw_api_key: Final = dynamic_api_key or litellm_params.api_key
+
+    if missing_key_error := missing_json_provider_key_error(custom_llm_provider, "", raw_api_key, False):
+        raise missing_key_error
 
     if provider_config is not None:
         resolved_api_base = provider_config.get_api_base(api_base=raw_api_base)

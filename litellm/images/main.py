@@ -40,13 +40,13 @@ from openai.types.audio.transcription_create_params import FileTypes
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
     base_llm_http_handler,
     bedrock_image_edit,
     bedrock_image_generation,
-    missing_json_provider_key_error,
     openai_chat_completions,
     openai_image_variations,
 )
