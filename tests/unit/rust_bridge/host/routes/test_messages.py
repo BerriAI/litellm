@@ -2979,6 +2979,23 @@ def test_a_bedrock_connect_failure_names_the_origin_rust_could_not_reach(
     assert text in str(mapped)
 
 
+@pytest.mark.parametrize("aiohttp", (True, False), ids=("aiohttp", "httpx"))
+def test_a_connect_failure_with_no_known_base_keeps_rust_s_text(monkeypatch: pytest.MonkeyPatch, aiohttp: bool) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    rust_error: Final = (
+        f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)"
+    )
+
+    mapped: Final = messages_host.map_failure(RuntimeError(rust_error), {"model": "claude-sonnet-4-5"}, "vertex_ai")
+
+    assert type(mapped) is litellm.InternalServerError
+    assert mapped.status_code == 500
+    assert mapped.llm_provider == "vertex_ai"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.message.endswith(f"Vertex_aiException InternalServerError - {rust_error}")
+
+
 @pytest.fixture
 def no_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
