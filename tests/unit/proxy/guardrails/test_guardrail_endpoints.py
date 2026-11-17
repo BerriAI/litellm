@@ -11,7 +11,7 @@ import httpx
 import pytest
 import yaml
 from fastapi import FastAPI, HTTPException
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from pytest_mock import MockerFixture
 
 import litellm
@@ -4276,6 +4276,10 @@ def _bedrock_guard(handler: AsyncHTTPHandler, latest_user_message_only: bool = F
     )
 
 
+def _another_provider_guard(handler: AsyncHTTPHandler) -> CustomGuardrail:
+    return CustomGuardrail(guardrail_name="bedrock-guard", event_hook=GuardrailEventHooks.pre_call)
+
+
 async def _apply_bedrock_guardrail_over_http(
     mocker: MockerFixture,
     bedrock_answers: Sequence[Mapping[str, object]],
@@ -4489,20 +4493,24 @@ async def test_apply_guardrail_stops_at_a_blocked_image(mocker: MockerFixture) -
     assert _logged_verdicts(call) == [("bedrock-guard", "guardrail_intervened")]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "body",
+    ("body", "reason"),
     [
-        {"text": "hello", "images": [_PNG, _PNG]},
-        {},
-        {"text": "hello", "images": [f"data:image/webp;base64,{_PNG_BASE64}"]},
+        ({"text": "hello", "images": [_PNG, _PNG]}, "at most 1 item"),
+        ({}, "Provide 'text', 'images', or both"),
     ],
-    ids=["two-images", "neither-text-nor-image", "unreadable-image"],
+    ids=["two-images", "neither-text-nor-image"],
 )
-async def test_apply_guardrail_rejects_a_request_it_cannot_judge_without_calling_the_guardrail(
-    mocker: MockerFixture, body: Mapping[str, object]
-) -> None:
-    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_IMAGE_ALLOWED,), body)
+def test_apply_guardrail_request_refuses_a_body_it_cannot_judge(body: Mapping[str, object], reason: str) -> None:
+    with pytest.raises(ValidationError, match=reason):
+        ApplyGuardrailRequest.model_validate({"guardrail_name": "bedrock-guard", **body})
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_refuses_an_unreadable_image_without_calling_the_guardrail(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED,), {"text": "hello", "images": [f"data:image/webp;base64,{_PNG_BASE64}"]}
+    )
 
     assert call.response.status_code == 422
     assert call.bedrock_payloads == ()
@@ -4554,7 +4562,7 @@ async def test_apply_guardrail_still_scans_message_text_sent_with_an_image(mocke
 @pytest.mark.asyncio
 async def test_apply_guardrail_refuses_an_image_for_a_guardrail_that_cannot_scan_it(mocker: MockerFixture) -> None:
     call: Final = await _apply_bedrock_guardrail_over_http(
-        mocker, (), {"text": "hello", "images": [_PNG]}, guardrail=lambda handler: _NativeFindingGuardrail(({"ok": 1},))
+        mocker, (), {"text": "hello", "images": [_PNG]}, guardrail=_another_provider_guard
     )
 
     assert call.response.status_code == 422
