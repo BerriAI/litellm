@@ -1913,6 +1913,33 @@ class TestPanwAirsApplyGuardrail:
             assert mock_api.call_args.kwargs["call_id"] == request_data["litellm_call_id"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("inputs_model", [None, "gemini-2.5-flash"])
+    async def test_apply_guardrail_scans_with_a_model_it_leaves_out_of_a_body_that_has_none(
+        self, handler, inputs_model: str | None
+    ):
+        inputs: Final[GenericGuardrailAPIInputs] = {
+            "texts": ["Hello world"],
+            **({"model": inputs_model} if inputs_model else {}),
+        }
+        body: Final[dict[str, object]] = {
+            "contents": [{"role": "user", "parts": [{"text": "Hello world"}]}],
+            "litellm_call_id": "call-1",
+        }
+        logging_obj: Final = MagicMock()
+        logging_obj.model = "unknown"
+        logging_obj.model_call_details = {}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs, request_data=body, input_type="request", logging_obj=logging_obj
+            )
+
+        assert "model" not in body
+        assert mock_api.call_args.kwargs["metadata"]["model"] == (inputs_model or "unknown")
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_call_id_from_logging_obj(self, handler):
         """Test litellm_call_id resolved from logging_obj when missing from request_data."""
         inputs: GenericGuardrailAPIInputs = {"texts": ["Hello world"]}
