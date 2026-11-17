@@ -4,6 +4,7 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 from openai import OpenAI
 
 import litellm
@@ -161,6 +162,22 @@ def test_optiq_cloud_key_and_base_come_from_optiq_cloud_env_vars(monkeypatch: py
 
     assert get_llm_provider(model="optiq_cloud/glm-5.3-flash")[3] == "https://optiq-cloud.internal.example/v1"
 
+
+@pytest.mark.parametrize("model", OPTIQ_CLOUD_MODELS)
+def test_missing_optiq_cloud_key_fails_locally_instead_of_sending_the_openai_key(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    monkeypatch.delenv("OPTIQ_CLOUD_API_KEY", raising=False)
+    monkeypatch.delenv("OPTIQ_CLOUD_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-global-key")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{OPTIQ_CLOUD_API_BASE}/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="OPTIQ_CLOUD_API_KEY"):
+            litellm.completion(model=f"optiq_cloud/{model}", messages=[{"role": "user", "content": "hello"}])
+
+    assert route.calls.call_count == 0
 
 def test_optiq_cloud_wildcard_lists_every_optiq_cloud_catalog_model():
     catalog_models: Final = sorted(
