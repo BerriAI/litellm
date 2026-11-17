@@ -1,4 +1,6 @@
 import json
+import re
+from contextlib import asynccontextmanager
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -519,8 +521,6 @@ def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
         ("pre_mcp_call", [], False, "output", {"raw": "restored"}, "masked", 1),
         ({"tags": {"team:mcp": "pre_mcp_call"}}, ["team:mcp"], False, "output", {}, "masked", 1),
         ({"tags": {"team:mcp": "pre_mcp_call"}}, [], False, "output", {}, "raw", 0),
-        ("pre_call", [], True, None, {"raw": "restored"}, "restored", 1),
-        ("pre_call", [], True, "both", {"raw": "restored"}, "restored", 1),
         ("pre_call", [], True, "output", {"raw": "restored"}, "masked", 1),
     ],
 )
@@ -566,6 +566,190 @@ async def test_presidio_initialized_output_dispatch(
         )
     assert response.choices[0].message.content == expected
     assert len(selected) == expected_calls
+
+
+def _fake_presidio_analyze_results(text: str) -> list[dict]:
+    """
+    Span detections with the real analyzer's pattern semantics. A card is a
+    13-19 digit run passing Luhn, and the literal "John Smith" stands in for
+    an NER person detection. Placeholder tokens such as <PERSON_1> match
+    neither, which is the property the mask-before-restore wiring relies on.
+    """
+    results: list[dict] = []
+    for match in re.finditer(r"\d[ -]?(\d[ -]?){12,18}\d", text):
+        digits = re.sub(r"\D", "", match.group(0))
+        total = 0
+        for i, ch in enumerate(reversed(digits)):
+            d = int(ch)
+            if i % 2 == 1:
+                d = d * 2 - 9 if d * 2 > 9 else d * 2
+            total += d
+        if 13 <= len(digits) <= 19 and total % 10 == 0:
+            results.append({"entity_type": "CREDIT_CARD", "start": match.start(), "end": match.end(), "score": 1.0})
+    for match in re.finditer(re.escape("John Smith"), text):
+        results.append({"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 1.0})
+    return sorted(results, key=lambda r: r["start"])
+
+
+def _make_fake_presidio_session(recorded_analyze_texts: list[str]):
+    """
+    Stand-in for the Presidio HTTP pair. /analyze answers with the span
+    detections above and records every text it was asked to analyze;
+    /anonymize replaces each detected span with <ENTITY_TYPE>, the real
+    anonymizer's default replace operator.
+    """
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            def __init__(self, status, body):
+                self.status = status
+                self.content_type = "application/json"
+                self.headers = {"Content-Type": "application/json"}
+                self._body = body
+
+            async def text(self):
+                return json.dumps(self._body)
+
+            async def json(self):
+                return self._body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None, timeout=None):
+                payload = json
+                if url.endswith("analyze"):
+                    recorded_analyze_texts.append(payload["text"])
+                    return MockResponse(200, _fake_presidio_analyze_results(payload["text"]))
+                text = payload["text"]
+                items = sorted(payload["analyzer_results"], key=lambda r: r["start"], reverse=True)
+                for r in items:
+                    text = text[: r["start"]] + "<" + r["entity_type"] + ">" + text[r["end"] :]
+                return MockResponse(
+                    200,
+                    {"text": text, "items": [{"entity_type": r["entity_type"]} for r in items]},
+                )
+
+        yield MockSession()
+
+    return mock_iterator
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [None, "both"])
+async def test_presidio_initialized_output_dispatch_masks_before_restoring(
+    scope: Literal["input", "output", "both"] | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    With output_parse_pii on and an output-inclusive scope, the output masker
+    runs on the still-tokenised response before the restore callback, so PII
+    that newly appears in the output is masked while the restored values
+    reach the client. The span-based fake pair is required here because
+    mock_redacted_text replaces the whole text and cannot express this.
+    """
+    from typing import Final
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, PiiAction, PiiEntityType
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        default_on=True,
+        output_parse_pii=True,
+        presidio_filter_scope=scope,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.MASK, PiiEntityType.PERSON: PiiAction.MASK},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "mask_before_restore"})
+    analyze_texts: Final = {}
+    for callback in callbacks:
+        recorded: list[str] = []
+        analyze_texts[id(callback)] = recorded
+        callback._get_session_iterator = _make_fake_presidio_session(recorded)
+    data: Final = {"metadata": {"tags": [], "pii_tokens": {"<PERSON_1>": "John Smith"}}}
+    response: Final = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content="<PERSON_1> paid 4111111111111111 today"), index=0)]
+    )
+    selected: Final = tuple(
+        callback for callback in callbacks if callback.should_run_guardrail(data, GuardrailEventHooks.post_call)
+    )
+    for callback in selected:
+        data["guardrail_to_apply"] = callback
+        await UnifiedLLMGuardrails().async_post_call_success_hook(
+            data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+        )
+    content: Final = response.choices[0].message.content
+    assert content == "John Smith paid <CREDIT_CARD> today", content
+    (mask_callback,) = (callback for callback in selected if callback.apply_to_output)
+    assert analyze_texts[id(mask_callback)] == ["<PERSON_1> paid 4111111111111111 today"], analyze_texts[
+        id(mask_callback)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_presidio_initialized_output_dispatch_blocks_new_pii_before_restoring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A BLOCK-configured entity that newly appears in the output raises even
+    though output_parse_pii restores the input values afterwards, and a
+    response carrying only restore tokens passes and is restored.
+    """
+    from typing import Final
+
+    from litellm.exceptions import BlockedPiiEntityError
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, PiiAction, PiiEntityType
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        default_on=True,
+        output_parse_pii=True,
+        presidio_filter_scope=None,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK, PiiEntityType.PERSON: PiiAction.MASK},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "block_before_restore"})
+    for callback in callbacks:
+        callback._get_session_iterator = _make_fake_presidio_session([])
+
+    async def dispatch(content: str) -> str:
+        data: Final = {"metadata": {"tags": [], "pii_tokens": {"<PERSON_1>": "John Smith"}}}
+        response: Final = ModelResponse(
+            choices=[Choices(message=Message(role="assistant", content=content), index=0)]
+        )
+        selected: Final = tuple(
+            callback for callback in callbacks if callback.should_run_guardrail(data, GuardrailEventHooks.post_call)
+        )
+        for callback in selected:
+            data["guardrail_to_apply"] = callback
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+            )
+        return response.choices[0].message.content
+
+    with pytest.raises(BlockedPiiEntityError):
+        await dispatch("<PERSON_1> charged 4111111111111111")
+    restored: Final = await dispatch("<PERSON_1> charged nothing")
+    assert restored == "John Smith charged nothing", restored
 
 
 def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(
