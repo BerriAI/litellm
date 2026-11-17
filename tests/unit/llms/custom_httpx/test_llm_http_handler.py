@@ -181,6 +181,37 @@ async def test_get_search_preserves_tinyfish_http_error_formatting(is_async: boo
             assert error.value.headers["retry-after"] == "7"
 
 
+def test_a_caller_fake_stream_is_honored_and_kept_off_the_wire(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.mistral.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-fake-stream",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "mistral-small-latest",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="mistral/mistral-small-latest",
+            api_key="fake-mistral-key",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            fake_stream=True,
+        )
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert "fake_stream" not in sent, sent
+    assert sent.get("stream") is not True, sent
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "ok"
+
+
 def test_prepare_fake_stream_request():
     # Initialize the BaseLLMHTTPHandler
     handler = BaseLLMHTTPHandler()
@@ -6194,6 +6225,104 @@ async def test_async_text_to_speech_handler_records_upstream_response_headers():
 
     assert response.content == b"audio-bytes"
     _assert_upstream_headers_recorded(response)
+
+
+class _RecordingSyncAudioStream(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes], produced: list[bytes]):
+        self._chunks = chunks
+        self._produced = produced
+
+    def __iter__(self):
+        for chunk in self._chunks:
+            self._produced.append(chunk)
+            yield chunk
+
+
+def _sync_audio_chunk_transport(produced: list[bytes]) -> httpx.MockTransport:
+    def _respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "audio/mpeg"},
+            stream=_RecordingSyncAudioStream([b"one", b"two", b"three"], produced),
+        )
+
+    return httpx.MockTransport(_respond)
+
+
+class _StreamingTextToSpeechConfig(_HeaderTextToSpeechConfig):
+    supports_streaming = True
+
+
+class _RecordingAudioStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes], produced: list[bytes]):
+        self._chunks = chunks
+        self._produced = produced
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            self._produced.append(chunk)
+            yield chunk
+
+
+def _audio_chunk_transport(produced: list[bytes]) -> httpx.MockTransport:
+    def _respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "audio/mpeg"},
+            stream=_RecordingAudioStream([b"one", b"two", b"three"], produced),
+        )
+
+    return httpx.MockTransport(_respond)
+
+
+@pytest.mark.asyncio
+async def test_async_text_to_speech_handler_yields_chunks_before_upstream_finishes():
+    produced: Final[list[bytes]] = []
+    client: Final = AsyncHTTPHandler(transport=_audio_chunk_transport(produced))
+
+    response: Final = await BaseLLMHTTPHandler().async_text_to_speech_handler(
+        client=client,
+        stream=True,
+        **{
+            **_text_to_speech_call_kwargs(),
+            "text_to_speech_provider_config": _StreamingTextToSpeechConfig(),
+        },
+    )
+    audio: Final = await response.aiter_bytes()
+
+    assert await anext(audio) == b"one"
+    assert produced == [b"one"]
+
+
+@pytest.mark.asyncio
+async def test_async_text_to_speech_handler_buffers_when_provider_does_not_support_streaming():
+    produced: Final[list[bytes]] = []
+    client: Final = AsyncHTTPHandler(transport=_audio_chunk_transport(produced))
+
+    response: Final = await BaseLLMHTTPHandler().async_text_to_speech_handler(
+        client=client, stream=True, **_text_to_speech_call_kwargs()
+    )
+
+    assert produced == [b"one", b"two", b"three"]
+    assert response.content == b"onetwothree"
+
+
+def test_text_to_speech_handler_yields_chunks_before_upstream_finishes():
+    produced: Final[list[bytes]] = []
+    client: Final = HTTPHandler()
+    client.client = httpx.Client(transport=_sync_audio_chunk_transport(produced))
+
+    response: Final = BaseLLMHTTPHandler().text_to_speech_handler(
+        client=client,
+        stream=True,
+        **{
+            **_text_to_speech_call_kwargs(),
+            "text_to_speech_provider_config": _StreamingTextToSpeechConfig(),
+        },
+    )
+
+    assert next(response.iter_bytes()) == b"one"
+    assert produced == [b"one"]
 
 
 async def _get_by_id_with_upstream(handler_name: str, upstream_response: httpx.Response) -> object:

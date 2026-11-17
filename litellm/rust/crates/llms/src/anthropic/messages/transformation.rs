@@ -37,8 +37,9 @@ use crate::{
         minted_oauth_environment, optionally_handle_anthropic_oauth,
         requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
-        strip_raw_encrypted_reasoning_blocks,
-        strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
+        strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
+        strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
+        tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
@@ -202,7 +203,7 @@ fn is_foundry_url(url: &str) -> bool {
         })
 }
 
-pub(crate) fn is_claude_model(model: &str) -> bool {
+pub fn is_claude_model(model: &str) -> bool {
     model.to_lowercase().contains("claude")
 }
 
@@ -345,12 +346,22 @@ pub(crate) fn transform_messages_request(
     } else {
         messages
     };
-    Ok(MessagesRequest {
-        messages: map_messages(
+    let messages = map_messages(
+        messages,
+        strip_encrypted_reasoning_blocks_restoring_redacted_data,
+        strip_raw_encrypted_reasoning_blocks,
+    );
+    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+        map_messages(
             messages,
-            strip_encrypted_reasoning_blocks_restoring_redacted_data,
-            strip_raw_encrypted_reasoning_blocks,
-        ),
+            strip_unsigned_thinking_blocks,
+            strip_raw_unsigned_thinking_blocks,
+        )
+    } else {
+        messages
+    };
+    Ok(MessagesRequest {
+        messages,
         params: MessagesOptionalParams {
             context_management,
             extra: without_null_safeguards(request.params.extra),
@@ -1317,6 +1328,58 @@ mod tests {
         );
     }
 
+    fn tool_turn(opening: Option<Value>) -> Value {
+        let pending: Vec<Value> = opening
+            .into_iter()
+            .chain([json!({"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}})])
+            .collect();
+        json!([
+            {"role": "user", "content": "List the files."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Draft."}
+            ]},
+            {"role": "user", "content": "Now list them."},
+            {"role": "assistant", "content": pending},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]}
+        ])
+    }
+
+    #[rstest]
+    #[case::empty(json!({"type": "thinking", "thinking": "open model plan", "signature": ""}))]
+    #[case::null(json!({"type": "thinking", "thinking": "open model plan", "signature": null}))]
+    #[case::missing(json!({"type": "thinking", "thinking": "open model plan"}))]
+    fn unsigned_thinking_never_reaches_claude_even_on_the_pending_tool_turn(
+        #[case] unsigned: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform(
+                json!({"messages": tool_turn(Some(unsigned))}),
+                unmapped,
+                false
+            ),
+            Ok(body(json!({"messages": tool_turn(None)})))
+        );
+    }
+
+    #[rstest]
+    fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
+        let messages = tool_turn(Some(
+            json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        ));
+        assert_eq!(
+            transform(
+                json!({"model": "deepseek-v4-pro", "messages": messages.clone()}),
+                unmapped,
+                false
+            ),
+            Ok(body(
+                json!({"model": "deepseek-v4-pro", "messages": messages})
+            ))
+        );
+    }
+
     #[test]
     fn thinking_is_translated_with_the_context_budgets() {
         let context = MessagesTransformContext::with_lookup(
@@ -1360,6 +1423,7 @@ mod tests {
                     drop_params: true,
                     drops_unsupported_params: false,
                     global_drop_params: false,
+                    claude_base_model: false,
                 }
             );
             return;

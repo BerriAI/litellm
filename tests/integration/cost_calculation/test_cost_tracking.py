@@ -28,7 +28,11 @@ from integration.cost_calculation.conftest import (
     read_rows_now,
     register_scenario_deployment,
 )
-from integration.cost_calculation.catalog import STANDALONE_CASES, data_errors
+from integration.cost_calculation.catalog import (
+    BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+    STANDALONE_CASES,
+    data_errors,
+)
 from integration.cost_calculation.stream_parity.runner import flush_spend_logs
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
@@ -55,7 +59,12 @@ def _marks(case: CostTrackingTestCase) -> tuple[pytest.MarkDecorator, ...]:
     bug: Final = (
         (pytest.mark.xfail(strict=True, reason=f"BUG: {case.known_bug}"),) if case.known_bug is not None else ()
     )
-    return (pytest.mark.covers(case.covers), *bug)
+    billed: Final = (
+        (pytest.mark.billed_against_real_provider_by_cost_tracking_reconciliation_automation,)
+        if case.name in BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION
+        else ()
+    )
+    return (pytest.mark.covers(case.covers), *bug, *billed)
 
 
 _CASES: Final = tuple(pytest.param(case, marks=_marks(case), id=case.name) for case in STANDALONE_CASES)
