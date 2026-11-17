@@ -2,7 +2,7 @@ import os
 import re
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.bedrock.web_identity_session_policy import BEDROCK_BATCHES_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.types.llms.bedrock import (
     BedrockCreateBatchRequest,
     BedrockCreateBatchResponse,
@@ -102,9 +103,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     Config for Bedrock Batches - handles batch job creation and management for Bedrock
     """
 
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_BATCHES_SESSION_POLICY
+
     def __init__(self):
         super().__init__()
-        self.common_utils = CommonBatchFilesUtils()
+        self.common_utils = CommonBatchFilesUtils(self)
 
     @property
     def custom_llm_provider(self) -> LlmProviders:

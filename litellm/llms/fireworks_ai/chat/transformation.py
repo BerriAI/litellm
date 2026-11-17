@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -13,6 +14,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     unpack_legacy_defs,
@@ -36,7 +38,6 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
-    get_model_cost_mutation_generation,
     supports_function_calling,
     supports_reasoning,
     supports_tool_choice,
@@ -63,6 +64,10 @@ _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _FunctionFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -542,21 +547,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             for message in messages
         ]
 
-    # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
-    # this index requires a full scan of model_cost (tens of thousands of
-    # entries), so we memoize it. The cache key is (id(model_cost),
-    # mutation_generation): the generation counter is bumped on every
-    # register_model / reload path, so add+remove or in-place value
-    # replacement (which can leave id and len unchanged) still invalidates.
-    _fireworks_index_cache: tuple[int, int, list[tuple[str, dict]]] | None = None
+    _fireworks_index_cache: tuple[ModelCostVersion, list[tuple[str, dict]]] | None = None
 
     @classmethod
     def _get_fireworks_index(cls) -> list[tuple[str, dict]]:
         model_cost: Final = litellm.model_cost
-        signature: Final = (id(model_cost), get_model_cost_mutation_generation())
+        version: Final = model_cost_version()
         cached: Final = cls._fireworks_index_cache
-        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
-            return cached[2]
+        if cached is not None and cached[0] == version:
+            return cached[1]
 
         index: Final[list[tuple[str, dict]]] = []
         for key, model_info in (*model_cost.items(),):
@@ -570,7 +569,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 continue
             index.append((key_short, model_info))
 
-        cls._fireworks_index_cache = (signature[0], signature[1], index)
+        cls._fireworks_index_cache = (version, index)
         return index
 
     @staticmethod
@@ -724,7 +723,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         """
         if tool_calls is not None and message.content is not None and message.tool_calls is None:
             try:
-                function: Final = Function(**json.loads(message.content))
+                function: Final = Function(**_FunctionFields(**_JSON_DICT.validate_python(json.loads(message.content))))
                 if function.name != RESPONSE_FORMAT_TOOL_NAME and function.name in [
                     tool["function"]["name"] for tool in tool_calls
                 ]:

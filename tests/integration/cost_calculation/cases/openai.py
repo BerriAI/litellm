@@ -20,6 +20,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     RecountRates,
     SseResponse,
+    UnsizedFlacUpload,
     WavUpload,
 )
 from pydantic import JsonValue
@@ -7952,6 +7953,7 @@ GPT_5_6_STREAM_USAGE_IN_EMPTY_CHOICES_CHUNK: Final = CostTrackingTestCase(
         frames=(
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"content":"scripted answer"},"finish_reason":null}],"usage":null}',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2252}}',
             "data: [DONE]",
         ),
@@ -8099,6 +8101,18 @@ WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND: Final = CostTrackingTestCase(
     request={"language": "en", "response_format": "json"},
     response=JsonResponse(content_type="application/json", body={"text": "hello"}),
     expected=ExactExpected(spend=0.00035, input_cost=0.00035, output_cost=0, prompt_tokens=0, completion_tokens=0),
+)
+
+
+WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE: Final = CostTrackingTestCase(
+    name="whisper-next-transcriptions-unsized-flac-no-usage",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="whisper-next",
+    endpoint="/v1/audio/transcriptions",
+    upload=UnsizedFlacUpload(kind="unsized_flac"),
+    request={"response_format": "json"},
+    response=JsonResponse(content_type="application/json", body={"text": "hello"}),
+    expected=ExactExpected(spend=0, input_cost=0, output_cost=0, prompt_tokens=0, completion_tokens=0),
 )
 
 
@@ -8456,6 +8470,19 @@ GPT_5_6_CHAT_REQUEST_TO_EMBEDDING_ENTRY: Final = CostTrackingTestCase(
 
 
 # gpt-6.1-sol
+_PROVIDER_CACHEABLE_PROMPT: Final = (
+    "The pricing harness keeps one stable instruction block so the provider can cache it. " * 220
+)
+_GPT_6_PROMPT_CACHE_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "messages": [
+        {"role": "system", "content": _PROVIDER_CACHEABLE_PROMPT},
+        {"role": "user", "content": "Reply with OK."},
+    ],
+    "reasoning_effort": "low",
+    "stream": False,
+}
+
 GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
     name="gpt-6.1-sol-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -8497,31 +8524,7 @@ GPT_6_1_SOL_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6.1-sol-cache_read",
         "model": "gpt-6.1-sol",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -8571,31 +8574,7 @@ GPT_6_LUNA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6-luna-cache_read",
         "model": "gpt-6-luna",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "a880e9da100c summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -8645,31 +8624,7 @@ GPT_6_ASTRA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6-astra-cache_read",
         "model": "gpt-6-astra",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "d45eefac915d summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -12075,216 +12030,453 @@ GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM: Final = (
     )
 )
 
-GPT_6_1_TERRA_INPUT_TEXT: Final = CostTrackingTestCase(
-    name="gpt-6.1-terra-input_text",
+def _gpt_6_on_model(base: CostTrackingTestCase, model: str, shape: str, expected: ExactExpected) -> CostTrackingTestCase:
+    response: Final = (
+        _stream_for_model(base.response, model)
+        if isinstance(base.response, SseResponse)
+        else _response_for_model(cast(JsonResponse, base.response), model)
+    )
+    return base.model_copy(
+        update={"name": f"{model}-{shape}", "model": model, "response": response, "expected": expected}
+    )
+
+
+def _gpt_6_with_real_usage(
+    base: CostTrackingTestCase,
+    model: str,
+    shape: str,
+    request: Mapping[str, JsonValue],
+    usage: Mapping[str, JsonValue],
+    expected: ExactExpected,
+) -> CostTrackingTestCase:
+    body: Final = {**cast(JsonResponse, base.response).body, "model": model, "usage": dict(usage)}
+    return base.model_copy(
+        update={
+            "name": f"{model}-{shape}",
+            "model": model,
+            "request": dict(request),
+            "response": cast(JsonResponse, base.response).model_copy(update={"body": body}),
+            "expected": expected,
+        }
+    )
+
+
+def _gpt_6_tool_call_served_by_responses_api(model: str, expected: ExactExpected) -> CostTrackingTestCase:
+    body: Final = cast(JsonResponse, GPT_6_LUNA_RESPONSES_NATIVE_JSON.response).body
+    function_call: Final[dict[str, JsonValue]] = {
+        "type": "function_call",
+        "id": "fc_$REQUEST_ID",
+        "call_id": "call_$REQUEST_ID",
+        "name": "get_weather",
+        "arguments": '{"city": "Lisbon"}',
+        "status": "completed",
+    }
+    return GPT_6_LUNA_TOOL_CALL.model_copy(
+        update={
+            "name": f"{model}-tool_call",
+            "model": model,
+            "request": {**GPT_6_LUNA_TOOL_CALL.request, "reasoning_effort": "low"},
+            "response": JsonResponse(
+                content_type="application/json", body={**body, "model": model, "output": [function_call]}
+            ),
+            "expected": expected,
+        }
+    )
+
+
+_GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
+    "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    "reasoning": {"effort": "low"},
+}
+_GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
+    "reasoning": {"effort": "low"},
+}
+_GPT_6_RESPONSES_WEB_SEARCH_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": "What is the population of Lisbon? Search the web and answer in one line.",
+    "tools": [{"type": "web_search", "search_context_size": "medium"}],
+    "reasoning": {"effort": "low"},
+}
+
+GPT_6_1_TERRA_INPUT_TEXT: Final = _gpt_6_on_model(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6.1-terra",
+    "input_text",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_STREAM: Final = _gpt_6_on_model(
+    GPT_6_LUNA_STREAM,
+    "gpt-6.1-terra",
+    "stream",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_REASONING: Final = _gpt_6_on_model(
+    GPT_6_LUNA_REASONING,
+    "gpt-6.1-terra",
+    "reasoning",
+    ExactExpected(spend=0.0220832, input_cost=0.0012772, output_cost=0.020806, prompt_tokens=1240, completion_tokens=4040),
+)
+GPT_6_1_TERRA_TOOL_CALL: Final = _gpt_6_on_model(
+    GPT_6_LUNA_TOOL_CALL,
+    "gpt-6.1-terra",
+    "tool_call",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_SERVICE_TIER_FLEX: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    "gpt-6.1-terra",
+    "service_tier_flex",
+    ExactExpected(spend=0.0020085, input_cost=0.0009476, output_cost=0.0010609, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_SERVICE_TIER_PRIORITY: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "gpt-6.1-terra",
+    "service_tier_priority",
+    ExactExpected(spend=0.008034, input_cost=0.0037904, output_cost=0.0042436, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_RESPONSES_NATIVE_JSON: Final = _gpt_6_on_model(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6.1-terra",
+    "responses_native_json",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_ASTRA_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6-astra",
+    ExactExpected(spend=0.0468, input_cost=0.02208, output_cost=0.02472, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_SOL_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6.1-sol",
+    ExactExpected(spend=0.0078, input_cost=0.00368, output_cost=0.00412, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_LUNA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3334, "completion_tokens": 4, "total_tokens": 3338, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3331, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000418675, input_cost=0.000416675, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_creation_cost=0.000416375),
+)
+GPT_6_LUNA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3334, "completion_tokens": 4, "total_tokens": 3338, "prompt_tokens_details": {"cached_tokens": 3331, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=3.561e-05, input_cost=3.361e-05, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_read_cost=3.331e-05),
+)
+GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-luna",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3334, "input_tokens_details": {"cache_write_tokens": 3331, "cache_write_tokens_details": {"ttl_12h_tokens": 3331, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3339},
+    ExactExpected(spend=0.000419175, input_cost=0.000416675, output_cost=2.5e-06, prompt_tokens=3334, completion_tokens=5, cache_creation_cost=0.000416375),
+)
+GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-luna",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8636, "input_tokens_details": {"cache_write_tokens": 20, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 20}, "cached_tokens": 4435}, "output_tokens": 81, "output_tokens_details": {"reasoning_tokens": 43}, "total_tokens": 8717},
+    ExactExpected(spend=0.01050545, input_cost=0.00046495, output_cost=4.05e-05, prompt_tokens=8636, completion_tokens=81, tool_usage_cost=0.01, cache_read_cost=4.435e-05, cache_creation_cost=2.5e-06),
+)
+GPT_6_SOL_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-sol",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3336, "completion_tokens": 4, "total_tokens": 3340, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3333, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.00921635, input_cost=0.00917235, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_creation_cost=0.00916575),
+)
+GPT_6_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-sol",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3336, "completion_tokens": 4, "total_tokens": 3340, "prompt_tokens_details": {"cached_tokens": 3333, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.00078386, input_cost=0.00073986, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_read_cost=0.00073326),
+)
+GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-sol",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3332, "input_tokens_details": {"cache_write_tokens": 3329, "cache_write_tokens_details": {"ttl_12h_tokens": 3329, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3338},
+    ExactExpected(spend=0.0183821, input_cost=0.0183161, output_cost=6.6e-05, prompt_tokens=3332, completion_tokens=6, cache_creation_cost=0.0183095),
+)
+GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-sol",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8763, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 94, "output_tokens_details": {"reasoning_tokens": 52}, "total_tokens": 8857},
+    ExactExpected(spend=0.03276285, input_cost=0.02172885, output_cost=0.001034, prompt_tokens=8763, completion_tokens=94, tool_usage_cost=0.01, cache_creation_cost=0.01225125),
+)
+GPT_6_ASTRA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-astra",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.050226, input_cost=0.049986, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.04995),
+)
+GPT_6_ASTRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-astra",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.004272, input_cost=0.004032, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.003996),
+)
+GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-astra",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 3326, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.100116, input_cost=0.099816, output_cost=0.0003, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.09978),
+)
+GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-astra",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8580, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 81, "output_tokens_details": {"reasoning_tokens": 38}, "total_tokens": 8661},
+    ExactExpected(spend=0.131185, input_cost=0.116325, output_cost=0.00486, prompt_tokens=8580, completion_tokens=81, tool_usage_cost=0.01, cache_creation_cost=0.066825),
+)
+GPT_6_1_SOL_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-sol",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.008371, input_cost=0.008331, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.008325),
+)
+GPT_6_1_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-sol",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000379, input_cost=0.000339, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000333),
+)
+GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6.1-sol",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3328, "input_tokens_details": {"cache_write_tokens": 3325, "cache_write_tokens_details": {"ttl_12h_tokens": 3325, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3333},
+    ExactExpected(spend=0.016681, input_cost=0.016631, output_cost=5e-05, prompt_tokens=3328, completion_tokens=5, cache_creation_cost=0.016625),
+)
+GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6.1-sol",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8617, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 83, "output_tokens_details": {"reasoning_tokens": 38}, "total_tokens": 8700},
+    ExactExpected(spend=0.0302915, input_cost=0.0194615, output_cost=0.00083, prompt_tokens=8617, completion_tokens=83, tool_usage_cost=0.01, cache_creation_cost=0.0111375),
+)
+GPT_6_1_TERRA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-terra",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.004311065, input_cost=0.004290465, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.004287375),
+)
+GPT_6_1_TERRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-terra",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000195185, input_cost=0.000174585, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000171495),
+)
+GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6.1-terra",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3332, "input_tokens_details": {"cache_write_tokens": 3329, "cache_write_tokens_details": {"ttl_12h_tokens": 3329, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3337},
+    ExactExpected(spend=0.008601015, input_cost=0.008575265, output_cost=2.575e-05, prompt_tokens=3332, completion_tokens=5, cache_creation_cost=0.008572175),
+)
+GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6.1-terra",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8657, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 77, "output_tokens_details": {"reasoning_tokens": 36}, "total_tokens": 8734},
+    ExactExpected(spend=0.0204604225, input_cost=0.0100638725, output_cost=0.00039655, prompt_tokens=8657, completion_tokens=77, tool_usage_cost=0.01, cache_creation_cost=0.0057358125),
+)
+GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-luna",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00041855, input_cost=0.00041605, output_cost=2.5e-06, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.00041575),
+)
+GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3328, "input_tokens_details": {"cache_write_tokens": 3325, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3325}, "cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00921635, input_cost=0.00915035, output_cost=6.6e-05, prompt_tokens=3328, completion_tokens=6, cache_creation_cost=0.00914375),
+)
+GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-astra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3327, "input_tokens_details": {"cache_write_tokens": 3324, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3324}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3332},
+    ExactExpected(spend=0.050196, input_cost=0.049896, output_cost=0.0003, prompt_tokens=3327, completion_tokens=5, cache_creation_cost=0.04986),
+)
+GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6.1-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.008371, input_cost=0.008321, output_cost=5e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.008315),
+)
+GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6.1-terra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.004311065, input_cost=0.004285315, output_cost=2.575e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.004282225),
+)
+TEXT_EMBEDDING_3_LARGE_DIMENSIONS: Final = CostTrackingTestCase(
+    name="text-embedding-3-large-dimensions",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gpt-6.1-terra",
-    request={
-        "model": "$MODEL",
-        "messages": [{"role": "user", "content": "Say hello."}],
-        "stream": False,
-        "allowed_openai_params": [],
-    },
+    model="text-embedding-3-large",
+    endpoint="/v1/embeddings",
+    request={"model": "$MODEL", "input": "price this embedding request", "dimensions": 256},
     response=JsonResponse(
         content_type="application/json",
         body={
-            "id": "chatcmpl-$REQUEST_ID",
-            "object": "chat.completion",
-            "created": 1793550477,
-            "model": "gpt-6.1-terra",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "Hello!", "refusal": None, "annotations": []},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 1840,
-                "completion_tokens": 412,
-                "total_tokens": 2252,
-                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
-                "completion_tokens_details": {
-                    "reasoning_tokens": 0,
-                    "audio_tokens": 0,
-                    "accepted_prediction_tokens": 0,
-                    "rejected_prediction_tokens": 0,
-                },
-            },
-            "service_tier": "default",
-            "system_fingerprint": None,
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [-0.060546875, -0.0176849365234375], "index": 0}],
+            "model": "text-embedding-3-large",
+            "usage": {"prompt_tokens": 4, "total_tokens": 4},
         },
     ),
-    expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
-    ),
+    expected=ExactExpected(spend=5.2e-07, input_cost=5.2e-07, output_cost=0.0, prompt_tokens=4, completion_tokens=0),
 )
 
-GPT_6_1_TERRA_STREAM: Final = CostTrackingTestCase(
-    name="gpt-6.1-terra-stream",
+def _gpt_image_2_6_sunburst_body(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "created": 1794891118,
+        "background": "opaque",
+        "data": [{"b64_json": "AA=="}],
+        "output_format": "png",
+        "quality": "low",
+        "size": "1024x1024",
+        "usage": dict(usage),
+    }
+
+
+GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW: Final = CostTrackingTestCase(
+    name="gpt-image-2.6-sunburst-images-low",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gpt-6.1-terra",
-    request={
-        "model": "$MODEL",
-        "messages": [
+    model="gpt-image-2.6-sunburst",
+    endpoint="/v1/images/generations",
+    deployment=Deployment(model="openai/gpt-image-2.6-sunburst"),
+    request={"prompt": "a plain red square", "size": "1024x1024", "quality": "low", "n": 1},
+    response=JsonResponse(
+        content_type="application/json",
+        body=_gpt_image_2_6_sunburst_body(
             {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
-                        "single short line.",
-                    }
-                ],
-            },
+                "input_tokens": 10,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 10},
+                "output_tokens": 824,
+                "output_tokens_details": {"image_tokens": 824, "text_tokens": 0},
+                "total_tokens": 834,
+            }
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0247702,
+        input_cost=5.02e-05,
+        output_cost=0.02472,
+        prompt_tokens=10,
+        completion_tokens=824,
+        breakdown_persisted=False,
+    ),
+)
+GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT: Final = CostTrackingTestCase(
+    name="gpt-image-2.6-sunburst-images-edit",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-image-2.6-sunburst",
+    endpoint="/v1/images/edits",
+    deployment=Deployment(model="openai/gpt-image-2.6-sunburst"),
+    upload=PngUpload(kind="png"),
+    request={"prompt": "make the square blue", "size": "1024x1024", "quality": "low", "n": 1},
+    response=JsonResponse(
+        content_type="application/json",
+        body=_gpt_image_2_6_sunburst_body(
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "fe2e0078a155 summarize the attached material in one line and name the city weather",
-                    }
-                ],
+                "input_tokens": 1044,
+                "input_tokens_details": {"image_tokens": 1024, "text_tokens": 20},
+                "output_tokens": 824,
+                "output_tokens_details": {"image_tokens": 824, "text_tokens": 0},
+                "total_tokens": 1868,
+            }
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0330124,
+        input_cost=0.0082924,
+        output_cost=0.02472,
+        prompt_tokens=1044,
+        completion_tokens=824,
+        breakdown_persisted=False,
+    ),
+)
+GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS: Final = CostTrackingTestCase(
+    name="gpt-4o-transcribe-transcriptions-tokens",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-4o-transcribe",
+    endpoint="/v1/audio/transcriptions",
+    upload=WavUpload(kind="wav", seconds=3.0),
+    request={"response_format": "json"},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "text": "The pricing harness says hello.",
+            "usage": {
+                "type": "tokens",
+                "total_tokens": 38,
+                "input_tokens": 30,
+                "input_token_details": {"text_tokens": 0, "audio_tokens": 30},
+                "output_tokens": 8,
             },
-        ],
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "allowed_openai_params": [],
-    },
+        },
+    ),
+    expected=ExactExpected(spend=0.00026, input_cost=0.00018, output_cost=8e-05, prompt_tokens=30, completion_tokens=8),
+)
+GPT_4O_MINI_TTS_SPEECH: Final = CostTrackingTestCase(
+    name="gpt-4o-mini-tts-speech",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-4o-mini-tts",
+    endpoint="/v1/audio/speech",
+    request={"input": "The pricing harness says hello.", "voice": "alloy", "response_format": "mp3"},
     response=SseResponse(
         content_type="text/event-stream",
         frames=(
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"finish_reason":null}],"usage":null,"obfuscation":"V6maPTGAg2ee7"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":"Please"},"finish_reason":null}],"usage":null,"obfuscation":"DeB2F5WWE"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'attach"},"finish_reason":null}],"usage":null,"obfuscation":"vhKBOJ81"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'the"},"finish_reason":null}],"usage":null,"obfuscation":"INVpNKhs7DW"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'material"},"finish_reason":null}],"usage":null,"obfuscation":"0O1Pvm"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'and"},"finish_reason":null}],"usage":null,"obfuscation":"MuEX4UDBYtT"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'specify"},"finish_reason":null}],"usage":null,"obfuscation":"ndkC0Cl"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'the"},"finish_reason":null}],"usage":null,"obfuscation":"q6k4WZYcNRM"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'city"},"finish_reason":null}],"usage":null,"obfuscation":"IpYix0p3PR"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'for"},"finish_reason":null}],"usage":null,"obfuscation":"rKxPKxRq4qx"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'the"},"finish_reason":null}],"usage":null,"obfuscation":"H3i2dOw4fnn"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":" '
-            'weather"},"finish_reason":null}],"usage":null,"obfuscation":"SYkCNCB"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"content":"."},"finish_reason":null}],"usage":null,"obfuscation":"KwuEGDWIiki1oD"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null,"obfuscation":"FHSsHelue"}',
-            "data: "
-            '{"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1793550481,"model":"gpt-6.1-terra","service_tier":"default","system_fingerprint":null,"choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2252,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}},"obfuscation":"0MOoQz"}',
+            'data: {"type":"speech.audio.delta","audio":"c2NyaXB0ZWQgYXVkaW8="}',
+            'data: {"type":"speech.audio.done","usage":{"input_tokens":6,"output_tokens":50,"total_tokens":56}}',
             "data: [DONE]",
         ),
     ),
     expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
-    ),
-)
-
-GPT_6_1_TERRA_RESPONSES_NATIVE_JSON: Final = CostTrackingTestCase(
-    name="gpt-6.1-terra-responses_native_json",
-    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gpt-6.1-terra",
-    endpoint="/v1/responses",
-    request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
-    response=JsonResponse(
-        content_type="application/json",
-        body={
-            "id": "resp_$REQUEST_ID",
-            "object": "response",
-            "created_at": 1793550478,
-            "status": "completed",
-            "access_programs": {"cyber": "standard"},
-            "background": False,
-            "billing": {"payer": "developer"},
-            "completed_at": 1793550480,
-            "error": None,
-            "frequency_penalty": 0.0,
-            "incomplete_details": None,
-            "instructions": None,
-            "max_output_tokens": None,
-            "max_tool_calls": None,
-            "model": "gpt-6.1-terra",
-            "moderation": None,
-            "output": [
-                {
-                    "id": "rs_$REQUEST_ID",
-                    "type": "reasoning",
-                    "content": [],
-                    "encrypted_content": "gAAAAABq52iQo3ILWVDdQ9urPwquhcD7cD3bBTTat3yuH4RGh0k47sW-tcihEoa2U-3cTXx3sbe8M_zsmc-x3bBxuNOSDtdMGki6W5QlQAKXOawPDaJZfBXS6D_s1KquRjnZveQU5tSCyV61MYFnIBoxtTap_MD3CgyabiddVA2-1zLyyNf2gzGnuzW75-GScgzKPGDD-k-F7bJw4r0T8ZLzmLGG_OR2blLygTvAPu9MkRlm9swj70PCmvOojv2TVrSBTCcIBHa91DsNKr03e1IFDPAQ_63FuNqwv3H2O3BjtQxW2EcwlO2pn5pCinwRHp5dYG0-sXDYZqZRixQ65bvwT0yKsF1-Ehda1HwZnYmEUluJrPQMZs5IqTQmziRqdxo5xQmNdu_nfz0qpE-R0eLF4uOPcDaYlwbmwUC99G7vIgD2nC4l18R_iU213FN_R-Zb3z1VGG4Qy9p86mUep91AlEk0-49badioVT7DUgYMbgPXmzv9zfQY6EqXRqW4mhdYhLUDcwNcO7PK5lySX1occbZOdyyGOaypeGb8I1eX8vK32PlI-v8WZge0l673_sMTfPaOpsUAMw2yYoCQ3Ky5flxiDhv_26DSDVRBWwm1HqvsW-lqTKeTFXv9VWu753a6QbGS9fG1TcCy_v0_cilG02kVoX7uXH9U1EtUz_fu-jjE4to_NdULJS4anC6I--0na2nHQBjTmJ2Pg2CRdf8yQdJ-xXcP9EP_jrXEEze6wCfjBVUbEUwB4CIVM4IVWBz4h3eXAK-sQ328hKgD-WtlNor_BEA4oEGVDBEVlBp437pzzvnHMwFzeyMYuC6c-jOKmqVujx0hjUp4Uc0qwG1MFbBPYBjEmCOb4r-Rzs5PLvzDN-j4TUxx075ZQQiAmW3W73oQbm2fxS5_xNYHe-uh6TcNCxBXpBGW0FUHy0-kLDCxPDFLpPQpVG4Tp1iD0oN3FiFmQZ4sKSe8P4pZhdZIoFEgKZzrdLXzqGVC_1UwTzJbLkaVZ0rzfijYfZd3BgA2gx1A3-zKVcMHyTtpPtyypiGcdcXnkeEU8sfkjOBX2w8Y_n47KbPz71gOXb3fILIaIaVft7ZYA1Die28rpKKaFpKKzlc5PeuZLzIUlLp7rS4SVab4iXyY1dfxNI-If1W9yESy50356OVmRTaVske78Qv80iiRkTP6WLnpH7xUixvRQe1yOga70Mu-ztOBQGPEafxEY4j4ecVhIkEExIBATKhOfFuOWpES3dABfSuxjdBz-vq6a9Kt3kd84SO_s6gBIVXfW86F8Rx8O7bXJME4WtbpM0FJtFXjkSUnsgT3XRyKc_cEBcltEvkJr8q75T79rUDBeGgBpIS2qyZ22h-1DvU8CLe6NjfazmaAlfNesRCPdIp13LzfOP5rai1gXvnFy8TjLsh3nIFNC3R2-KRG8eLAvke-THLJ7Npsxt9MY0TBkCJK79kmJDiKKwGhaBUPQQhzmqXhjsKMP4pYzCMyCDw8xnMjb_SvV7jiuapLLr1A-8uk9jENYkmWnpwcHCLUmYUjnzuuQSUTOY0cx9xjO-pSzwVfrqrEv-AMxb7UgQNePKing-cOkF25mrvymJrEs5aLY5pvHW3XjmYmj-tExRSZeJsWwFFyt_EGNkgam9Gx2DGZCB3ybk1-BZBBzKD6ogMHhkY3vZeerC5dAUv8RjxVJZUBP_9wr6Ycxim_m9O63GEcH4MCCJJZGyE_Ckg4ioqb0fOZB_AeQMgUsG8h9zo5tCK_-ZX3q5cVSmws27WQMqqF0kI5dKvdocpVwGrc0mm0eiwSFXHPtygITEvGPvP-og6cBLBX3VCI4C7D3L2PvlGt7UTmiEZsaOPJPfLVoV5RfvJx5ID3CyLjD7FIx8iFXgwfEJdajjulUuSE0SvecHaO3y9dEEsGFUgi9WLc1cNOsplxPeOk1QjUoYZHPm2MxGvZ9j9G2wYb7GIAYPe3s6HgbZHZEH73vilA2RtlUwupChfBHaxA18HqJPHInA8wnazb94Gnjhdep5UswhmMdBtGnl6bl8cvveXHJY6f_eIEbEXm4qEs-qvqdqz3e-NjXTqb18BknQD79Npv3963SQduPeWEzz5TlFoqBXqPROx1U3MMQvHIIGu988dA-OszWTDyovY1yDkXRNqW5flJ8taID-Dpl0sDwNJPxq4ixnrlwQUG8FbMyGXVXdVbsykOoIJnqBZ-V69nzk9AqjjxcrRtzApR0zn8xh103WpQpB5BMkqwVOyWIkMkYQ0u0Ph5S3u4k5LmjqO-4oXdxmRMcSOgy3WYXiFO-tXGgNEPfT5lqRiA7Q6lA0lHc06K-pyu23KR2hBkpN7WLwH0nnUjtz7_CmU=",
-                    "summary": [],
-                },
-                {
-                    "id": "msg_$REQUEST_ID",
-                    "type": "message",
-                    "status": "completed",
-                    "content": [
-                        {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"}
-                    ],
-                    "phase": "final_answer",
-                    "role": "assistant",
-                },
-            ],
-            "parallel_tool_calls": True,
-            "presence_penalty": 0.0,
-            "previous_response_id": None,
-            "prompt_cache_key": None,
-            "prompt_cache_retention": "24h",
-            "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
-            "safety_identifier": None,
-            "service_tier": "default",
-            "store": True,
-            "temperature": 1.0,
-            "text": {"format": {"type": "text"}, "verbosity": "medium"},
-            "tool_choice": "auto",
-            "tool_usage": {
-                "image_gen": {
-                    "input_tokens": 0,
-                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
-                    "output_tokens": 0,
-                    "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
-                    "total_tokens": 0,
-                },
-                "web_search": {"num_requests": 0},
-            },
-            "tools": [],
-            "top_logprobs": 0,
-            "top_p": 0.98,
-            "truncation": "disabled",
-            "usage": {
-                "input_tokens": 1840,
-                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-                "output_tokens": 412,
-                "output_tokens_details": {"reasoning_tokens": 0},
-                "total_tokens": 2252,
-            },
-            "user": None,
-            "metadata": {},
-        },
-    ),
-    expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        spend=0.00060366, input_cost=3.66e-06, output_cost=0.0006, prompt_tokens=6, completion_tokens=50
     ),
 )
 
@@ -12404,7 +12596,7 @@ GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM: Final = CostTrackingTestCase(
         ),
     ),
     expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -12420,7 +12612,7 @@ GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON: Final = CostTrackingTestCase(
     },
     response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
     expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -12437,7 +12629,7 @@ GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM: Final = CostTrackingTestCase(
     },
     response=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM.response,
     expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -12450,7 +12642,7 @@ GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON: Final = CostTrackingTestCase(
     request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
     response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
     expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -12462,7 +12654,7 @@ GPT_6_1_TERRA_CHAT_BRIDGED_JSON: Final = CostTrackingTestCase(
     request={"model": "$MODEL", "messages": [{"role": "user", "content": "responses native fixture"}], "stream": False},
     response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
     expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -12532,7 +12724,7 @@ GPT_6_1_TERRA_CACHE_READ: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.01167128, input_cost=0.00464128, output_cost=0.00703, prompt_tokens=12928, completion_tokens=380
+        spend=0.003249032, input_cost=0.001292032, output_cost=0.001957, prompt_tokens=12928, completion_tokens=380
     ),
 )
 
@@ -12603,253 +12795,11 @@ GPT_6_1_TERRA_CACHE_WRITE_5M: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.06623, input_cost=0.0592, output_cost=0.00703, prompt_tokens=12928, completion_tokens=380
-    ),
-)
-
-GPT_6_1_TERRA_REASONING: Final = CostTrackingTestCase(
-    name="gpt-6.1-terra-reasoning",
-    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gpt-6.1-terra",
-    request={
-        "model": "$MODEL",
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
-                        "single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "6450817d8662 summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
-        "stream": False,
-        "reasoning_effort": "medium",
-        "allowed_openai_params": ["reasoning_effort"],
-    },
-    response=JsonResponse(
-        content_type="application/json",
-        body={
-            "id": "chatcmpl-$REQUEST_ID",
-            "object": "chat.completion",
-            "created": 1793550519,
-            "model": "gpt-6.1-terra",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Please attach the material and specify the city for the weather.",
-                        "refusal": None,
-                        "annotations": [],
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 1240,
-                "completion_tokens": 4040,
-                "total_tokens": 5280,
-                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
-                "completion_tokens_details": {
-                    "reasoning_tokens": 3480,
-                    "audio_tokens": 0,
-                    "accepted_prediction_tokens": 0,
-                    "rejected_prediction_tokens": 0,
-                },
-            },
-            "service_tier": "default",
-            "system_fingerprint": None,
-        },
-    ),
-    expected=ExactExpected(
-        spend=0.079328, input_cost=0.004588, output_cost=0.07474, prompt_tokens=1240, completion_tokens=4040
-    ),
-)
-
-GPT_6_1_TERRA_SERVICE_TIER_PRIORITY: Final = CostTrackingTestCase(
-    name="gpt-6.1-terra-service_tier_priority",
-    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gpt-6.1-terra",
-    request={
-        "model": "$MODEL",
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
-                        "single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "27c98f26478e summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
-        "stream": False,
-        "service_tier": "priority",
-        "allowed_openai_params": [],
-    },
-    response=JsonResponse(
-        content_type="application/json",
-        body={
-            "id": "chatcmpl-$REQUEST_ID",
-            "object": "chat.completion",
-            "created": 1793550517,
-            "model": "gpt-6.1-terra",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Please attach the material and specify the city.",
-                        "refusal": None,
-                        "annotations": [],
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 1840,
-                "completion_tokens": 412,
-                "total_tokens": 2252,
-                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
-                "completion_tokens_details": {
-                    "reasoning_tokens": 0,
-                    "audio_tokens": 0,
-                    "accepted_prediction_tokens": 0,
-                    "rejected_prediction_tokens": 0,
-                },
-            },
-            "service_tier": "fast",
-            "system_fingerprint": None,
-        },
-    ),
-    expected=ExactExpected(
-        spend=0.02886, input_cost=0.013616, output_cost=0.015244, prompt_tokens=1840, completion_tokens=412
-    ),
-)
-
-GPT_6_1_TERRA_TOOL_CALL: Final = CostTrackingTestCase(
-    name="gpt-6.1-terra-tool_call",
-    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gpt-6.1-terra",
-    request={
-        "model": "$MODEL",
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
-                        "single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "29a8fbc85239 summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
-        "stream": False,
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the current weather and a short forecast for a city.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "city": {"type": "string", "description": "City name"},
-                            "days": {"type": "integer", "description": "Forecast horizon in days"},
-                            "units": {"type": "string", "enum": ["metric", "imperial"]},
-                        },
-                        "required": ["city"],
-                    },
-                },
-            }
-        ],
-        "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
-        "reasoning_effort": "none",
-        "allowed_openai_params": ["tool_choice", "reasoning_effort"],
-    },
-    response=JsonResponse(
-        content_type="application/json",
-        body={
-            "id": "chatcmpl-$REQUEST_ID",
-            "object": "chat.completion",
-            "created": 1793553086,
-            "model": "gpt-6.1-terra",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call_$REQUEST_ID",
-                                "type": "function",
-                                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
-                            }
-                        ],
-                        "refusal": None,
-                        "annotations": [],
-                    },
-                    "finish_reason": "tool_calls",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 1840,
-                "completion_tokens": 412,
-                "total_tokens": 2252,
-                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
-                "completion_tokens_details": {
-                    "reasoning_tokens": 0,
-                    "audio_tokens": 0,
-                    "accepted_prediction_tokens": 0,
-                    "rejected_prediction_tokens": 0,
-                },
-            },
-            "service_tier": "default",
-            "system_fingerprint": None,
-        },
-    ),
-    expected=ExactExpected(
-        spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        spend=0.018437, input_cost=0.01648, output_cost=0.001957, prompt_tokens=12928, completion_tokens=380
     ),
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
-    GPT_6_1_TERRA_INPUT_TEXT,
-    GPT_6_1_TERRA_STREAM,
-    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
     GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM,
     GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON,
     GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM,
@@ -12857,9 +12807,45 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_1_TERRA_CHAT_BRIDGED_JSON,
     GPT_6_1_TERRA_CACHE_READ,
     GPT_6_1_TERRA_CACHE_WRITE_5M,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
+    GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
+    GPT_4O_MINI_TTS_SPEECH,
+    GPT_6_1_TERRA_INPUT_TEXT,
+    GPT_6_1_TERRA_STREAM,
     GPT_6_1_TERRA_REASONING,
-    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
     GPT_6_1_TERRA_TOOL_CALL,
+    GPT_6_1_TERRA_SERVICE_TIER_FLEX,
+    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_TOOL_CALL,
+    GPT_6_1_SOL_TOOL_CALL,
+    GPT_6_LUNA_PROMPT_CACHE_WRITE,
+    GPT_6_LUNA_PROMPT_CACHE_READ,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_SOL_PROMPT_CACHE_READ,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_ASTRA_PROMPT_CACHE_WRITE,
+    GPT_6_ASTRA_PROMPT_CACHE_READ,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_1_SOL_PROMPT_CACHE_READ,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_TERRA_PROMPT_CACHE_WRITE,
+    GPT_6_1_TERRA_PROMPT_CACHE_READ,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    TEXT_EMBEDDING_3_LARGE_DIMENSIONS,
     GATEWAY_REPORTED_COST,
     GATEWAY_REPORTED_COST_STREAM,
     GATEWAY_REPORTED_COST_OPERATOR_PRICED,
@@ -12989,6 +12975,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_UPSTREAM_500_ZERO_SPEND,
     GPT_5_6_UPSTREAM_429_ZERO_SPEND,
     WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND,
+    WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE,
     WHISPER_VERBOSE_NEXT_TRANSCRIPTIONS_DURATION,
     GPT_4O_TRANSCRIBE_NEXT_TRANSCRIPTIONS_TOKENS,
     TTS_NEXT_SPEECH_PER_CHARACTER,
@@ -13112,8 +13099,75 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM,
 )
 
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
+    GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
+    GPT_4O_MINI_TTS_SPEECH,
+    GPT_6_1_TERRA_INPUT_TEXT,
+    GPT_6_1_TERRA_STREAM,
+    GPT_6_1_TERRA_REASONING,
+    GPT_6_1_TERRA_TOOL_CALL,
+    GPT_6_1_TERRA_SERVICE_TIER_FLEX,
+    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_TOOL_CALL,
+    GPT_6_1_SOL_TOOL_CALL,
+    GPT_6_LUNA_PROMPT_CACHE_WRITE,
+    GPT_6_LUNA_PROMPT_CACHE_READ,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_SOL_PROMPT_CACHE_READ,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_ASTRA_PROMPT_CACHE_WRITE,
+    GPT_6_ASTRA_PROMPT_CACHE_READ,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_1_SOL_PROMPT_CACHE_READ,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_TERRA_PROMPT_CACHE_WRITE,
+    GPT_6_1_TERRA_PROMPT_CACHE_READ,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    TEXT_EMBEDDING_3_LARGE_DIMENSIONS,
+    GPT_6_LUNA_INPUT_TEXT,
+    GPT_6_LUNA_STREAM,
+    GPT_6_LUNA_REASONING,
+    GPT_6_LUNA_TOOL_CALL,
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    GPT_6_SOL_INPUT_TEXT,
+    GPT_6_SOL_STREAM,
+    GPT_6_SOL_REASONING,
+    GPT_6_SOL_TOOL_CALL,
+    GPT_6_SOL_SERVICE_TIER_FLEX,
+    GPT_6_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_SOL_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_INPUT_TEXT,
+    GPT_6_ASTRA_STREAM,
+    GPT_6_ASTRA_REASONING,
+    GPT_6_ASTRA_SERVICE_TIER_FLEX,
+    GPT_6_ASTRA_SERVICE_TIER_PRIORITY,
+    GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
+    GPT_6_1_SOL_INPUT_TEXT,
+    GPT_6_1_SOL_STREAM,
+    GPT_6_1_SOL_REASONING,
+    GPT_6_1_SOL_SERVICE_TIER_FLEX,
+    GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
+)
+
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
-    StreamParityTestCase(plain=GPT_6_1_TERRA_INPUT_TEXT, streamed=GPT_6_1_TERRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM),
     StreamParityTestCase(plain=GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM),
     StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
@@ -13158,6 +13212,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
     StreamParityTestCase(plain=GPT_5_6_TERRA_INPUT_TEXT, streamed=GPT_5_6_TERRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_TERRA_INPUT_TEXT, streamed=GPT_6_1_TERRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM),
     StreamParityTestCase(plain=GPT_6_LUNA_RESPONSES_NATIVE_JSON, streamed=GPT_6_LUNA_RESPONSES_NATIVE_STREAM),
     StreamParityTestCase(plain=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM),

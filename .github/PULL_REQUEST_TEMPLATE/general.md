@@ -6,18 +6,12 @@
 
 ## Handwritten 1-3 sentence description
 
-<!-- The PR author rewrites this in their own words before asking for review. Being able to sum up the PR in a few
-     plain sentences proves the author understands what it does, and human-written technical English is far easier
-     for a reviewer to parse than AI-written English
-     An AI agent may draft a starting point here, but always wraps its draft in the make-me-human-readable tags below,
-     backticks included so the tags stay visible on GitHub, so nobody mistakes it for the author's words. The author rewrites it in their own words and deletes the tags.
-     Tags still present at review time mean the summary is AI-written and has not been rewritten yet
+<!-- The author writes this in their own words, and it can be left empty. AI agents never write here and leave the
+     placeholder line below as is, and when updating an existing PR they keep whatever the author wrote. Keep this heading
      Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
      No bullets, tables, or code names here. Everything else goes inside the Details block below -->
 
-`<make-me-human-readable>`
-<blah>
-`</make-me-human-readable>`
+[insert handwritten description here]
 
 <details>
 <summary>Details</summary>
@@ -99,6 +93,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      Otherwise proof must be fully e2e, no mocks, with real provider calls where applicable. Pytest alone is insufficient. The following format applies to live proof
      Show only the latest proof. Before uses the merge base and After the tested tip. Rerun affected QA after behavior changes. Verified neutral diffs may carry proof with the tested SHA, current tip, equivalence reason and focused checks, following AGENTS.md and /qa
      Use matching Before/After case headings with numbered commands and observed output. Put shared setup above them. For one case, omit case headings
+     A reviewer must be able to rerun every case from the body alone, so the shared setup gives the proxy start command, the config.yaml, env var names (never values) and the client code or curl used, all exactly as run. Wrap any block longer than about 20 lines in a collapsed <details> with a one-line summary
 
 ### Before (<hash>)
 

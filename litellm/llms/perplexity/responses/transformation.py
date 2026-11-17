@@ -89,7 +89,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         """Handle preset/ model prefix: send as {"preset": name} instead of {"model": name}."""
         input = self._ensure_message_type(input)
         if model.startswith("preset/"):
-            input = self._validate_input_param(input, drops_set_created_by=drops_params(litellm_params))
+            input = self._validate_input_param(input, drop_params=drops_params(litellm_params))
             data: Final[dict] = {
                 "preset": model[len("preset/") :],
                 "input": input,

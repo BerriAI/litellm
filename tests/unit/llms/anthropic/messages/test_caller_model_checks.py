@@ -1,4 +1,5 @@
-from collections.abc import Mapping, Sequence
+import functools
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
 
 import pytest
@@ -24,14 +25,14 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import run_centralized_common_checks
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
-    RateLimitDescriptor,
     RateLimitResponse,
     RateLimitUnverifiableError,
+    caller_model_rate_limit_response,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.router import Router
 from litellm.types.agents import AgentResponse
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
 
 CLASSIFIER: Final = "classifier"
@@ -137,38 +138,12 @@ class _RecordingRateLimiter:
     def __init__(self, overall_code: str = "OK", failure: Exception | None = None) -> None:
         self.overall_code = overall_code
         self.failure = failure
-        self.read_only: bool | None = None
+        self.checked: tuple[str, ...] = ()
 
-    def create_rate_limit_descriptors(
-        self,
-        *,
-        user_api_key_dict: UserAPIKeyAuth,
-        data: Mapping[str, str],
-        rpm_limit_type: object,
-        tpm_limit_type: object,
-        model_has_failures: bool,
-    ) -> list[RateLimitDescriptor]:
-        return [{"key": "api_key", "value": "k", "rate_limit": {"requests_per_unit": 1, "window_size": 60}}]
-
-    def _add_team_model_rate_limit_descriptor_from_metadata(
-        self, *, user_api_key_dict: UserAPIKeyAuth, requested_model: str, descriptors: Sequence[RateLimitDescriptor]
-    ) -> None:
-        return None
-
-    def _add_project_model_rate_limit_descriptor_from_metadata(
-        self, *, user_api_key_dict: UserAPIKeyAuth, requested_model: str, descriptors: Sequence[RateLimitDescriptor]
-    ) -> None:
-        return None
-
-    def create_organization_rate_limit_descriptor(
-        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None = None
-    ) -> list[RateLimitDescriptor]:
-        return []
-
-    async def should_rate_limit(
-        self, *, descriptors: Sequence[RateLimitDescriptor], parent_otel_span: object, read_only: bool
+    async def caller_model_rate_limit_response(
+        self, user_api_key_dict: UserAPIKeyAuth, model: str
     ) -> RateLimitResponse:
-        self.read_only = read_only
+        self.checked = (*self.checked, model)
         if self.failure is not None:
             raise self.failure
         return {"overall_code": self.overall_code, "statuses": []}
@@ -189,12 +164,12 @@ async def test_a_full_rate_limit_window_denies_for_now(limiter: _RecordingRateLi
     result: Final = await rate_limit_verdict(
         user_api_key_auth=UserAPIKeyAuth(api_key="k"),
         model=CLASSIFIER,
-        limiter=limiter,
+        check=limiter.caller_model_rate_limit_response,
         unverifiable=RateLimitUnverifiableError,
     )
 
     assert result == verdict
-    assert limiter.read_only is True
+    assert limiter.checked == (CLASSIFIER,)
 
 
 _ProxyRow = (
@@ -298,15 +273,19 @@ async def test_a_managed_agent_reaches_the_classifier_only_through_a_grant_for_i
     assert await caller_model_verdict(_managed_agent(object_permission), CLASSIFIER, llm_router=None) == verdict
 
 
-def _limiter() -> PROXY_MaxParallelRequestsHandler_v3:
-    return PROXY_MaxParallelRequestsHandler_v3(
+def _limiter() -> RustParallelRequestLimiter:
+    return RustParallelRequestLimiter(
         internal_usage_cache=InternalUsageCache(dual_cache=DualCache()),
         model_group_resolver=lambda model: None,
         fail_closed_resolver=lambda: False,
     )
 
 
-async def _admit(limiter: PROXY_MaxParallelRequestsHandler_v3, caller: UserAPIKeyAuth, model: str) -> None:
+def _check(limiter: RustParallelRequestLimiter) -> Callable[[UserAPIKeyAuth, str], Awaitable[RateLimitResponse]]:
+    return functools.partial(caller_model_rate_limit_response, limiter)
+
+
+async def _admit(limiter: RustParallelRequestLimiter, caller: UserAPIKeyAuth, model: str) -> None:
     await limiter.async_pre_call_hook(
         user_api_key_dict=caller, cache=DualCache(), data={"model": model}, call_type="acompletion"
     )
@@ -321,7 +300,7 @@ async def test_the_parent_turn_holding_the_keys_only_rpm_slot_leaves_the_classif
         await _admit(limiter, caller, "kimi-k3")
 
     verdict: Final = await rate_limit_verdict(
-        user_api_key_auth=caller, model=CLASSIFIER, limiter=limiter, unverifiable=RateLimitUnverifiableError
+        user_api_key_auth=caller, model=CLASSIFIER, check=_check(limiter), unverifiable=RateLimitUnverifiableError
     )
 
     assert verdict == "allowed"
@@ -332,12 +311,12 @@ async def test_a_full_per_model_rpm_limit_on_the_classifier_still_denies_for_now
     limiter: Final = _limiter()
     caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-model-rpm"), metadata={"model_rpm_limit": {CLASSIFIER: 1}})
     before: Final = await rate_limit_verdict(
-        user_api_key_auth=caller, model=CLASSIFIER, limiter=limiter, unverifiable=RateLimitUnverifiableError
+        user_api_key_auth=caller, model=CLASSIFIER, check=_check(limiter), unverifiable=RateLimitUnverifiableError
     )
     await _admit(limiter, caller, CLASSIFIER)
 
     after: Final = await rate_limit_verdict(
-        user_api_key_auth=caller, model=CLASSIFIER, limiter=limiter, unverifiable=RateLimitUnverifiableError
+        user_api_key_auth=caller, model=CLASSIFIER, check=_check(limiter), unverifiable=RateLimitUnverifiableError
     )
 
     assert (before, after) == ("allowed", "denied_for_now")
@@ -398,7 +377,7 @@ async def test_a_sub_call_reserves_nothing_against_the_callers_budget(
     proxy_auth_state.serve(_classifier_router(cost_per_token=0.001))
     caller: Final = UserAPIKeyAuth(api_key="sk-live", spend=0.0, max_budget=10.0)
     counter_key: Final = f"spend:key:{caller.token}"
-    await proxy_server.spend_counter_cache.async_set_cache(counter_key, 0.0)
+    proxy_server.spend_counter_store.set_local(counter_key, 0.0)
     request: Final = Request(
         scope={"type": "http", "method": "POST", "path": "/v1/messages", "headers": [], "query_string": b""}
     )
@@ -410,7 +389,7 @@ async def test_a_sub_call_reserves_nothing_against_the_callers_budget(
 
     await run_centralized_common_checks(caller, request, priced_body, "/v1/messages", sub_call=sub_call)
 
-    counter: Final = await proxy_server.spend_counter_cache.async_get_cache(counter_key)
+    counter: Final = proxy_server.spend_counter_store.get_local(counter_key)
     assert (counter > 0, caller.budget_reservation is not None) == (reserved, reserved)
 
 

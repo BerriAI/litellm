@@ -14,11 +14,16 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
+from litellm.exceptions import BadRequestError
 from litellm.llms.anthropic.count_tokens.transformation import (
+    COUNT_TOKEN_OPTION_NAMES,
     AnthropicCountTokensConfig,
+    without_dropped_paths,
 )
+from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
@@ -26,6 +31,8 @@ from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAn
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
+from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -50,20 +57,30 @@ COMPACTED_HISTORY = [
     "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
 )
 @pytest.mark.parametrize(
-    ("image_url", "source"),
+    ("image_url", "block"),
     (
-        ("data:image/png;base64,aW1hZ2U=", {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}),
-        ({"url": "data:image/png;base64,aW1hZ2U="}, {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}),
+        (
+            "data:image/png;base64,aW1hZ2U=",
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+        ),
+        (
+            {"url": "data:image/png;base64,aW1hZ2U="},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+        ),
         (
             {"url": "data:image/png;base64,aW1hZ2U=", "format": "image/jpeg", "detail": "high"},
-            {"type": "base64", "media_type": "image/jpeg", "data": "aW1hZ2U="},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "aW1hZ2U="}},
+        ),
+        (
+            "data:application/pdf;base64,JVBERi0=",
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
         ),
     ),
 )
 def test_count_translates_openai_images_without_mutating_input(
     config_type: type[AnthropicCountTokensConfig],
     image_url: str | dict[str, JsonValue],
-    source: dict[str, JsonValue],
+    block: dict[str, JsonValue],
 ) -> None:
     cache_control: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
     messages: Final[list[dict[str, JsonValue]]] = [{
@@ -81,7 +98,7 @@ def test_count_translates_openai_images_without_mutating_input(
         "model": "claude-opus-5-5", "messages": [{
             "role": "user", "content": [
                 {"type": "text", "text": "Count this image"},
-                {"type": "image", "source": source, "cache_control": cache_control},
+                {**block, "cache_control": cache_control},
             ],
         }],
     }
@@ -547,6 +564,8 @@ async def _counted_body(
     tools: list[dict[str, JsonValue]] | None,
     messages_format: TokenCountMessagesFormat,
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    model: str = "claude-opus-5-5",
 ) -> tuple[TokenCountResponse | None, tuple[dict[str, JsonValue], ...]]:
     sent: Final[SimpleQueue[bytes]] = SimpleQueue()
 
@@ -557,14 +576,15 @@ async def _counted_body(
     with respx.mock:
         respx.post(count_endpoint).mock(side_effect=count)
         result: Final = await counter_type().count_tokens(
-            model_to_use="claude-opus-5-5",
+            model_to_use=model,
             messages=messages,
             contents=None,
             deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
-            request_model="claude-opus-5-5",
+            request_model=model,
             tools=tools,
             messages_format=messages_format,
             chat_params=chat_params,
+            count_options=count_options,
         )
     return result, tuple(TypeAdapter(dict[str, JsonValue]).validate_json(sent.get()) for _ in range(sent.qsize()))
 
@@ -789,6 +809,177 @@ async def test_counter_rejects_input_chat_translation_would_leave_out_without_ca
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @_COUNTERS
+@pytest.mark.parametrize(
+    ("messages_format", "message", "problem"),
+    (
+        ("anthropic", {"role": "user"}, "Message 1 must have a 'content' field"),
+        ("anthropic", {"content": "Hello"}, "Message 1 must have a 'role' field"),
+        ("openai", {"content": "Hello"}, "Message 1 must have a 'role' field"),
+    ),
+    ids=("anthropic-without-content", "anthropic-without-role", "openai-without-role"),
+)
+async def test_counter_rejects_a_message_anthropic_rejects_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages_format: TokenCountMessagesFormat,
+    message: dict[str, JsonValue],
+    problem: str,
+) -> None:
+    result, bodies = await _counted_body(
+        counter_type, count_endpoint, [{"role": "user", "content": "Hi"}, message], None, messages_format
+    )
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert result.error_message == problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("messages", "problem"),
+    (
+        ([{"role": "system"}, {"role": "user", "content": "Hi"}], "Message 0 must have a 'content' field"),
+        ([{"role": "developer"}, {"role": "user", "content": "Hi"}], "Message 0 must have a 'content' field"),
+        ([{"role": "user", "content": "Hi"}, {}], "Message 1 must have a 'role' field"),
+        (
+            [{"role": "user"}, _CHAT_TOOL_TURNS[2], {"role": "tool", "tool_call_id": "call_1"}],
+            "Message 2 must have a 'content' field",
+        ),
+        ([{"role": "assistant"}], "At least one non-system message with content is required"),
+        (
+            [_CHAT_TOOL_TURNS[0], {"role": "assistant", "content": None}],
+            "At least one non-system message with content is required",
+        ),
+    ),
+    ids=(
+        "system-without-content",
+        "developer-without-content",
+        "empty-message",
+        "tool-result-without-content",
+        "lone-assistant-without-content",
+        "nothing-left-after-system",
+    ),
+)
+async def test_counter_names_the_chat_message_chat_translation_cannot_send(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages: list[dict[str, JsonValue]],
+    problem: str,
+) -> None:
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert result.error_message == problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize("role", ([], {"name": "user"}))
+async def test_counter_rejects_a_chat_message_with_a_non_string_role_before_the_provider_call(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    role: JsonValue,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": role, "content": "Hi", "name": "critic"}]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_blames_the_message_chat_translation_fails_on_not_a_null_content_tool_result(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    messages: Final = [
+        *_CHAT_TOOL_TURNS[1:3],
+        {"role": "tool", "tool_call_id": "call_1", "content": None},
+        {"role": "tool", "content": "sunny"},
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert result.error_message is not None
+    assert "'tool_call_id'" in result.error_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    "message", ({"role": "user"}, {"role": "user", "content": None}, {"role": "system", "content": None})
+)
+async def test_counter_counts_a_chat_message_without_content_as_chat_inference_sends_it(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    message: dict[str, JsonValue],
+) -> None:
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, message]
+    inference: Final = AnthropicConfig().transform_request(
+        model="claude-opus-5-5", messages=deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert [body["messages"] for body in bodies] == [inference["messages"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize("role", ("developer", "critic", [], {"name": "user"}))
+async def test_counter_sends_a_null_content_turn_chat_translation_cannot_send_to_anthropic_as_given(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    role: JsonValue,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": role, "content": None}, {"role": "user", "content": "Hi"}]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert result is not None
+    assert result.error is False
+    assert [body["messages"] for body in bodies] == [messages]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_counts_a_chat_tool_call_turn_sent_without_a_content_key(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    turns: Final = [
+        {key: value for key, value in message.items() if (key, value) != ("content", None)}
+        for message in _CHAT_TOOL_TURNS
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, turns, None, "openai")
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert len(bodies) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
 async def test_counter_sends_a_tool_with_a_non_string_type_to_anthropic_as_given(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
 ) -> None:
@@ -909,6 +1100,150 @@ async def test_counter_sends_the_structured_output_tool_choice_and_thinking_chat
     )
 
 
+_MESSAGES_CONFIGS: Final = MappingProxyType(
+    {AnthropicTokenCounter: AnthropicMessagesConfig, AzureAIAnthropicTokenCounter: AzureAnthropicMessagesConfig}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("model", "options"),
+    (
+        ("claude-sonnet-4-5", {"tool_choice": {"type": "any"}, "thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        ("claude-haiku-5-5", {"thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        ("claude-opus-5-5", {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}),
+        ("claude-unlisted-model", {"tool_choice": {"type": "any"}, "thinking": {"type": "enabled", "budget_tokens": 2048}}),
+    ),
+)
+async def test_counter_sends_the_thinking_tool_choice_and_effort_messages_inference_sends(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    model: str,
+    options: Mapping[str, JsonValue],
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Weather in SF?"}]
+    inference: Final = _MESSAGES_CONFIGS[counter_type]().transform_anthropic_messages_request(
+        model=model,
+        messages=deepcopy(messages),
+        anthropic_messages_optional_request_params={**deepcopy(dict(options)), "max_tokens": 4096},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    result, bodies = await _counted_body(
+        counter_type, count_endpoint, messages, None, "anthropic", count_options=options, model=model
+    )
+
+    (body,) = bodies
+    assert result is not None
+    assert result.total_tokens == 31
+    assert {name: body.get(name) for name in COUNT_TOKEN_OPTION_NAMES} == {
+        name: inference.get(name) for name in COUNT_TOKEN_OPTION_NAMES
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_leaves_out_an_option_the_deployment_drops(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    sent: Final[SimpleQueue[bytes]] = SimpleQueue()
+
+    def count(request: httpx.Request) -> httpx.Response:
+        sent.put(request.content)
+        return httpx.Response(200, json={"input_tokens": 31})
+
+    with respx.mock:
+        respx.post(count_endpoint).mock(side_effect=count)
+        await counter_type().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Weather in SF?"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "api_key": "sk-ant-api03-test-key",
+                    "api_base": "https://gateway.example",
+                    "additional_drop_params": ["tool_choice"],
+                }
+            },
+            request_model="claude-sonnet-4-5",
+            messages_format="anthropic",
+            count_options={"tool_choice": {"type": "any"}, "thinking": {"type": "enabled", "budget_tokens": 2048}},
+        )
+
+    body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(sent.get())
+    assert ("tool_choice" in body, body["thinking"]) == (False, {"type": "enabled", "budget_tokens": 2048})
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize("drop_params", (True, False))
+async def test_counter_sends_thinking_display_with_the_beta_messages_inference_adds_for_it(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    drop_params: bool,
+) -> None:
+    thinking: Final[dict[str, JsonValue]] = {"type": "adaptive", "display": "updates"}
+    inference_betas: Final = AnthropicModelInfo().thinking_betas(thinking)
+    with respx.mock:
+        route: Final = respx.post(count_endpoint).mock(return_value=httpx.Response(200, json={"input_tokens": 31}))
+        await counter_type().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Weather in SF?"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "api_key": "sk-ant-api03-test-key",
+                    "api_base": "https://gateway.example",
+                    "drop_params": drop_params,
+                }
+            },
+            request_model="claude-opus-5-5",
+            messages_format="anthropic",
+            count_options={"thinking": thinking},
+        )
+
+    sent: Final = route.calls.last.request
+    assert inference_betas
+    assert frozenset(inference_betas) <= frozenset(sent.headers["anthropic-beta"].split(","))
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)["thinking"] == thinking
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_rejects_a_thinking_budget_messages_inference_rejects_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    options: Final[dict[str, JsonValue]] = {"thinking": {"type": "enabled", "budget_tokens": "lots"}}
+    with pytest.raises(BadRequestError) as rejected:
+        _MESSAGES_CONFIGS[counter_type]().transform_anthropic_messages_request(
+            model="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Weather in SF?"}],
+            anthropic_messages_optional_request_params={**deepcopy(options), "max_tokens": 4096},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    result, bodies = await _counted_body(
+        counter_type,
+        count_endpoint,
+        [{"role": "user", "content": "Weather in SF?"}],
+        None,
+        "anthropic",
+        count_options=options,
+    )
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert rejected.value.message in (result.error_message or "")
+
+
 def test_headers_add_the_compaction_beta_only_for_a_compacted_history():
     config = AnthropicCountTokensConfig()
     auth_header = {"x-api-key": "sk-ant-api03-test-key"}
@@ -1019,3 +1354,21 @@ async def test_counter_leaves_out_context_management_without_edits(context_manag
         ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
         ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
     }
+
+
+@pytest.mark.parametrize(
+    ("additional_drop_params", "kept"),
+    (
+        (["thinking", 5, None], ("output_config",)),
+        (("thinking",), ("output_config",)),
+        ("thinking", ("output_config", "thinking")),
+        (None, ("output_config", "thinking")),
+    ),
+)
+def test_drop_paths_skip_entries_and_values_inference_skips(additional_drop_params: object, kept: tuple[str, ...]) -> None:
+    options: Final[dict[str, JsonValue]] = {
+        "output_config": {"effort": "low"},
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+    }
+
+    assert without_dropped_paths(options, additional_drop_params) == {name: options[name] for name in kept}
