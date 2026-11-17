@@ -1819,12 +1819,6 @@ async def _cached_team_fields_for_key(
         return None
 
 
-def _refused_by_team_limit(rejection: HTTPException) -> bool:
-    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-
-    return isinstance(rejection, ProxyRateLimitError) and rejection.descriptor_key == "team"
-
-
 async def _reject_from_headers_before_reading_body(
     request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
 ) -> None:
@@ -1900,10 +1894,10 @@ async def _reject_from_headers_before_reading_body(
         }
     )
     try:
-        await raise_if_over_limit_before_body(limiter, rate_limited)
+        await raise_if_over_limit_before_body(
+            limiter, rate_limited, frozenset({"team"}) if team_fields is None else frozenset()
+        )
     except HTTPException as rejection:
-        if team_fields is None and _refused_by_team_limit(rejection):
-            return
         failure_data: Final = dict(await _preflight_failure_request_data(request, route, rate_limited))
         transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
             request_data=failure_data,
