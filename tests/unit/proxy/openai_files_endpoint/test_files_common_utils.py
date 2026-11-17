@@ -663,7 +663,7 @@ def _family_wildcard_of_a_model_in(known_models: set[str]) -> str:
     return f"{family}-*"
 
 
-def _team_wildcard_credentials(custom_llm_provider: str, key_wildcard: str) -> dict | None:
+def _team_wildcard_credentials(custom_llm_provider: str, key_wildcard: str) -> dict[str, object] | None:
     team_wildcard: Final = f"{custom_llm_provider}/*"
     return get_team_provider_credentials(
         llm_router=Router(
