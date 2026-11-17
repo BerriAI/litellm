@@ -1974,6 +1974,35 @@ async def test_stream_without_provider_usage_keeps_the_lts_token_counts(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("iteration", ["sync", "async"])
+async def test_stream_that_ends_without_a_finish_reason_keeps_provider_usage_when_usage_is_off(
+    iteration: Literal["sync", "async"],
+    logging_obj: Logging,
+):
+    model: Final = "gpt-4.1-mini"
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-no-finish",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="OK"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=12, total_tokens=42, cost=0.0123),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=list(chunks)),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=ChatCompletionStreamOptionsParam(include_usage=False),
+    )
+
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (30, 12, 0.0123)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "stream_options",
     [
