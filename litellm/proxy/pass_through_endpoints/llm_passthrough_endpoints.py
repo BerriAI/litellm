@@ -2623,7 +2623,13 @@ async def _relay_router_model(
                 method=request.method,
                 endpoint=endpoint,
                 request_query_params=request.query_params,
-                request_headers=dict(_relay_request_headers(request, user_api_key_dict)),
+                request_headers=dict(
+                    _relay_request_headers(
+                        request,
+                        user_api_key_dict,
+                        lambda: any("claude" in name.lower() for name in _models_served_by_group(llm_router, model)),
+                    )
+                ),
                 stream=is_streaming_request,
                 content=None,
                 data=None,
@@ -3345,14 +3351,20 @@ def _vertex_upstream_headers(
     return override_headers(_without_dropped_anthropic_betas(dropped_anthropic_betas, headers), pinned_profile)
 
 
-def _relay_request_headers(request: Request, user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
+def _relay_request_headers(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, serves_claude: Callable[[], bool]
+) -> Mapping[str, str]:
     from litellm.proxy.litellm_pre_call_utils import pinned_anthropic_user_profile_id
 
-    if pinned_anthropic_user_profile_id(user_api_key_dict) is None:
+    pinned: Final = pinned_anthropic_user_profile_id(user_api_key_dict)
+    if pinned is None:
         return request.headers
     pass_through_profile_header: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USER_PROFILE_ID_HEADER
     return MappingProxyType(
-        {name: value for name, value in dict(request.headers).items() if name != pass_through_profile_header}
+        {
+            **{name: value for name, value in dict(request.headers).items() if name != pass_through_profile_header},
+            **({pass_through_profile_header: pinned} if serves_claude() else {}),
+        }
     )
 
 

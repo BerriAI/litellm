@@ -146,3 +146,50 @@ class TestProviderSpecificHeaderUtils:
         """An empty list of scoped entries contributes nothing."""
         result = ProviderSpecificHeaderUtils.get_provider_specific_headers([], "anthropic")
         assert result == {}
+
+
+_PROFILE_ON_AZURE_AI: ProviderSpecificHeader = {
+    "custom_llm_provider": "azure_ai",
+    "extra_headers": {"anthropic-user-profile-id": "uprof_client"},
+    "claude_models_only": True,
+}
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("claude-sonnet-5-5", {"anthropic-user-profile-id": "uprof_client"}),
+        ("Claude-Opus-5-5", {"anthropic-user-profile-id": "uprof_client"}),
+        ("mistral-large-3", {}),
+        (None, {}),
+    ],
+    ids=["claude", "claude_mixed_case", "non_claude", "unknown_model"],
+)
+def test_a_claude_only_entry_reaches_claude_models_alone(model: str | None, expected: dict[str, str]) -> None:
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(_PROFILE_ON_AZURE_AI, "azure_ai", model=model)
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "yields_to_configured,configured_headers,expected",
+    [
+        (True, {"Anthropic-User-Profile-Id": "uprof_deployment"}, {}),
+        (True, {"x-tenant": "a"}, {"anthropic-user-profile-id": "uprof_client"}),
+        (True, None, {"anthropic-user-profile-id": "uprof_client"}),
+        (False, {"anthropic-user-profile-id": "uprof_deployment"}, {"anthropic-user-profile-id": "uprof_client"}),
+    ],
+    ids=["yields_to_a_configured_header", "other_configured_header", "nothing_configured", "pinned_entry_overrides"],
+)
+def test_a_yielding_entry_never_replaces_a_configured_header(
+    yields_to_configured: bool, configured_headers: dict[str, str] | None, expected: dict[str, str]
+) -> None:
+    scoped_header: ProviderSpecificHeader = {**_PROFILE_ON_AZURE_AI, "yields_to_configured": yields_to_configured}
+
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            scoped_header, "azure_ai", model="claude-sonnet-5-5", configured_headers=configured_headers
+        )
+        == expected
+    )

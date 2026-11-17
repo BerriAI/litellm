@@ -6024,6 +6024,8 @@ def completion(
             ProviderSpecificHeaderUtils.get_provider_specific_headers(
                 provider_specific_header=provider_specific_header,
                 custom_llm_provider=custom_llm_provider,
+                model=model,
+                configured_headers=headers,
             ),
         )
 

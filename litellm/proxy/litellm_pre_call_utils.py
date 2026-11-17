@@ -855,14 +855,27 @@ def _key_or_team_metadata_flag_is_true(
 
 def pinned_anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
-    return next(
-        (
-            value
-            for value in admin_mapped
-            if isinstance(value, str) and value and is_valid_anthropic_user_profile_id(value)
-        ),
-        None,
+    return next((value for value in admin_mapped if isinstance(value, str) and _usable_profile_pin(value)), None)
+
+
+def _usable_profile_pin(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and is_valid_anthropic_user_profile_id(value)
+
+
+def _warn_on_unusable_profile_pins(user_api_key_dict: UserAPIKeyAuth) -> None:
+    unusable: Final = sum(
+        1
+        for value in _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+        if value not in (None, "") and not _usable_profile_pin(value)
     )
+    if unusable:
+        verbose_proxy_logger.warning(
+            "Skipping %d stored %s value(s) on key alias %s / team %s that are not valid Anthropic user profile ids",
+            unusable,
+            ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+            user_api_key_dict.key_alias,
+            user_api_key_dict.team_id,
+        )
 
 
 def anthropic_user_profile_id(
@@ -3094,6 +3107,7 @@ async def add_litellm_data_to_request(
     if dynamic_api_version is not None:  # only pass, if set
         data["api_version"] = dynamic_api_version
 
+    _warn_on_unusable_profile_pins(user_api_key_dict)
     caller_body_profile: Final = _caller_body_anthropic_user_profile_id(_REQUEST_FIELDS.validate_python(data))
     if anthropic_user_profile_id(user_api_key_dict, {}) is not None:
         for field in ("extra_headers", "headers"):
@@ -3118,7 +3132,7 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
         data=data,
         headers=_headers,
-        user_profile_id=anthropic_user_profile_id(user_api_key_dict, _headers),
+        user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
         caller_user_profile_id=caller_body_profile,
     )
     caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
@@ -4877,10 +4891,14 @@ def _caller_body_anthropic_user_profile_id(data: Mapping[str, object]) -> str | 
     return None
 
 
-def _user_profile_id_header(providers: frozenset[str], user_profile_id: str | None) -> ProviderSpecificHeader:
+def _user_profile_id_header(
+    providers: frozenset[str], user_profile_id: str | None, yields_to_configured: bool = False
+) -> ProviderSpecificHeader:
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
         extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+        claude_models_only=True,
+        yields_to_configured=yields_to_configured,
     )
 
 
@@ -4927,7 +4945,9 @@ def add_provider_specific_headers_to_request(
                 native_anthropic_messages_only=True,
             ),
             _user_profile_id_header(
-                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers, user_profile_id
+                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers,
+                user_profile_id or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
+                yields_to_configured=user_profile_id is None,
             ),
             _user_profile_id_header(caller_credential_providers, caller_profile),
             ProviderSpecificHeader(

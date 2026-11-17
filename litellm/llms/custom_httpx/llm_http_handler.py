@@ -2632,14 +2632,16 @@ class BaseLLMHTTPHandler:
             litellm.types.utils.ProviderSpecificHeader | Sequence[litellm.types.utils.ProviderSpecificHeader] | None,
             kwargs.get("provider_specific_header", None),
         )
+        forwarded_headers: Final = kwargs.get("headers", None)
+        # Also check for extra_headers in kwargs (from config or direct calls)
+        extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
         provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
             provider_specific_header=provider_specific_header,
             custom_llm_provider=custom_llm_provider,
             native_anthropic_messages=anthropic_messages_provider_config.is_native_messages_route(),
+            model=model,
+            configured_headers=_merge_messages_header_sources(forwarded_headers, extra_headers_from_kwargs),
         )
-        forwarded_headers: Final = kwargs.get("headers", None)
-        # Also check for extra_headers in kwargs (from config or direct calls)
-        extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
         merged_headers: Final = _merge_messages_header_sources(
             forwarded_headers, extra_headers_from_kwargs, provider_specific_headers
         )

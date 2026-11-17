@@ -1625,6 +1625,7 @@ def responses(
             extra_headers=extra_headers,
             provider_specific_header=attribute_or_none(litellm_params, "provider_specific_header"),
             custom_llm_provider=custom_llm_provider,
+            model=model,
         )
         local_vars["extra_headers"] = provider_headers
 

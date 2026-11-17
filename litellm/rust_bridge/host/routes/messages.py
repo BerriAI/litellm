@@ -1427,6 +1427,8 @@ def _affinity_extra_headers(
             ),
             custom_llm_provider=provider,
             native_anthropic_messages=True,
+            model=model,
+            configured_headers=_merged_headers(headers, extra_headers),
         ),
     )
     added: Final = add_provider_affinity_header(merged, _handler_params(request), default_header)

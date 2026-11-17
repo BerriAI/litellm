@@ -313,6 +313,18 @@ async fn provider_call(
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
+    let configured_headers = extra_headers.unwrap_or_default();
+    let scoped = get_provider_specific_headers(
+        provider_specific_header.as_ref(),
+        provider.as_str(),
+        &model,
+        &configured_headers,
+    );
+    let forwarded = string_headers(Some(merge_messages_header_sources([
+        configured_headers,
+        scoped,
+    ])))?;
+
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
         shaping.settings.shape_options(),
@@ -329,12 +341,6 @@ async fn provider_call(
     let trimmed =
         without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 
-    let scoped =
-        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
-    let forwarded = string_headers(Some(merge_messages_header_sources([
-        extra_headers.unwrap_or_default(),
-        scoped,
-    ])))?;
     let configured_key = api_key.as_deref().filter(|key| !key.is_empty()).or(shaping
         .settings
         .module_api_key
