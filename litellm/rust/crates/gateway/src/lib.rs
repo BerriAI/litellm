@@ -1,5 +1,6 @@
 mod auth;
 mod error;
+mod models;
 mod redis;
 pub use error::Error;
 pub use redis::RedisClients;
@@ -19,7 +20,7 @@ use litellm_config::Config;
 use litellm_config_load::{ConfigEnvironment, environment_values};
 use litellm_env::{Lookup, ProcessEnvironment};
 use litellm_gateway_auth::Auth;
-use litellm_gateway_inference::{Gateway, ModelRouter};
+use litellm_gateway_inference::Gateway;
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     media::PublicDnsResolver,
@@ -59,7 +60,11 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     ));
     let lookup = |name: &str| environment.get(name);
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let router = ModelRouter::from_config(config, &catalog);
+    let router = litellm_gateway_inference::model_router(
+        &config.router_settings,
+        models::deployments(config),
+    )?;
+    let shaping = models::shapings(&router, config, &catalog);
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -84,7 +89,9 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let client = pool.client(&http, ClientVariant::Provider)?;
     let secrets = Arc::new(environment_secrets(environment.clone(), client));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
+    Ok(Arc::new(Gateway::new(
+        resources, http, secrets, router, shaping,
+    )?))
 }
 
 pub fn install_crypto_provider() {

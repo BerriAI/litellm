@@ -1,34 +1,29 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::{path::Path, sync::Arc};
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_inference_transcription::types::AudioTranscriptionRequest;
+use litellm_inference_transcription::{AudioTranscriptionRoute, types::AudioTranscriptionRequest};
 use serde_json::{Value, json};
 
 use crate::{
     Error, Gateway,
-    request::{self, InferenceBody},
+    request::InferenceBody,
+    routing::{self, Target},
 };
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
-    body: InferenceBody,
-) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body).await.map(Json)
-}
-
-async fn handle(
-    gateway: &Gateway,
-    identity: &AuthenticatedRequest,
     InferenceBody {
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<Value, Error> {
-    let deployment = request::resolve_deployment(gateway, "/audio/transcriptions", &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+) -> Result<Response, Error> {
     let audio = match upload {
         Some(upload) => {
             let format = upload
@@ -41,20 +36,41 @@ async fn handle(
         }
         None => body.get("audio").cloned().unwrap_or_default(),
     };
-    Ok(gateway
-        .audio_transcription
+    let route = gateway.audio_transcription.clone();
+    routing::call(
+        gateway,
+        &identity,
+        "atranscription",
+        "/audio/transcriptions",
+        body,
+        move |target| attempt(route.clone(), audio.clone(), target),
+    )
+    .await
+}
+
+async fn attempt(
+    route: AudioTranscriptionRoute,
+    audio: Value,
+    target: Target,
+) -> Result<Response, Error> {
+    let api_key = target.api_key();
+    let params = &target.deployment.params;
+    let transcript = route
         .execute(AudioTranscriptionRequest {
-            model: &deployment.model,
+            model: &params.model,
             audio,
-            api_key: deployment.api_key.as_deref(),
-            api_base: deployment.api_base.as_deref(),
-            custom_llm_provider: deployment.custom_llm_provider.as_deref(),
+            api_key: api_key.as_deref(),
+            api_base: params.api_base.as_deref(),
+            custom_llm_provider: params.custom_llm_provider.as_deref(),
             extra_headers: None,
-            optional_params: body
-                .into_iter()
+            optional_params: target
+                .body
+                .iter()
                 .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
+                .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
-            timeout: deployment.timeout,
+            timeout: target.timeout,
         })
-        .await?)
+        .await?;
+    Ok(Json(transcript).into_response())
 }

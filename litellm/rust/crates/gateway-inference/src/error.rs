@@ -23,6 +23,8 @@ pub enum Error {
     Route(#[from] InferenceError),
     #[error(transparent)]
     Ocr(#[from] OcrError),
+    #[error(transparent)]
+    Routing(litellm_router_core::Error),
     #[error("{0} is not implemented by the Rust gateway")]
     Unsupported(String),
     #[error("request body exceeds the size limit")]
@@ -79,6 +81,7 @@ impl Error {
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
+            Self::Routing(error) => routing_status(error),
         }
     }
 
@@ -141,6 +144,7 @@ impl Error {
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
+            | Self::Routing(_)
             | Self::Unsupported(_)
             | Self::BodyTooLarge
             | Self::Internal => litellm_error::Report::new(self).to_string(),
@@ -162,6 +166,19 @@ fn route_status(error: &InferenceError) -> StatusCode {
         return StatusCode::BAD_REQUEST;
     }
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+/// The status of an error the router made itself: no deployment to pick is Python's
+/// `RouterRateLimitError`, any other refusal carries the status of the exception it stands for.
+fn routing_status(error: &litellm_router_core::Error) -> StatusCode {
+    let status = match error {
+        litellm_router_core::Error::NoHealthyDeployments { .. } => Some(429),
+        litellm_router_core::Error::Attempt(failure) => failure.status,
+        other => other.pick_failure().and_then(|failure| failure.status),
+    };
+    status
+        .and_then(|status| StatusCode::from_u16(status).ok())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn ocr_status(error: &OcrError) -> StatusCode {

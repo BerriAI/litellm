@@ -4027,6 +4027,7 @@ dependencies = [
  "litellm-gateway-ui",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-messages",
  "litellm-llms",
  "litellm-model-catalog",
  "litellm-python-compat",
@@ -4035,6 +4036,7 @@ dependencies = [
  "litellm-redis-resolve",
  "litellm-redis-testing",
  "litellm-redis-types",
+ "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
@@ -4118,6 +4120,7 @@ dependencies = [
 name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -4139,9 +4142,11 @@ dependencies = [
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
- "litellm-router",
+ "litellm-router-core",
+ "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
+ "parking_lot",
  "rstest",
  "serde",
  "serde_json",
@@ -4149,6 +4154,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
+ "tracing",
  "wiremock",
 ]
 
@@ -4822,21 +4828,6 @@ dependencies = [
  "litellm-secret-value",
  "rstest",
  "url",
-]
-
-[[package]]
-name = "litellm-router"
-version = "0.1.0"
-dependencies = [
- "litellm-config",
- "litellm-inference",
- "litellm-inference-messages",
- "litellm-llms",
- "litellm-model-catalog",
- "litellm-python-compat",
- "litellm-router-types",
- "rstest",
- "serde_json",
 ]
 
 [[package]]

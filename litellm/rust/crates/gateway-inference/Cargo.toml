@@ -24,7 +24,13 @@ litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
-litellm-router.workspace = true
+litellm-router-core.workspace = true
+litellm-router-types.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+parking_lot.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
 litellm-secrets.workspace = true
 litellm-llms-types.workspace = true
 serde.workspace = true
@@ -34,7 +40,6 @@ thiserror.workspace = true
 [dev-dependencies]
 litellm-core-utils.workspace = true
 litellm-cache-memory.workspace = true
-futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
 tokio-tungstenite.workspace = true

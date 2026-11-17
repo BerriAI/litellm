@@ -1,8 +1,16 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
-use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
+use axum::{
+    Json,
+    extract::State,
+    http::HeaderMap,
+    response::{IntoResponse, Response},
+};
+use litellm_inference_ocr::{
+    OcrRoute,
+    types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
+};
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
 use litellm_llms_types::formats::ocr::OcrDocument;
 use litellm_secret_value::SecretValue;
@@ -10,33 +18,44 @@ use serde_json::Value;
 
 use crate::{
     Error, Gateway,
-    request::{self, InferenceBody},
+    request::{InferenceBody, Upload},
+    routing::{self, Target},
 };
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
     headers: HeaderMap,
-    body: InferenceBody,
-) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, &headers, body).await.map(Json)
-}
-
-async fn handle(
-    gateway: &Gateway,
-    identity: &AuthenticatedRequest,
-    headers: &HeaderMap,
     InferenceBody {
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<Value, Error> {
+) -> Result<Response, Error> {
     let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let deployment = request::resolve_deployment(gateway, "/ocr", &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+    let route = gateway.ocr.clone();
+    routing::call(gateway, &identity, "aocr", "/ocr", body, move |target| {
+        attempt(route.clone(), upload.clone(), header_format.clone(), target)
+    })
+    .await
+}
+
+async fn attempt(
+    route: OcrRoute,
+    upload: Option<Upload>,
+    header_format: Option<String>,
+    target: Target,
+) -> Result<Response, Error> {
+    let api_key = target.api_key();
+    let Target {
+        deployment,
+        body,
+        timeout,
+        ..
+    } = target;
+    let params = &deployment.params;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
             bytes: upload.bytes,
@@ -64,20 +83,21 @@ async fn handle(
         .chain(format.map(|value| ("req_format".into(), value)))
         .collect();
     let call = LiteLLMOcrRequest::from_inputs(
-        deployment.model.clone(),
+        params.model.clone(),
         document,
-        deployment.custom_llm_provider.as_deref(),
+        params.custom_llm_provider.as_deref(),
         options,
         OcrConnectionInputs {
-            api_key: deployment.api_key.clone().map(SecretValue::new),
-            api_base: deployment.api_base.clone(),
-            timeout: deployment.timeout,
+            api_key: api_key.map(SecretValue::new),
+            api_base: params.api_base.clone(),
+            timeout,
             ..Default::default()
         },
     )?;
-    let response = gateway.ocr.execute(call, &(), None).await?;
-    match response.provider_native_response {
-        Some(native) => Ok(Value::Object(native)),
-        None => Ok(response.into_json()),
-    }
+    let response = route.execute(call, &(), None).await?;
+    let body = match response.provider_native_response {
+        Some(native) => Value::Object(native),
+        None => response.into_json(),
+    };
+    Ok(Json(body).into_response())
 }

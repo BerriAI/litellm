@@ -196,10 +196,33 @@ impl Core {
         {
             return Err(Unsupported::Plugin(plugin.name.clone()).into());
         }
+        if let Some(setting) = self.host_selection_setting()
+            && !can_select
+        {
+            return Err(Unsupported::Setting(setting).into());
+        }
         for deployment in registry.deployments(&DeploymentFilter::default()) {
             self.validate_deployment(&deployment)?;
         }
         Ok(())
+    }
+
+    /// The first setting turned on that only works through the host's selection steps.
+    fn host_selection_setting(&self) -> Option<&'static str> {
+        [
+            ("enable_pre_call_checks", self.config.enable_pre_call_checks),
+            ("enable_tag_filtering", self.config.enable_tag_filtering),
+            (
+                "optional_pre_call_checks",
+                !self.config.optional_pre_call_checks.is_empty(),
+            ),
+            (
+                "model_group_affinity_config",
+                self.config.model_group_affinity,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(setting, on)| on.then_some(setting))
     }
 
     /// Reject a deployment whose provider this host cannot run a served op on.
