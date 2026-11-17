@@ -25602,6 +25602,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 7.5e-07,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-b-27b": {
@@ -25611,6 +25613,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 7.5e-07,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-coder-30b": {
@@ -25620,6 +25624,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-vl-72b": {
@@ -25630,6 +25636,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-llama-3.2-11b-vision": {
@@ -25640,6 +25648,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 7.5e-07,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-x-397b": {
@@ -25649,6 +25659,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-free-9b": {
@@ -25658,6 +25670,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-free-7b": {
@@ -25667,6 +25681,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-free-20b": {
@@ -25676,6 +25692,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-glm-5.3": {
@@ -25685,6 +25703,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-glm-5.2": {
@@ -25694,6 +25714,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-deepseek-v4-flash-0731": {
@@ -25703,6 +25725,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-kimi-k2.7-code": {
@@ -25712,6 +25736,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-qwen3.8-27b": {
@@ -25721,6 +25747,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 7.5e-07,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-qwen2.5-coder-32b": {
@@ -25730,6 +25758,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-llama-3.3-70b": {
@@ -25739,6 +25769,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-gpt-oss-120b": {
@@ -25748,6 +25780,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-gpt-oss-20b": {
@@ -25757,6 +25791,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 7.5e-07,
         "source": "https://control.dulus.ai/v1/models"
     },
     "dulus/dulus-mistral-small-3.1-24b": {
@@ -25766,6 +25802,8 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_system_messages": true,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 7.5e-07,
         "source": "https://control.dulus.ai/v1/models"
     },
     "elevenlabs/scribe_v1": {

@@ -1,5 +1,6 @@
 from typing import Final
 
+from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -37,8 +38,11 @@ class DulusConfig(OpenAIGPTConfig):
 
     with `DULUS_API_KEY` set (keys look like `dulus_sk_live_...`). Billing is
     metered in Fuel on the tokens each call actually uses; there is no public
-    per-model USD list price, so the model rows in
-    `model_prices_and_context_window.json` intentionally carry no cost fields.
+    per-model USD list price. The rows in `model_prices_and_context_window.json`
+    carry proxy-accounting defaults (relative 1x/2x/4x Fuel tiers mapped to USD
+    for budget tracking only — NOT Dulus billing). For budget-controlled proxy
+    deployments, override input_cost_per_token/output_cost_per_token in config
+    or enable `block_requests_for_models_without_pricing`.
     """
 
     @property
@@ -53,4 +57,39 @@ class DulusConfig(OpenAIGPTConfig):
     ) -> tuple[str | None, str | None]:
         resolved_api_base: Final = api_base or get_secret_str("DULUS_API_BASE") or "https://control.dulus.ai/v1"
         dynamic_api_key: Final = api_key or get_secret_str("DULUS_API_KEY")
+        if not dynamic_api_key:
+            raise AuthenticationError(
+                message="Missing DULUS_API_KEY - set DULUS_API_KEY or pass api_key. "
+                "Dulus keys look like dulus_sk_live_... . Refusing to fall back to "
+                "OPENAI_API_KEY for https://control.dulus.ai/v1.",
+                llm_provider="dulus",
+                model="dulus/*",
+            )
         return resolved_api_base, dynamic_api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        if not api_key:
+            raise AuthenticationError(
+                message="Missing DULUS_API_KEY - set DULUS_API_KEY or pass api_key. "
+                "Dulus keys look like dulus_sk_live_... .",
+                llm_provider="dulus",
+                model=model,
+            )
+        return super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
