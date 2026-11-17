@@ -1,17 +1,12 @@
 use litellm_auth_types::Error;
 use serde_json::Value;
 
-/// Python's `GOOGLE_IMPORT_ERROR_MESSAGE`, which its login raises when google-auth is not installed.
-pub const GOOGLE_SDK_MISSING: &str = "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform";
-
 pub(crate) const FILE_FAILURE_MESSAGE: &str =
     "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason.";
 
 /// The exception class Python's Vertex AI login raises, by the name a host raises it under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
 pub enum PythonException {
-    #[strum(serialize = "ImportError")]
-    Import,
     #[strum(serialize = "ValueError")]
     Value,
     /// Only LiteLLM's own check that a project is a string raises it.

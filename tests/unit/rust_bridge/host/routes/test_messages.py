@@ -3193,7 +3193,6 @@ def _vertex_logger() -> Logging:
     [
         ("ValueError", ValueError),
         ("TypeError", TypeError),
-        ("ImportError", ImportError),
         ("OSError", OSError),
         ("google.auth.exceptions.DefaultCredentialsError", google_auth.DefaultCredentialsError),
         ("google.auth.exceptions.InvalidResource", google_auth.InvalidResource),

@@ -11,9 +11,7 @@ use litellm_secret_value::SecretValue;
 
 use litellm_auth::VertexParams;
 use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, SigV4Signer};
-use litellm_auth_gcp::vertex_messages::{
-    GOOGLE_SDK_MISSING, GoogleLoginFailure, PythonException, vertex_credentials, vertex_project,
-};
+use litellm_auth_gcp::vertex_messages::{vertex_credentials, vertex_project};
 use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
@@ -137,16 +135,12 @@ pub async fn log_in_to_vertex(
     services: &AuthServices,
     model: &str,
     validated: ValidatedEnvironment,
-    google_sdk_missing: bool,
     secrets: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<(ValidatedEnvironment, Option<String>), litellm_auth::Error> {
     let ValidatedEnvironment { headers, auth } = validated;
     let AuthScheme::GcpAccessToken { params } = auth else {
         return Ok((ValidatedEnvironment { headers, auth }, None));
     };
-    if google_sdk_missing {
-        return Err(GoogleLoginFailure::new(PythonException::Import, GOOGLE_SDK_MISSING).into());
-    }
     let login = services
         .vertex_messages
         .login(
@@ -447,7 +441,6 @@ mod tests {
 
     async fn log_in(
         forwarded: &[(&str, &str)],
-        google_sdk_missing: bool,
     ) -> Result<(ValidatedEnvironment, Option<String>), litellm_auth::Error> {
         let services = AuthServices {
             vertex_messages: VertexMessagesAuth::new(Arc::new(OnGce {
@@ -465,7 +458,6 @@ mod tests {
                     params: Box::default(),
                 },
             },
-            google_sdk_missing,
             &no_env,
         )
         .await
@@ -486,24 +478,12 @@ mod tests {
         #[case] forwarded: &[(&str, &str)],
         #[case] expected: &[(&str, &str)],
     ) {
-        let (validated, project) = log_in(forwarded, false).await.unwrap();
+        let (validated, project) = log_in(forwarded).await.unwrap();
         let authenticated = resolve_auth(&AuthServices::default(), validated, &no_env)
             .await
             .unwrap();
         assert_eq!(authenticated.headers, headers(expected));
         assert_eq!(project.as_deref(), Some("gce-project"));
-    }
-
-    #[tokio::test]
-    async fn without_google_auth_the_login_raises_python_s_import_error() {
-        let error = log_in(&[], true).await.unwrap_err();
-        assert_eq!(
-            litellm_error::find::<GoogleLoginFailure>(&error),
-            Some(&GoogleLoginFailure::new(
-                PythonException::Import,
-                GOOGLE_SDK_MISSING
-            ))
-        );
     }
 
     #[rstest]
