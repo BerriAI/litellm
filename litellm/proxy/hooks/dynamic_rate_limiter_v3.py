@@ -42,7 +42,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     BorrowingTeamModelHold,
     BorrowingTeamModelLimits,
     ModelLimitBorrower,
-    PROXY_MaxParallelRequestsHandler_v3,
+    ParallelRequestLimiterHook,
+    PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitedModel,
@@ -54,13 +55,20 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     ReservationWindowIdentity,
     WindowGuardedIncrement,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _socket_turn_tpm_windows,  # pyright: ignore[reportPrivateUsage]  # same per-turn TPM window the regular limiter checks
+    atomic_check_and_increment_by_n,
     callback_kwargs_mapping,
+    cap_output_for_limit,
     claim_request_stash_for_data,
+    estimate_request_tokens,
     get_or_create_request_stash,
     get_request_stash,
+    increment_reservation_aware_tokens,
     model_limit_borrowers,
+    rate_limited_model,
     request_stash_for_callback,
+    should_rate_limit,
+    socket_turn_tpm_windows,
+    token_rate_limit_type,
 )
 from litellm.proxy.hooks.priority_class_share import (
     DEFAULT_CLASS,
@@ -378,6 +386,19 @@ def _reserved_window(
     return next((w for w in response.get("reservation_windows", frozenset()) if w[0] == counter), None)
 
 
+def _without_counter(descriptor: RateLimitDescriptor, counter: RateLimitStatus) -> RateLimitDescriptor:
+    if (descriptor["key"], descriptor["value"]) != (counter["descriptor_key"], counter.get("descriptor_value")):
+        return descriptor
+    limits: Final = descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
+    return RateLimitDescriptor(
+        key=descriptor["key"],
+        value=descriptor["value"],
+        rate_limit={**limits, "tokens_per_unit": None}
+        if counter["rate_limit_type"] == "tokens"
+        else {**limits, "requests_per_unit": None},
+    )
+
+
 def _get_priority_settings() -> "PriorityReservationSettings":
     """
     Get the priority reservation settings, guaranteed to be non-None.
@@ -424,7 +445,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
     ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
-        self.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
+        self.v3_limiter = ParallelRequestLimiterHook(self.internal_usage_cache, time_provider=time_provider)
         self.active_teams = ActiveTeamRegistry(internal_usage_cache)
 
     def update_variables(self, llm_router: Router) -> None:
@@ -757,7 +778,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self, model: str, user_api_key_dict: UserAPIKeyAuth
     ) -> Mapping[BorrowerKind, _BorrowingTeamShare]:
         """One counter per borrower and resolved model group, so an alias and its target share the borrower's share."""
-        rate_limited: Final = self.v3_limiter.rate_limited_model(model) or RateLimitedModel(
+        rate_limited: Final = rate_limited_model(self.v3_limiter, model) or RateLimitedModel(
             requested=model, group=model
         )
         return MappingProxyType(
@@ -860,7 +881,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 return
             class_share_kind: Final = _class_share_kind(stash.priority_class_share_holder)
             group: Final = (
-                self.v3_limiter.rate_limited_model(model_group)
+                rate_limited_model(self.v3_limiter, model_group)
                 or RateLimitedModel(requested=model_group, group=model_group)
             ).group
             for kind, state in stash.borrowing_shares.items():
@@ -1055,9 +1076,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         if not descriptors:
             return
-        tpm_windows: Final = _socket_turn_tpm_windows(descriptors)
+        tpm_windows: Final = socket_turn_tpm_windows(descriptors)
         try:
-            response: Final = await self.v3_limiter.should_rate_limit(
+            response: Final = await should_rate_limit(
+                self.v3_limiter,
                 tpm_windows,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 read_only=True,
@@ -1276,7 +1298,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 for _ in held.descriptors  # comprehension-ok: one increment per held descriptor
             ),
         )
-        atomic_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
+        atomic_response: Final = await atomic_check_and_increment_by_n(
+            self.v3_limiter,
             descriptors=list(enforced_descriptors),
             increments=list(increments),
             parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -1393,17 +1416,36 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if tightest_held is not None:
             self._cap_admitted_output(tightest_held[1], tightest_held[2], data, call_type)
         if priority_descriptors and not should_enforce_priority:
-            priority_tracking_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=list(priority_descriptors),
-                increments=[per_request_increment for _ in priority_descriptors],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
             get_or_create_request_stash().rate_limit_response = RateLimitResponse(
                 overall_code=atomic_response["overall_code"],
-                statuses=atomic_response["statuses"] + priority_tracking_response["statuses"],
+                statuses=[
+                    *atomic_response["statuses"],
+                    *await self._track_priority_usage(priority_descriptors, user_api_key_dict),
+                ],
             )
         else:
             get_or_create_request_stash().rate_limit_response = atomic_response
+
+    async def _track_priority_usage(
+        self, descriptors: Sequence[RateLimitDescriptor], user_api_key_dict: UserAPIKeyAuth
+    ) -> tuple[RateLimitStatus, ...]:
+        """Count one request against each tracked priority counter. The atomic call writes nothing once any counter
+        is full, so a full counter is reported as it stands and the rest are counted without it."""
+        tracked: Final = await atomic_check_and_increment_by_n(
+            self.v3_limiter,
+            descriptors=list(descriptors),
+            increments=[{"requests": 1, "tokens": 0} for _ in descriptors],
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        full: Final = next((status for status in tracked["statuses"] if status["code"] == "OVER_LIMIT"), None)
+        if full is None:
+            return tuple(tracked["statuses"])
+        return (
+            full,
+            *await self._track_priority_usage(
+                tuple(_without_counter(descriptor, full) for descriptor in descriptors), user_api_key_dict
+            ),
+        )
 
     def _cap_admitted_output(
         self,
@@ -1416,8 +1458,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         tpm_share: Final = (
             None if enforced_team_share is None else (enforced_team_share["rate_limit"] or {}).get("tokens_per_unit")
         )
-        if team_reservation and tpm_share is not None and self.v3_limiter.get_rate_limit_type() != "input":
-            self.v3_limiter.bound_output_for_limit(data, tpm_share, call_type)
+        if team_reservation and tpm_share is not None and token_rate_limit_type() != "input":
+            cap_output_for_limit(data, tpm_share, call_type)
 
     async def _tightest_token_reservation(
         self,
@@ -1451,16 +1493,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if tpm_share is None or not data:
             return 0
         as_dispatched: Final = dict(data, model=model)
-        if self.v3_limiter.get_rate_limit_type() != "input":
-            self.v3_limiter.bound_output_for_limit(as_dispatched, tpm_share, call_type)
+        if token_rate_limit_type() != "input":
+            cap_output_for_limit(as_dispatched, tpm_share, call_type)
         try:
-            estimate: Final = await offload_token_count(self.v3_limiter.estimate_request_tokens)(
+            estimate: Final = await offload_token_count(estimate_request_tokens)(
+                self.v3_limiter,
                 data=as_dispatched,
                 model=model,
                 min_configured_tpm_limit=tpm_share,
                 call_type=call_type,
                 team_id=user_api_key_dict.team_id,
-                rate_limit_type=self.v3_limiter.get_rate_limit_type(),
+                rate_limit_type=token_rate_limit_type(),
             )
         except Exception as e:  # noqa: BLE001  # an unreadable prompt still holds the minimum so admission runs
             verbose_proxy_logger.warning(
@@ -1509,7 +1552,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         model_wide_descriptor: Final = self._create_model_tracking_descriptor(
             model=model, model_group_info=model_group_info, high_limit_multiplier=1
         )
-        response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
+        response: Final = await atomic_check_and_increment_by_n(
+            self.v3_limiter,
             descriptors=[
                 model_wide_descriptor,
                 *(
@@ -1545,8 +1589,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     async def _share_has_room(
         self, descriptor: RateLimitDescriptor, tokens: int, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
-        checked: Final = await self.v3_limiter.should_rate_limit(
-            [descriptor], parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True
+        checked: Final = await should_rate_limit(
+            self.v3_limiter, [descriptor], parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True
         )
         return all(
             status["code"] != "OVER_LIMIT"
@@ -1559,7 +1603,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> None:
         """A borrower with no limit on the target takes an empty hold, so the target's usage never settles to its
         share on the admitting model."""
-        resolved: Final = self.v3_limiter.rate_limited_model(model)
+        resolved: Final = rate_limited_model(self.v3_limiter, model)
         names: Final = (model,) if resolved is None else (model, resolved.group)
         for kind, state in get_or_create_request_stash().borrowing_shares.items():
             if kind not in borrowing and model not in state.fallback_limits:
@@ -1779,9 +1823,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             )
 
             model_group: Final = get_model_group_from_litellm_kwargs(dict(kwargs))
-            total_tokens: Final = _settled_tokens(
-                _usage_of(callback_kwargs, response_obj), self.v3_limiter.get_rate_limit_type()
-            )
+            total_tokens: Final = _settled_tokens(_usage_of(callback_kwargs, response_obj), token_rate_limit_type())
             stash: Final = request_stash_for_callback(callback_kwargs)
             team_model_tokens: Final = _borrowing_settlement(
                 stash, model_group, total_tokens, self.v3_limiter.window_size
@@ -1793,8 +1835,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     state.drop_fallback_hold(served.get(kind))
             if not model_group:
                 if team_model_tokens:
-                    await self.v3_limiter.async_increment_reservation_aware_tokens(
-                        pipeline_operations=team_model_tokens, parent_otel_span=litellm_parent_otel_span
+                    await increment_reservation_aware_tokens(
+                        self.v3_limiter,
+                        pipeline_operations=team_model_tokens,
+                        parent_otel_span=litellm_parent_otel_span,
                     )
                 return
 
@@ -1855,7 +1899,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Execute token increments with TTL preservation
             if pipeline_operations:
-                await self.v3_limiter.async_increment_reservation_aware_tokens(
+                await increment_reservation_aware_tokens(
+                    self.v3_limiter,
                     pipeline_operations=pipeline_operations,
                     parent_otel_span=litellm_parent_otel_span,
                 )
@@ -1893,8 +1938,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         for state in stash.borrowing_shares.values():
             state.clear_reservation()
         if refund:
-            await self.v3_limiter.async_increment_reservation_aware_tokens(
-                pipeline_operations=refund, parent_otel_span=user_api_key_dict.parent_otel_span
+            await increment_reservation_aware_tokens(
+                self.v3_limiter, pipeline_operations=refund, parent_otel_span=user_api_key_dict.parent_otel_span
             )
 
     async def async_log_failure_event(
@@ -1912,7 +1957,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         failed_group: Final = get_model_group_from_litellm_kwargs(dict(callback_kwargs))
         used: Final = _settled_tokens(
             _usage_of(callback_kwargs, None if isinstance(response_obj, BaseException) else response_obj),
-            self.v3_limiter.get_rate_limit_type(),
+            token_rate_limit_type(),
         )
         failed_holds: Final = _served_holds(stash, failed_group)
         refund: Final = tuple(
@@ -1925,7 +1970,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             state.clear_reservation()
             state.drop_fallback_hold(failed_holds.get(kind))
         if refund:
-            await self.v3_limiter.async_increment_reservation_aware_tokens(pipeline_operations=refund)
+            await increment_reservation_aware_tokens(self.v3_limiter, pipeline_operations=refund)
         await self._record_team_share(
             stash,
             failed_group,

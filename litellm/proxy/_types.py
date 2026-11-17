@@ -418,6 +418,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vertex_ai",
         "/cohere",
         "/cursor",
+        "/cursor-cli",
         "/gemini",
         "/anthropic",
         "/langfuse",
@@ -631,6 +632,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
+        "/get/reference_exchange_rates",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
