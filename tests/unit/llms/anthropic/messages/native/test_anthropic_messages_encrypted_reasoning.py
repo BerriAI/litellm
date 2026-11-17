@@ -122,14 +122,18 @@ def _pending_tool_turn(opening: list[dict[str, object]]) -> list[dict[str, objec
     ]
 
 
-def test_unsigned_thinking_that_opens_the_pending_tool_turn_is_left_for_the_retry() -> None:
+def test_unsigned_thinking_that_opens_the_pending_tool_turn_is_dropped_too() -> None:
     messages: Final = [
         {"role": "user", "content": "Solve it."},
         _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
         *_pending_tool_turn([{"type": "thinking", "thinking": "call ls", "signature": ""}]),
     ]
 
-    assert _transform(messages)["messages"] == messages
+    sent: Final = _transform(messages)["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
+    assert sent[3]["content"] == [{"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}]
+    assert sent[4] == messages[4]
 
 
 def test_unsigned_thinking_is_dropped_when_the_pending_tool_turn_never_opened_with_thinking() -> None:
@@ -143,3 +147,4 @@ def test_unsigned_thinking_is_dropped_when_the_pending_tool_turn_never_opened_wi
 
     assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
     assert sent[2:] == messages[2:]
+

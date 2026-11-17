@@ -788,7 +788,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                         getattr(litellm_params, "drop_params", None),
                     )
                 ),
-                custom_llm_provider=self._resolved_provider,
                 model=model,
             ),
             max_tokens=max_tokens,

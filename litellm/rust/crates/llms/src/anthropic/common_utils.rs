@@ -554,6 +554,17 @@ pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> 
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
 }
 
+fn is_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Thinking)
+        && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
+/// Python's `strip_unsignable_thinking_blocks_for_claude` once the encrypted strip has run: Claude
+/// answers 400 to a thinking block with no signature, so an open model's reasoning goes.
+pub fn strip_unsigned_thinking_blocks(messages: Vec<Message>) -> Vec<Message> {
+    retain_blocks(messages, |block| !is_unsigned_thinking_block(block))
+}
+
 /// Python's `strip_encrypted_reasoning_blocks_from_anthropic_messages`: the same strip, and a
 /// kept `redacted_thinking` block gets Claude's own `data` back from a Bedrock Converse wrapper.
 pub fn strip_encrypted_reasoning_blocks_restoring_redacted_data(
@@ -1102,6 +1113,26 @@ pub fn strip_raw_encrypted_reasoning_blocks(message: Value) -> Option<Value> {
             .filter(|block| !is_raw_encrypted_reasoning_block(block))
             .cloned()
             .map(with_native_raw_redacted_data)
+            .collect();
+        (kept == blocks || !kept.is_empty()).then_some(kept)
+    })
+}
+
+fn is_raw_unsigned_thinking_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("thinking")
+        && block
+            .get("signature")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+}
+
+/// [`strip_unsigned_thinking_blocks`] on a raw message.
+pub fn strip_raw_unsigned_thinking_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let kept: Vec<Value> = blocks
+            .iter()
+            .filter(|block| !is_raw_unsigned_thinking_block(block))
+            .cloned()
             .collect();
         (kept == blocks || !kept.is_empty()).then_some(kept)
     })
@@ -1737,6 +1768,34 @@ mod tests {
     ) {
         assert_eq!(
             strip_empty_raw_content_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
+    #[case::empty_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": ""}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::non_string_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": 5}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::signed(
+        json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]),
+        Some(json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]))
+    )]
+    #[case::redacted_kept(
+        json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]),
+        Some(json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]))
+    )]
+    #[case::only_unsigned(json!([{"type": "thinking", "thinking": "plan"}]), None)]
+    fn strip_raw_unsigned_thinking_blocks_drops_what_claude_rejects(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_raw_unsigned_thinking_blocks(turn(blocks)),
             expected.map(turn)
         );
     }
