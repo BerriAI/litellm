@@ -104204,5 +104204,328 @@
         "supports_xhigh_reasoning_effort": true,
         "thinking_always_on": true,
         "token_count_model": {"model":"anthropic.claude-opus-5-5","litellm_provider":"bedrock_mantle","region":"us-east-1"}
+    },
+    "thegrid/agent-max": {
+        "max_tokens": 128000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.6362e-06,
+        "output_cost_per_token": 1.6362e-06,
+        "cache_read_input_token_cost": 1.6362e-06,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/agent-prime": {
+        "max_tokens": 131072,
+        "max_input_tokens": 120000,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.402e-07,
+        "output_cost_per_token": 1.402e-07,
+        "cache_read_input_token_cost": 1.402e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/agent-standard": {
+        "max_tokens": 65536,
+        "max_input_tokens": 120000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 3.51e-08,
+        "output_cost_per_token": 3.51e-08,
+        "cache_read_input_token_cost": 3.51e-08,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/bytedance-pro-latest": {
+        "max_tokens": 131072,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.951e-07,
+        "output_cost_per_token": 1.951e-07,
+        "cache_read_input_token_cost": 1.951e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/claude-opus-latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.6063e-06,
+        "output_cost_per_token": 1.6063e-06,
+        "cache_read_input_token_cost": 1.6063e-06,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/code-max": {
+        "max_tokens": 128000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.5565e-06,
+        "output_cost_per_token": 1.5565e-06,
+        "cache_read_input_token_cost": 1.5565e-06,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/code-prime": {
+        "max_tokens": 131072,
+        "max_input_tokens": 120000,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.204e-07,
+        "output_cost_per_token": 1.204e-07,
+        "cache_read_input_token_cost": 1.204e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/code-standard": {
+        "max_tokens": 65536,
+        "max_input_tokens": 120000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 2.88e-08,
+        "output_cost_per_token": 2.88e-08,
+        "cache_read_input_token_cost": 2.88e-08,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/deepseek-pro-latest": {
+        "max_tokens": 384000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 384000,
+        "input_cost_per_token": 3.191e-07,
+        "output_cost_per_token": 3.191e-07,
+        "cache_read_input_token_cost": 3.191e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/gemini-pro-latest": {
+        "max_tokens": 65536,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 6.402e-07,
+        "output_cost_per_token": 6.402e-07,
+        "cache_read_input_token_cost": 6.402e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/glm-latest": {
+        "max_tokens": 131072,
+        "max_input_tokens": 917504,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3.324e-07,
+        "output_cost_per_token": 3.324e-07,
+        "cache_read_input_token_cost": 3.324e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/gpt-sol-latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.4089e-06,
+        "output_cost_per_token": 1.4089e-06,
+        "cache_read_input_token_cost": 1.4089e-06,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/kimi-latest": {
+        "max_tokens": 943718,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 943718,
+        "input_cost_per_token": 6.962e-07,
+        "output_cost_per_token": 6.962e-07,
+        "cache_read_input_token_cost": 6.962e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/minimax-latest": {
+        "max_tokens": 512000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 512000,
+        "input_cost_per_token": 1.122e-07,
+        "output_cost_per_token": 1.122e-07,
+        "cache_read_input_token_cost": 1.122e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/text-max": {
+        "max_tokens": 128000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.678e-06,
+        "output_cost_per_token": 1.678e-06,
+        "cache_read_input_token_cost": 1.678e-06,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/text-prime": {
+        "max_tokens": 131072,
+        "max_input_tokens": 120000,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.004e-07,
+        "output_cost_per_token": 1.004e-07,
+        "cache_read_input_token_cost": 1.004e-07,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
+    },
+    "thegrid/text-standard": {
+        "max_tokens": 65536,
+        "max_input_tokens": 120000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 2.95e-08,
+        "output_cost_per_token": 2.95e-08,
+        "cache_read_input_token_cost": 2.95e-08,
+        "litellm_provider": "thegrid",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ]
     }
 }

@@ -701,6 +701,7 @@ openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
 wally_models: Final[Set[str]] = set()
+thegrid_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 vispark_models: Final[Set[str]] = set()
@@ -1000,6 +1001,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             streamlake_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
+        elif value.get("litellm_provider") == "thegrid":
+            thegrid_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1184,6 +1187,7 @@ model_list = list(
     | kyma_models
     | streamlake_models
     | wally_models
+    | thegrid_models
     | zerogpu_models
     | v0_models
     | vispark_models
@@ -1317,6 +1321,7 @@ def _build_models_by_provider() -> dict:
         "kyma": kyma_models,
         "streamlake": streamlake_models,
         "wally": wally_models,
+        "thegrid": thegrid_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "vispark": vispark_models,
