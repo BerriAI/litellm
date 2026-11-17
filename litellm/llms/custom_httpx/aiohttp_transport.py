@@ -16,7 +16,7 @@ import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, Self, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -130,9 +130,7 @@ def _anchor_transport_to(stream: "AiohttpResponseStream", transport: object) -> 
     live response back to that session references the transport, so a client dropped
     mid-stream would close the session under the body. ``weakref.finalize`` holds the
     transport in its own registry rather than on the stream, which keeps the transport
-    out of the response's reference cycle (an exception carrying the response, for one)
-    so it is finalized by refcount once the anchor drops and can still schedule an async
-    close, instead of being collected in the same cyclic pass as the session it closes.
+    out of the response's reference cycle (an exception carrying the response, for one).
     """
     weakref.finalize(stream, _release_transport_anchor, transport)
 
@@ -233,11 +231,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         default_factory: Final[Callable[[], ClientSession]] = client if callable(client) else ClientSession
         self._client_factory: Callable[[], ClientSession] = session_factory or default_factory
-        self._session_finalizer: weakref.finalize[[ClientSession], None] | None = None
+        self._session_finalizer: weakref.finalize[[ClientSession], Self] | None = None
         if owns_session and isinstance(client, ClientSession):
-            self._dispose_with_transport(client)
+            self._close_session_when_collected(client)
 
-    def _dispose_with_transport(self, session: ClientSession) -> None:
+    def _close_session_when_collected(self, session: ClientSession) -> None:
         """Dispose ``session`` once this transport is freed, even when a reference cycle frees it.
 
         The finalizer registry holds the session strongly, keeping it out of the transport's cyclic garbage,
@@ -245,7 +243,12 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         """
         if self._session_finalizer is not None:
             self._session_finalizer.detach()
-        self._session_finalizer = weakref.finalize(self, _dispose_owned_session, session)
+        self._session_finalizer = weakref.finalize(self, LiteLLMAiohttpTransport._dispose_owned_session, session)
+
+    @staticmethod
+    def _dispose_owned_session(session: ClientSession) -> None:
+        with contextlib.suppress(Exception):
+            LiteLLMAiohttpTransport._close_recycled_session(session)
 
     def _rebuild_session(self) -> ClientSession:
         """
@@ -257,7 +260,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         """
         session: Final = self._client_factory()
         self._owns_session = True
-        self._dispose_with_transport(session)
+        self._close_session_when_collected(session)
         return session
 
     @classmethod
@@ -299,7 +302,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
     @classmethod
     def _close_recycled_session(cls, session: ClientSession) -> None:
-        """Deterministically dispose a ClientSession this transport is replacing.
+        """Deterministically dispose a ClientSession a transport is replacing, or owned when it was collected.
 
         Covers the three lifecycles a recycled session can be in:
         - its loop is the current running loop: schedule an async close and keep
@@ -559,8 +562,3 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         self.proxy_cache[proxy_cache_key] = proxy_url
 
         return proxy_url
-
-
-def _dispose_owned_session(session: ClientSession) -> None:
-    with contextlib.suppress(Exception):
-        LiteLLMAiohttpTransport._close_recycled_session(session)
