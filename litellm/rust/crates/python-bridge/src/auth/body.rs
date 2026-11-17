@@ -13,7 +13,8 @@ use pyo3::{
 
 const MODULE: &str = "litellm.rust_bridge.host.request_body";
 
-/// How deep a body is read. No consumer of a body reads a parameter from further down.
+/// How deep a body is read. No consumer of a body reads a parameter from further down, and a
+/// list or mapping below it reads as `TooDeep`.
 const MAX_DEPTH: usize = 32;
 
 /// The name tables the check reads, built once from the Python modules that own them.
@@ -102,7 +103,7 @@ pub(crate) fn check_request_body<'py>(
 ) -> PyResult<Option<String>> {
     let module = body.py().import(MODULE)?;
     let surface = Surface::of(route);
-    let params = root(body, &names.get().0)?;
+    let params = root(body, &names.get().0, &surface)?;
     let fallback_targets = fallback_targets
         .iter()
         .map(|target| read(target, 0))
@@ -135,12 +136,12 @@ pub(crate) fn check_request_body<'py>(
     }
 }
 
-fn root(body: &Bound<'_, PyAny>, names: &Names) -> PyResult<Params> {
+fn root(body: &Bound<'_, PyAny>, names: &Names, surface: &Surface) -> PyResult<Params> {
     entries(body)?
         .into_iter()
         .filter_map(|(key, entry)| {
             let key = text(&key)?;
-            let entry = match names.reading(&key) {
+            let entry = match names.reading(surface, &key) {
                 Reading::Unread => Ok(CallerValue::Other),
                 Reading::Shallow => Ok(shallow(&entry)),
                 Reading::Deep => read(&entry, 0),
@@ -190,8 +191,12 @@ fn shallow(value: &Bound<'_, PyAny>) -> CallerValue {
 
 fn read(object: &Bound<'_, PyAny>, depth: usize) -> PyResult<CallerValue> {
     let scalar = shallow(object);
-    if scalar != CallerValue::Other || depth >= MAX_DEPTH {
+    if scalar != CallerValue::Other {
         return Ok(scalar);
+    }
+    let nests = object.is_instance_of::<PyDict>() || object.is_instance_of::<PyList>();
+    if nests && depth >= MAX_DEPTH {
+        return Ok(CallerValue::TooDeep);
     }
     if object.is_instance_of::<PyDict>() {
         return params(object, depth + 1).map(CallerValue::Map);

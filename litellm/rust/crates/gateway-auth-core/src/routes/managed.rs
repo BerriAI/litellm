@@ -61,7 +61,7 @@ impl RouteGroups {
     }
 }
 
-fn is_managed_model_route(route: &str) -> bool {
+pub(crate) fn is_managed_model_route(route: &str) -> bool {
     MANAGED_MODEL_EXTRA_ROUTES.contains(&route)
         || MANAGED_MODEL_PREFIXES.iter().any(|prefix| {
             route

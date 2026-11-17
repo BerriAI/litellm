@@ -281,6 +281,98 @@ def test_values_that_are_not_secret_references_in_credential_params_are_allowed(
     )
 
 
+@pytest.mark.parametrize(
+    "body",
+    (
+        {"some_provider_param": "os.environ/LITELLM_MASTER_KEY"},
+        {"provider_options": {"auth": ["plain", {"token": "oidc/env/LITELLM_MASTER_KEY"}]}},
+        {"extra_body": {"some_provider_param": "os.environ/LITELLM_MASTER_KEY"}},
+        {"fallbacks": [{"model": "azure-group", "some_provider_param": "os.environ/LITELLM_MASTER_KEY"}]},
+    ),
+)
+def test_secret_reference_in_a_param_no_list_names_is_rejected_on_a_model_call(body: Mapping[str, object]) -> None:
+    with pytest.raises(ValueError, match="holds a secret reference"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", **body},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+def _nested(levels: int, innermost: object, *, as_mapping: bool) -> object:
+    if levels == 0:
+        return innermost
+    below: Final = _nested(levels - 1, innermost, as_mapping=as_mapping)
+    return {"k": below} if as_mapping else [below]
+
+
+@pytest.mark.parametrize("as_mapping", (False, True))
+@pytest.mark.parametrize("innermost", ("os.environ/LITELLM_MASTER_KEY", "plain"))
+def test_a_param_nested_deeper_than_the_check_reads_is_rejected_on_a_model_call(
+    innermost: str, as_mapping: bool
+) -> None:
+    refusal: Final = (
+        "Rejected Request: some_provider_param nests deeper than the proxy reads a request body, so it cannot be "
+        "checked for secret references."
+    )
+
+    with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "some_provider_param": _nested(33, innermost, as_mapping=as_mapping)},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("as_mapping", (False, True))
+def test_a_secret_reference_at_the_deepest_level_the_check_reads_is_still_found(as_mapping: bool) -> None:
+    deepest: Final = _nested(32, "os.environ/LITELLM_MASTER_KEY", as_mapping=as_mapping)
+
+    with pytest.raises(ValueError, match="some_provider_param holds a secret reference"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "some_provider_param": deepest},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("key", ("messages", "metadata"))
+def test_content_and_metadata_may_nest_deeper_than_the_check_reads(key: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", key: _nested(40, "os.environ/HOME", as_mapping=True)},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("route", "body"),
+    (
+        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "os.environ/HOME"}]}),
+        (
+            "/v1/chat/completions",
+            {"tools": [{"type": "function", "function": {"name": "f", "parameters": {"default": "os.environ/KEY"}}}]},
+        ),
+        ("/v1/embeddings", {"input": ["oidc/azure/ tokens explained"]}),
+        ("/key/generate", {"key_alias": "os.environ/HOME"}),
+        ("/credentials", {"credential_name": "azure", "credential_values": {"api_key": "os.environ/AZURE_API_KEY"}}),
+    ),
+)
+def test_text_no_provider_resolves_may_look_like_a_secret_reference(route: str, body: Mapping[str, object]) -> None:
+    assert is_request_body_safe(request_body=body, general_settings={}, llm_router=None, model="", route=route) is True
+
+
 def test_deployment_management_body_may_carry_a_secret_reference() -> None:
     assert (
         is_request_body_safe(
@@ -675,6 +767,53 @@ def test_a_refused_body_reads_the_same_refusal_text(
             model=model if isinstance(model, str) else "",
             route=route,
         )
+
+
+_CALLER_OWN_DEPLOYMENT: Final = MappingProxyType(
+    {"model": "openai/gpt-4o", "api_base": "https://caller.example.com", "api_key": "sk-own"}
+)
+
+
+@pytest.mark.parametrize(
+    ("router_setting", "param"),
+    (
+        ({"redis_password": "os.environ/LITELLM_MASTER_KEY"}, "redis_password"),
+        ({"redis_url": "os.environ/LITELLM_MASTER_KEY"}, "redis_url"),
+        ({"cache_kwargs": {"password": "oidc/env/LITELLM_MASTER_KEY"}}, "cache_kwargs"),
+    ),
+)
+def test_secret_reference_in_a_user_config_router_setting_is_rejected_despite_client_side_opt_in(
+    router_setting: Mapping[str, object], param: str
+) -> None:
+    user_config: Final = {**_user_config("model_list", _CALLER_OWN_DEPLOYMENT), **router_setting}
+
+    with pytest.raises(ValueError, match=f"^{re.escape(_SECRET_REFERENCE_REFUSAL.format(param=param))}$"):
+        is_request_body_safe(
+            request_body={"model": "caller-model", "user_config": user_config},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="caller-model",
+            route="/v1/chat/completions",
+        )
+
+
+def test_user_config_with_literal_router_settings_is_allowed_with_client_side_opt_in() -> None:
+    user_config: Final = {
+        **_user_config("model_list", _CALLER_OWN_DEPLOYMENT),
+        "redis_host": "cache.caller.example.com",
+        "redis_password": "caller-own-password",
+    }
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "caller-model", "user_config": user_config},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="caller-model",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -4881,30 +5020,22 @@ class TestIsRequestBodySafeNestedConfig:
         )
 
     def test_deeply_nested_config_does_not_recurse(self):
-        """Greptile P1: ``is_request_body_safe`` is iterative single-level —
-        a deeply-nested ``litellm_embedding_config`` cannot exhaust the
-        Python call stack to trigger a 500 ``RecursionError``. Build a
-        body 1000 levels deep; the validator must complete in O(1)
-        descent."""
+        """Greptile P1: a ``litellm_embedding_config`` nested 1000 levels deep cannot exhaust the call stack to
+        trigger a 500 ``RecursionError``. The check stops reading at a fixed depth and refuses what it cannot see."""
         body = {"litellm_embedding_config": {}}
         cur = body["litellm_embedding_config"]
         for _ in range(1000):
             cur["litellm_embedding_config"] = {}
             cur = cur["litellm_embedding_config"]
-        # Banned param at the deepest level shouldn't be reached — single
-        # level only.
         cur["api_base"] = "https://attacker.example.com"
 
-        # No exception raised: deeper levels aren't checked.
-        assert (
+        with pytest.raises(ValueError, match="litellm_embedding_config nests deeper than the proxy reads"):
             is_request_body_safe(
                 request_body=body,
                 general_settings={},
                 llm_router=None,
                 model="x",
             )
-            is True
-        )
 
 
 # ── observability-callback ban (root + metadata) ───────────────────────────
