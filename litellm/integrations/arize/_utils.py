@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, override
@@ -10,6 +10,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes, subscript
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
@@ -34,32 +35,40 @@ from litellm.integrations._types.open_inference import (
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: "Span", kwargs: Mapping[str, object]):
         messages: Final = kwargs.get("messages")
 
         # for /chat/completions
         # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
         if messages:
-            last_message: Final = messages[-1]
+            last_message: Final = subscript(messages, -1)
             safe_set_attribute(
                 span,
                 SpanAttributes.INPUT_VALUE,
-                last_message.get("content", ""),
+                require_attributes(last_message, _SupportsGetWithDefault, "get").get("content", ""),
             )
 
             # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
-            for idx, msg in enumerate(messages):
+            for idx, msg in enumerate(iter_items(messages)):
                 prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
                 # Set the role per message.
-                safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role"))
+                safe_set_attribute(
+                    span,
+                    f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                    require_attributes(msg, _SupportsGetWithDefault, "get").get("role"),
+                )
                 # Set the content per message.
                 safe_set_attribute(
                     span,
                     f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    msg.get("content", ""),
+                    require_attributes(msg, _SupportsGetWithDefault, "get").get("content", ""),
                 )
 
                 # Additive: emit structured tool_calls / multimodal content

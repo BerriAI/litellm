@@ -574,6 +574,11 @@ def _parse_sse_event(adapter: TypeAdapter[_SSEEventT], event_type: str, data_lin
     return None
 
 
+def _mapping_type(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    return mapping.get("type") if mapping is not None else None
+
+
 class AnthropicMessagesHandler(BaseTranslation):
     """Process Anthropic messages with guardrails.
 
@@ -698,6 +703,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index: Final = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []
+        if open_index is not None and self._is_unsigned_thinking_block(responses_so_far, open_index):
+            chunks.append(
+                _sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": open_index,
+                        "delta": {"type": "signature_delta", "signature": ""},
+                    },
+                )
+            )
         if open_index is not None:
             chunks.append(_sse("content_block_stop", {"type": "content_block_stop", "index": open_index}))
         chunks += [
@@ -729,6 +745,18 @@ class AnthropicMessagesHandler(BaseTranslation):
             _sse("message_stop", {"type": "message_stop"}),
         ]
         return chunks
+
+    @staticmethod
+    def _is_unsigned_thinking_block(responses_so_far: Sequence[object], index: int) -> bool:
+        events: Final = tuple(
+            event
+            for event in chain.from_iterable(map(AnthropicMessagesHandler._iter_sse_events, responses_so_far))
+            if event.get("index") == index
+        )
+        return any(
+            event.get("type") == "content_block_start" and _mapping_type(event.get("content_block")) == "thinking"
+            for event in events
+        ) and not any(_mapping_type(event.get("delta")) == "signature_delta" for event in events)
 
     @staticmethod
     def _content_block_state(
@@ -795,18 +823,21 @@ class AnthropicMessagesHandler(BaseTranslation):
         data: dict,  # mutable-ok: the request body the adapter reads
         *,
         keep_cache_control: bool = False,
+        keep_tool_errors: bool = False,
     ) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter(keep_cache_control=keep_cache_control).translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(
+            keep_cache_control=keep_cache_control, keep_tool_errors=keep_tool_errors
+        ).translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
             preserve_midturn_system=True,
         )
         return chat_completion_compatible_request
 
-    def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
         """
         Convert Anthropic messages request data to OpenAI-spec structured messages.
 
@@ -815,7 +846,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         messages: Final = data.get("messages")
         if messages is None:
             return None
-        chat_completion_compatible_request: Final = self._translate_to_openai(data)
+        chat_completion_compatible_request: Final = self._translate_to_openai(data, keep_tool_errors=keep_tool_errors)
         result: Final = cast(
             list[AllMessageValues],
             chat_completion_compatible_request.get("messages", []),

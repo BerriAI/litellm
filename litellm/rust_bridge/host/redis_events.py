@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
+from contextvars import Context, copy_context
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
 
 from redis import exceptions as redis_exceptions
 from typing_extensions import assert_never
 
-from litellm._internal_context import current_request_parent_otel_span
+from litellm._internal_context import current_request_parent_otel_span, service_target
 from litellm._logging import verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.types.services import ServiceTypes
@@ -74,6 +75,14 @@ def _emit(event_loop: asyncio.AbstractEventLoop | None, hook: Hook) -> None:
     event_loop.call_soon_threadsafe(_spawn, hook)
 
 
+def deadline_flush_context() -> Context:
+    """The context a request's post-call batch is reported in when its deadline sends it. It is the declaring caller's,
+    so the flush parents under that request's span, without the declaring store's target, since the flush that
+    closes the callbacks runs under none."""
+    with service_target(None):
+        return copy_context()
+
+
 def record_redis_call(
     event_loop: asyncio.AbstractEventLoop | None,
     call_type: str,
@@ -121,4 +130,13 @@ def record_redis_call(
 
 
 def record_redis_breaker(state: BreakerState) -> None:
+    match state:
+        case "open":
+            verbose_logger.warning("Redis circuit breaker OPENED, fast-failing Redis calls")
+        case "half_open":
+            verbose_logger.info("Redis circuit breaker HALF_OPEN, probing Redis")
+        case "closed":
+            verbose_logger.info("Redis circuit breaker CLOSED, Redis recovered")
+        case _:
+            assert_never(state)
     _service_logging().redis_breaker_hook(transitions_to=state, failure_class=None)
