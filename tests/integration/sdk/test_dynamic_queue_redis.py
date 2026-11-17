@@ -211,6 +211,18 @@ async def test_consecutive_successes_recover_into_a_snapshot_claimed_in_order_ah
     assert e == f == Released(arrival_after.generation)
     assert arrival_mid == Waiting(ahead=1)
 
+    assert isinstance(e, Released)
+    assert await first.report(capacity, "e", e, MatchingFailure(retry_after_ms=5_000)) is None
+    held: Final = await second.admit(WaitRequest(capacity, "late", 0), FAR)
+    clock.ms = 5_999
+    still_held: Final = await second.poll(capacity, "late")
+    clock.ms = 6_000
+    reprobed: Final = await second.poll(capacity, "late")
+
+    assert held == Waiting(probe_in_ms=5_000)
+    assert still_held == Waiting(probe_in_ms=1)
+    assert isinstance(reprobed, Probe) and reprobed.generation > e.generation
+
 
 @pytest.mark.asyncio
 async def test_a_success_from_a_superseded_generation_does_not_recover(capacity: str, workers: WorkerFactory) -> None:
