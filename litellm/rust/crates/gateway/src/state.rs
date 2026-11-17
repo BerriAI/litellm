@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::extract::FromRef;
 use litellm_config::{Config, Environment};
 use litellm_db::Pools;
+use litellm_env::Lookup;
 use litellm_gateway_inference::Gateway;
 use litellm_license::Entitlements;
 
@@ -14,6 +15,8 @@ pub struct AppState {
     pub redis: RedisClients,
     pub database: Option<Pools>,
     pub entitlements: Arc<Entitlements>,
+    /// The config's `environment_variables` in front of the process environment.
+    pub environment: Arc<dyn Lookup + Send + Sync>,
 }
 
 impl AppState {
@@ -28,6 +31,7 @@ impl AppState {
             redis,
             database,
             entitlements,
+            environment: resources.environment,
         })
     }
 
