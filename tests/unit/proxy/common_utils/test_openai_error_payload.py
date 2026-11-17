@@ -521,7 +521,7 @@ def test_a_router_rejection_is_labelled_by_the_status_it_answers_with(
 @pytest.mark.parametrize(
     "leakable",
     [
-        "sk-1234567890abcdef1234567890",
+        "sk-9876543210abcdef9876543210",
         "guard-scan.internal.corp",
         "/srv/secret/app/guard.py",
     ],

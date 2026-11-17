@@ -15261,7 +15261,7 @@ async def test_openai_compatible_backend_400_redacts_secrets_and_internal_detail
     route: str, call: Callable[[], object]
 ) -> None:
     leaks: Final = (
-        "sk-1234567890abcdef1234567890",
+        "sk-9876543210abcdef9876543210",
         "guard-scan.internal.corp",
         "/srv/secret/app/guard.py",
     )
