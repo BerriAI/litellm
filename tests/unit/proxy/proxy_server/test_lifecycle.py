@@ -24,7 +24,7 @@ import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -992,6 +992,40 @@ async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
 
     assert not stale.exists()
     assert counter.exists()
+
+
+class _PromptCacheRegistration:
+    def __init__(self) -> None:
+        self.events: tuple[str, ...] = ()
+
+    def __call__(self, settings: object, prisma: object, resources: AsyncExitStack) -> None:
+        self.events = (*self.events, "registered")
+        resources.callback(self._released)
+
+    def _released(self) -> None:
+        self.events = (*self.events, "released")
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_lifespan_registers_prompt_cache_alerts_and_releases_them_on_exit() -> None:
+    """The lifespan must still run as an async context manager, register on entry and release on exit."""
+    registration: Final = _PromptCacheRegistration()
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {
+        k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "WORKER_CONFIG")
+    } | {"LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"}
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "register_prompt_cache_alerts", registration),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                assert registration.events == ("registered",)
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+    assert registration.events == ("registered", "released")
 
 
 @pytest.mark.asyncio

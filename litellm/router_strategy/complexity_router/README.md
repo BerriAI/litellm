@@ -591,6 +591,24 @@ With the default heuristic v1, a request short-circuits, meaning it routes on th
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
 one signal. Everything else goes to the classifier, which then decides as it normally would.
 
+For coding agents with long conversations, set `heuristic_first_max_context_tokens: 8000` alongside
+`heuristic_first_max_tier`. Above that estimated size, even a short follow-up such as "why did that
+fail?" goes to the classifier. At or below the limit, the usual local-scoring rules apply. Omit the
+setting or use `null` to keep the existing behavior. The value must be a positive integer and is only
+accepted with `classifier_type: heuristic_first`.
+
+The estimate counts message text and tool-result bodies, including structured tool results, at
+roughly four characters per token. It excludes images and tool-call arguments. The classifier gets
+the same size estimate with its existing recent-turn context, not the full tool transcript. The
+limit requires a classifier decision, not a higher tier, and classifier failures still use
+`classifier_fallback`.
+
+Existing pins take precedence. With `classification_mode: user_turn`, tool continuations reuse the
+held tier and the next human ask checks the limit again. With `session_affinity: true`, the session
+pin also takes precedence on new asks. In the dashboard, set **Max conversation tokens before judge**
+under the heuristic-first classification settings. Clear the field to disable the limit. Confirm
+`llm_classifier` in the routing decision for a new ask above the limit.
+
 The signal requirement is what keeps this from quietly routing everything to your cheapest model.
 A prompt where no dimension fires scores exactly 0.0, which is below `simple_medium`, so the score
 to tier mapping calls it SIMPLE by default rather than by evidence. Around half of general traffic

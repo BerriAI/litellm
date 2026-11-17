@@ -13,10 +13,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.fallback_budget import (
     _user_api_key_auth_from_request,  # pyright: ignore[reportPrivateUsage]  # shared auth lookup for fallback checks
 )
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # the proxy's limiter type
 )
@@ -42,7 +44,18 @@ class RouterFallbackRateLimitCheck:
         if valid_token is None:
             return True
         try:
-            return await limiter.async_fallback_target_allowed(valid_token, model, request_kwargs)
+            dynamic_limiter: Final = next(
+                (cb for cb in litellm.callbacks if isinstance(cb, PROXY_DynamicRateLimitHandlerV3)), None
+            )
+            if dynamic_limiter is not None and not await dynamic_limiter.async_fallback_target_allowed(
+                valid_token, model, request_kwargs, commit=False
+            ):
+                return False
+            if not await limiter.async_fallback_target_allowed(valid_token, model, request_kwargs):
+                return False
+            return dynamic_limiter is None or await dynamic_limiter.async_fallback_target_allowed(
+                valid_token, model, request_kwargs
+            )
         except Exception as e:  # noqa: BLE001  # fail closed: a limiter failure must not hand out unchecked capacity
             verbose_proxy_logger.warning("Skipping fallback to model=%s: rate limit check failed: %s", model, e)
             return False

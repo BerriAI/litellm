@@ -12,6 +12,7 @@ class DailyActivityTable(str, Enum):
     TAG = "litellm_dailytagspend"
     ORGANIZATION = "litellm_dailyorganizationspend"
     CUSTOMER = "litellm_dailyenduserspend"
+    CUSTOMER_MEMBER = "litellm_dailycustomermemberspend"
     AGENT = "litellm_dailyagentspend"
 
 
@@ -22,6 +23,7 @@ _ENTITY_FIELDS: Mapping[DailyActivityTable, frozenset[str]] = MappingProxyType(
         DailyActivityTable.TAG: frozenset(("tag",)),
         DailyActivityTable.ORGANIZATION: frozenset(("organization_id",)),
         DailyActivityTable.CUSTOMER: frozenset(("end_user_id",)),
+        DailyActivityTable.CUSTOMER_MEMBER: frozenset(("customer_org_id", "customer_team_id", "customer_member_id")),
         DailyActivityTable.AGENT: frozenset(("agent_id",)),
     }
 )
