@@ -70,14 +70,11 @@ def _custom_generate_content_handler(provider: str) -> CustomLLM | None:
     return ProviderConfigManager.get_custom_llm_handler(provider)
 
 
-def _start_endpoint_attempt(
-    logging_obj: LiteLLMLoggingObj | None, async_call_type: CallTypes, sync_call_type: CallTypes, is_async: bool
-) -> None:
+def _start_endpoint_attempt(logging_obj: LiteLLMLoggingObj | None, marker: str, is_async: bool) -> None:
     if logging_obj is None:
         return
-    logging_obj.model_call_details.setdefault("litellm_params", {})[async_call_type.value] = is_async
-    call_type: Final = async_call_type if is_async else sync_call_type
-    logging_obj.call_type = call_type.value  # rebind-ok: a retried request logs under this attempt's endpoint
+    logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
+    logging_obj.set_logged_call_type(None)
 
 
 class GenerateContentSetupResult(LiteLLMBaseModel):
@@ -478,9 +475,7 @@ def generate_content(
     try:
         _is_async: Final = kwargs.pop("agenerate_content", False)
 
-        _start_endpoint_attempt(
-            kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content, CallTypes.generate_content, _is_async
-        )
+        _start_endpoint_attempt(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content.value, _is_async)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
@@ -624,12 +619,7 @@ async def agenerate_content_stream(
     try:
         kwargs["agenerate_content_stream"] = True
 
-        _start_endpoint_attempt(
-            kwargs.get("litellm_logging_obj"),
-            CallTypes.agenerate_content_stream,
-            CallTypes.generate_content_stream,
-            True,
-        )
+        _start_endpoint_attempt(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, True)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
@@ -730,12 +720,7 @@ def generate_content_stream(
         # Remove any async-related flags since this is the sync function
         _is_async: Final = kwargs.pop("agenerate_content_stream", False)
 
-        _start_endpoint_attempt(
-            kwargs.get("litellm_logging_obj"),
-            CallTypes.agenerate_content_stream,
-            CallTypes.generate_content_stream,
-            _is_async,
-        )
+        _start_endpoint_attempt(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, _is_async)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
