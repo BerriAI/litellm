@@ -332,6 +332,14 @@ def test_list__azure_dispatch(seams):
     _assert_only(seams.azure.list_batches, seams, "list_batches")
 
 
+def test_list__azure_forwards_after_and_limit(seams):
+    bm.list_batches(custom_llm_provider="azure", after="cur", limit=5)
+
+    kw = seams.azure.list_batches.call_args.kwargs
+    assert kw["after"] == "cur"
+    assert kw["limit"] == 5
+
+
 def test_list__vertex_ai_dispatch(seams):
     result = bm.list_batches(custom_llm_provider="vertex_ai")
 
