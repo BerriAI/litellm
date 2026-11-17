@@ -145,7 +145,12 @@ export const CUSTOM_TIER_RESTRICTIONS = {
     reason: "addModel.tierRows.restrictions.sessionAffinity",
   },
   heuristicClassifier: {
-    omit: ["heuristic_first_max_tier", "hybrid_boundary_margin", "local_heuristic"],
+    omit: [
+      "heuristic_first_max_tier",
+      "heuristic_first_max_context_tokens",
+      "hybrid_boundary_margin",
+      "local_heuristic",
+    ],
     reason: "addModel.tierRows.restrictions.heuristicClassifier",
   },
   heuristicScoring: {
