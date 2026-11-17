@@ -1972,9 +1972,17 @@ async def test_stream_without_provider_usage_keeps_the_lts_token_counts(
     )
     assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens) == (estimate if rebuilds_the_estimate else (0, 0))
 
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream_options", [ChatCompletionStreamOptionsParam(include_usage=False), None])
-async def test_async_for_over_a_sync_stream_keeps_usage_on_a_chunk_with_choices_when_usage_is_off(
+@pytest.mark.parametrize(
+    "stream_options",
+    [
+        ChatCompletionStreamOptionsParam(include_usage=True),
+        ChatCompletionStreamOptionsParam(include_usage=False),
+        None,
+    ],
+)
+async def test_async_for_over_a_sync_stream_returns_inline_usage_once(
     logging_obj: Logging,
     stream_options: ChatCompletionStreamOptionsParam | None,
 ):
