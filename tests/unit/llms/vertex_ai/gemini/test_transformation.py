@@ -1,6 +1,7 @@
 
 import json
 import uuid
+from itertools import chain
 from typing import Final, cast
 from unittest.mock import Mock
 
@@ -534,7 +535,7 @@ _WEATHER_TOOL_RESULT: Final = {"role": "tool", "tool_call_id": "call_weather", "
 
 
 def _all_parts(contents: list[ContentType]) -> list[object]:
-    return [part for content in contents for part in content["parts"]]
+    return list(chain.from_iterable(content["parts"] for content in contents))
 
 
 @pytest.mark.parametrize(

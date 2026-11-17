@@ -1,5 +1,6 @@
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2549,4 +2550,4 @@ def test_a_cached_segment_ending_on_an_empty_user_message_caches_no_blank_user_t
         vertex_location=None,
     )
 
-    assert {"text": " "} not in [part for content in cached["contents"] for part in content["parts"]]
+    assert {"text": " "} not in chain.from_iterable(content["parts"] for content in cached["contents"])
