@@ -151,7 +151,7 @@ pub async fn log_in_to_vertex(
         .await?;
     // Deliberately keeps Python's exact-key behaviour: a caller's `authorization` header in another
     // casing is not replaced, so both tokens reach the provider joined as "Bearer <caller>, Bearer
-    // <google>". Kept for parity (owner ruling 2026-11-17).
+    // <google>", as they do on main.
     Ok((
         ValidatedEnvironment {
             headers: with_python_authorization_bearer(headers, login.token.expose()),
@@ -219,20 +219,12 @@ pub async fn resolve_auth(
                 subject: "Azure AD token without a Python host",
             },
         )),
-        AuthScheme::GcpAccessToken { params } => {
-            let login = services
-                .vertex_messages
-                .login(
-                    "",
-                    vertex_credentials(&params, env_lookup),
-                    vertex_project(&params, env_lookup),
-                )
-                .await?;
-            Ok(Authenticated {
-                headers: with_python_authorization_bearer(headers, login.token.expose()),
-                signer: None,
-            })
-        }
+        // `log_in_to_vertex` logs in per model and forwards the token before auth resolves.
+        AuthScheme::GcpAccessToken { .. } => Err(litellm_auth::Error::CredentialAcquisition(
+            litellm_auth::ErrorDetail::Unresolved {
+                subject: "Vertex AI token without its per-model login",
+            },
+        )),
         AuthScheme::AwsSigV4 {
             region,
             service,
