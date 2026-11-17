@@ -5,7 +5,7 @@ import logging
 import math
 import re
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final, TypeAlias
 
 import httpx
@@ -787,6 +787,9 @@ async def test_a_billing_task_that_is_cancelled_reports_the_lost_row(
     [
         pytest.param(True, {}, id="sleep_fails"),
         pytest.param(False, {TURNS_URL: (ValueError("unexpected turns reply"),)}, id="poll_raises"),
+        pytest.param(
+            False, {f"{SESSIONS_URL}/{SESSION_ID}": (ValueError("unexpected session reply"),)}, id="costing_raises"
+        ),
     ],
 )
 async def test_a_poll_that_breaks_unexpectedly_still_logs_the_call_at_zero(
@@ -1233,3 +1236,95 @@ async def test_a_turn_row_on_the_legacy_limiter_frees_its_slot_once(local_model_
 
     with pytest.raises(ProxyRateLimitError):
         await call("5e7a9c1e-3a5c-4e7a-8c9e-1a3c5e7a9c03")
+
+
+class _LimiterClock:
+    def __init__(self) -> None:
+        self.now = CALL_TIME
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+@pytest.mark.asyncio
+async def test_a_turn_row_the_legacy_limiter_sees_a_minute_later_leaves_the_key_free(local_model_cost_map: None):
+    limiter_clock: Final = _LimiterClock()
+    limiter: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=limiter_clock
+    )
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-agents-legacy-next-minute"),
+        max_parallel_requests=1,
+        user_id="agents-user",
+        user_rpm_limit=1,
+    )
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    clock: Final = _GatedClock()
+    rows: Final = _SpendRows()
+    released: Final = asyncio.Event()
+
+    async def release_request_slot(logging_obj: LiteLLMLoggingObj) -> None:
+        await proxy_logging.arelease_slot_before_logging(logging_obj)
+        released.set()
+
+    async def call(litellm_call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=DualCache(),
+            data={"litellm_call_id": litellm_call_id},
+            call_type="pass_through_endpoint",
+        )
+
+    await call("7a9c1e3a-5c7e-4a9c-8e1a-3c5e7a9c1e01")
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, release_request_slot=release_request_slot),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "7a9c1e3a-5c7e-4a9c-8e1a-3c5e7a9c1e01",
+        metadata={
+            "user_api_key": key.api_key,
+            "user_api_key_user_id": key.user_id,
+            "user_api_key_model_max_budget": key.model_max_budget,
+        },
+        callbacks=(limiter,),
+    )
+    await asyncio.wait_for(released.wait(), timeout=5)
+    limiter_clock.now = CALL_TIME + timedelta(minutes=1)
+    clock.gate.set()
+    _ = await rows.only_row()
+
+    await call("7a9c1e3a-5c7e-4a9c-8e1a-3c5e7a9c1e02")
+    with pytest.raises(ProxyRateLimitError):
+        await call("7a9c1e3a-5c7e-4a9c-8e1a-3c5e7a9c1e03")
+
+
+async def _failing_release(logging_obj: LiteLLMLoggingObj) -> None:
+    raise RuntimeError("limiter cache is down")
+
+
+@pytest.mark.asyncio
+async def test_a_turn_row_still_bills_when_freeing_its_parallel_slot_fails(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    clock: Final = _Clock()
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, release_request_slot=_failing_release),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "8b0d2f4b-6d8f-4b0d-9f2b-4d6f8b0d2f01",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
