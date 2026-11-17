@@ -2,7 +2,7 @@
 ## Handler file for calling claude-3 on vertex ai
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -21,6 +21,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
+from ....anthropic.common_utils import merge_anthropic_beta_headers
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LABELS: Final = TypeAdapter(Mapping[object, object])
+_BETA_HEADER_VALUE: Final[TypeAdapter[str | Sequence[str] | None]] = TypeAdapter(str | Sequence[str] | None)
 
 
 def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
@@ -188,7 +190,10 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         if beta_set:
             data["anthropic_beta"] = list(beta_set)
-            headers["anthropic-beta"] = ",".join(beta_set)
+            headers["anthropic-beta"] = merge_anthropic_beta_headers(
+                _BETA_HEADER_VALUE.validate_python(_NON_DEFAULT_PARAMS.validate_python(headers).get("anthropic-beta")),
+                sorted(beta_set),
+            )
 
         return data
 

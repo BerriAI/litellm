@@ -1287,7 +1287,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if web_search_tool_used:
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
-                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                headers["anthropic-beta"] = merge_anthropic_beta_headers(
+                    user_anthropic_beta_headers, ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
         elif len(all_betas) > 0:
             headers["anthropic-beta"] = ",".join(all_betas)
 
