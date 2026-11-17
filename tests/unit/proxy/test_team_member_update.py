@@ -69,6 +69,7 @@ def happy_path_upsert(monkeypatch):
 
     class _FakeTx:
         litellm_teamtable = prisma_client.db.litellm_teamtable
+        litellm_teammembership = types.SimpleNamespace(find_many=AsyncMock(return_value=[]))
 
         async def __aenter__(self):
             return self

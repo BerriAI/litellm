@@ -27,6 +27,7 @@ from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    budget_ids_shared_by_memberships,
     member_budget_patch,
     upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
 )
@@ -35,7 +36,6 @@ from litellm.proxy.management_helpers.bulk_user_deletion import (
     _duplicate_member_indexes,  # pyright: ignore[reportPrivateUsage]  # same duplicate rule as members/bulk_delete
     _eq_filter,  # pyright: ignore[reportPrivateUsage]  # same prisma filter shape as members/bulk_delete
     _forbidden,  # pyright: ignore[reportPrivateUsage]  # same problem shape as members/bulk_delete
-    _in_filter,  # pyright: ignore[reportPrivateUsage]  # same prisma filter shape as members/bulk_delete
     _team_not_found,  # pyright: ignore[reportPrivateUsage]  # same problem shape as members/bulk_delete
     _team_users_filter,  # pyright: ignore[reportPrivateUsage]  # same prisma filter shape as members/bulk_delete
 )
@@ -77,15 +77,6 @@ def _roster_user_id(member: TeamMemberBudgetPatch, roster: Sequence[Member]) -> 
 def _team_default_budget_id(team: LiteLLM_TeamTable) -> str | None:
     raw: Final = (team.metadata or _NO_METADATA).get("team_member_budget_id")
     return raw if isinstance(raw, str) else None
-
-
-async def _shared_budget_ids(tx: "Prisma", budget_ids: frozenset[str]) -> frozenset[str]:
-    """The rows in ``budget_ids`` more than one membership points at, counted across every
-    team so a row shared with another team is protected too."""
-    if not budget_ids:
-        return frozenset()
-    rows: Final = await _membership_tx_db(tx).find_many(where=_in_filter("budget_id", budget_ids))
-    return frozenset(budget_id for budget_id in budget_ids if sum(1 for row in rows if row.budget_id == budget_id) > 1)
 
 
 class _AuditedMemberBudget(LiteLLMBaseModel):
@@ -210,7 +201,7 @@ async def bulk_update_team_member_budgets(
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
         memberships: Final = await _membership_tx_db(tx).find_many(where=team_members_filter, include=_WITH_BUDGET)
         budget_id_of: Final = MappingProxyType({m.user_id: m.budget_id for m in memberships})
-        shared: Final = await _shared_budget_ids(
+        shared: Final = await budget_ids_shared_by_memberships(
             tx, frozenset(budget_id for budget_id in budget_id_of.values() if budget_id is not None)
         )
         for index, user_id in applied:
