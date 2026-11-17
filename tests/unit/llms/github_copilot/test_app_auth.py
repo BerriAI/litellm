@@ -846,18 +846,24 @@ def test_invalid_app_configuration_fails_closed(override: Mapping[str, object]) 
         )
 
 
+@pytest.mark.parametrize("named", (False, True))
 @pytest.mark.parametrize("blank_stored_key", ("", "   "))
-def test_key_ref_is_accepted_with_blank_stored_key(blank_stored_key: str) -> None:
-    config: Final = app_config(
-        {
-            "github_copilot_auth_type": "github_app",
-            "github_copilot_app_id": _CONFIG.app_id,
-            "github_copilot_app_installation_id": _CONFIG.installation_id,
-            "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
-            "github_copilot_app_private_key": blank_stored_key,
-        }
+def test_key_ref_is_accepted_with_blank_stored_key(
+    monkeypatch: pytest.MonkeyPatch, blank_stored_key: str, named: bool
+) -> None:
+    values: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": _CONFIG.app_id,
+        "github_copilot_app_installation_id": _CONFIG.installation_id,
+        "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+        "github_copilot_app_private_key": blank_stored_key,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="copilot-app", credential_values=values, credential_info={})],
     )
-    assert config == _CONFIG
+    assert app_config({"litellm_credential_name": "copilot-app"} if named else values) == _CONFIG
 
 
 @pytest.mark.parametrize("blank", ("", "   "))

@@ -3528,6 +3528,22 @@ def test_update_github_app_validates_merged_values_before_storage(credential_sto
     update.assert_awaited_once()
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_create_github_app_never_stores_a_blank_app_field(credential_store: _InstallCredentialStore, blank: str) -> None:
+    credential_store(create=AsyncMock())
+    response: Final = _create_credential(
+        {
+            "credential_name": "copilot-app",
+            "credential_values": {**_github_app_values(), "github_copilot_app_private_key": blank},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        }
+    )
+    assert response.status_code == 200, response.text
+    listed: Final = _list_credentials()
+    assert listed.status_code == 200
+    assert "github_copilot_app_private_key" not in listed.json()["credentials"][0]["credential_values"]
+
+
 @pytest.fixture
 def app_pem() -> str:
     from cryptography.hazmat.primitives import serialization
@@ -3596,6 +3612,34 @@ def test_uploaded_app_key_replaces_reference_with_explicit_deletion(
         "github_copilot_app_private_key": app_pem,
     }
     assert app_pem not in update.await_args.kwargs["data"]["credential_values"]
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_update_github_app_treats_a_blank_app_field_as_a_deletion(
+    credential_store: _InstallCredentialStore, app_pem: str, blank: str
+) -> None:
+    uploaded: Final = {key: value for key, value in _github_app_values().items() if not key.endswith("_ref")}
+    stored: Final = _encrypted_row(
+        CredentialItem(
+            credential_name="copilot-app",
+            credential_values={**uploaded, "github_copilot_app_private_key": app_pem},
+            credential_info={"custom_llm_provider": "github_copilot"},
+        )
+    )
+    update: Final = AsyncMock()
+    credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update)
+    response: Final = _patch_credential(
+        "copilot-app",
+        {
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+            "credential_values": {
+                "github_copilot_app_private_key_ref": _github_app_values()["github_copilot_app_private_key_ref"],
+                "github_copilot_app_private_key": blank,
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _written_values(update) == _github_app_values()
 
 
 @pytest.mark.parametrize("pem", ["not-a-private-key", "x" * 16385, "-----BEGIN PRIVATE KEY----- secret-invalid"])

@@ -62,8 +62,16 @@ def _value(source: object, key: str) -> object:
     return getattr(source, key, None)
 
 
+def _is_blank_text(value: object) -> bool:
+    return isinstance(value, str) and not value.strip()
+
+
 def _is_blank(value: object) -> bool:
-    return value is None or (isinstance(value, str) and not value.strip())
+    return value is None or _is_blank_text(value)
+
+
+def blank_app_fields(values: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(key for key in APP_FIELDS if _is_blank_text(values.get(key)))
 
 
 def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfig | None:
