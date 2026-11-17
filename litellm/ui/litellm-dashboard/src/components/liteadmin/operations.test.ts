@@ -63,7 +63,7 @@ describe.each(accessModes)("Aria tool schemas for %j", (access) => {
         ? {}
         : datedArguments[tool.function.name];
     const parse = (start_date: string, end_date: string) =>
-      tool.function.parse(JSON.stringify({ ...args, start_date, end_date }));
+      tool.$parseRaw(JSON.stringify({ ...args, start_date, end_date }));
 
     expect(parse("2026-02-01", "2026-02-28")).toMatchObject({
       start_date: "2026-02-01",
