@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { stubViewportMatchMedia } from "@/../tests/viewport";
@@ -231,6 +231,22 @@ describe("ChatShell", () => {
       "aria-expanded",
       "true",
     );
+  });
+
+  it("should show the full sidebar in the phone drawer after the desktop rail was collapsed", async () => {
+    const resizeTo = stubViewportMatchMedia();
+    const user = userEvent.setup();
+    render(
+      <ChatShell>
+        <div />
+      </ChatShell>,
+    );
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    await resizeTo(390);
+    await user.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    const drawer = await screen.findByRole("dialog", { name: "Sidebar" });
+    expect(within(drawer).getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(drawer).getByRole("button", { name: /^Account menu/ })).toHaveTextContent("developer@example.com");
   });
 
   it("should open only conversation search at phone width and focus it", async () => {

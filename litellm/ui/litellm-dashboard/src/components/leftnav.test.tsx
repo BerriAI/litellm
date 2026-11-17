@@ -20,8 +20,8 @@ const CloseOnBreakpointChange = () => {
   return null;
 };
 
-const PhoneShell = () => (
-  <SidebarProvider>
+const PhoneShell = ({ railCollapsed = false }: { railCollapsed?: boolean }) => (
+  <SidebarProvider defaultOpen={!railCollapsed}>
     <CloseOnBreakpointChange />
     <SidebarTrigger />
     <LeftNav />
@@ -719,6 +719,19 @@ describe("Sidebar (leftnav)", () => {
       fireEvent.click(within(await screen.findByRole("dialog", { name: "Sidebar" })).getByRole("link", { name: page }));
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
     }
+  });
+
+  it("shows the full nav in the phone drawer when the desktop rail was left collapsed", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    navState.pathname = "/ui/search-tools";
+    renderWithProviders(<PhoneShell railCollapsed />);
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    const drawer = await screen.findByRole("dialog", { name: "Sidebar" });
+    expect(within(drawer).getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+    const tools = within(drawer).getByRole("button", { name: "Tools" });
+    expect(tools).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(tools);
+    expect(tools).toHaveAttribute("aria-expanded", "false");
   });
 
   it("keeps the phone drawer closed after the window widens to desktop and narrows again", async () => {
