@@ -2319,9 +2319,11 @@ mod tests {
     #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5-5")]
     #[case::bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5-5")]
     #[tokio::test]
-    async fn a_string_stream_flag_sends_no_stream_key_to_mantle(#[case] model: &str) {
+    async fn a_string_stream_flag_neither_streams_nor_sends_a_stream_key_to_mantle(
+        #[case] model: &str,
+    ) {
         let call = mantle_call(model, json!({"stream": "true"}), Some("key")).await;
-        assert_eq!(call.wire.body.get("stream"), None);
+        assert_eq!((call.wire.body.get("stream"), call.stream), (None, false));
     }
 
     #[rstest]

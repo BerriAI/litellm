@@ -7,15 +7,13 @@ use litellm_llms_types::{
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
+use url::Url;
 
 use crate::{
     Error, MantleRegionCheck,
-    anthropic::{
-        common_utils::strip_trailing_slashes,
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::retry_anthropic_messages_after_http_error,
-        },
+    anthropic::messages::{
+        handler::shape_anthropic_messages_request,
+        transformation::retry_anthropic_messages_after_http_error,
     },
     base_llm::messages::{
         context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
@@ -35,8 +33,9 @@ use crate::{
         mantle_transformation::{
             AMAZON_MANTLE_REQUEST_SETTINGS, MANTLE_API_BASE_ENV, MANTLE_MESSAGES_PATH,
             amazon_mantle_model_id, bearer_environment, mantle_headers, mantle_secret_names,
-            mantle_wire_body, sigv4_environment, transform_mantle_messages_request,
-            unchecked_with_zero_usage, validated_mantle_region, with_zero_usage,
+            mantle_wire_body, parse_mantle_base, sigv4_environment,
+            transform_mantle_messages_request, unchecked_with_zero_usage, validated_mantle_region,
+            with_mantle_messages_path, with_zero_usage,
         },
     },
 };
@@ -104,32 +103,23 @@ pub struct BedrockMantleAnthropicMessagesConfig;
 pub const BEDROCK_MANTLE_MESSAGES_CONFIG: BedrockMantleAnthropicMessagesConfig =
     BedrockMantleAnthropicMessagesConfig;
 
-fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
-    values.into_iter().flatten().find(|value| !value.is_empty())
-}
-
 fn env_value(env_lookup: &dyn Fn(&str) -> Option<String>, names: &[&str]) -> Option<String> {
     names
         .iter()
-        .find_map(|name| env_lookup(name).filter(|value| !value.is_empty()))
+        .find_map(|name| env_lookup(name).filter(|value| !value.trim().is_empty()))
 }
 
-/// The region group of Python's `MANTLE_HOST_RE`, `^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)`,
-/// matched case-insensitively.
-fn mantle_host_region(base: &str) -> Option<&str> {
-    let lowered = base.to_ascii_lowercase();
-    let scheme = ["https://", "http://"]
-        .into_iter()
-        .find(|scheme| lowered.starts_with(scheme))?;
-    let host = "bedrock-mantle.";
-    let rest = lowered[scheme.len()..].strip_prefix(host)?;
-    let region_len = rest.find(['/', '.']).unwrap_or(rest.len());
-    let after = rest[region_len..].strip_prefix(".api.aws")?;
-    if region_len == 0 || !(after.is_empty() || after.starts_with('/')) {
+/// The region of a public Mantle host, `bedrock-mantle.<region>.api.aws` with no port. The url
+/// crate lowercases the host, so the region signs as it is sent.
+fn mantle_host_region(url: &Url) -> Option<&str> {
+    if !matches!(url.scheme(), "http" | "https") || url.port().is_some() {
         return None;
     }
-    let start = scheme.len() + host.len();
-    Some(&base[start..start + region_len])
+    let region = url
+        .host_str()?
+        .strip_prefix("bedrock-mantle.")?
+        .strip_suffix(".api.aws")?;
+    (!region.is_empty() && !region.contains('.')).then_some(region)
 }
 
 /// Python's `split_mantle_region_prefix`, which `get_llm_provider` applies before the config sees the model.
@@ -184,31 +174,30 @@ fn has_route_prefix(model: &str, prefix: &str) -> bool {
 }
 
 fn configured_region(litellm_params: &LitellmParams) -> Option<&str> {
-    first_non_empty([litellm_params.aws.aws_region_name.as_deref()])
+    litellm_params
+        .aws
+        .aws_region_name
+        .as_deref()
+        .filter(|region| !region.is_empty())
 }
 
 /// Python's `resolve_mantle_region`.
 fn resolve_mantle_region(
-    api_base: Option<&str>,
+    base: &Url,
     litellm_params: &LitellmParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
     if let Some(region) = configured_region(litellm_params) {
         return validated_mantle_region(region.to_string(), MantleRegionCheck::ProviderResolution);
     }
-    let base = first_non_empty([api_base])
+    Ok(mantle_host_region(base)
         .map(str::to_string)
-        .or_else(|| env_value(env_lookup, &[MANTLE_API_BASE_ENV]));
-    let host_region = base
-        .as_deref()
-        .and_then(|base| mantle_host_region(base.trim_end_matches('/')))
-        .map(str::to_string);
-    Ok(host_region
         .or_else(|| env_value(env_lookup, &REGION_ENVS))
         .unwrap_or_else(|| BEDROCK_MANTLE_DEFAULT_REGION.to_string()))
 }
 
-/// The base Python's `get_llm_provider` hands the config: the caller's, the env's, or the regional default.
+/// The base Python's `get_llm_provider` hands the config: the caller's, the env's, or the regional
+/// default. A blank `api_base` counts as unset.
 fn dynamic_api_base(
     api_base: Option<&str>,
     model: &str,
@@ -223,35 +212,37 @@ fn dynamic_api_base(
             .unwrap_or_else(|| BEDROCK_MANTLE_DEFAULT_REGION.to_string()),
         MantleRegionCheck::ProviderResolution,
     )?;
-    Ok(first_non_empty([api_base])
+    Ok(api_base
+        .filter(|base| !base.trim().is_empty())
         .map(str::to_string)
         .or_else(|| env_value(env_lookup, &[MANTLE_API_BASE_ENV]))
         .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws/v1")))
 }
 
-/// Python's `build_mantle_native_messages_url`.
+/// Python's `build_mantle_native_messages_url`: one known suffix comes off the base's path and the
+/// Messages route goes on, the caller's query string staying after it. A public Mantle host is
+/// rebuilt on https in the resolved region.
 fn build_mantle_native_messages_url(
     api_base: Option<&str>,
     model: &str,
     litellm_params: &LitellmParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    let base = dynamic_api_base(api_base, model, litellm_params, env_lookup)?;
-    let region = resolve_mantle_region(Some(&base), litellm_params, env_lookup)?;
-    let configured = base.trim_end_matches('/');
-    let stripped = BASE_SUFFIXES_TO_STRIP
-        .iter()
-        .find_map(|suffix| configured.strip_suffix(suffix))
-        .unwrap_or(configured);
-    let host = match mantle_host_region(stripped) {
-        Some(_) => format!("https://bedrock-mantle.{region}.api.aws"),
-        None => stripped.to_string(),
-    };
-    Ok(format!(
-        "{}/{}",
-        strip_trailing_slashes(&host),
-        MANTLE_MESSAGES_PATH.trim_start_matches('/')
-    ))
+) -> Result<Url, Error> {
+    let base = parse_mantle_base(&dynamic_api_base(
+        api_base,
+        model,
+        litellm_params,
+        env_lookup,
+    )?)?;
+    let region = resolve_mantle_region(&base, litellm_params, env_lookup)?;
+    if mantle_host_region(&base).is_none() {
+        return Ok(with_mantle_messages_path(base, &BASE_SUFFIXES_TO_STRIP));
+    }
+    let mut url = parse_mantle_base(&format!(
+        "https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
+    ))?;
+    url.set_query(base.query());
+    Ok(url)
 }
 
 impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
@@ -295,6 +286,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             litellm_params,
             env_lookup,
         )
+        .map(String::from)
     }
 
     fn finalize_request(
@@ -379,16 +371,22 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let headers = mantle_headers(headers, litellm_params)?;
-        if let Some(token) = first_non_empty([api_key])
+        if let Some(token) = api_key
+            .filter(|key| !key.trim().is_empty())
             .map(str::to_string)
             .or_else(|| env_value(env_lookup, &KEY_ENVS))
         {
             return Ok(bearer_environment(headers, &token));
         }
-        let url = self.get_complete_url(None, model, litellm_params, false, env_lookup)?;
-        let signing_region = match mantle_host_region(url.trim_end_matches('/')) {
+        let url = build_mantle_native_messages_url(
+            litellm_params.api_base.as_deref(),
+            model,
+            litellm_params,
+            env_lookup,
+        )?;
+        let signing_region = match mantle_host_region(&url) {
             Some(region) => region.to_string(),
-            None => resolve_mantle_region(Some(&url), litellm_params, env_lookup)?,
+            None => resolve_mantle_region(&url, litellm_params, env_lookup)?,
         };
         let unsigned: Headers = headers
             .into_iter()
@@ -566,7 +564,18 @@ mod tests {
         "http://bedrock-mantle.us-west-2.api.aws/openai/v1",
         "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages"
     )]
-    #[case::whitespace_base_is_used("   ", "   /anthropic/v1/messages")]
+    #[case::blank_base_is_unset(
+        "   ",
+        "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+    )]
+    #[case::query_stays_after_the_route(
+        "https://private.test/openai/v1?tenant=a",
+        "https://private.test/anthropic/v1/messages?tenant=a"
+    )]
+    #[case::public_host_keeps_the_query(
+        "https://bedrock-mantle.us-west-2.api.aws/v1?tenant=a",
+        "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages?tenant=a"
+    )]
     fn api_base_suffixes_are_stripped_once(#[case] base: &str, #[case] expected: &str) {
         assert_eq!(
             BEDROCK_MANTLE_MESSAGES_CONFIG
@@ -656,39 +665,44 @@ mod tests {
     }
 
     #[rstest]
-    fn upper_case_public_host_fails_sigv4_but_not_bearer() {
-        let litellm_params = params(Some("https://BEDROCK-MANTLE.US-EAST-1.API.AWS"), None);
+    fn upper_case_public_host_is_sent_and_signed_lowercased() {
+        let litellm_params = params(Some("https://BEDROCK-MANTLE.US-EAST-2.API.AWS"), None);
         assert_eq!(
             BEDROCK_MANTLE_MESSAGES_CONFIG
                 .get_complete_url(None, "claude-test", &litellm_params, false, &|_| None)
                 .unwrap(),
-            "https://bedrock-mantle.US-EAST-1.api.aws/anthropic/v1/messages"
+            "https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages"
         );
-        assert!(matches!(
-            environment(
-                &BEDROCK_MANTLE_MESSAGES_CONFIG,
-                vec![],
-                None,
-                "claude-test",
-                &litellm_params,
-                &[]
-            ),
-            Err(Error::InvalidRequest(ErrorDetail::InvalidMantleRegion {
-                region,
-                check: MantleRegionCheck::Request,
-            })) if region == "US-EAST-1"
-        ));
-        assert!(
-            environment(
-                &BEDROCK_MANTLE_MESSAGES_CONFIG,
-                vec![],
-                Some("key"),
-                "claude-test",
-                &litellm_params,
-                &[]
-            )
-            .is_ok()
+        let validated = environment(
+            &BEDROCK_MANTLE_MESSAGES_CONFIG,
+            vec![],
+            None,
+            "claude-test",
+            &litellm_params,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(signing_region(&validated), Some("us-east-2"));
+    }
+
+    #[rstest]
+    #[case::blank("   ", None)]
+    #[case::set("key", Some("Bearer key"))]
+    fn a_blank_api_key_counts_as_unset(#[case] api_key: &str, #[case] expected: Option<&str>) {
+        let validated = environment(
+            &BEDROCK_MANTLE_MESSAGES_CONFIG,
+            vec![],
+            Some(api_key),
+            "claude-test",
+            &params(None, Some("us-east-1")),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            header(&validated.headers, "Authorization").first().copied(),
+            expected
         );
+        assert_eq!(signing_region(&validated).is_some(), expected.is_none());
     }
 
     #[rstest]
