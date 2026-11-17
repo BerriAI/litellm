@@ -798,13 +798,14 @@ impl Executable {
             })?
             .map_err(|error| GoogleLoginFailure::new(PythonException::OS, error.to_string()))?;
         let printed = [output.stdout.as_slice(), output.stderr.as_slice()].concat();
+        // stdout carries the subject token, so a failed run's output never goes into the
+        // message, which can reach the API caller.
         if !output.status.success() {
             return Err(GoogleLoginFailure::new(
                 PythonException::Refresh,
                 format!(
-                    "The credential_source executable exited with code {}: {}",
+                    "The credential_source executable exited with code {}.",
                     output.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&printed).trim_end()
                 ),
             ));
         }
@@ -1297,6 +1298,33 @@ mod tests {
                 PythonException::Malformed,
                 "Set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1 to let credentials run an executable."
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_executable_s_output_stays_out_of_the_error() {
+        let command = r#"sh -c 'printf "%s" "{\"id_token\": \"leaked-jwt\"}"; echo stderr-secret >&2; exit 3'"#;
+        let executable = Executable {
+            command: command.to_owned(),
+            timeout: Duration::from_secs(30),
+            output_file: None,
+            audience: "aud".into(),
+            subject_token_type: "urn:ietf:params:oauth:token-type:jwt".into(),
+            impersonated_email: None,
+            os_env: Arc::new(|name| {
+                (name == "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES").then(|| "1".into())
+            }),
+        };
+
+        let failure = executable
+            .subject_token(&Requests::with_environment(&[]))
+            .await
+            .unwrap_err();
+
+        assert_eq!(failure.exception, PythonException::Refresh);
+        assert_eq!(
+            failure.message,
+            "The credential_source executable exited with code 3."
         );
     }
 
