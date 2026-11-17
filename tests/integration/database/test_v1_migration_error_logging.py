@@ -29,7 +29,7 @@ from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import stop_process_group
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+MIGRATIONS_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras" / "migrations"
 MIGRATION_NAME: Final = "20260921190000_agent_identity"
 pytestmark: Final = pytest.mark.timeout(300)
 PASSWORD: Final = "wr ong'pw9"

@@ -15,4 +15,5 @@ class UiDiscoveryEndpoints(LiteLLMBaseModel):
     is_control_plane: bool = False
     mcp_stdio_enabled: bool = False
     use_si_terminology: bool = False
+    claude_code_marketplace_auth_required: bool = False
     workers: list[WorkerRegistryEntry] = Field(default=[])

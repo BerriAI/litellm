@@ -57,6 +57,7 @@ def test_key_whose_daily_spend_names_two_users_is_reported_with_no_owner(gateway
                 DAY,
                 key_metadata(),
                 seeded_metrics(2),
+                entity_rows={first: 1, second: 1},
             )
 
 
@@ -74,6 +75,7 @@ def test_daily_spend_rows_naming_no_user_do_not_hide_the_one_user_the_others_nam
                 DAY,
                 key_metadata(user=owner, email=email),
                 seeded_metrics(2),
+                entity_rows={owner: 1, "Unassigned": 1},
             )
 
 

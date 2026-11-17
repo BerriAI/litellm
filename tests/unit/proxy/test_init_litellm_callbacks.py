@@ -173,3 +173,26 @@ class TestInitLitellmCallbacks:
 
         # Clean up
         litellm.callbacks = []  # type: ignore
+
+
+def test_startup_fans_a_v2_callback_out_to_every_event_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Hook, on
+    from litellm.proxy.utils import ProxyLogging
+
+    class Observer(CustomLoggerV2):
+        @on(Hook.attempt_ended)
+        def attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
+            return None
+
+    observer = Observer()
+    for callback_list in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    monkeypatch.setattr(litellm, "callbacks", [observer])
+    monkeypatch.setattr(ProxyLogging, "_add_proxy_hooks", lambda self, llm_router=None: None)
+
+    ProxyLogging(user_api_key_cache=MagicMock())._init_litellm_callbacks(llm_router=None)
+
+    assert observer in litellm._async_success_callback
+    assert observer in litellm._async_failure_callback
+    assert observer in litellm.success_callback
+    assert observer in litellm.failure_callback

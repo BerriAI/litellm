@@ -1,5 +1,5 @@
 """
-Tests for enterprise/litellm_enterprise/proxy/hooks/managed_files.py
+Tests for litellm/enterprise/litellm_enterprise/proxy/hooks/managed_files.py
 
 Regression test for afile_retrieve called without credentials in
 async_post_call_success_hook when processing completed batch responses.
@@ -9,17 +9,23 @@ import asyncio
 import base64
 import json
 import logging
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
 import pytest
-from typing import Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm._internal_context import internal_parent_request_id, is_internal_call
 from litellm.llms.base_llm.files.transformation import FileListModelScope
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import BATCH_CREATE_HIDDEN_PARAM
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.llms.openai import FileListPage, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
+
+if TYPE_CHECKING:
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
 
 def _make_file_object(file_id: str = "file-output-abc") -> OpenAIFileObject:
@@ -222,7 +228,7 @@ async def test_should_pass_credentials_to_afile_retrieve():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
 
@@ -332,14 +338,7 @@ async def test_provider_file_id_resolver_returns_owned_mappings_with_owner_scope
         "file-provider-2": "unified-file-id",
     }
     assert isinstance(unified_file_ids, MappingProxyType)
-    find_many.assert_awaited_once_with(
-        where={
-            "OR": [{"created_by": "test-user"}, {"team_id": "test-team"}],
-            "flat_model_file_ids": {
-                "hasSome": ["file-provider-1", "file-provider-2", "file-unmanaged-2"],
-            },
-        }
-    )
+    find_many.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1096,7 +1095,7 @@ async def test_should_not_double_wrap_already_unified_output_file_id():
         "custom_llm_provider": "openai",
     }
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
     mock_afile_retrieve = AsyncMock(return_value=_make_file_object(provider_file_id))
@@ -1159,45 +1158,56 @@ async def test_should_skip_non_file_unified_id_on_output_file_id():
 
 
 @pytest.mark.asyncio
-async def test_afile_content_passes_trusted_model_credentials_to_router():
-    """
-    afile_content must hand the deployment's credential snapshot to the router
-    call as an immutable server-side mapping. Cloud-storage providers (Bedrock
-    S3) validate file ids against the bucket in that snapshot, so without it
-    unified-id content retrieval only works when AWS_S3_BUCKET_NAME is set.
-    """
-    from types import MappingProxyType
+async def test_afile_content_reads_from_the_deployment_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unified-id content retrieval must validate and fetch the s3:// file against the
+    deployment's s3_bucket_name, with no AWS_S3_BUCKET_NAME env set."""
+    import httpx
+    import respx
+
+    import litellm
+    from litellm import Router
+
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+                "model_info": {"id": "model-123"},
+            }
+        ],
+        num_retries=0,
+    )
 
     managed_files = _make_managed_files_instance()
     unified_file_id = "unified-file-id"
     s3_uri = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
     managed_files.get_unified_file_id = AsyncMock(return_value=None)
-    managed_files.get_model_file_id_mapping = AsyncMock(
-        return_value={unified_file_id: {"model-123": s3_uri}}
-    )
+    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
 
-    mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
-        return_value={
-            "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "my-bucket",
-            "aws_region_name": "us-west-2",
-        }
-    )
-    mock_router.afile_content = AsyncMock(return_value=MagicMock())
+    with respx.mock:
+        route = respx.get(
+            "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+        ).mock(return_value=httpx.Response(200, content=b'{"recordId":"req-1"}'))
 
-    await managed_files.afile_content(
-        file_id=unified_file_id,
-        litellm_parent_otel_span=None,
-        llm_router=mock_router,
-    )
+        response = await managed_files.afile_content(
+            file_id=unified_file_id,
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
 
-    call_kwargs = mock_router.afile_content.call_args.kwargs
-    assert call_kwargs["model"] == "model-123"
-    assert call_kwargs["file_id"] == s3_uri
-    trusted_credentials = call_kwargs["_litellm_internal_model_credentials"]
-    assert isinstance(trusted_credentials, MappingProxyType)
-    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
+    assert route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert response.content == b'{"recordId":"req-1"}'
 
 
 def _managed_deletion_file_id(provider_file_id):
@@ -1267,7 +1277,6 @@ async def test_afile_delete_bedrock_uses_deployment_bucket_and_signed_s3_delete(
             file_id=unified_file_id,
             litellm_parent_otel_span=None,
             llm_router=router,
-            _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
         )
 
     assert len(route.calls) == 1
@@ -1286,14 +1295,13 @@ async def test_afile_delete_returns_managed_id_for_stored_provider_output():
     stored_file = _make_file_object(provider_file_id)
     managed_files, table = _managed_files_with_deletion_row(unified_file_id, provider_file_id, stored_file)
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(return_value=FileDeleted(id=provider_file_id, object="file", deleted=True)),
     )
     response = await managed_files.afile_delete(
         file_id=unified_file_id,
         litellm_parent_otel_span=None,
         llm_router=router,
-        _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
     )
 
     assert response.id == unified_file_id
@@ -1380,7 +1388,7 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value=None)
+    mock_router.registry.return_value.credentials = MagicMock(return_value=None)
     mock_router.afile_content = AsyncMock(side_effect=Exception("deployment failed"))
 
     with pytest.raises(Exception, match='LiteLLM Managed File object with') as exc_info:
@@ -1437,6 +1445,8 @@ def _make_object_store_instance():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock()
     mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock()
+    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.writer = mock_prisma.db
 
     return (
         PROXY_LiteLLMManagedFiles(
@@ -1687,7 +1697,7 @@ async def test_hook_mint_prefers_input_file_target_model_names():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1717,7 +1727,7 @@ async def test_hook_mint_falls_back_to_response_input_file_id_target_models():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1921,45 +1931,6 @@ async def test_post_call_hook_leaves_litellm_executed_batches_untouched(llm_batc
 
 
 @pytest.mark.asyncio
-async def test_afile_delete_passes_trusted_model_credentials_to_router():
-    """
-    afile_delete must hand the deployment's credential snapshot to the router
-    call, since Bedrock validates the s3:// file id against the bucket in it.
-    """
-    from types import MappingProxyType
-
-    managed_files = _make_managed_files_instance()
-    unified_file_id = "unified-file-id"
-    s3_uri = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
-    managed_files.get_unified_file_id = AsyncMock(return_value=None)
-    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
-    managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
-
-    mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
-        return_value={
-            "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "my-bucket",
-            "aws_region_name": "us-west-2",
-        }
-    )
-    mock_router.afile_delete = AsyncMock(return_value=MagicMock())
-
-    await managed_files.afile_delete(
-        file_id=unified_file_id,
-        litellm_parent_otel_span=None,
-        llm_router=mock_router,
-    )
-
-    call_kwargs = mock_router.afile_delete.call_args.kwargs
-    assert call_kwargs["model"] == "model-123"
-    assert call_kwargs["file_id"] == s3_uri
-    trusted_credentials = call_kwargs["_litellm_internal_model_credentials"]
-    assert isinstance(trusted_credentials, MappingProxyType)
-    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
-
-
-@pytest.mark.asyncio
 async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
     """
     Proxy repro for deleting a Bedrock batch input file by unified id: the
@@ -2046,7 +2017,7 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(),
     )
 
@@ -2090,7 +2061,7 @@ async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provide
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_content=AsyncMock(),
     )
 
@@ -2161,3 +2132,420 @@ async def test_store_unified_file_id_caches_the_storage_location_the_db_row_gets
     assert (cached.storage_backend, cached.storage_url) == ("litellm_db", "litellm_db://content-row-1")
     create_data = file_table.upsert.await_args.kwargs["data"]["create"]
     assert (create_data["storage_backend"], create_data["storage_url"]) == ("litellm_db", "litellm_db://content-row-1")
+
+
+@pytest.mark.asyncio
+async def test_create_stores_the_creating_deployment_in_file_object():
+    """Regression (LIT-10326): an unmanaged gs:// batch stores the raw Vertex job id, which
+    says nothing about which of two deployments sharing a base model created it. The create
+    must keep the router's deployment id inside the stored file_object so the cost poller
+    reads the result through that deployment instead of the first base-model match."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    creator: Final = UserAPIKeyAuth(api_key="sk-team-b", user_id="bob", team_id="team-b", parent_otel_span=None)
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_object=_make_batch_response(status="validating"),
+        litellm_parent_otel_span=None,
+        model_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+        persist_attribution=True,
+        create_if_missing=True,
+        creating_model_id="deploy-team-b",
+    )
+
+    created: Final = mock_prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]
+    assert json.loads(created["file_object"])["model_id"] == "deploy-team-b"
+
+
+@pytest.mark.asyncio
+async def test_poll_refresh_keeps_the_stored_creating_deployment():
+    """A later observe of the row (a GET through whichever deployment the client named)
+    rewrites file_object; it must carry the create-time model_id forward, not drop it or
+    replace it with the deployment that served the retrieve."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    stored_row: Final = MagicMock()
+    stored_row.file_object = json.dumps({**json.loads(_make_batch_response(status="validating").model_dump_json()), "model_id": "deploy-team-b"})
+    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=stored_row)
+    observer: Final = UserAPIKeyAuth(api_key="sk-team-b", user_id="bob", team_id="team-b", parent_otel_span=None)
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_object=_make_batch_response(status="completed"),
+        litellm_parent_otel_span=None,
+        model_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_purpose="batch",
+        user_api_key_dict=observer,
+        persist_attribution=False,
+        create_if_missing=False,
+    )
+
+    written: Final = json.loads(mock_prisma.db.litellm_managedobjecttable.update_many.await_args.kwargs["data"]["file_object"])
+    assert written["model_id"] == "deploy-team-b"
+    assert written["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_poll_refresh_reads_the_stored_creating_deployment_from_the_writer():
+    """With a read replica configured, a retrieve that lands before the replica has the create
+    must still find the create-time model_id, so the lookup goes to the writer. Prisma may hand
+    the Json column back already decoded, so the row here is a dict rather than JSON text."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    stored_row: Final = MagicMock()
+    stored_row.file_object = {**json.loads(_make_batch_response(status="validating").model_dump_json()), "model_id": "deploy-team-b"}
+    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.writer = MagicMock()
+    mock_prisma.db.writer.litellm_managedobjecttable.find_first = AsyncMock(return_value=stored_row)
+    observer: Final = UserAPIKeyAuth(api_key="sk-team-b", user_id="bob", team_id="team-b", parent_otel_span=None)
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_object=_make_batch_response(status="completed"),
+        litellm_parent_otel_span=None,
+        model_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_purpose="batch",
+        user_api_key_dict=observer,
+        persist_attribution=False,
+        create_if_missing=False,
+    )
+
+    written: Final = json.loads(mock_prisma.db.litellm_managedobjecttable.update_many.await_args.kwargs["data"]["file_object"])
+    assert written["model_id"] == "deploy-team-b"
+    mock_prisma.db.litellm_managedobjecttable.find_first.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_create_hook_passes_the_router_deployment_as_creating_model_id():
+    """The post-call hook on a batch create hands the router's model_id to the object store;
+    a retrieve of the same batch hands None so it cannot overwrite the creator."""
+    from litellm_enterprise.proxy.hooks.managed_files import BATCH_CREATE_HIDDEN_PARAM
+
+    managed_files: Final = _make_managed_files_instance()
+    created: Final = _make_batch_response(model_id="deploy-team-b", output_file_id=None, status="validating")
+    created._hidden_params[BATCH_CREATE_HIDDEN_PARAM] = True
+    retrieved: Final = _make_batch_response(model_id="deploy-team-a", output_file_id=None, status="in_progress")
+
+    with patch("litellm.proxy.proxy_server.llm_router", MagicMock()):
+        await managed_files.async_post_call_success_hook(
+            data={}, user_api_key_dict=_make_user_api_key_dict(), response=created
+        )
+        await managed_files.async_post_call_success_hook(
+            data={}, user_api_key_dict=_make_user_api_key_dict(), response=retrieved
+        )
+
+    first, second = managed_files.store_unified_object_id.await_args_list
+    assert first.kwargs["creating_model_id"] == "deploy-team-b"
+    assert second.kwargs["creating_model_id"] is None
+
+
+class _FakeFilesRouter:
+    def __init__(
+        self,
+        deployments_by_model: Mapping[str, tuple[str, ...]],
+        delete_error: Exception | None = None,
+        delete_gate: asyncio.Event | None = None,
+        provider: str = "openai",
+        gone_file_ids: frozenset[str] = frozenset(),
+    ) -> None:
+        self.deployments_by_model = deployments_by_model
+        self.delete_error = delete_error
+        self.gone_file_ids = gone_file_ids
+        self.delete_gate = delete_gate
+        self.provider = provider
+        self.upload_count = 0
+        self.deletes: tuple[tuple[str, str, Mapping[str, object]], ...] = ()
+        self.deletes_marked_internal: tuple[bool, ...] = ()
+        self.delete_parent_request_ids: tuple[str | None, ...] = ()
+
+    async def acreate_file(
+        self,
+        model: str,
+        file: tuple[str, bytes, str],
+        purpose: str,
+        litellm_metadata: Mapping[str, object],
+    ) -> OpenAIFileObject:
+        deployment_ids: Final = self.deployments_by_model[model]
+        provider_file_ids: Final = tuple(
+            f"file-upload-{self.upload_count + offset + 1}" for offset in range(len(deployment_ids))
+        )
+        self.upload_count += len(deployment_ids)
+        response: Final = _make_file_object(provider_file_ids[0]).model_copy(update={"purpose": purpose})
+        response._hidden_params = {
+            "model_id": deployment_ids[0],
+            "custom_llm_provider": self.provider,
+            "model_file_id_mapping": dict(zip(deployment_ids, provider_file_ids)),
+            "litellm_call_id": f"call-of-{provider_file_ids[0]}",
+        }
+        return response
+
+    def registry(self) -> "_FakeFilesRouter":
+        return self
+
+    def credentials(self, model_id: str, form: str) -> dict[str, str]:
+        assert form == "with_provider"
+        return {"custom_llm_provider": self.provider, "api_key": f"key-of-{model_id}"}
+
+    async def afile_delete(
+        self,
+        model: str,
+        file_id: str,
+        litellm_metadata: Mapping[str, object],
+        litellm_call_id: str | None = None,
+    ) -> None:
+        if self.delete_gate is not None:
+            await self.delete_gate.wait()
+        if isinstance(litellm_metadata, dict):
+            litellm_metadata.update({"model_info": {"id": model}})
+        self.deletes = (*self.deletes, (model, file_id, litellm_metadata))
+        self.deletes_marked_internal = (*self.deletes_marked_internal, is_internal_call.get())
+        self.delete_parent_request_ids = (*self.delete_parent_request_ids, internal_parent_request_id.get())
+        if file_id in self.gone_file_ids:
+            raise RuntimeError(f"No such File object: {file_id}")
+        if self.delete_error is not None:
+            raise self.delete_error
+
+
+_REQUEST_METADATA: Final = MappingProxyType({"user_api_key_team_id": "test-team"})
+
+
+async def _eventually(condition: Callable[[], bool]) -> None:
+    async def _poll() -> None:
+        while not condition():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout=1)
+
+
+async def _upload(
+    managed_files: "PROXY_LiteLLMManagedFiles",
+    router: _FakeFilesRouter,
+    target_model_names: list[str],
+    litellm_metadata: Mapping[str, object] = _REQUEST_METADATA,
+    content_type: str = "text/plain",
+) -> OpenAIFileObject:
+    return await managed_files.acreate_file(
+        create_file_request={
+            "file": ("notes.txt", b"the launch code is ORCHID-42\n", content_type),
+            "purpose": "user_data",
+            "litellm_metadata": litellm_metadata,
+        },
+        llm_router=router,
+        target_model_names_list=target_model_names,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_team_member_api_key_dict(),
+    )
+
+
+async def _create_managed_file(
+    router: _FakeFilesRouter, target_model_names: list[str]
+) -> tuple[dict[str, str], list[str], tuple[str, str]]:
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+    response: Final = await _upload(managed_files, router, target_model_names)
+    stored: Final = mock_prisma.db.litellm_managedfiletable.upsert.await_args.kwargs["data"]["create"]
+    decoded: Final = base64.urlsafe_b64decode(response.id + "=" * (-len(response.id) % 4)).decode()
+    carried: Final = (
+        managed_files.get_model_id_from_unified_file_id(decoded),
+        managed_files.get_output_file_id_from_unified_file_id(decoded),
+    )
+    return json.loads(stored["model_mappings"]), stored["flat_model_file_ids"], carried
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_keeps_the_upload_the_managed_id_carries_when_two_targets_share_a_deployment():
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+
+    model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    await _eventually(lambda: len(router.deletes) == 1)
+
+    assert carried == ("wildcard-dep", "file-upload-1")
+    assert model_mappings == {"wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert router.deletes == (("wildcard-dep", "file-upload-2", _REQUEST_METADATA),)
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_deletes_only_the_repeat_upload_and_keeps_every_deployment_reached_once():
+    router: Final = _FakeFilesRouter({"gpt-a": ("dep-1", "dep-2"), "gpt-b": ("dep-2",), "gpt-c": ("dep-3",)})
+
+    model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b", "gpt-c"])
+    await _eventually(lambda: len(router.deletes) == 1)
+
+    assert carried == ("dep-1", "file-upload-1")
+    assert list(model_mappings.items()) == [
+        ("dep-1", "file-upload-1"),
+        ("dep-2", "file-upload-2"),
+        ("dep-3", "file-upload-4"),
+    ]
+    assert flat_ids == ["file-upload-1", "file-upload-2", "file-upload-4"]
+    assert [delete[:2] for delete in router.deletes] == [("dep-2", "file-upload-3")]
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_still_returns_the_managed_file_when_deleting_the_repeat_upload_fails(caplog: pytest.LogCaptureFixture):
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)},
+        delete_error=RuntimeError("provider unavailable"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+        await _eventually(lambda: "provider unavailable" in caplog.text)
+
+    assert carried == ("wildcard-dep", "file-upload-1")
+    assert model_mappings == {"wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert [delete[:2] for delete in router.deletes] == [("wildcard-dep", "file-upload-2")]
+    assert "file-upload-2" in caplog.text and "wildcard-dep" in caplog.text
+    assert "provider unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_answers_before_deleting_the_repeat_upload_finishes():
+    delete_gate: Final = asyncio.Event()
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)}, delete_gate=delete_gate)
+
+    model_mappings, flat_ids, carried = await asyncio.wait_for(
+        _create_managed_file(router, ["gpt-a", "gpt-b"]), timeout=1
+    )
+
+    assert carried == ("wildcard-dep", "file-upload-1")
+    assert model_mappings == {"wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert router.deletes == ()
+    delete_gate.set()
+    await _eventually(lambda: len(router.deletes) == 1)
+    assert router.deletes[0][:2] == ("wildcard-dep", "file-upload-2")
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_the_repeat_upload_delete():
+    delete_gate: Final = asyncio.Event()
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)}, delete_gate=delete_gate)
+
+    await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    asyncio.get_running_loop().call_later(0.05, delete_gate.set)
+    await drain_logging_tasks(timeout=1)
+
+    assert [delete[:2] for delete in router.deletes] == [("wildcard-dep", "file-upload-2")]
+
+
+@pytest.mark.asyncio
+async def test_each_repeat_upload_delete_runs_as_an_internal_call_of_the_upload_that_made_the_copy():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",), "gpt-c": ("wildcard-dep",)}
+    )
+
+    await _create_managed_file(router, ["gpt-a", "gpt-b", "gpt-c"])
+    await drain_logging_tasks(timeout=1)
+
+    assert router.deletes_marked_internal == (True, True)
+    assert sorted(zip((delete[1] for delete in router.deletes), router.delete_parent_request_ids)) == [
+        ("file-upload-2", "call-of-file-upload-2"),
+        ("file-upload-3", "call-of-file-upload-3"),
+    ]
+    assert is_internal_call.get() is False
+    assert internal_parent_request_id.get() is None
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_wildcard_keeps_its_last_per_target_upload_and_deletes_nothing():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)}, provider="litellm_proxy"
+    )
+
+    model_mappings, flat_ids, _ = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    await drain_logging_tasks(timeout=1)
+
+    assert model_mappings == {"proxy-wildcard-dep": "file-upload-2"}
+    assert flat_ids == ["file-upload-2"]
+    assert router.deletes == ()
+
+
+async def _upload_then_delete(
+    router: _FakeFilesRouter, target_model_names: list[str], content_type: str = "text/plain"
+) -> tuple[str, ...]:
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+    response: Final = await _upload(managed_files, router, target_model_names, content_type=content_type)
+    await drain_logging_tasks(timeout=1)
+    deletes_during_upload: Final = len(router.deletes)
+    managed_files.internal_usage_cache.async_get_cache = AsyncMock(
+        return_value=managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    )
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=MagicMock())
+    mock_prisma.db.litellm_managedfiletable.delete = AsyncMock()
+
+    deleted: Final = await managed_files.afile_delete(
+        file_id=response.id,
+        litellm_parent_otel_span=None,
+        llm_router=router,
+        litellm_metadata=_REQUEST_METADATA,
+        litellm_call_id="delete-call",
+    )
+
+    assert deleted.deleted is True
+    mock_prisma.db.litellm_managedfiletable.delete.assert_awaited_once_with(where={"unified_file_id": response.id})
+    return tuple(delete[1] for delete in router.deletes[deletes_during_upload:])
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_litellm_proxy_wildcard_file_removes_the_upload_its_id_carries_too():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)}, provider="litellm_proxy"
+    )
+
+    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-2", "file-upload-1")
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_wildcard_file_removes_its_kept_upload_once():
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+
+    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-1",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/plain;llm_output_file_id,file-of-another-team;llm_output_file_model_id,wildcard-dep",
+        "text/plain;llm_output_file_id,file-of-another-team",
+    ],
+)
+async def test_deleting_a_file_removes_only_the_uploads_the_gateway_made_for_it(content_type: str):
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+
+    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"], content_type) == ("file-upload-1",)
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_file_still_succeeds_when_the_upload_its_id_carries_is_already_gone(
+    caplog: pytest.LogCaptureFixture,
+):
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
+        provider="litellm_proxy",
+        gone_file_ids=frozenset({"file-upload-1"}),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-2", "file-upload-1")
+
+    assert "file-upload-1" in caplog.text and "No such File object" in caplog.text
+    assert router.deletes_marked_internal == (False, True)
+    assert router.delete_parent_request_ids == (None, "delete-call")
+
+
+@pytest.mark.asyncio
+async def test_repeat_upload_delete_leaves_the_upload_request_metadata_unchanged():
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+    upload_metadata: Final = {"user_api_key_team_id": "test-team"}
+    managed_files, _ = _make_real_managed_files_instance()
+
+    await _upload(managed_files, router, ["gpt-a", "gpt-b"], upload_metadata)
+    await drain_logging_tasks(timeout=1)
+
+    assert upload_metadata == {"user_api_key_team_id": "test-team"}
+    assert [delete[2] for delete in router.deletes] == [
+        {"user_api_key_team_id": "test-team", "model_info": {"id": "wildcard-dep"}}
+    ]

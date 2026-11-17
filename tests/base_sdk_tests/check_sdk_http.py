@@ -70,7 +70,9 @@ def enqueue(body: object, status: int = 200) -> None:
 
 def enqueue_stream() -> None:
     chunk: Final = {**CHAT, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "pong"}}]}
-    RESPONSES.put((200, f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()))
+    terminal: Final = {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+    stream: Final = f"data: {json.dumps(chunk)}\n\ndata: {json.dumps(terminal)}\n\ndata: [DONE]\n\n"
+    RESPONSES.put((200, stream.encode()))
 
 
 def bedrock_event(event: str, payload: object) -> bytes:

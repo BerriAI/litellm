@@ -8,8 +8,8 @@ on:
     paths:
       - "uv.lock"
       - "pyproject.toml"
-      - "litellm-proxy-extras/pyproject.toml"
-      - "enterprise/pyproject.toml"
+      - "litellm/proxy-extras/pyproject.toml"
+      - "litellm/enterprise/pyproject.toml"
 
 permissions: {}
 
@@ -130,8 +130,12 @@ jobs:
           }
 
           check_deps base/pyproject.toml pr/pyproject.toml "pyproject.toml" || had_error=1
-          check_deps base/litellm-proxy-extras/pyproject.toml pr/litellm-proxy-extras/pyproject.toml "litellm-proxy-extras/pyproject.toml" || had_error=1
-          check_deps base/enterprise/pyproject.toml pr/enterprise/pyproject.toml "enterprise/pyproject.toml" || had_error=1
+          base_extras=base/litellm/proxy-extras/pyproject.toml
+          [ -f "$base_extras" ] || base_extras=base/litellm-proxy-extras/pyproject.toml
+          base_enterprise=base/litellm/enterprise/pyproject.toml
+          [ -f "$base_enterprise" ] || base_enterprise=base/enterprise/pyproject.toml
+          check_deps "$base_extras" pr/litellm/proxy-extras/pyproject.toml "litellm/proxy-extras/pyproject.toml" || had_error=1
+          check_deps "$base_enterprise" pr/litellm/enterprise/pyproject.toml "litellm/enterprise/pyproject.toml" || had_error=1
 
           if [ "$had_error" -ne 0 ]; then
             echo ""

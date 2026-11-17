@@ -83,6 +83,7 @@ def _logging_obj() -> LiteLLMLoggingObj:
     logging_obj = MagicMock(spec=LiteLLMLoggingObj)
     logging_obj.model_call_details = {}
     logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
     logging_obj.litellm_call_id = "test-call-id"
     return logging_obj
 
@@ -164,10 +165,10 @@ def _interrupted_anthropic_stream(model: str, output_text: str) -> list[bytes]:
 async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -189,7 +190,7 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
             request_body={"model": model, "stream": True},
             endpoint_type=EndpointType.ANTHROPIC,
             start_time=datetime.now(),
-            raw_bytes=_interrupted_anthropic_stream(model, text * 100),
+            raw_bytes=_interrupted_anthropic_stream(model, uncounted_text()),
             end_time=datetime.now(),
             model=model,
         )
@@ -205,10 +206,10 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
 async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -231,7 +232,7 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
             litellm_logging_obj=logging_obj,
             endpoint_type=EndpointType.ANTHROPIC,
             request_body={"model": model, "stream": True},
-            raw_bytes=_interrupted_anthropic_stream(model, text * 100),
+            raw_bytes=_interrupted_anthropic_stream(model, uncounted_text()),
             exception=RuntimeError("upstream closed the stream"),
         )
     )

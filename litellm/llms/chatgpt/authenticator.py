@@ -66,6 +66,13 @@ def get_cached_authenticator(auth_file: str) -> "Authenticator":
     return Authenticator(auth_file=auth_file)
 
 
+def resolve_chatgpt_authenticator(
+    litellm_params: "Mapping[str, object] | GenericLiteLLMParams | None", default: "Authenticator"
+) -> "Authenticator":
+    auth_file: Final = get_chatgpt_auth_file(litellm_params)
+    return get_cached_authenticator(auth_file) if auth_file else default
+
+
 def _token_refresh_timeout() -> httpx.Timeout:
     configured: Final = get_configured_request_timeout()
     seconds: Final = (
@@ -122,6 +129,12 @@ class Authenticator:
         return tokens["access_token"]
 
     def get_account_id(self, access_token: str | None = None) -> str | None:
+        return self._account_id(access_token, persist_derived=True)
+
+    def read_account_id(self, access_token: str | None = None) -> str | None:
+        return self._account_id(access_token, persist_derived=False)
+
+    def _account_id(self, access_token: str | None, persist_derived: bool) -> str | None:
         auth_data: Final = self._read_auth_file()
         if access_token and (not auth_data or auth_data.get("access_token") != access_token):
             return extract_chatgpt_account_id(access_token)
@@ -133,7 +146,7 @@ class Authenticator:
         id_token: Final = auth_data.get("id_token")
         saved_access_token: Final = auth_data.get("access_token")
         derived: Final = extract_chatgpt_account_id(_optional_str(id_token or saved_access_token))
-        if derived:
+        if derived and persist_derived:
             self._write_auth_file({**auth_data, "account_id": derived})
         return derived
 
