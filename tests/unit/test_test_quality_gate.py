@@ -1,6 +1,6 @@
-"""Tests for scripts/test_quality_gate.py.
+"""Tests for litellm/scripts/test_quality_gate.py.
 
-The blame rule itself lives in scripts/lint_base_counts.py and is tested there;
+The blame rule itself lives in litellm/scripts/lint_base_counts.py and is tested there;
 what is tested here is `parse_changed_lines`, the diff scan that turns a breach into
 file:line. The base scan spawns a worktree and a checker subprocess, so its cleanup
 on termination is driven end to end.
@@ -19,7 +19,7 @@ from typing import Final, NamedTuple
 import test_quality_gate as gate
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MODULE_PATH = _REPO_ROOT / "scripts" / "test_quality_gate.py"
+_MODULE_PATH = _REPO_ROOT / "litellm/scripts" / "test_quality_gate.py"
 
 _SCAN_BASE = (
     "import pathlib, sys\n"

@@ -290,6 +290,62 @@ async def test_existing_provider_response_cache_still_hits(copilot_response_cach
 
 
 @pytest.mark.asyncio
+async def test_cache_hit_logs_the_vertex_location_the_deployment_is_configured_with(
+    monkeypatch: pytest.MonkeyPatch, copilot_response_cache: Cache
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged_locations: Final[list[tuple[object, object]]] = []
+    both_logged: Final = asyncio.Event()
+
+    class LocationRecorder(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            payload: Final = TypeAdapter(Mapping[str, object]).validate_python(kwargs["standard_logging_object"])
+            breakdown: Final = TypeAdapter(Mapping[str, object]).validate_python(payload["cost_breakdown"])
+            logged_locations.append((payload["cache_hit"], breakdown.get("vertex_location")))
+            if len(logged_locations) == 2:
+                both_logged.set()
+
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [LocationRecorder()])
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "global-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_location": "global",
+                    "mock_response": "ok",
+                },
+            }
+        ]
+    )
+    for _ in range(2):
+        request: Final[dict[str, object]] = {
+            "model": "global-gemini",
+            "messages": [{"role": "user", "content": "cache hit location"}],
+            "caching": True,
+            "litellm_call_id": str(uuid.uuid4()),
+        }
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="acompletion", rules_obj=litellm.utils.Rules(), start_time=datetime(2026, 1, 1), **request
+        )
+        await router.acompletion(**request, litellm_logging_obj=logging_obj)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    await asyncio.wait_for(both_logged.wait(), timeout=10)
+    assert sorted(logged_locations, key=str) == [(None, "global"), (True, "global")], logged_locations
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_reports_zero_response_cost(copilot_response_cache: Cache) -> None:
     messages: Final = [{"role": "user", "content": "cache cost repro"}]
     first: Final = await litellm.acompletion(

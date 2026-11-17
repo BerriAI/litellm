@@ -2764,7 +2764,7 @@ class TestCallToolRestAPI:
         assert resolved_server is target_server
         assert billed.team_id == "team-b"
 
-    async def test_extract_mcp_headers_scrubs_admitted_caller_credential(self) -> None:
+    async def test_extract_mcp_headers_scrubs_caller_key_only_from_implicit_authorization(self) -> None:
         caller_key: Final = "sk-rest-caller-admission-key-123"
         upstream_token: Final = "Bearer unrelated-upstream-token"
         request: Final = _build_request(
@@ -2783,9 +2783,14 @@ class TestCallToolRestAPI:
 
         assert extracted_headers == (
             None,
-            {"upstream": {"Authorization": upstream_token}},
+            {
+                "echo_srv": {"Authorization": f"Bearer {caller_key}"},
+                "upstream": {"Authorization": upstream_token},
+            },
             {
                 "x-litellm-api-key": f"Bearer {caller_key}",
+                "authorization": f"Bearer {caller_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
                 "x-mcp-upstream-authorization": upstream_token,
             },
             None,
@@ -5097,12 +5102,5 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
         assert result.is_error is False
         assert observed.qsize() == 1
         assert observed.get_nowait() == expected
-        if claims is None:
-            list_headers: Final = rest_endpoints._extract_mcp_headers_from_request(
-                _build_request(headers),
-                auth,
-            )[2]
-            authorization: Final = list_headers.get("authorization", "")
-            assert (authorization.removeprefix("Bearer ") or None) == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")

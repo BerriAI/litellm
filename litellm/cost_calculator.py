@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     select_cost_metric_for_model,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -100,6 +101,7 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
+    video_clip_cost,
     video_output_cost_per_second,
 )
 from litellm.llms.perplexity.cost_calculator import (
@@ -125,6 +127,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
+from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -964,6 +967,19 @@ def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _bedrock_cost_registration(model: str | None) -> tuple[str, Mapping[str, object]] | None:
+    if model is None:
+        return None
+    return next(
+        (
+            (key, entry)
+            for key, entry in runtime_model_cost_registrations(model, "bedrock")
+            if _bedrock_registration_has_prices(entry)
+        ),
+        None,
+    )
+
+
 def _bedrock_pricing_info(
     model: str | None,
     invoked_model_id: str | None,
@@ -972,14 +988,7 @@ def _bedrock_pricing_info(
 ) -> ModelInfo | None:
     if explicit_pricing or custom_llm_provider != "bedrock" or not model:
         return None
-    registration: Final = next(
-        (
-            (key, entry)
-            for key, entry in runtime_model_cost_registrations(model, "bedrock")
-            if _bedrock_registration_has_prices(entry)
-        ),
-        None,
-    )
+    registration: Final = _bedrock_cost_registration(model)
     profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
     if profile is None or not _declares_rates(profile):
         return _cost_map_model_info(registration[0], None) if registration is not None else None
@@ -1006,6 +1015,16 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     if own_model_info is None or not _declares_rates(own_model_info):
         return None
     return own_model_info["litellm_provider"]
+
+
+def _routed_model_pricing_provider(
+    request_model: str | None, served_model: str | None, custom_llm_provider: object
+) -> str | None:
+    if custom_llm_provider != "azure" or request_model is None or served_model is None:
+        return None
+    if not azure_ai_is_model_router_name(request_model) or _resolves_to_rates(served_model, "azure"):
+        return None
+    return "azure_ai" if _resolves_to_rates(served_model, "azure_ai") else None
 
 
 def _pricing_provider_for_cost_candidate(
@@ -1137,9 +1156,27 @@ def _served_or_priced_requested_model(
     if served in (requested, requested.partition("/")[2]):
         return served
     pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
+    profile_of_served: Final = _is_bedrock_cross_region_profile_of(requested_model, served_model, pricing_provider)
+    if profile_of_served and _resolves_to_rates(requested, pricing_provider):
+        return requested
     if _resolves_to_rates(served, pricing_provider):
         return served
     return requested if _resolves_to_rates(requested, pricing_provider) else served
+
+
+def _is_bedrock_cross_region_profile_of(profile: str, served_model: str, custom_llm_provider: str | None) -> bool:
+    if custom_llm_provider != "bedrock":
+        return False
+    from litellm.llms.bedrock.common_utils import (
+        get_bedrock_cross_region_inference_regions,
+        strip_bedrock_routing_prefix,
+    )
+
+    region, _, profiled_model = strip_bedrock_routing_prefix(profile).partition(".")
+    return (
+        region in get_bedrock_cross_region_inference_regions()
+        and strip_bedrock_routing_prefix(served_model) == profiled_model
+    )
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
@@ -1180,6 +1217,8 @@ def _get_response_model(completion_response: object) -> str | None:
     if completion_response is None:
         return None
 
+    if isinstance(completion_response, InteractionsAPIResponse):
+        return completion_response.model or completion_response.agent
     if isinstance(completion_response, BaseModel):
         return getattr(completion_response, "model", None)
     elif isinstance(completion_response, dict):
@@ -1235,6 +1274,14 @@ def _normalize_service_tier(service_tier: object) -> str | None:
 
 
 _BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
+
+
+def _served_image_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
+    """Image requests never send a tier upstream, so only the tier the provider reports can price them."""
+    return _resolve_billable_service_tier(
+        requested=None,
+        served=_served_service_tier(completion_response, usage_object),
+    )
 
 
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
@@ -1651,6 +1698,14 @@ def _response_time_ms_for_cost(
     return litellm_logging_obj.get_response_ms()
 
 
+def _model_is_none_error(completion_response_text: str, litellm_logging_obj: LitellmLoggingObject | None) -> ValueError:
+    message: Final = "Model is None and does not exist in passed completion_response."
+    model_call_details: Final = {} if litellm_logging_obj is None else litellm_logging_obj.model_call_details
+    if should_redact_message_logging(model_call_details) or model_call_details.get("query_image") is not None:
+        return ValueError(message)
+    return ValueError(f"{message} Passed completion_response={completion_response_text}, model=None")
+
+
 def _breakdown_total(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
     breakdown: Final = None if litellm_logging_obj is None else litellm_logging_obj.cost_breakdown
     total: Final[object] = None if breakdown is None else breakdown.get("total_cost")
@@ -1884,6 +1939,11 @@ def completion_cost(
             if base_model is not None and custom_pricing is not True
             else None
         )
+        pricing_provider_override: Final = base_model_provider or (
+            _routed_model_pricing_provider(model, _get_response_model(completion_response), custom_llm_provider)
+            if base_model is None and custom_pricing is not True
+            else None
+        )
         invoked_model_id: Final = _invoked_model_id_for_cost(
             _LOGGED_LITELLM_PARAMS.validate_python(optional_params) if optional_params is not None else None,
             litellm_logging_obj,
@@ -1891,7 +1951,7 @@ def completion_cost(
         selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
-            custom_llm_provider=base_model_provider or custom_llm_provider,
+            custom_llm_provider=pricing_provider_override or custom_llm_provider,
             custom_pricing=custom_pricing,
             base_model=base_model,
             router_model_id=router_model_id,
@@ -1910,7 +1970,7 @@ def completion_cost(
         raw_candidates: Final = (
             (
                 selected_model,
-                base_model_provider if base_model_provider is not None else request_pricing_provider,
+                pricing_provider_override or request_pricing_provider,
             ),
             (_get_response_model(completion_response), request_pricing_provider),
             *(((model, request_pricing_provider),) if model is not None else ()),
@@ -1999,9 +2059,7 @@ def completion_cost(
 
                 else:
                     if model is None:
-                        raise ValueError(
-                            f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                        )
+                        raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                     if len(messages) > 0:
                         prompt_tokens = token_counter(model=model, messages=messages)
                     elif len(prompt) > 0:
@@ -2015,9 +2073,7 @@ def completion_cost(
                     return A2ACostCalculator.calculate_a2a_cost(litellm_logging_obj=litellm_logging_obj)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                 if custom_llm_provider is None:
                     try:
                         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -2043,6 +2099,7 @@ def completion_cost(
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
+                        service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -2050,25 +2107,21 @@ def completion_cost(
                         litellm_logging_obj, custom_pricing, router_model_id
                     )
 
-                    usage_obj = getattr(completion_response, "usage", None)
+                    _video_usage_obj: object = attribute_or_none(completion_response, "usage")
                     duration_seconds: float | None = None
                     video_resolution: str | None = None
                     provider_reported_cost: float | None = None
-                    if completion_response is not None and usage_obj:
-                        # Handle both dict and Pydantic Usage object
-                        if isinstance(usage_obj, dict):
-                            duration_seconds = usage_obj.get("duration_seconds", None)
-                            _vr = usage_obj.get("video_resolution", None)
-                            provider_reported_cost = usage_obj.get("provider_reported_cost_usd", None)
-                            _vc = usage_obj.get("video_count", None)
-                        else:
-                            duration_seconds = getattr(usage_obj, "duration_seconds", None)
-                            _vr = getattr(usage_obj, "video_resolution", None)
-                            provider_reported_cost = getattr(usage_obj, "provider_reported_cost_usd", None)
-                            _vc = getattr(usage_obj, "video_count", None)
-                        if _vr is not None:
-                            video_resolution = str(_vr).strip().lower()
-                        video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
+                    if completion_response is not None and _video_usage_obj:
+                        duration_seconds = _VIDEO_USAGE_NUMBER.validate_python(
+                            _video_usage_value(_video_usage_obj, "duration_seconds")
+                        )
+                        provider_reported_cost = _VIDEO_USAGE_NUMBER.validate_python(
+                            _video_usage_value(_video_usage_obj, "provider_reported_cost_usd")
+                        )
+                        if (
+                            video_resolution_value := _video_usage_value(_video_usage_obj, "video_resolution")
+                        ) is not None:
+                            video_resolution = str(video_resolution_value).strip().lower()
 
                         if _video_model_info is None and provider_reported_cost is not None:
                             return float(provider_reported_cost)
@@ -2085,7 +2138,7 @@ def completion_cost(
                                 custom_llm_provider=custom_llm_provider,
                                 model_info=_video_model_info,
                                 video_resolution=video_resolution,
-                            ) * video_count + _video_input_image_cost(
+                            ) * _video_count(_video_usage_obj) + _video_input_image_cost(
                                 requested_model or model,
                                 custom_llm_provider,
                                 _video_model_info,
@@ -2098,7 +2151,7 @@ def completion_cost(
                         custom_llm_provider=custom_llm_provider,
                         model_info=_video_model_info,
                         video_resolution=video_resolution,
-                    )
+                    ) * _video_count(_video_usage_obj)
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = _speech_billed_characters(
                         completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
@@ -2261,9 +2314,7 @@ def completion_cost(
                     return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
 
                 if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
                     # Calculate the prompt characters + response characters
@@ -2613,6 +2664,19 @@ def _speech_billed_characters(speech_response: HttpxBinaryResponseContent | None
     return reported if isinstance(reported, int) else litellm.utils.count_characters(text=prompt)
 
 
+_VIDEO_USAGE_NUMBER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
+
+
+def _video_usage_value(usage: object, field: str) -> object:
+    fields: Final = as_str_mapping(usage)
+    return fields.get(field) if fields is not None else attribute_or_none(usage, field)
+
+
+def _video_count(usage: object) -> int:
+    count: Final = _video_usage_value(usage, "video_count")
+    return count if type(count) is int and count > 1 else 1
+
+
 def _video_input_image_cost(
     model: str,
     custom_llm_provider: str | None,
@@ -2761,7 +2825,14 @@ def pricing_entry_for_cost_calc(
         custom_pricing is True or base_model is not None,
     )
     if bedrock_model_info is not None:
-        return bedrock_model_info["key"], bedrock_model_info
+        key: Final = bedrock_model_info["key"]
+        declared_pricing: Final = declared_cost_map_pricing(key, model or key, custom_llm_provider)
+        registration: Final = _bedrock_cost_registration(model)
+        declared_keys: Final = frozenset(declared_pricing) | (
+            frozenset(registration[1]) if registration is not None else frozenset[str]()
+        )
+        selected_entry: Final[Mapping[str, object]] = bedrock_model_info
+        return key, MappingProxyType({name: value for name, value in selected_entry.items() if name in declared_keys})
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
     resolved: Final = next(
         (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
@@ -2769,7 +2840,7 @@ def pricing_entry_for_cost_calc(
     )
     if resolved is None:
         return None
-    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
+    return resolved["key"], declared_cost_map_pricing(resolved["key"], model or resolved["key"], custom_llm_provider)
 
 
 def ocr_cost(
@@ -3097,6 +3168,9 @@ def default_image_cost_calculator(
     return cost
 
 
+_VIDEO_COST_INFO: Final = TypeAdapter(Mapping[str, object])
+
+
 def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
@@ -3158,6 +3232,14 @@ def default_video_cost_calculator(
 
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
+
+    clip_cost: Final = video_clip_cost(_VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution)
+    if clip_cost is not None:
+        return clip_cost
+
+    video_cost: Final = cost_info.get("output_cost_per_video")
+    if video_cost is not None:
+        return video_cost
 
     # Check for video-specific cost per second first
     video_cost_per_second: Final = cost_info.get("output_cost_per_video_per_second")

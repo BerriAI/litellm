@@ -24,7 +24,7 @@ from sdk_clients import SdkClients, response_header
 
 pytestmark = pytest.mark.e2e
 
-OPENAI_TTS_MODEL: Final = "openai/gpt-4o-mini-tts"
+OPENAI_TTS_MODEL: Final = "openai/tts-1-1106"
 AWS_POLLY_MODEL: Final = "aws_polly/generative"
 
 
