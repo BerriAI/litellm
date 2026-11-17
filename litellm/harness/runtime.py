@@ -24,6 +24,7 @@ from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm.constants import HARNESS_EVENT_QUEUE_MAX_SIZE
+from litellm.harness.config import UNSET, Agent, Unset, resolve
 from litellm.harness.context import ApprovalHandler, GatewayTarget, SessionContext
 from litellm.harness.endpoint import ModelEndpoint
 from litellm.harness.errors import (
@@ -176,47 +177,49 @@ def validate(config: SessionConfig, harness_config: BaseHarnessConfig, interacti
 
 
 def build_config(
-    harness: Harness,
+    harness: Harness | Agent,
     *,
     sandbox: Sandbox,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> SessionConfig:
     """Normalize public keyword arguments into a SessionConfig."""
-    resolved_harness = require_harness(harness)
-    routed_model, gateway = resolve_model_route(model, api_key, api_base)
+    definition: Final = harness if isinstance(harness, Agent) else Agent(require_harness(harness))
+    resolved_api_key: Final = resolve(api_key, definition.api_key)
+    resolved_api_base: Final = resolve(api_base, definition.api_base)
+    routed_model, gateway = resolve_model_route(resolve(model, definition.model), resolved_api_key, resolved_api_base)
     return SessionConfig(
-        harness=resolved_harness,
+        harness=definition.harness,
         sandbox=sandbox,
         model=routed_model,
         gateway=gateway,
-        api_key=api_key,
-        api_base=api_base,
-        instructions=instructions,
-        tools=tuple(tools),
-        skills=tuple(_normalize_skills(skills)),
-        disable_tools=tuple(disable_tools),
-        permissions=permissions,
-        on_approval=on_approval,
-        output=output,
-        max_turns=max_turns,
-        timeout=timeout,
-        metadata=MappingProxyType(dict(metadata or ())),
-        options=options,
-        install=install,
+        api_key=resolved_api_key,
+        api_base=resolved_api_base,
+        instructions=resolve(instructions, definition.instructions),
+        tools=tuple(resolve(tools, definition.tools)),
+        skills=_normalize_skills(resolve(skills, definition.skills)),
+        disable_tools=tuple(resolve(disable_tools, definition.disable_tools)),
+        permissions=resolve(permissions, definition.permissions),
+        on_approval=resolve(on_approval, definition.on_approval),
+        output=resolve(output, definition.output),
+        max_turns=resolve(max_turns, definition.max_turns),
+        timeout=resolve(timeout, definition.timeout),
+        metadata=MappingProxyType(dict(resolve(metadata, definition.metadata) or ())),
+        options=resolve(options, definition.options),
+        install=resolve(install, definition.install),
     )
 
 
@@ -790,24 +793,24 @@ async def _collect(events: AsyncIterator[Event]) -> Result:
 
 
 def aagent_session(
-    harness: Harness,
+    harness: Harness | Agent,
     *,
     sandbox: Sandbox,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> AsyncSession:
     """A multi-turn agent session: `async with litellm.aagent_session(...) as s:`."""
     config = build_config(
@@ -833,25 +836,25 @@ def aagent_session(
 
 
 async def arun_agent(
-    harness: Harness,
+    harness: Harness | Agent,
     prompt: str,
     *,
     sandbox: Sandbox,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> Result:
     """Run one prompt to completion and return the Result."""
     config = build_config(
@@ -878,25 +881,25 @@ async def arun_agent(
 
 
 def astream_agent(
-    harness: Harness,
+    harness: Harness | Agent,
     prompt: str,
     *,
     sandbox: Sandbox,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> AsyncEventStream:
     """Stream events for one prompt. Validation errors raise here, before iteration."""
     session = aagent_session(
@@ -982,26 +985,26 @@ def agent_capabilities(harness: Harness) -> Capabilities:
 
 
 def aagent(
-    harness: Harness,
+    harness: Harness | Agent,
     prompt: str,
     *,
     sandbox: Sandbox,
     stream: bool = False,
-    model: str | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    instructions: str | None = None,
-    tools: Sequence[Callable[..., object]] = (),
-    skills: Sequence[str | os.PathLike[str]] = (),
-    disable_tools: Sequence[str] = (),
-    permissions: PermissionMode = "full",
-    on_approval: ApprovalHandler | None = None,
-    output: type[BaseModel] | None = None,
-    max_turns: int | None = None,
-    timeout: float | None = None,
-    metadata: Mapping[str, object] | None = None,
-    options: HarnessOptions | None = None,
-    install: bool = False,
+    model: str | None | Unset = UNSET,
+    api_key: str | None | Unset = UNSET,
+    api_base: str | None | Unset = UNSET,
+    instructions: str | None | Unset = UNSET,
+    tools: Sequence[Callable[..., object]] | Unset = UNSET,
+    skills: Sequence[str | os.PathLike[str]] | Unset = UNSET,
+    disable_tools: Sequence[str] | Unset = UNSET,
+    permissions: PermissionMode | Unset = UNSET,
+    on_approval: ApprovalHandler | None | Unset = UNSET,
+    output: type[BaseModel] | None | Unset = UNSET,
+    max_turns: int | None | Unset = UNSET,
+    timeout: float | None | Unset = UNSET,
+    metadata: Mapping[str, object] | None | Unset = UNSET,
+    options: HarnessOptions | None | Unset = UNSET,
+    install: bool | Unset = UNSET,
 ) -> Coroutine[object, object, Result] | AsyncEventStream:
     """Run an agent harness on one prompt.
 
