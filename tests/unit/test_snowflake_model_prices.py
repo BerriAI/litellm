@@ -14,11 +14,12 @@ BACKUP_PATH: Final = REPO_ROOT / "litellm" / "model_prices_and_context_window_ba
 USD_PER_CREDIT: Final = 2.0
 TOKENS_PER_MILLION: Final = 1_000_000
 
-# Source: Snowflake Service Consumption Table, Tables 6(b) and 6(c), effective November 12, 2026
+# Source: Snowflake Service Consumption Table, Tables 6(b) and 6(c), effective November 17, 2026
 # https://www.snowflake.com/legal-files/CreditConsumptionTable.pdf
 # Rates are AI Credits per million tokens, converted at the $2.00 per credit global-routing price on
 # https://docs.snowflake.com/en/user-guide/snowflake-cortex/pricing
 # Tuple order: input, output, cache read, cache write. None means the table lists no such rate.
+# The table prints the claude-haiku-5-5 cache write as 0.063, which is 0.0625 rounded (1.25 x its 0.05 input rate).
 PUBLISHED_CREDITS: Final = {
     "snowflake/openai-gpt-5-mini": (0.125, 1.0, 0.015, None),
     "snowflake/openai-gpt-5-nano": (0.03, 0.22, 0.005, None),
@@ -30,6 +31,15 @@ PUBLISHED_CREDITS: Final = {
     "snowflake/claude-sonnet-4-5": (1.5, 7.5, 0.15, 1.875),
     "snowflake/claude-sonnet-4-6": (1.5, 7.5, 0.15, 1.875),
     "snowflake/claude-haiku-4-5": (0.5, 2.5, 0.05, 0.625),
+    "snowflake/claude-opus-5-5": (2.0, 10.0, 0.1, 2.5),
+    "snowflake/claude-sonnet-5-5": (1.0, 5.0, 0.05, 1.25),
+    "snowflake/claude-haiku-5-5": (0.05, 0.25, 0.005, 0.0625),
+    "snowflake/claude-sonnet-5": (1.0, 5.0, 0.1, 1.25),
+    "snowflake/claude-opus-5": (2.5, 12.5, 0.25, 3.125),
+    "snowflake/claude-opus-4-8": (2.5, 12.5, 0.25, 3.125),
+    "snowflake/claude-opus-4-7": (2.5, 12.5, 0.25, 3.125),
+    "snowflake/claude-opus-4-6": (2.5, 12.5, 0.25, 3.125),
+    "snowflake/claude-opus-4-5": (2.5, 12.5, 0.25, 3.125),
 }
 RATE_FIELDS: Final = (
     "input_cost_per_token",
@@ -71,3 +81,16 @@ def test_snowflake_cache_writes_are_billed_at_the_cache_write_rate(model: str, l
     )
     assert prompt_cost == pytest.approx(entry["cache_creation_input_token_cost"] * TOKENS_PER_MILLION)
     assert prompt_cost > entry["input_cost_per_token"] * TOKENS_PER_MILLION
+
+
+CLAUDE_MODELS: Final = tuple(key for key in PUBLISHED_CREDITS if key.startswith("snowflake/claude-"))
+
+
+@pytest.mark.parametrize("model", CLAUDE_MODELS)
+def test_snowflake_claude_entry_limits_and_cache_rates_are_consistent(model: str) -> None:
+    entry: Final = _snowflake_entries(MAIN_PATH)[model]
+    assert 0 < entry["max_output_tokens"] <= entry["max_input_tokens"]
+    assert entry["supports_prompt_caching"] is True
+    assert (
+        entry["cache_read_input_token_cost"] < entry["input_cost_per_token"] < entry["cache_creation_input_token_cost"]
+    )
