@@ -819,6 +819,7 @@ def image_variation(
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+_OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
@@ -840,6 +841,14 @@ def _tokenhub_passthrough_edit_params(
         **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
         **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
     }
+
+
+def _custom_handler_edit_params(
+    kwargs: Mapping[str, object], openai_params: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: CustomLLM.image_edit takes optional_params as a dict
+    dropped: Final = frozenset(_listed_drop_params(kwargs.get("additional_drop_params")))
+    requested: Final = {key: value for key, value in openai_params.items() if value is not None}
+    return {key: value for key, value in {**kwargs, **requested}.items() if key not in dropped}
 
 
 @client
@@ -924,6 +933,17 @@ def image_edit(
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             model_response: Final = ImageResponse()
+            custom_optional_params: Final = _custom_handler_edit_params(
+                _OBJECT_DICT_ADAPTER.validate_python(kwargs),
+                {
+                    "mask": mask,
+                    "n": n,
+                    "quality": quality,
+                    "response_format": response_format,
+                    "size": size,
+                    "user": user,
+                },
+            )
 
             if _is_async:
                 async_custom_client: AsyncHTTPHandler | None = None
@@ -937,7 +957,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=async_custom_client,
@@ -954,7 +974,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=custom_client,
