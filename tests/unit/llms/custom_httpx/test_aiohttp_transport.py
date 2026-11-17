@@ -1392,6 +1392,33 @@ async def test_a_collected_transport_closes_the_session_it_owns():
     assert session.closed, "the owned session outlived the transport that was collected before closing it"
 
 
+class _ReferenceCycle:
+    def __init__(self, transport: LiteLLMAiohttpTransport) -> None:
+        self.transport = transport
+        self.itself = self
+
+
+@pytest.mark.asyncio
+async def test_a_transport_collected_in_a_reference_cycle_closes_the_session_it_owns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An SDK client that cached a resource such as ``client.chat`` is a reference cycle, so the cyclic collector
+    frees the client, its transport and the session that transport owns in the same pass."""
+    gc.collect()
+    caplog.clear()
+    cycle: Final = _ReferenceCycle(LiteLLMAiohttpTransport(client=aiohttp.ClientSession()))
+    session_ref: Final = weakref.ref(cycle.transport.client)
+
+    del cycle
+    gc.collect()
+    await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+    gc.collect()
+
+    assert "Unclosed client session" not in caplog.text, caplog.text
+    assert "Unclosed connector" not in caplog.text, caplog.text
+    assert session_ref() is None, "the owned session outlived the transport that was collected before closing it"
+
+
 @pytest.mark.asyncio
 async def test_a_collected_transport_leaves_a_shared_session_open():
     session = aiohttp.ClientSession()
