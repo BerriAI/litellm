@@ -388,7 +388,7 @@ def test_adapter_route_upstream_error_reaches_the_caller_with_its_status(
     gateway: Gateway, status: int, stream: bool
 ) -> None:
     route: Final = _ROUTES["model_garden_publisher"]
-    message: Final = f"scripted vertex rejection {uuid.uuid4().hex}"
+    message: Final = f"scripted vertex rejection {uuid.uuid4().hex}f4039"
     with wire_server(_vertex_peer(status=status, error=message)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire, route, num_retries=0)
         key: Final = scenario.key(models=[model])

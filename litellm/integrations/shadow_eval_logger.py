@@ -39,8 +39,11 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.redis.stores.spend_counters import (
+    shadow_eval_counter,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
@@ -113,7 +116,7 @@ def _chat_request_from_anthropic_messages(
     because the logged optional_params switch dialect per provider path (the bridge's
     inner completion rewrites them to chat shape mid-flight); the adapter translates
     them alongside the messages, and sampling params copy through untranslated."""
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -203,7 +206,7 @@ def _chat_final_text(response_obj: object) -> str:
     if read is None:
         return ""
     prose: Final = extract_text_from_content(read("content"))
-    if not (read("tool_calls") or read("function_call")):
+    if not _tool_calls_list(read):
         return prose
     serialized: Final = _serialize_tool_calls(read)
     return f"{prose} {serialized}".strip() if prose else serialized
@@ -219,8 +222,9 @@ _RESPONSES_TOOL_CALL_TYPES: Final = frozenset(("function_call", "custom_tool_cal
 
 
 def _tool_calls_list(read: Callable[[str], object]) -> tuple[object, ...]:
-    calls: Final = read("tool_calls")
-    listed: Final = tuple(calls) if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    listed: Final = tool_calls_with_server_tool_calls(
+        {"tool_calls": read("tool_calls"), "provider_specific_fields": read("provider_specific_fields")}
+    )
     single: Final = read("function_call")
     return listed if listed else ((single,) if single is not None else ())
 
@@ -588,7 +592,7 @@ def _leg_eval_spend(sums: Mapping[str, object]) -> float:
 
 
 def _job_spend_counter_key(job_id: str) -> str:
-    return f"spend:shadow_eval:{job_id}"
+    return shadow_eval_counter(job_id)
 
 
 async def _job_spend_from_counter(counter_key: str, fallback_spend: float, max_budget: float) -> float:
@@ -747,6 +751,7 @@ class ActiveShadowEvalJob(LiteLLMBaseModel):
     models: frozenset[str] = frozenset()
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
+    skip_same_model: bool = False
     shadow_percentage: float
     judge_model: str
     max_turns: int
@@ -790,9 +795,7 @@ class ActiveShadowEvalJob(LiteLLMBaseModel):
 def _canonical_group(router: "Router | None", model_group: str) -> str:
     """A model group in the one spelling both a job's scope and a request's model compare
     under: an alias resolves to its target so the two never fail to match on spelling."""
-    return (
-        resolve_model_group_alias(router.model_group_alias, model_group) if router is not None else None
-    ) or model_group
+    return (router.registry().resolve(model_group, kind="alias") if router is not None else None) or model_group
 
 
 def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_group: str) -> bool:
@@ -800,6 +803,38 @@ def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_gro
     the router's alias map at match time, so a re-pointed alias applies to the next request
     rather than after the jobs cache rolls."""
     return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
+
+
+def _served_group(
+    router: "Router | None",
+    job: "ActiveShadowEvalJob",
+    request_metadata: Mapping[str, object],
+    model_group: str,
+) -> str | None:
+    """The canonical group that answered the caller, or None when the request does not say.
+    A fallback hop restamps model_group with its own target while routed_model keeps the
+    router's first pick, so routed_model is only trusted while model_group is still the
+    router's own name and no hop ran."""
+    if not model_group:
+        return None
+    if model_group != _canonical_group(router, job.router_name):
+        return model_group
+    if request_metadata.get("attempted_fallbacks"):
+        return None
+    routed: Final = _routing_decision(request_metadata).get("routed_model")
+    return _canonical_group(router, routed) if isinstance(routed, str) and routed else None
+
+
+def _baseline_served_it(
+    router: "Router | None",
+    job: "ActiveShadowEvalJob",
+    request_metadata: Mapping[str, object],
+    model_group: str,
+) -> bool:
+    if not job.skip_same_model or job.baseline_model is None:
+        return False
+    served: Final = _served_group(router, job, request_metadata, model_group)
+    return served is not None and served == _canonical_group(router, job.baseline_model)
 
 
 class _ShadowEvalJobRow(Protocol):
@@ -983,6 +1018,9 @@ class ShadowEvalLogger(CustomLogger):
             if not _sample_hits(request_id, job.id, job.shadow_percentage):
                 self._record_funnel(job.id, "not_sampled")
                 continue
+            if _baseline_served_it(router, job, request_metadata, model_group):
+                self._record_funnel(job.id, "same_model")
+                continue
             eligible.append(job)
         return tuple(eligible)
 
@@ -1109,7 +1147,7 @@ class ShadowEvalLogger(CustomLogger):
         decline to spend on an admitted sample (no DB to record into, an over-budget key,
         an unverifiable or exhausted eval budget) count the REQUEST withheld before any
         arm runs, so funnel counters stay per-request and a leg's eligible traffic still
-        reconciles as not_sampled + unjudgeable + shed + withheld + sampled requests,
+        reconciles as not_sampled + same_model + unjudgeable + shed + withheld + sampled requests,
         where each sampled request writes one attempt row per arm. A budget crossed
         mid-loop lets the remaining arms overshoot by one round, the same class of
         overshoot as the samples already in flight when the cap is crossed. The prisma

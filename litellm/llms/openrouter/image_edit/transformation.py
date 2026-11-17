@@ -47,11 +47,12 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import ConfigDict, RootModel, with_config
+from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.openrouter.common_utils import OpenRouterException
@@ -72,6 +73,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -187,11 +190,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
-        base_url = base_url.rstrip("/")
-        if not base_url.endswith("/chat/completions"):
-            return f"{base_url}/chat/completions"
-        return base_url
+        base_url: Final = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+        return ensure_api_route(base_url, "chat/completions")
 
     def transform_image_edit_request(
         self,
@@ -250,7 +250,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         try:
-            response_json: Final[object] = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error parsing OpenRouter response: {e}",

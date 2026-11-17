@@ -4,6 +4,7 @@ from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows h
 from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 from typing_extensions import TypedDict
 
+from litellm.types.guardrails import GuardrailNumRetries
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -47,7 +48,7 @@ class GenericGuardrailAPIMetadata(TypedDict, total=False):
 class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
     """Optional parameters for the Generic Guardrail API"""
 
-    additional_provider_specific_params: dict[str, Any] | None = Field(
+    additional_provider_specific_params: dict[str, object] | None = Field(
         default=None,
         description="Additional provider-specific parameters to send with the guardrail request",
     )
@@ -69,6 +70,8 @@ class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
             "guardrail response can block or modify it; broader than unreachable_fallback."
         ),
     )
+
+    num_retries: GuardrailNumRetries = None
 
     forward_messages_as_sent: bool | None = Field(
         default=False,
@@ -158,7 +161,7 @@ class GenericGuardrailAPIRequest(LiteLLMBaseModel):
         default=None,
         description="LiteLLM library version running this proxy.",
     )
-    additional_provider_specific_params: dict[str, Any] | None = None
+    additional_provider_specific_params: dict[str, object] | None = None
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None
     model: str | None = None  # the model being used for the LLM call
 

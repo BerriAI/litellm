@@ -13,6 +13,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import (
+    ContentPartDonePartOutputText,
     IncompleteDetails,
     ResponseAPIUsage,
     ResponseCompletedEvent,
@@ -225,10 +226,12 @@ def _assert_valid_stream(events: tuple[object, ...], item_id: str) -> None:
     }
     assert getattr(events[4], "delta", None) == _OUTPUT_TEXT
     assert getattr(events[5], "text", None) == _OUTPUT_TEXT
+    assert isinstance(getattr(events[6], "part", None), ContentPartDonePartOutputText)
     assert _json_object(getattr(events[6], "part", None)) == {
         "type": "output_text",
         "text": _OUTPUT_TEXT,
         "annotations": [],
+        "logprobs": None,
     }
     assert getattr(getattr(events[7], "item", None), "type", None) == "message"
     assert tuple(item.id for item in completed.response.output) == (item_id,)
