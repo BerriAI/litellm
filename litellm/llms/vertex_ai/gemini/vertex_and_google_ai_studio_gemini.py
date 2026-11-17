@@ -204,15 +204,17 @@ def _served_model_name(model_version: object) -> str | None:
     return model_version.split("@", 1)[0]
 
 
+def _sent_response_format(optional_params: Mapping[str, object]) -> object:
+    match optional_params.get("extra_body"):
+        case {"generationConfig": {"responseFormat": response_format} | {"response_format": response_format}}:
+            return response_format
+        case _:
+            return optional_params.get("responseFormat")
+
+
 def _requests_audio_mime_type(optional_params: Mapping[str, object]) -> bool:
-    match optional_params:
-        case {"responseFormat": {"audio": {"mimeType": str()} | {"mime_type": str()}}}:
-            return True
-        case {
-            "extra_body": {
-                "generationConfig": {"responseFormat": {"audio": {"mimeType": str()} | {"mime_type": str()}}}
-            }
-        }:
+    match _sent_response_format(optional_params):
+        case {"audio": {"mimeType": str()} | {"mime_type": str()}}:
             return True
         case _:
             return False
