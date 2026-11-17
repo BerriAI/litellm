@@ -1,7 +1,9 @@
 import contextlib
+import difflib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Generator, Mapping, Sequence
 from enum import Enum, auto
+from itertools import chain, repeat
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 import httpx
@@ -69,6 +71,18 @@ from litellm.types.utils import (
 GUARDRAIL_NAME: Final = "model_armor"
 _RESPONSE_JSON: Final = TypeAdapter(object)
 _FILTER_RESULT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _changed_line_indexes(original: Sequence[str], redacted: Sequence[str]) -> Generator[int, None, None]:
+    for tag, start, end, _, _ in difflib.SequenceMatcher(None, original, redacted, autojunk=False).get_opcodes():
+        if tag != "equal":
+            yield from range(start, end)
+
+
+def _texts_changed_by(texts: Sequence[str], redacted: str) -> frozenset[str]:
+    owners: Final = tuple(chain.from_iterable(repeat(text, text.count("\n") + 1) for text in texts))
+    changed: Final = _changed_line_indexes(tuple("\n".join(texts).split("\n")), tuple(redacted.split("\n")))
+    return frozenset(owners[index] for index in changed)
 
 
 @runtime_checkable
@@ -1396,39 +1410,35 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     armor_response,
                 ),
             )
-        if flagged or not mask or (self._get_sanitized_content(armor_response) or content) == content:
+        redaction: Final = self._get_sanitized_content(armor_response) or content
+        if flagged or not mask or redaction == content:
             return inputs
 
-        def blocked_after_rescan(rescan_response: _ModelArmorResponse) -> HTTPException:
-            rescan_end_time: Final = time.time()
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response=self._build_logging_response(rescan_response),
-                request_data=request_data,
-                guardrail_status="guardrail_flagged",
-                guardrail_provider="model_armor",
-                start_time=start_time,
-                end_time=rescan_end_time,
-                duration=rescan_end_time - start_time,
-            )
-            return HTTPException(
-                status_code=400,
-                detail=self._build_block_error_detail("Response blocked by Model Armor", rescan_response),
-            )
-
         async def sanitized(text: str) -> str:
-            text_response: Final = await scanned(text, rescan=True)
-            if self._should_block_content(text_response, allow_sanitization=True):
-                raise blocked_after_rescan(text_response)
-            return self._get_sanitized_content(text_response) or text
+            return self._get_sanitized_content(await scanned(text, rescan=True)) or text
 
+        rescanned: Final = _texts_changed_by(unique_texts, redaction)
         try:
-            rewrites: Final = {text: await sanitized(text) for text in unique_texts}
+            rewrites: Final = {text: await sanitized(text) if text in rescanned else text for text in unique_texts}
         except (ModelArmorAPIError, httpx.HTTPError) as e:
             if not fails_open(e):
                 raise
             return inputs
-        if "\n".join(rewrites.values()) != self._get_sanitized_content(armor_response):
-            raise blocked_after_rescan(armor_response)
+        if "\n".join(rewrites.values()) != redaction:
+            mismatch_end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=self._build_logging_response(armor_response),
+                request_data=request_data,
+                guardrail_status="guardrail_flagged",
+                guardrail_provider="model_armor",
+                start_time=start_time,
+                end_time=mismatch_end_time,
+                duration=mismatch_end_time - start_time,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
+            )
         return {**inputs, "texts": [rewrites.get(text, text) for text in inputs.get("texts") or ()]}
 
     @staticmethod

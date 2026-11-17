@@ -5416,12 +5416,11 @@ async def test_apply_guardrail_masks_a_deidentified_response_text():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_each_response_text_on_its_own_and_keeps_count_and_order():
+async def test_apply_guardrail_rescans_only_the_texts_the_redaction_changed_and_keeps_count_and_order():
     guardrail = _post_mcp_call_guardrail(
         [
             _deidentified_armor_response("ssn [REDACTED]\nplain\nphone [REDACTED]"),
             _deidentified_armor_response("ssn [REDACTED]"),
-            _clean_armor_response(),
             _deidentified_armor_response("phone [REDACTED]"),
         ]
     )
@@ -5436,9 +5435,25 @@ async def test_apply_guardrail_masks_each_response_text_on_its_own_and_keeps_cou
     assert _scanned_texts(guardrail) == [
         "ssn 078-05-1120\nplain\nphone 555-0100",
         "ssn 078-05-1120",
-        "plain",
         "phone 555-0100",
     ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_rescans_a_multiline_text_whose_later_line_the_redaction_changed():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("header\nmail [EMAIL]\nclean"),
+            _deidentified_armor_response("header\nmail [EMAIL]"),
+        ]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["header\nmail a@b.co", "clean"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert result["texts"] == ["header\nmail [EMAIL]", "clean"]
+    assert _scanned_texts(guardrail)[1:] == ["header\nmail a@b.co"]
 
 
 @pytest.mark.asyncio
@@ -5466,16 +5481,18 @@ async def test_apply_guardrail_blocks_a_deidentified_response_when_masking_is_of
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_when_a_single_response_text_is_flagged_during_masking():
-    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("ssn [REDACTED]"), _flagged_armor_response()])
+async def test_apply_guardrail_masks_instead_of_blocking_when_a_rescan_trips_another_filter_out_of_context():
+    rescan_with_csam_match: Final = _deidentified_armor_response("id [EMAIL]")
+    cast(dict, rescan_with_csam_match["sanitizationResult"])["filterResults"]["csam"] = {
+        "csamFilterFilterResult": {"matchState": "MATCH_FOUND"}
+    }
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("row 34\nid [EMAIL]"), rescan_with_csam_match])
 
-    with pytest.raises(HTTPException) as exc_info:
-        await guardrail.apply_guardrail(
-            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
-        )
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["row 34", "id c34@corp.invalid"]}, request_data={"metadata": {}}, input_type="response"
+    )
 
-    assert exc_info.value.status_code == 400
-    assert _scanned_texts(guardrail) == ["ssn 078-05-1120", "ssn 078-05-1120"]
+    assert result["texts"] == ["row 34", "id [EMAIL]"]
 
 
 @pytest.mark.asyncio
@@ -5559,7 +5576,7 @@ async def test_apply_guardrail_returns_the_inputs_on_a_model_armor_failure_when_
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_logs_a_block_found_on_a_single_text_rescan_as_flagged():
+async def test_apply_guardrail_logs_a_redaction_the_rescan_cannot_reproduce_as_flagged():
     guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("ssn [REDACTED]"), _flagged_armor_response()])
     request_data: Final[dict] = {"metadata": {}}
 
@@ -5794,8 +5811,7 @@ async def test_apply_guardrail_masks_the_match_when_another_text_rescan_skipped_
     guardrail = _post_mcp_call_guardrail(
         [
             _skipped_with_deidentified("a very large text\nssn [REDACTED]"),
-            _skipped_armor_response(),
-            _deidentified_armor_response("ssn [REDACTED]"),
+            _skipped_with_deidentified("ssn [REDACTED]"),
         ],
         fail_on_error=False,
     )
@@ -5827,8 +5843,7 @@ async def test_apply_guardrail_raises_a_model_armor_error_when_a_text_rescan_ski
     guardrail = _post_mcp_call_guardrail(
         [
             _deidentified_armor_response("a very large text\nssn [REDACTED]"),
-            _skipped_armor_response(),
-            _deidentified_armor_response("ssn [REDACTED]"),
+            _skipped_with_deidentified("ssn [REDACTED]"),
         ],
         fail_on_error=True,
     )
