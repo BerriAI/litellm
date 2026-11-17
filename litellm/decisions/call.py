@@ -36,6 +36,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     with_images_where,
     with_inlined_images,
     without_prompt_cache_breakpoints,
+    without_raw_prompt_cache_breakpoints,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
@@ -186,11 +187,16 @@ class OpenAIDecisionRequestFields:
     videos: DecisionsVideoClips | None = None
     prompt_cache_key: str | None = None
     prompt_cache_options: DecisionsPromptCacheOptions | None = None
+    keeps_prompt_cache_breakpoints: bool = True
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
             {
-                "input": self.input,
+                "input": (
+                    self.input
+                    if self.keeps_prompt_cache_breakpoints
+                    else without_raw_prompt_cache_breakpoints(self.input)
+                ),
                 "questions": self.questions,
                 "safety_identifier": safety_identifier,
                 "audio": self.audio,
@@ -387,7 +393,9 @@ def _fields_without_unsupported_prompt_cache(
 ) -> RequestFields:
     match fields:
         case OpenAIDecisionRequestFields() if not provider_config.supports_prompt_cache:
-            return replace(fields, prompt_cache_key=None, prompt_cache_options=None)
+            return replace(
+                fields, prompt_cache_key=None, prompt_cache_options=None, keeps_prompt_cache_breakpoints=False
+            )
         case _:
             return fields
 

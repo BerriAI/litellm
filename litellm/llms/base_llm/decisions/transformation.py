@@ -246,6 +246,46 @@ def without_prompt_cache_breakpoints(
             assert_never(decision_input)
 
 
+_RAW_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_RAW_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _raw_entries(value: object) -> tuple[object, ...] | None:
+    try:
+        return _RAW_ENTRIES_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _raw_fields(value: object) -> Mapping[str, object] | None:
+    try:
+        return _RAW_FIELDS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _raw_part_without_breakpoint(part: object) -> object:
+    fields: Final = _raw_fields(part)
+    if fields is None:
+        return part
+    return {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _raw_message_without_breakpoints(message: object) -> object:
+    fields: Final = _raw_fields(message)
+    parts: Final = None if fields is None else _raw_entries(fields.get("content"))
+    if fields is None or parts is None:
+        return message
+    return {**fields, "content": tuple(map(_raw_part_without_breakpoint, parts))}
+
+
+def without_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+    messages: Final = _raw_entries(decision_input)
+    if messages is None:
+        return decision_input
+    return tuple(map(_raw_message_without_breakpoints, messages))
+
+
 def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
     if isinstance(message.content, str):
         return (message.content,)

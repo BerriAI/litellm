@@ -2300,6 +2300,60 @@ def test_prompt_cache_values_are_not_validated_for_a_provider_without_prompt_cac
     }
 
 
+_MALFORMED_BREAKPOINT_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "role": "developer",
+    "content": [
+        {
+            "type": "input_text",
+            "text": _REVIEW_POLICY,
+            "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+        },
+    ],
+}
+
+
+def test_malformed_prompt_cache_breakpoints_are_ignored_by_a_provider_without_prompt_cache(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    litellm.decisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        input=[_MALFORMED_BREAKPOINT_MESSAGE, _REVIEW_MESSAGE],
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": f"{_REVIEW_POLICY}\n\n{_SCREEN_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
+def test_malformed_prompt_cache_breakpoints_are_refused_for_openai(
+    drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="prompt_cache_breakpoint"):
+        litellm.decisions(
+            model="openai/gpt-6-luna",
+            api_key="caller-key",
+            input=[_MALFORMED_BREAKPOINT_MESSAGE, _REVIEW_MESSAGE],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
 def test_prompt_cache_controls_next_to_state_are_ignored(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

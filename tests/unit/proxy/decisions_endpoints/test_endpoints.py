@@ -1132,6 +1132,67 @@ def test_prompt_cache_controls_are_ignored_by_a_deployment_without_prompt_cache(
     }
 
 
+_MALFORMED_BREAKPOINT_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "role": "developer",
+    "content": [
+        {
+            "type": "input_text",
+            "text": _CACHE_POLICY,
+            "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+        }
+    ],
+}
+
+
+def test_malformed_prompt_cache_breakpoints_are_ignored_by_a_deployment_without_prompt_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key"})
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_MALFORMED_BREAKPOINT_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": f"{_CACHE_POLICY}\n\n{_IMAGE_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+def test_malformed_prompt_cache_breakpoints_are_refused_by_an_openai_deployment(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    _route_decider_to(monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k"})
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json={})
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_MALFORMED_BREAKPOINT_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "prompt_cache_breakpoint" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
 @pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
 def test_malformed_images_are_refused_unless_the_deployment_drops_params(
     client: TestClient,
