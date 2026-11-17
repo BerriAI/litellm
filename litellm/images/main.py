@@ -730,8 +730,8 @@ def image_variation(
     return response
 
 
-_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:

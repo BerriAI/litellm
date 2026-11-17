@@ -1,7 +1,6 @@
 import asyncio
 import json
 from datetime import datetime
-from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,9 +14,10 @@ from pydantic import JsonValue
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.custom_llm import CustomLLM
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 import os
+from litellm.llms.custom_llm import CustomLLM
+from queue import SimpleQueue
 
 
 def test_image_generation_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
@@ -459,6 +459,8 @@ async def test_azure_image_generation_request_body():
 
 
 _CUSTOM_IMAGE: Final = litellm.ImageResponse(created=1700000000, data=[{"b64_json": "aW1hZ2U="}])
+
+
 _OPENAI_IMAGE_PARAMS: Final = {
     "n": 2,
     "size": "1024x1536",
