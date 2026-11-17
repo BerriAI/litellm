@@ -22,6 +22,7 @@ import json
 import random
 import re
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -42,6 +43,7 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    REDACTED_HEADER_VALUE,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
@@ -65,6 +67,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.redis.stores.router_session_pins import TierModelPin, TierSessionPin
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
@@ -553,6 +556,27 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _conversation_text_lengths(content: object) -> Iterator[int]:
+    pending: Final[deque[object]] = deque((content,))  # mutable-ok: explicit stack avoids recursive content traversal
+    while pending:
+        part = pending.pop()
+        if isinstance(part, str):
+            yield len(part)
+        elif isinstance(part, list):
+            parts = cast(Sequence[object], part)  # cast-ok: every list element is an object
+            pending.extend(parts)
+        elif isinstance(part, Mapping):
+            block = cast(Mapping[object, object], part)  # cast-ok: mapping keys and values are objects
+            if block.get("type") == "text":
+                pending.append(block.get("text"))
+            elif block.get("type") == "tool_result":
+                pending.append(block.get("content"))
+
+
+def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
+    return sum(sum(_conversation_text_lengths(message.get("content"))) // 4 for message in messages or ())
+
+
 def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:
     """Span of each complete reminder block for one marker pair, left to right.
 
@@ -814,7 +838,11 @@ _CLAUDE_CODE_REQUEST_CLASS_HEADER: Final = "x-claude-code-request-class"
 _CLAUDE_CODE_AUXILIARY_SENTINEL: Final = f"{_CLAUDE_CODE_REQUEST_CLASS_HEADER}: auxiliary"
 
 
-def _claude_code_request_class(request_kwargs: Mapping[str, object]) -> str | None:
+_REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _proxy_request_header(request_kwargs: Mapping[str, object], header_name: str) -> str | None:
     proxy_request: Final = request_kwargs.get("proxy_server_request")
     if not isinstance(proxy_request, Mapping):
         return None
@@ -823,12 +851,21 @@ def _claude_code_request_class(request_kwargs: Mapping[str, object]) -> str | No
         return None
     return next(
         (
-            value.strip().lower()
+            value
             for key, value in cast(Mapping[object, object], headers).items()  # cast-ok: header map from the proxy
-            if isinstance(key, str) and key.lower() == _CLAUDE_CODE_REQUEST_CLASS_HEADER and isinstance(value, str)
+            if isinstance(key, str) and key.lower() == header_name and isinstance(value, str)
         ),
         None,
     )
+
+
+def _claude_code_request_class(request_kwargs: Mapping[str, object]) -> str | None:
+    value: Final = _proxy_request_header(request_kwargs, _CLAUDE_CODE_REQUEST_CLASS_HEADER)
+    return value.strip().lower() if value is not None else None
+
+
+def _conversation_pin_id(parts: tuple[str, ...]) -> str:
+    return "conversation-header:" + hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
 
 _CODEX_TURN_METADATA_KEY: Final = "x-codex-turn-metadata"
@@ -2205,10 +2242,12 @@ class ComplexityRouter(CustomLogger):
         """
         scored: Final = self._classify_locally(prompt, system_prompt)
         threshold: Final = self.config.heuristic_first_max_tier
+        context_limit: Final = self.config.heuristic_first_max_context_tokens
         decided_cheaply: Final = (
             threshold is not None
             and self._local_outcome_is_decided(scored)
             and not self._classifier_image_parts(messages)
+            and (context_limit is None or _estimated_conversation_tokens(messages) <= context_limit)
             and self._active_tier_severity(scored.tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
@@ -3090,7 +3129,7 @@ class ComplexityRouter(CustomLogger):
             else ()
         )
 
-        cumulative_tokens: Final = sum(len(_message_text(msg.get("content"))) // 4 for msg in messages or ())
+        cumulative_tokens: Final = _estimated_conversation_tokens(messages)
         trajectory_block: Final = (
             (f"\nConversation so far: ~{cumulative_tokens} tokens across the request",)
             if has_prior_conversation
@@ -3179,20 +3218,19 @@ class ComplexityRouter(CustomLogger):
         if retained_model is not None and retained_model in candidates:
             self._restamp_adaptive_choice(request_kwargs, model, retained_model)
             return retained_model
-        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
+        session_id: Final = self._affinity_session_id(request_kwargs)
         if session_id is None:
             return model
-        caller: Final = DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs)
-        identity: Final = (self.model_name, self._tier_affinity_config, caller, session_id, _tier_name(tier))
-        cache_identity: Final = (
-            (*identity, ("replay_fallback", retained_model)) if retained_model is not None else identity
-        )
-        cache_key: Final = (
-            "complexity_router_tier_model_affinity:v1:"
-            + hashlib.sha256(json.dumps(cache_identity).encode()).hexdigest()
+        cache_key: Final = TierModelPin(
+            router=self.model_name,
+            tiers=self._tier_affinity_config,
+            caller=DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs),
+            session_id=session_id,
+            tier=_tier_name(tier),
+            replay_fallback=retained_model,
         )
         winner: Final = await claim_affinity_pin(
-            self.ctx.health().store,
+            self.ctx.health().session_pins,
             cache_key,
             MappingProxyType({"model": model}),
             self.config.session_affinity_ttl_seconds,
@@ -4480,19 +4518,42 @@ class ComplexityRouter(CustomLogger):
                 return str(session_id)
         return None
 
+    def _child_tier_session_metadata(self, request_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+        if self.config.classification_mode != "user_turn" or self.config.session_affinity:
+            return None
+        return next(
+            (
+                metadata
+                for metadata in self._iter_metadata_dicts(request_kwargs)
+                if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
+            ),
+            None,
+        )
+
+    def _configured_conversation_id(self, request_kwargs: Mapping[str, object], header_name: str) -> str | None:
+        conversation: Final = _proxy_request_header(request_kwargs, header_name)
+        if not conversation or conversation == REDACTED_HEADER_VALUE:
+            return None
+        child_metadata: Final = self._child_tier_session_metadata(request_kwargs)
+        if child_metadata is None:
+            return _conversation_pin_id((header_name, conversation))
+        child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+        if not isinstance(child_session, str) or not child_session:
+            return None
+        return _conversation_pin_id((header_name, conversation, child_session))
+
+    def _affinity_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
+        if self.config.conversation_header is not None:
+            return self._configured_conversation_id(request_kwargs, self.config.conversation_header)
+        return self._get_session_id_from_request_kwargs(request_kwargs)
+
     def _get_tier_pin_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
-        if self.config.classification_mode == "user_turn" and not self.config.session_affinity:
-            child_metadata: Final = next(
-                (
-                    metadata
-                    for metadata in self._iter_metadata_dicts(request_kwargs)
-                    if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
-                ),
-                None,
-            )
-            if child_metadata is not None:
-                child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
-                return child_session if isinstance(child_session, str) and child_session else None
+        if self.config.conversation_header is not None:
+            return self._configured_conversation_id(request_kwargs, self.config.conversation_header)
+        child_metadata: Final = self._child_tier_session_metadata(request_kwargs)
+        if child_metadata is not None:
+            child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+            return child_session if isinstance(child_session, str) and child_session else None
         return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
@@ -4506,13 +4567,18 @@ class ComplexityRouter(CustomLogger):
                 return str(user_key)
         return None
 
-    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
-        # Namespace by the caller's API key hash so two different callers reusing the
-        # same client-supplied session_id can't poison each other's routing pin. Falls
-        # back to "unscoped" only when there's no authenticated caller to scope by
-        # (e.g. direct Router usage without the proxy layer).
-        caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
-        return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> TierSessionPin:
+        return TierSessionPin(
+            router=self.model_name,
+            caller=(
+                DeploymentAffinityCheck.get_user_key_from_request_kwargs(
+                    _REQUEST_KWARGS.validate_python(request_kwargs)
+                )
+                if self.config.conversation_header is not None
+                else self._get_user_api_key_hash_from_request_kwargs(request_kwargs)
+            ),
+            session_id=session_id,
+        )
 
     @property
     def _uses_tier_pin(self) -> bool:
@@ -4530,11 +4596,23 @@ class ComplexityRouter(CustomLogger):
         return bool(self.config.deployment_affinity and not self.config.plugins) or self._uses_tier_pin
 
     def _with_session_deployment_affinity(
-        self, response: PreRoutingHookResponse | None
+        self, response: PreRoutingHookResponse | None, request_kwargs: Mapping[str, object]
     ) -> PreRoutingHookResponse | None:
         if response is None or not self._uses_deployment_pin:
             return response
-        return response.model_copy(update={"session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds})
+        if self.config.conversation_header is None:
+            return response.model_copy(
+                update={"session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds}
+            )
+        conversation_id: Final = self._configured_conversation_id(request_kwargs, self.config.conversation_header)
+        if conversation_id is None:
+            return response
+        return response.model_copy(
+            update={
+                "session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds,
+                "session_affinity_conversation_id": conversation_id,
+            }
+        )
 
     @with_service_target(ROUTER_SESSION_PINS_TARGET)
     async def async_pre_routing_hook(
@@ -4594,7 +4672,7 @@ class ComplexityRouter(CustomLogger):
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await read_affinity_pin(
-                self.ctx.health().store, cache_key, self.config.session_affinity_ttl_seconds
+                self.ctx.health().session_pins, cache_key, self.config.session_affinity_ttl_seconds
             )
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
@@ -4693,10 +4771,10 @@ class ComplexityRouter(CustomLogger):
                         else floor_model
                     )
                     if escalated:
-                        await self.ctx.health().store.async_set_cache(
-                            key=cache_key,
-                            value=_session_affinity_cache_value(session_model, resolved_pin_tier),
-                            ttl=self.config.session_affinity_ttl_seconds,
+                        await self.ctx.health().session_pins.set(
+                            cache_key,
+                            _session_affinity_cache_value(session_model, resolved_pin_tier),
+                            self.config.session_affinity_ttl_seconds,
                         )
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
@@ -4755,7 +4833,10 @@ class ComplexityRouter(CustomLogger):
                             request_kwargs,
                             context_fit,
                             retained_pin,
-                        )
+                        ),
+                        _REQUEST_KWARGS.validate_python(request_kwargs)
+                        if self.config.conversation_header is not None
+                        else _NO_REQUEST_KWARGS,
                     )
 
         routed_response: Final = await self._classify_and_route(
@@ -4802,15 +4883,20 @@ class ComplexityRouter(CustomLogger):
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
         if pinnable and cache_key is not None and response is not None:
-            await self.ctx.health().store.async_set_cache(
-                key=cache_key,
-                value=_session_affinity_cache_value(
+            await self.ctx.health().session_pins.set(
+                cache_key,
+                _session_affinity_cache_value(
                     response.model,
                     response.routing_decision.get("tier") if response.routing_decision is not None else None,
                 ),
-                ttl=self.config.session_affinity_ttl_seconds,
+                self.config.session_affinity_ttl_seconds,
             )
-        return self._with_session_deployment_affinity(response)
+        return self._with_session_deployment_affinity(
+            response,
+            _REQUEST_KWARGS.validate_python(request_kwargs)
+            if self.config.conversation_header is not None
+            else _NO_REQUEST_KWARGS,
+        )
 
     async def _apply_prompt_cache_routing(
         self,

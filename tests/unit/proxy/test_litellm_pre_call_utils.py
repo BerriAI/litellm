@@ -6,13 +6,16 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from botocore.credentials import Credentials
 from fastapi import Request
+from fastapi.routing import APIRoute
 from opentelemetry.trace import INVALID_SPAN, NonRecordingSpan, SpanContext
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -30,6 +33,7 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.ecb_reference_rates import EcbReferenceRates
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -45,6 +49,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
+    _add_otel_traceparent_to_data,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
     _get_enforced_params,
@@ -64,9 +69,10 @@ from litellm.proxy.litellm_pre_call_utils import (
     move_guardrails_to_metadata,
     resolve_tenant_otel_destinations,
 )
+from litellm.proxy.pricing_currency import ReferenceRateLookup
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.caching import LiteLLMCacheType
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, PROMPT_MANAGEMENT_APPLIED_FIELD
 from litellm.types.utils import CredentialItem
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -1586,6 +1592,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
+        "_session_deployment_affinity_conversation": "forged-conversation",
         "internal_call_origin": "autorouter_classifier",
         "_managed_background_response": True,
         "_guardrail_pipelines": [{"name": "spoofed"}],
@@ -1647,6 +1654,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "routing_decision",
         "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
+        "_session_deployment_affinity_conversation",
         "internal_call_origin",
         "_managed_background_response",
         "_guardrail_pipelines",
@@ -1713,6 +1721,7 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
         "logger_fn",
         "litellm_disabled_callbacks",
         *AGENTIC_LOOP_KWARG_NAMES,
+        PROMPT_MANAGEMENT_APPLIED_FIELD,
     ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
@@ -1753,6 +1762,7 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "_websearch_interception_stream_options": {"include_usage": True},
         "_headroom_interception_converted_stream": True,
         "max_agentic_loops": 9999,
+        PROMPT_MANAGEMENT_APPLIED_FIELD: True,
     }
     sample_value: Final = sample_values.get(control_field, "forged")
 
@@ -7477,6 +7487,48 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
     return request_mock
 
 
+_TRACEPARENT: Final = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+@pytest.mark.parametrize(
+    ("extra_headers", "forwarded"),
+    (
+        ("X-Foo: bar", "X-Foo: bar"),
+        (["X-Foo: bar"], ["X-Foo: bar"]),
+        (None, {"traceparent": _TRACEPARENT}),
+        ({"X-Kept": "yes"}, {"X-Kept": "yes", "traceparent": _TRACEPARENT}),
+        ({"traceparent": "caller-set"}, {"traceparent": "caller-set"}),
+    ),
+    ids=("string", "list", "null", "object", "caller_traceparent"),
+)
+def test_traceparent_forwarding_leaves_non_object_extra_headers_for_the_endpoint_to_check(
+    extra_headers: object, forwarded: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers}
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["extra_headers"] == forwarded
+
+
+@pytest.mark.parametrize("extra_headers", ({}, {"X-Kept": "yes"}), ids=("empty_object", "object"))
+def test_forwarded_traceparent_shows_in_the_logged_request_body(
+    extra_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers, "proxy_server_request": {"body": None}}
+    refresh_proxy_server_request_body_snapshot(data)
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["proxy_server_request"]["body"]["extra_headers"]["traceparent"] == _TRACEPARENT
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_agent, request_drop_params, operator_settings, expected_drop_params",
@@ -9466,6 +9518,129 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
+
+
+def _eur_rates() -> ReferenceRateLookup:
+    def now() -> datetime:
+        return datetime(2026, 11, 13, 16, tzinfo=timezone.utc)
+
+    async def fetch() -> bytes:
+        return (
+            "<gesmes:Envelope xmlns:gesmes='http://www.gesmes.org/xml/2002-08-01'"
+            " xmlns='http://www.ecb.int/vocabulary/2002-08-01/eurofxref'><Cube><Cube time='2026-11-13'>"
+            "<Cube currency='USD' rate='1.25'/></Cube></Cube></gesmes:Envelope>"
+        ).encode()
+
+    return ReferenceRateLookup(EcbReferenceRates(clock=now), fetch)
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "body", "expected"),
+    [
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"pricing_currency": "EUR", "input_cost_per_token": 0.5},
+            {"input_cost_per_token": 0.625},
+            id="trusted-eur-input-only",
+        ),
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            id="trusted-omitted-currency-stays-usd",
+        ),
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"pricing_currency": None, "input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            id="trusted-null-currency-stays-usd",
+        ),
+        pytest.param({}, {"pricing_currency": "EUR", "input_cost_per_token": 0.5}, {}, id="untrusted-stripped"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_for_trusted_keys(
+    key_metadata: Mapping[str, object], body: Mapping[str, object], expected: Mapping[str, float]
+) -> None:
+    data: Final[dict[str, object]] = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], **body}
+    updated: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        await add_litellm_data_to_request(
+            data=data,
+            request=_reserved_stamp_request("/v1/chat/completions"),
+            user_api_key_dict=_reserved_stamp_key(dict(key_metadata)),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+    )
+
+    assert "pricing_currency" not in updated
+    assert {
+        field: updated[field] for field in ("input_cost_per_token", "output_cost_per_token") if field in updated
+    } == expected
+
+
+def _routed_request(template: str, path: str) -> MagicMock:
+    request: Final = _reserved_stamp_request(path)
+    request.scope = {"type": "http", "path": path, "root_path": "", "route": APIRoute(template, endpoint=lambda: None)}
+    return request
+
+
+@pytest.mark.parametrize(
+    ("template", "path"),
+    [
+        ("/v1/chat/completions", "/v1/chat/completions"),
+        ("/chat/completions", "/chat/completions"),
+        ("/engines/{model:path}/chat/completions", "/engines/gpt-5.4-mini/chat/completions"),
+        ("/openai/deployments/{model:path}/chat/completions", "/openai/deployments/gpt-5.4-mini/chat/completions"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_prices_every_chat_completions_alias_in_usd(template: str, path: str) -> None:
+    data: Final[dict[str, object]] = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "pricing_currency": "EUR",
+        "input_cost_per_token": 0.5,
+    }
+    updated: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        await add_litellm_data_to_request(
+            data=data,
+            request=_routed_request(template, path),
+            user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+    )
+
+    assert "pricing_currency" not in updated
+    assert updated["input_cost_per_token"] == 0.625
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_rejects_pricing_currency_outside_chat_completions() -> None:
+    data: Final[dict[str, object]] = {
+        "model": "text-embedding-3-small",
+        "input": "hi",
+        "pricing_currency": "EUR",
+        "input_cost_per_token": 0.5,
+    }
+    with pytest.raises(ProxyException) as rejected:
+        await add_litellm_data_to_request(
+            data=data,
+            request=_reserved_stamp_request("/v1/embeddings"),
+            user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
 
 
 @pytest.mark.asyncio
@@ -11764,6 +11939,55 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/chat/completions", "/v1/responses"))
+@pytest.mark.parametrize("assigned", (False, True))
+async def test_customer_window_policy_is_stamped_from_auth_not_requester_metadata(path, assigned):
+    from litellm.models.budget import BudgetLimit
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.auth.customer_hierarchy import (
+        CustomerHierarchyAuth,
+        CustomerScopeAuth,
+        customer_budget_scopes_from_request,
+        customer_budget_scopes_metadata,
+    )
+
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="admitted-org",
+        scopes=(
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="admitted-org",
+                budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+            ),
+        ),
+    )
+    forged: Final = {
+        "user_api_key_customer_org_id": "admitted-org",
+        "user_api_key_customer_budget_scopes": customer_budget_scopes_metadata(
+            hierarchy.model_copy(
+                update={
+                    "scopes": (
+                        CustomerScopeAuth(
+                            key="customer_org",
+                            entity_id="admitted-org",
+                            budget_limits=(BudgetLimit(budget_duration="12mo", max_budget=9999),),
+                        ),
+                    )
+                }
+            )
+        ),
+    }
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4o-mini", "metadata": dict(forged), "litellm_metadata": dict(forged)},
+        request=_make_request_mock(path, {}),
+        user_api_key_dict=UserAPIKeyAuth(customer_hierarchy=hierarchy if assigned else None),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert customer_budget_scopes_from_request({"litellm_params": updated}) == (hierarchy.scopes if assigned else None)
 
 
 @pytest.mark.parametrize(

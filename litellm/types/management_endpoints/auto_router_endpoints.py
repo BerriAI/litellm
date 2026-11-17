@@ -327,6 +327,16 @@ class StartShadowEvalRequest(LiteLLMBaseModel):
             "responses are judged against. Must be a plain model rather than another auto-router"
         ),
     )
+    skip_same_model: bool = Field(
+        default=False,
+        description=(
+            "Reverse jobs only. When true, a sampled request whose response came from baseline_model's own "
+            "model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made "
+            "or billed for it and it never counts toward win, tie, or error rates. Skips are reported as "
+            "same_model_skipped_count. Different model group names stay distinct even when they share a "
+            "provider model"
+        ),
+    )
     shadow_percentage: float = Field(
         ge=0.1,
         le=100.0,
@@ -414,6 +424,8 @@ class StartShadowEvalRequest(LiteLLMBaseModel):
             raise ValueError("baseline_model is required when direction is 'reverse'")
         if self.direction == "forward" and self.baseline_model is not None:
             raise ValueError("baseline_model is only meaningful when direction is 'reverse'")
+        if self.direction == "forward" and self.skip_same_model:
+            raise ValueError("skip_same_model is only meaningful when direction is 'reverse'")
         return self
 
     @model_validator(mode="after")
@@ -626,6 +638,10 @@ class ShadowEvalJobResponse(LiteLLMBaseModel):
     )
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
+    skip_same_model: bool = Field(
+        default=False,
+        description="Whether this reverse job skips samples that baseline_model's own model group served",
+    )
     judge_model: str
     shadow_percentage: float
     created_at: datetime
@@ -644,6 +660,14 @@ class ShadowEvalJobResponse(LiteLLMBaseModel):
     judge_spend: float | None = Field(default=None, description="Judge cost so far; detail endpoint only")
     last_error: str | None = Field(default=None, description="Most recent attempt error; detail endpoint only")
     results: ShadowEvalResult | None = Field(default=None, description="Stratified verdicts; detail endpoint only")
+    same_model_skipped_count: int | None = Field(
+        default=None,
+        description=(
+            "Sampled requests skipped because baseline_model's own model group served them, summed over "
+            "targets; detail endpoint only and reported even before any turn is judged. None when coverage "
+            "counts are unknown for any target"
+        ),
+    )
 
     @computed_field
     @property

@@ -1,4 +1,4 @@
-import asyncio, importlib, os, uuid
+import asyncio, base64, importlib, os, uuid
 import json
 import logging
 import re
@@ -1886,7 +1886,11 @@ def test_vertex_ai_map_tools_declares_a_member_a_namespace_lists_twice_once_from
             [("get_weather", None), ("get_weather", None), ("weather__get_weather", None)],
         ),
     ],
-    ids=["top_level_function_has_the_qualified_name", "namespaces_build_one_qualified_name", "client_repeats_a_function"],
+    ids=[
+        "top_level_function_has_the_qualified_name",
+        "namespaces_build_one_qualified_name",
+        "client_repeats_a_function",
+    ],
 )
 def test_vertex_ai_map_tools_never_repeats_a_generated_name(
     tools: list[dict], declared: list[tuple[str, str | None]]
@@ -2488,6 +2492,61 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+def _gemini_tts_audio_event(audio_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": audio_base64}}],
+                },
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+    }
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_tts_stream_carries_audio_in_delta_and_rebuilds_full_clip(respx_mock: respx.MockRouter) -> None:
+    first_audio: Final = base64.b64encode(b"\x01\x02\x03").decode()
+    second_audio: Final = base64.b64encode(b"\x04\x05").decode()
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash-tts:streamGenerateContent?alt=sse"
+    ).mock(
+        return_value=_gemini_sse(
+            _gemini_tts_audio_event(first_audio),
+            _gemini_tts_audio_event(second_audio),
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}
+                ],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 40, "totalTokenCount": 49},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="gemini/gemini-3.8-flash-tts",
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio={"voice": "Kore", "format": "pcm16"},
+            stream=True,
+            api_key="test-api-key",
+        )
+    )
+    complete_response: Final = litellm.stream_chunk_builder(chunks)
+
+    assert [chunk.choices[0].delta.audio for chunk in chunks if chunk.choices[0].delta.audio is not None] == [
+        {"data": first_audio},
+        {"data": second_audio},
+    ]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    assert base64.b64decode(complete_response.choices[0].message.audio.data) == b"\x01\x02\x03\x04\x05"
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_gemini_thinking(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
@@ -2840,6 +2899,199 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     assert request_params["tools"] == [
         {"function_declarations": [{"name": "lookup", "parameters": {"type": "object"}}]}
     ]
+
+
+_LOOKUP_PROPERTIES: Final = {"a": {"type": "string"}, "b": {"type": "string"}}
+_LOOKUP_BY_A: Final = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+_LOOKUP_BY_B: Final = {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]}
+_WEATHER_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+_WEATHER_VERTEX_PARAMETERS: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {
+            "type": "object",
+            "properties": _LOOKUP_PROPERTIES,
+            "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+            "additionalProperties": False,
+        },
+        {
+            "type": ["object", "null"],
+            "properties": _LOOKUP_PROPERTIES,
+            "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+        },
+        {"anyOf": [{**_LOOKUP_BY_A, "additionalProperties": False}, _LOOKUP_BY_B]},
+        {
+            "type": "object",
+            "properties": {"limit": {"type": "integer"}},
+            "anyOf": [
+                {"properties": {"query": {"type": "string"}}, "required": ["query"]},
+                {"properties": {"url": {"type": "string"}}, "required": ["url"]},
+            ],
+        },
+        {"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}},
+        {
+            "$ref": "#/$defs/Lookup",
+            "$defs": {"Lookup": {"$ref": "#/$defs/Union"}, "Union": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}},
+        },
+        {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
+    ],
+    ids=[
+        "object-with-required-branches",
+        "nullable-object-with-required-branches",
+        "root-object-branches",
+        "object-with-property-branches",
+        "root-ref-to-union",
+        "chained-root-ref-to-union",
+        "root-all-of",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_sends_a_union_root_tool_schema_unchanged_as_parameters_json_schema(
+    respx_mock: respx.MockRouter, parameters: Mapping[str, object]
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "Ready"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Look up the record named Atlas"}],
+        tools=[
+            {"type": "function", "function": {"name": "lookup", "parameters": deepcopy(parameters)}},
+            {"type": "function", "function": {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)}},
+        ],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls.last.request.content)
+
+    assert request_body["tools"] == [
+        {
+            "function_declarations": [
+                {"name": "lookup", "parametersJsonSchema": parameters},
+                {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS},
+            ]
+        }
+    ]
+
+
+def test_vertex_sends_a_union_root_tool_schema_built_with_tuples_as_parameters_json_schema() -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"anyOf": ({**_LOOKUP_BY_A, "required": ("a",)}, _LOOKUP_BY_B)},
+                    },
+                }
+            ]
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"] == [
+        {"function_declarations": [{"name": "lookup", "parametersJsonSchema": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}]}
+    ]
+
+
+def test_vertex_sends_a_union_root_legacy_function_schema_unchanged_as_parameters_json_schema() -> None:
+    parameters: Final = {"anyOf": [{**_LOOKUP_BY_A, "additionalProperties": False}, _LOOKUP_BY_B]}
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "functions": [
+                {"name": "lookup", "description": "Look up a record", "parameters": deepcopy(parameters)},
+                {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)},
+            ]
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"] == [
+        {
+            "function_declarations": [
+                {"name": "lookup", "description": "Look up a record", "parametersJsonSchema": parameters},
+                {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS},
+            ]
+        }
+    ]
+
+
+_ROOT_ONE_OF: Final = {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}
+
+
+@pytest.mark.parametrize(
+    ("lookup_parameters", "tool_choice", "expected_field"),
+    [
+        (_ROOT_ONE_OF, "required", "parameters"),
+        (_ROOT_ONE_OF, {"type": "function", "function": {"name": "lookup"}}, "parameters"),
+        (
+            {"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}},
+            "required",
+            "parameters",
+        ),
+        (
+            {"type": "object", "properties": _LOOKUP_PROPERTIES, "anyOf": [{"required": ["a"]}, {"required": ["b"]}]},
+            "required",
+            "parametersJsonSchema",
+        ),
+        (_ROOT_ONE_OF, {"type": "function", "function": {"name": "weather"}}, "parametersJsonSchema"),
+        (_ROOT_ONE_OF, "auto", "parametersJsonSchema"),
+        (
+            {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
+            "required",
+            "parametersJsonSchema",
+        ),
+    ],
+    ids=[
+        "required",
+        "named-union-tool",
+        "required-root-ref-to-union",
+        "required-root-properties-beside-union",
+        "named-other-tool",
+        "auto",
+        "required-root-all-of",
+    ],
+)
+def test_vertex_keeps_a_union_root_tool_on_parameters_when_the_call_can_be_forced_to_it(
+    lookup_parameters: Mapping[str, object], tool_choice: str | dict[str, object], expected_field: str
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tool_choice": tool_choice,
+            "tools": [
+                {"type": "function", "function": {"name": "lookup", "parameters": deepcopy(lookup_parameters)}},
+                {"type": "function", "function": {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)}},
+            ],
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    lookup, weather = request_params["tools"][0]["function_declarations"]
+
+    assert {field for field in ("parameters", "parametersJsonSchema") if field in lookup} == {expected_field}
+    assert weather == {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS}
 
 
 @pytest.mark.parametrize(
@@ -7609,6 +7861,36 @@ def test_invalid_reasoning_effort_surfaces_as_400_through_completion(custom_llm_
     assert not isinstance(exc_info.value, litellm.APIConnectionError)
 
 
+@pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini/gemini-4-hydrogen", "vertex_ai/gemini-4-hydrogen"])
+def test_xhigh_reasoning_effort_maps_to_the_xhigh_thinking_level_for_a_model_that_supports_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    result: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {"thinkingLevel": "xhigh", "includeThoughts": True}
+
+
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-3.8-flash", "gemini-3-pro-preview"])
+def test_xhigh_reasoning_effort_is_a_400_for_a_gemini_model_that_does_not_support_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "xhigh" in str(exc_info.value)
+
+
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-3-pro-preview"])
 def test_supported_reasoning_efforts_still_map(model):
     """Guards the fix against over-rejecting: every advertised value must still produce a config."""
@@ -7929,6 +8211,41 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
     assert resp.choices[0].finish_reason == "content_filter"
     assert resp.choices[0].message.content is None
     assert resp.choices[0].provider_specific_fields["native_finish_reason"] == "NO_IMAGE"
+
+
+@pytest.mark.parametrize(
+    ("google_signal", "expected_provider_specific_fields"),
+    [
+        ({"candidates": [{"finishReason": "RECITATION", "index": 0}]}, {"native_finish_reason": "RECITATION"}),
+        ({"candidates": [{"finishReason": "SAFETY", "index": 0}]}, {"native_finish_reason": "SAFETY"}),
+        ({"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]}, {"native_finish_reason": "IMAGE_SAFETY"}),
+        (
+            {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "blocked"}},
+            {"block_reason": "PROHIBITED_CONTENT"},
+        ),
+    ],
+)
+def test_non_streamed_content_filter_choice_keeps_google_reason(
+    google_signal: dict[str, object], expected_provider_specific_fields: dict[str, str]
+):
+    completion_response: Final = {
+        **google_signal,
+        "usageMetadata": {"promptTokenCount": 23, "candidatesTokenCount": 4, "totalTokenCount": 27},
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 1
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.choices[0].message.content is None
+    assert resp.choices[0].provider_specific_fields == expected_provider_specific_fields
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():

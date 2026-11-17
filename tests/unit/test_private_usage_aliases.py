@@ -68,11 +68,6 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "PROXY_MaxParallelRequestsHandler",
     ),
     (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "PROXY_MaxParallelRequestsHandler_v3",
-    ),
-    (
         "litellm.proxy.hooks.sensitive_data_routing",
         "_PROXY_SensitiveDataRoutingHandler",
         "PROXY_SensitiveDataRoutingHandler",
@@ -93,12 +88,12 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "ProxyDBLogger",
     ),
     (
-        "enterprise.litellm_enterprise.proxy.hooks.managed_files",
+        "litellm.enterprise.litellm_enterprise.proxy.hooks.managed_files",
         "_PROXY_LiteLLMManagedFiles",
         "PROXY_LiteLLMManagedFiles",
     ),
     (
-        "enterprise.litellm_enterprise.proxy.hooks.managed_vector_stores",
+        "litellm.enterprise.litellm_enterprise.proxy.hooks.managed_vector_stores",
         "_PROXY_LiteLLMManagedVectorStores",
         "PROXY_LiteLLMManagedVectorStores",
     ),
@@ -1140,42 +1135,42 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
 
 ALIAS_CASES: Final = (
     (
-        "enterprise.enterprise_hooks.banned_keywords",
+        "litellm.enterprise.enterprise_hooks.banned_keywords",
         "",
         "_ENTERPRISE_BannedKeywords",
         "ENTERPRISE_BannedKeywords",
         False,
     ),
     (
-        "enterprise.enterprise_hooks.blocked_user_list",
+        "litellm.enterprise.enterprise_hooks.blocked_user_list",
         "",
         "_ENTERPRISE_BlockedUserList",
         "ENTERPRISE_BlockedUserList",
         False,
     ),
     (
-        "enterprise.enterprise_hooks.google_text_moderation",
+        "litellm.enterprise.enterprise_hooks.google_text_moderation",
         "",
         "_ENTERPRISE_GoogleTextModeration",
         "ENTERPRISE_GoogleTextModeration",
         False,
     ),
     (
-        "enterprise.enterprise_hooks.openai_moderation",
+        "litellm.enterprise.enterprise_hooks.openai_moderation",
         "",
         "_ENTERPRISE_OpenAI_Moderation",
         "ENTERPRISE_OpenAI_Moderation",
         False,
     ),
     (
-        "enterprise.litellm_enterprise.proxy.hooks.managed_files",
+        "litellm.enterprise.litellm_enterprise.proxy.hooks.managed_files",
         "",
         "_PROXY_LiteLLMManagedFiles",
         "PROXY_LiteLLMManagedFiles",
         False,
     ),
     (
-        "enterprise.litellm_enterprise.proxy.hooks.managed_vector_stores",
+        "litellm.enterprise.litellm_enterprise.proxy.hooks.managed_vector_stores",
         "",
         "_PROXY_LiteLLMManagedVectorStores",
         "PROXY_LiteLLMManagedVectorStores",
@@ -3172,13 +3167,6 @@ PROXY_ALIAS_CASES: Final = (
         "",
         "_PROXY_MaxParallelRequestsHandler_v3",
         "PROXY_MaxParallelRequestsHandler_v3",
-        False,
-    ),
-    (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "_create_rate_limit_descriptors",
-        "create_rate_limit_descriptors",
         False,
     ),
     (
