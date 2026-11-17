@@ -3144,8 +3144,8 @@ def test_access_groups_usable_by_team_drops_other_teams_deployments() -> None:
 
     router: Final = _router_with_global_and_team_b_deployments()
 
-    assert access_groups_usable_by_team(router, None) == {"bedrock-group": ("bedrock-nova",)}
-    assert access_groups_usable_by_team(router, "team-a") == {"bedrock-group": ("bedrock-nova",)}
+    assert access_groups_usable_by_team(router, None) == {"bedrock-group": ("bedrock-nova",), "team-b-only": ()}
+    assert access_groups_usable_by_team(router, "team-a") == {"bedrock-group": ("bedrock-nova",), "team-b-only": ()}
     assert access_groups_usable_by_team(router, "team-b") == {
         "bedrock-group": ("bedrock-nova", "model_name_team-b_1111"),
         "team-b-only": ("model_name_team-b_2222",),

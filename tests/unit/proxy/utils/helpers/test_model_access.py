@@ -390,14 +390,23 @@ async def test_get_available_models_for_user_admin_listing_for_a_team_scopes_gro
 
 
 @pytest.mark.asyncio
-async def test_get_available_models_for_user_group_owned_by_another_team_lists_no_deployments():
+@pytest.mark.parametrize(
+    "user_api_key_dict",
+    [
+        UserAPIKeyAuth(api_key="sk-teamless", models=["team-b-only"], team_id=None, team_models=[]),
+        UserAPIKeyAuth(api_key="sk-team-a", models=[], team_id="team-a", team_models=["team-b-only"]),
+    ],
+)
+async def test_get_available_models_for_user_group_owned_by_another_team_lists_no_deployments(
+    user_api_key_dict: UserAPIKeyAuth,
+):
     result = await get_available_models_for_user(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-teamless", models=["team-b-only"], team_id=None, team_models=[]),
+        user_api_key_dict=user_api_key_dict,
         llm_router=_router_with_global_and_team_b_deployments(),
         general_settings={},
         user_model=None,
     )
-    assert not {"bedrock-nova", "model_name_team-b_1111", "model_name_team-b_2222"} & set(result)
+    assert list(result) == []
 
 
 @pytest.mark.asyncio

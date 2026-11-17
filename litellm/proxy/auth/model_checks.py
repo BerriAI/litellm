@@ -171,7 +171,10 @@ def _get_models_from_access_groups(
     member_models: Final = [
         member for model in all_models if model in model_access_groups for member in model_access_groups[model]
     ]
-    return kept_models + member_models
+    expanded_models: Final = kept_models + member_models
+    if all_models and not expanded_models:
+        return [SpecialModelNames.no_default_models.value]
+    return expanded_models
 
 
 def _model_name_usable_by_team(llm_router: RegistryReader, model_name: str, team_id: str | None) -> bool:
@@ -184,13 +187,8 @@ def _model_name_usable_by_team(llm_router: RegistryReader, model_name: str, team
 def access_groups_usable_by_team(llm_router: RegistryReader, team_id: str | None) -> Mapping[str, Sequence[str]]:
     return MappingProxyType(
         {
-            group: usable_group_models
+            group: tuple(name for name in model_names if _model_name_usable_by_team(llm_router, name, team_id))
             for group, model_names in llm_router.registry().access_groups().items()
-            if (
-                usable_group_models := tuple(
-                    name for name in model_names if _model_name_usable_by_team(llm_router, name, team_id)
-                )
-            )
         }
     )
 

@@ -5853,12 +5853,17 @@ def raise_when_key_reaches_only_other_teams_deployments(
     )
     if foreign_model is None:
         return
+    denied_object: Final = (
+        "team"
+        if valid_token.team_id is not None and SpecialModelNames.all_team_models.value in (valid_token.models or ())
+        else "key"
+    )
     raise ModelAccessDeniedProxyException(
         message=model_access_denied_client_message(model=foreign_model),
         internal_message=(
             f"key not allowed to access model. Tried to access {foreign_model}, which is only deployed for other teams"
         ),
-        type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
+        type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=denied_object),
         param="model",
         code=status.HTTP_403_FORBIDDEN,
     )

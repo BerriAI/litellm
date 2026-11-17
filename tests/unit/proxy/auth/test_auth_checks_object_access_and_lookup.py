@@ -3534,12 +3534,28 @@ async def test_enforce_key_access_keys_skipping_the_model_check_still_stop_at_ot
 
 
 @pytest.mark.asyncio
-async def test_can_key_call_resolved_model_all_team_models_key_denied_other_teams_deployment():
+@pytest.mark.parametrize(
+    ("valid_token", "expected_error_type"),
+    [
+        (
+            UserAPIKeyAuth(api_key="sk-orphan", models=["all-team-models"], team_models=[]),
+            ProxyErrorTypes.key_model_access_denied,
+        ),
+        (
+            UserAPIKeyAuth(
+                api_key="sk-team-a", models=["all-team-models"], team_id="team-a", team_models=["bedrock-group"]
+            ),
+            ProxyErrorTypes.team_model_access_denied,
+        ),
+    ],
+)
+async def test_can_key_call_resolved_model_all_team_models_key_denied_other_teams_deployment(
+    valid_token: UserAPIKeyAuth, expected_error_type: ProxyErrorTypes
+):
     from litellm.proxy._types import ModelAccessDeniedProxyException
     from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 
     router = _make_router_with_global_and_team_b_deployment()
-    valid_token = UserAPIKeyAuth(api_key="sk-orphan", models=["all-team-models"], team_models=[])
 
     with pytest.raises(ModelAccessDeniedProxyException) as exc:
         await can_key_call_resolved_model(
@@ -3549,6 +3565,7 @@ async def test_can_key_call_resolved_model_all_team_models_key_denied_other_team
             llm_router=router,
         )
     assert exc.value.code == "403"
+    assert exc.value.type == expected_error_type
     assert exc.value.internal_message == _OTHER_TEAMS_DEPLOYMENT_403
 
 
