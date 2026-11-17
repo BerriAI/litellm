@@ -759,7 +759,10 @@ async fn a_post_call_charge_moves_a_shorter_expiry_out_to_the_committed_ttl(
     request.flush_post().await;
 
     assert!(settlement.is_settled());
-    assert!(within(redis_ttl(&raw, &counter).await, COMMITTED_TTL.as_secs()));
+    assert!(within(
+        redis_ttl(&raw, &counter).await,
+        COMMITTED_TTL.as_secs()
+    ));
 }
 
 #[rstest]
@@ -786,7 +789,10 @@ async fn a_reset_keeps_its_own_ttl_until_the_next_charge_moves_it_out_to_the_com
 
     assert!(settlement.is_settled());
     assert!(within(after_reset, TTL.as_secs()));
-    assert!(within(redis_ttl(&raw, &counter).await, COMMITTED_TTL.as_secs()));
+    assert!(within(
+        redis_ttl(&raw, &counter).await,
+        COMMITTED_TTL.as_secs()
+    ));
 }
 
 #[rstest]
@@ -815,8 +821,14 @@ async fn a_configured_redis_ttl_longer_than_the_committed_ttl_is_never_shortened
     request.flush_post().await;
 
     assert!(settlement.is_settled());
-    assert!(within(redis_ttl(&raw, &incremented).await, configured.as_secs()));
-    assert!(within(redis_ttl(&raw, &post_call).await, configured.as_secs()));
+    assert!(within(
+        redis_ttl(&raw, &incremented).await,
+        configured.as_secs()
+    ));
+    assert!(within(
+        redis_ttl(&raw, &post_call).await,
+        configured.as_secs()
+    ));
 }
 
 #[tokio::test]

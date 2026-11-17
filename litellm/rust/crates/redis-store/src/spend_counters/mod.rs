@@ -473,9 +473,13 @@ mod tests {
         store.set_committed_ttl(Duration::from_secs(committed_ttl));
         let lifetime = committed_ttl.max(memory_default);
 
-        store.increment_local(&counter, Number::Float(0.25)).unwrap();
+        store
+            .increment_local(&counter, Number::Float(0.25))
+            .unwrap();
         seconds.fetch_add(lifetime - 1, Ordering::SeqCst);
-        store.increment_local(&counter, Number::Float(0.25)).unwrap();
+        store
+            .increment_local(&counter, Number::Float(0.25))
+            .unwrap();
         seconds.fetch_add(lifetime - 1, Ordering::SeqCst);
         let kept = store.get_local(&counter).unwrap();
         seconds.fetch_add(2, Ordering::SeqCst);
@@ -517,7 +521,11 @@ mod tests {
         let reset_ttl = 60;
 
         store
-            .set(&counter, Number::Float(0.0), Some(Duration::from_secs(reset_ttl)))
+            .set(
+                &counter,
+                Number::Float(0.0),
+                Some(Duration::from_secs(reset_ttl)),
+            )
             .await
             .unwrap();
         seconds.fetch_add(reset_ttl - 1, Ordering::SeqCst);
