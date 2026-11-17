@@ -380,6 +380,20 @@ def _map_openai_exception(
             response=response,
             litellm_debug_info=extra_information,
         )
+    elif custom_llm_provider == "github_copilot" and "model_not_supported" in error_str:
+        raise BadRequestError(
+            message=(
+                f"{exception_provider} - GitHub Copilot rejected model '{model}' because it is not available for "
+                "this GitHub Copilot account. Ask your GitHub admin to enable it in the Copilot model policy, or "
+                "use a model your Copilot plan includes. This is not a LiteLLM error. "
+                f"GitHub Copilot response: {message}"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=response,
+            litellm_debug_info=extra_information,
+            body=getattr(original_exception, "body", None),
+        )
     elif "invalid_request_error" in error_str and "model_not_found" in error_str:
         raise NotFoundError(
             message=f"{exception_provider} - {message}",

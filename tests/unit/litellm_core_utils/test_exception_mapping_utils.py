@@ -3525,3 +3525,56 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+def test_github_copilot_model_not_supported_explains_the_copilot_model_policy():
+    copilot_body: Final = {
+        "error": {
+            "message": "The requested model is not supported.",
+            "code": "model_not_supported",
+            "param": "model",
+            "type": "invalid_request_error",
+        }
+    }
+    request: Final = httpx.Request("POST", "https://api.githubcopilot.com/chat/completions")
+    original: Final = OpenAIError(
+        status_code=400,
+        message=json.dumps(copilot_body),
+        request=request,
+        response=httpx.Response(400, request=request),
+        body=copilot_body["error"],
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="claude-opus-4.6",
+            original_exception=original,
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert caught.value.status_code == 400
+    assert (
+        "GitHub Copilot rejected model 'claude-opus-4.6' because it is not available for this GitHub Copilot "
+        "account. Ask your GitHub admin to enable it in the Copilot model policy, or use a model your Copilot "
+        "plan includes. This is not a LiteLLM error."
+    ) in caught.value.message, caught.value.message
+    assert "The requested model is not supported." in caught.value.message
+
+
+def test_openai_model_not_supported_keeps_the_upstream_message():
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=400,
+        message='{"error": {"message": "The requested model is not supported.", "code": "model_not_supported"}}',
+        request=request,
+        response=httpx.Response(400, request=request),
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-5.4",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert "GitHub Copilot" not in caught.value.message, caught.value.message

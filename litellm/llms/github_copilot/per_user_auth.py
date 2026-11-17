@@ -629,9 +629,13 @@ def github_copilot_auth_mode(litellm_credential_name: object, auth_type_value: o
     return False
 
 
-def _connect_error(credential_name: str) -> CallerCredentialAuthenticationError:
+def _connect_error(credential_name: str, problem: str | None = None) -> CallerCredentialAuthenticationError:
+    reason: Final = f"{problem} " if problem else ""
     return CallerCredentialAuthenticationError(
-        message=(f"Connect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials)"),
+        message=(
+            f"{reason}Connect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials), "
+            f"or run: lite --api-key <this key> credentials connect {credential_name}"
+        ),
         llm_provider=_LLM_PROVIDER,
         model="",
     )
@@ -667,14 +671,22 @@ def _caller_connection(
     )
     token: Final[object] = connection.get("access_token") if connection is not None else None
     github_host: Final = normalized_github_host(connection.get("github_host") if connection is not None else None)
-    if (
-        not isinstance(user_id, str)
-        or not user_id
-        or not isinstance(token, str)
-        or not token
-        or github_host != endpoints.host
-    ):
-        raise _connect_error(credential_name)
+    if not isinstance(user_id, str) or not user_id:
+        raise _connect_error(
+            credential_name,
+            "This LiteLLM key is not assigned to a LiteLLM user. Use a key that belongs to your own user.",
+        )
+    if not isinstance(token, str) or not token:
+        raise _connect_error(
+            credential_name,
+            f"User '{user_id}' (the owner of this key) has not connected GitHub Copilot for '{credential_name}'.",
+        )
+    if github_host != endpoints.host:
+        raise _connect_error(
+            credential_name,
+            f"User '{user_id}' connected GitHub Copilot on '{github_host}', but '{credential_name}' uses "
+            f"'{endpoints.host}'.",
+        )
     return user_id, token
 
 
