@@ -167,7 +167,7 @@ _STOCK_MODELS = {
 _STOCK_CATALOG = json.dumps({"models": list(_STOCK_MODELS.values())})
 
 
-def _generic_tier(identity):
+def _generic_tier(identity: str) -> dict[str, str]:
     return {"id": identity, "name": identity.capitalize(), "description": f"Sends service_tier={identity} upstream"}
 
 
