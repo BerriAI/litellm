@@ -661,7 +661,7 @@ async def alist(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object]:
+) -> object:
     """
     Async: List vector stores.
     """
@@ -692,7 +692,7 @@ async def alist(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response: Mapping[str, object] = await init_response
+            response: object = await init_response
         else:
             response = init_response
 
@@ -719,7 +719,7 @@ def list(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
+) -> object | Coroutine[object, object, object]:
     """
     List vector stores.
 
@@ -965,7 +965,7 @@ async def adelete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object]:
+) -> object:
     """
     Async: Delete a vector store.
     """
@@ -993,7 +993,7 @@ async def adelete(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response: Mapping[str, object] = await init_response
+            response: object = await init_response
         else:
             response = init_response
 
@@ -1017,7 +1017,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
+) -> object | Coroutine[object, object, object]:
     """
     Delete a vector store.
 

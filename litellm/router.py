@@ -320,6 +320,7 @@ if TYPE_CHECKING:
         afile_delete: Callable[..., Awaitable[FileDeleted]]
         avector_store_create: Callable[..., Awaitable[VectorStoreCreateResponse]]
         allm_passthrough_route: Callable[..., Awaitable[httpx.Response | AsyncGenerator[bytes, bytes]]]
+        schedule_acompletion: Callable[..., Awaitable[object]]
 
         def __getattr__(self, name: str) -> Any: ...  # the endpoints served by name
 

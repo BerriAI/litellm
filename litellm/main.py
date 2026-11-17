@@ -26,7 +26,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
@@ -9815,7 +9815,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: 
 async def acount_tokens(
     model: str,
     messages: list[dict[str, object]] | None = None,
-    tools: list[dict[str, Any]] | None = None,
+    tools: list[dict[str, object]] | None = None,
     system: str | None = None,
     api_key: str | None = None,
     api_base: str | None = None,

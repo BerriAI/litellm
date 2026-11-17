@@ -12140,7 +12140,7 @@ def should_run_mock_completion(
     return False
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     from litellm._lazy_imports import resolve_lazy_attribute
 
     return resolve_lazy_attribute(__name__, name)

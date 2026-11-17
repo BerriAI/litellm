@@ -18,11 +18,13 @@ from typing import (
     Protocol,
     SupportsFloat,
     SupportsIndex,
+    TypeAlias,
     TypedDict,
     TypeVar,
     Union,
     cast,
     get_type_hints,
+    overload,
     runtime_checkable,
 )
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -284,7 +286,10 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
     from websockets.asyncio.client import ClientConnection
 
-    from litellm.google_genai.streaming_iterator import AsyncGoogleGenAIGenerateContentStreamingIterator
+    from litellm.google_genai.streaming_iterator import (
+        AsyncGoogleGenAIGenerateContentStreamingIterator,
+        GoogleGenAIGenerateContentStreamingIterator,
+    )
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -311,6 +316,11 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
+    _GenerateContentHandlerResult: TypeAlias = (
+        GenerateContentResponse
+        | GoogleGenAIGenerateContentStreamingIterator
+        | Coroutine[object, object, AsyncGoogleGenAIGenerateContentStreamingIterator | GenerateContentResponse]
+    )
 else:
     LiteLLMLoggingObj = Any
 
@@ -11329,7 +11339,7 @@ class BaseLLMHTTPHandler:
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-    ) -> Mapping[str, object]:
+    ) -> object:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -11380,7 +11390,7 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         self._raise_for_provider_error_status(response=response, provider_config=vector_store_provider_config)
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
     def vector_store_list_handler(
         self,
@@ -11397,7 +11407,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
+    ) -> object | Coroutine[object, object, object]:
         if _is_async:
             return self.async_vector_store_list_handler(
                 after=after,
@@ -11459,7 +11469,7 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         self._raise_for_provider_error_status(response=response, provider_config=vector_store_provider_config)
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
     async def async_vector_store_update_handler(
         self,
@@ -11620,7 +11630,7 @@ class BaseLLMHTTPHandler:
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-    ) -> Mapping[str, object]:
+    ) -> object:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -11660,7 +11670,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
     def vector_store_delete_handler(
         self,
@@ -11674,7 +11684,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
+    ) -> object | Coroutine[object, object, object]:
         if _is_async:
             return self.async_vector_store_delete_handler(
                 vector_store_id=vector_store_id,
@@ -11722,7 +11732,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
     #####################################################################
     ################ Vector Store Files HANDLERS ########################
@@ -12566,6 +12576,49 @@ class BaseLLMHTTPHandler:
     #####################################################################
     ################ Google GenAI GENERATE CONTENT HANDLER ###########################
     #####################################################################
+    @overload
+    def generate_content_handler(
+        self,
+        model: str,
+        contents: object,
+        generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
+        generate_content_config_dict: dict[str, object],
+        tools: object,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Mapping[str, object] | None = None,
+        extra_body: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        *,
+        _is_async: Literal[True],
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        stream: bool = False,
+        litellm_metadata: dict[str, object] | None = None,
+        system_instruction: object | None = None,
+    ) -> Coroutine[object, object, "AsyncGoogleGenAIGenerateContentStreamingIterator | GenerateContentResponse"]: ...
+
+    @overload
+    def generate_content_handler(
+        self,
+        model: str,
+        contents: object,
+        generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
+        generate_content_config_dict: dict[str, object],
+        tools: object,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Mapping[str, object] | None = None,
+        extra_body: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        _is_async: bool = False,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        stream: bool = False,
+        litellm_metadata: dict[str, object] | None = None,
+        system_instruction: object | None = None,
+    ) -> "_GenerateContentHandlerResult": ...
+
     def generate_content_handler(
         self,
         model: str,
@@ -12576,15 +12629,15 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, object] | None = None,
-        extra_body: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         _is_async: bool = False,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         system_instruction: object | None = None,
-    ) -> Any:
+    ) -> "_GenerateContentHandlerResult":
         """
         Handles Google GenAI generate content requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -12700,8 +12753,8 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, object] | None = None,
-        extra_body: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
         stream: bool = False,

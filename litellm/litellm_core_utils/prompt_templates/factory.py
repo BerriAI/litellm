@@ -3593,6 +3593,15 @@ from litellm.types.llms.cohere import (
 )
 
 
+def _cohere_tool_output(content_str: str) -> object:
+    if not content_str:
+        return {}
+    try:
+        return _DECODED_JSON.validate_python(json.loads(content_str))
+    except json.JSONDecodeError:
+        return {"result": content_str}
+
+
 def convert_openai_message_to_cohere_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     tool_calls: list,
@@ -3640,15 +3649,9 @@ def convert_openai_message_to_cohere_tool_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
-    if len(content_str) > 0:
-        try:
-            content = json.loads(content_str)
-        except json.JSONDecodeError:
-            content = {"result": content_str}
-    else:
-        content = {}
+    tool_output: Final = _cohere_tool_output(content_str)
     name = ""
-    arguments = {}
+    arguments: object = {}
     # Recover name from last message with tool calls
     if len(tool_calls) > 0:
         tools: Final = tool_calls
@@ -3659,14 +3662,14 @@ def convert_openai_message_to_cohere_tool_result(
                 name = tool.get("function", {}).get("name", "")
                 arguments_str = tool.get("function", {}).get("arguments", "")
                 if arguments_str is not None and len(arguments_str) > 0:
-                    arguments = json.loads(arguments_str)
+                    arguments = _DECODED_JSON.validate_python(json.loads(arguments_str))
 
     if message["role"] == "function":
         function_message: Final[ChatCompletionFunctionMessage] = message
         name = function_message["name"]
         cohere_tool_result: ToolResultObject = {
             "call": CallObject(name=name, parameters=arguments),
-            "outputs": [content],
+            "outputs": [tool_output],
         }
         return cohere_tool_result
     else:
@@ -3675,7 +3678,7 @@ def convert_openai_message_to_cohere_tool_result(
 
         cohere_tool_result = {
             "call": CallObject(name=name, parameters=arguments),
-            "outputs": [content],
+            "outputs": [tool_output],
         }
         return cohere_tool_result
 

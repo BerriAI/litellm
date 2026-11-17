@@ -19980,7 +19980,7 @@ async def async_queue_request(
 
         async def schedule_queued_call() -> object:
             try:
-                return _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
+                return await router.schedule_acompletion(**data)
             except asyncio.CancelledError:
                 await release_cancelled_budget_reservation(user_api_key_dict.budget_reservation)
                 raise

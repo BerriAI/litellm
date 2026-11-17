@@ -156,9 +156,14 @@ def initialize_callbacks_on_proxy(
     )
     from litellm.proxy.proxy_server import prisma_client
 
-    verbose_proxy_logger.debug("%sinitializing callbacks=%s on proxy%s", blue_color_code, value, reset_color_code)
+    verbose_proxy_logger.debug(
+        "%sinitializing callbacks=%s on proxy%s",
+        blue_color_code,
+        _LOADED_CALLBACK.validate_python(value),
+        reset_color_code,
+    )
     if isinstance(value, list):
-        imported_list: Final[list[Any]] = []
+        imported_list: Final[list[Callable[..., object] | str | CustomLogger]] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
             if callback == "customer_budget_webhook":
                 from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
@@ -234,7 +239,11 @@ def initialize_callbacks_on_proxy(
                     raise Exception("Trying to use Llama Guard" + CommonProxyErrors.not_premium_user.value)
 
                 llama_guard_object = _ENTERPRISE_LlamaGuard()
-                imported_list.append(llama_guard_object)
+                imported_list.append(
+                    _loaded_callback_or_raise(
+                        entry=callback, loaded=_LOADED_CALLBACK.validate_python(llama_guard_object)
+                    )
+                )
             elif isinstance(callback, str) and callback == "hide_secrets":
                 try:
                     from litellm_enterprise.enterprise_callbacks.secret_detection import (
@@ -249,7 +258,11 @@ def initialize_callbacks_on_proxy(
                     raise Exception("Trying to use secret hiding" + CommonProxyErrors.not_premium_user.value)
 
                 _secret_detection_object = _ENTERPRISE_SecretDetection()
-                imported_list.append(_secret_detection_object)
+                imported_list.append(
+                    _loaded_callback_or_raise(
+                        entry=callback, loaded=_LOADED_CALLBACK.validate_python(_secret_detection_object)
+                    )
+                )
             elif isinstance(callback, str) and callback == "openai_moderations":
                 try:
                     from litellm.enterprise.enterprise_hooks.openai_moderation import (
@@ -313,7 +326,11 @@ def initialize_callbacks_on_proxy(
                     raise Exception("Trying to use Llm Guard" + CommonProxyErrors.not_premium_user.value)
 
                 llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
-                imported_list.append(llm_guard_moderation_obj)
+                imported_list.append(
+                    _loaded_callback_or_raise(
+                        entry=callback, loaded=_LOADED_CALLBACK.validate_python(llm_guard_moderation_obj)
+                    )
+                )
             elif isinstance(callback, str) and callback == "blocked_user_check":
                 try:
                     from litellm.enterprise.enterprise_hooks.blocked_user_list import (

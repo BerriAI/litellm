@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from httpx._models import Headers, Response
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._uuid import uuid
@@ -57,6 +58,10 @@ def _json_document(value: object) -> str | bytes | bytearray:
 
 
 _TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
+
+
+class _MessageFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
@@ -404,20 +409,24 @@ class OllamaChatConfig(BaseConfig):
                 )
             )
             message: Final = litellm.Message(
-                content=None,
-                tool_calls=[
-                    {
-                        "id": f"call_{uuid.uuid4()}",
-                        "function": {
-                            "name": function_call.get(
-                                "name", _DECODED_JSON.validate_python(litellm_params.get("function_name"))
-                            ),
-                            "arguments": json.dumps(function_call.get("arguments", function_call)),
-                        },
-                        "type": "function",
-                    }
-                ],
-                reasoning_content=response_json_message.get("reasoning_content"),
+                **_MessageFields(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": f"call_{uuid.uuid4()}",
+                            "function": {
+                                "name": function_call.get(
+                                    "name", _DECODED_JSON.validate_python(litellm_params.get("function_name"))
+                                ),
+                                "arguments": json.dumps(function_call.get("arguments", function_call)),
+                            },
+                            "type": "function",
+                        }
+                    ],
+                    reasoning_content=decoded_json_object(_DECODED_JSON.validate_python(response_json_message)).get(
+                        "reasoning_content"
+                    ),
+                )
             )
             model_response.choices[0].message = message
             model_response.choices[0].finish_reason = "tool_calls"

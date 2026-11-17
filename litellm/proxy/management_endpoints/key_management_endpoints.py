@@ -21,13 +21,24 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    SupportsIndex,
+    SupportsInt,
+    TypeVar,
+    cast,
+    runtime_checkable,
+)
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import Buffer, ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -184,6 +195,7 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     hash_token_if_needed,
     is_valid_api_key,
+    query_raw_rows,
     require_enterprise_license,
 )
 from litellm.redis.stores.spend_counters import (
@@ -233,7 +245,6 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
-_RawRowT = TypeVar("_RawRowT")
 
 
 class _UserRowLike(Protocol):
@@ -383,8 +394,17 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     )
 
 
-async def _query_raw_rows(prisma_client: PrismaClient, query: str, *args: object) -> Sequence[_RawRowT]:
-    return await prisma_client.db.query_raw(query, *args)
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _int_of(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 def _model_reencrypt_transaction(prisma_client: PrismaClient) -> _ModelReencryptTransaction:
@@ -1430,43 +1450,69 @@ def _enforce_upperbound_key_params(
                     detail={"error": f"{field_name} must be a finite number. Received: {field_value}"},
                 )
 
-    if litellm.upperbound_key_generate_params is None:
+    upperbound: Final = litellm.upperbound_key_generate_params
+    if upperbound is None:
         return
 
-    for elem in data:
-        key, value = elem
-        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
-        if upperbound_value is not None:
-            if value is None:
-                if fill_defaults:
-                    setattr(data, key, upperbound_value)
-            else:
-                if key in [
-                    "max_budget",
-                    "max_parallel_requests",
-                    "tpm_limit",
-                    "rpm_limit",
-                ]:
-                    if value > upperbound_value:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
-                elif key in ["budget_duration", "duration"]:
-                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
-                    if value == "-1":
-                        user_duration = float("inf")
-                    else:
-                        user_duration = duration_in_seconds(duration=value)
-                    if user_duration > upperbound_duration:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
+    _enforce_duration_upperbound(data, "duration", data.duration, upperbound.duration, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(data, "max_budget", data.max_budget, upperbound.max_budget, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(
+        data,
+        "max_parallel_requests",
+        data.max_parallel_requests,
+        upperbound.max_parallel_requests,
+        fill_defaults=fill_defaults,
+    )
+    _enforce_numeric_upperbound(data, "tpm_limit", data.tpm_limit, upperbound.tpm_limit, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(data, "rpm_limit", data.rpm_limit, upperbound.rpm_limit, fill_defaults=fill_defaults)
+    _enforce_duration_upperbound(
+        data, "budget_duration", data.budget_duration, upperbound.budget_duration, fill_defaults=fill_defaults
+    )
+
+
+def _over_upperbound_error(key: str, value: object, upperbound_value: object) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"},
+    )
+
+
+def _enforce_numeric_upperbound(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    key: str,
+    value: float | None,
+    upperbound_value: float | None,
+    *,
+    fill_defaults: bool,
+) -> None:
+    if upperbound_value is None:
+        return
+    if value is None:
+        if fill_defaults:
+            setattr(data, key, upperbound_value)
+        return
+    if value > upperbound_value:
+        raise _over_upperbound_error(key, value, upperbound_value)
+
+
+def _enforce_duration_upperbound(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    key: str,
+    value: str | None,
+    upperbound_value: str | None,
+    *,
+    fill_defaults: bool,
+) -> None:
+    if upperbound_value is None:
+        return
+    if value is None:
+        if fill_defaults:
+            setattr(data, key, upperbound_value)
+        return
+    upperbound_duration: Final = duration_in_seconds(duration=upperbound_value)
+    user_duration: Final = float("inf") if value == "-1" else duration_in_seconds(duration=value)
+    if user_duration > upperbound_duration:
+        raise _over_upperbound_error(key, value, upperbound_value)
 
 
 def _team_admin_requests_member_key(
@@ -7694,8 +7740,8 @@ async def key_aliases(
         where_sql: Final = " AND ".join(where_parts)
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows: Final[Sequence[Mapping[str, int]]] = await _query_raw_rows(prisma_client, count_sql, *query_params)
-        total_count: Final = int(count_rows[0]["count"]) if count_rows else 0
+        count_rows: Final = await query_raw_rows(prisma_client.db, count_sql, *query_params)
+        total_count: Final = _int_of(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
         limit_idx: Final = len(aliases_params) - 1
@@ -7707,10 +7753,8 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows: Final[Sequence[Mapping[str, str]]] = await _query_raw_rows(
-            prisma_client, aliases_sql, *aliases_params
-        )
-        aliases: Final[list[str]] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+        alias_rows: Final = await query_raw_rows(prisma_client.db, aliases_sql, *aliases_params)
+        aliases: Final = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages: Final = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
