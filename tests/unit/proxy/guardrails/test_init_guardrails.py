@@ -571,9 +571,10 @@ async def test_presidio_initialized_output_dispatch(
 def _fake_presidio_analyze_results(text: str) -> list[dict]:
     """
     Span detections with the real analyzer's pattern semantics. A card is a
-    13-19 digit run passing Luhn, and the literal "John Smith" stands in for
-    an NER person detection. Placeholder tokens such as <PERSON_1> match
-    neither, which is the property the mask-before-restore wiring relies on.
+    13-19 digit run passing Luhn, an address pattern stands in for the email
+    recognizer, and the literal "John Smith" stands in for an NER person
+    detection. Placeholder tokens such as <PERSON_1> match none of them,
+    which is the property the mask-before-restore wiring relies on.
     """
     results: list[dict] = []
     for match in re.finditer(r"\d[ -]?(\d[ -]?){12,18}\d", text):
@@ -586,6 +587,8 @@ def _fake_presidio_analyze_results(text: str) -> list[dict]:
             total += d
         if 13 <= len(digits) <= 19 and total % 10 == 0:
             results.append({"entity_type": "CREDIT_CARD", "start": match.start(), "end": match.end(), "score": 1.0})
+    for match in re.finditer(r"[\w.+-]+@[\w-]+\.[\w.]+", text):
+        results.append({"entity_type": "EMAIL_ADDRESS", "start": match.start(), "end": match.end(), "score": 1.0})
     for match in re.finditer(re.escape("John Smith"), text):
         results.append({"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 1.0})
     return sorted(results, key=lambda r: r["start"])
@@ -750,6 +753,129 @@ async def test_presidio_initialized_output_dispatch_blocks_new_pii_before_restor
         await dispatch("<PERSON_1> charged 4111111111111111")
     restored: Final = await dispatch("<PERSON_1> charged nothing")
     assert restored == "John Smith charged nothing", restored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,tokens,content,expected",
+    [
+        (
+            ["pre_call", "post_call"],
+            {"<PERSON_1>": "John Smith"},
+            "<PERSON_1> can be reached at alice@example.com",
+            "John Smith can be reached at <EMAIL_ADDRESS>",
+        ),
+        (
+            "post_call",
+            {},
+            "Reach me at alice@example.com",
+            "Reach me at <EMAIL_ADDRESS>",
+        ),
+    ],
+)
+async def test_presidio_initialized_output_dispatch_post_call_mode_keeps_new_pii_masked(
+    mode: str | list[str] | Mode,
+    tokens: dict[str, str],
+    content: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    When the mode itself runs on post_call, the input callback is selected
+    for the response too. Its scan must not tokenise response-only PII into
+    the restoration map, or the restore callback unmasks it again. A
+    response-only email under a MASK rule stays masked, the map gains no
+    response values, and request-originated tokens still restore.
+    """
+    from typing import Final
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, PiiAction, PiiEntityType
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode=mode,
+        default_on=True,
+        output_parse_pii=True,
+        presidio_filter_scope="both",
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        pii_entities_config={PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK, PiiEntityType.PERSON: PiiAction.MASK},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "post_call_mode_new_pii"})
+    for callback in callbacks:
+        callback._get_session_iterator = _make_fake_presidio_session([])
+    data: Final = {"metadata": {"tags": [], "pii_tokens": dict(tokens)}}
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content=content), index=0)])
+    selected: Final = tuple(
+        callback for callback in callbacks if callback.should_run_guardrail(data, GuardrailEventHooks.post_call)
+    )
+    assert len(selected) == 3, [callback._callback_role for callback in selected]
+    for callback in selected:
+        data["guardrail_to_apply"] = callback
+        await UnifiedLLMGuardrails().async_post_call_success_hook(
+            data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+        )
+    assert response.choices[0].message.content == expected, response.choices[0].message.content
+    assert data["metadata"]["pii_tokens"] == tokens, data["metadata"]["pii_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_presidio_initialized_output_dispatch_post_call_mode_blocks_new_pii(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    In the same post_call-mode wiring, a BLOCK-configured entity that newly
+    appears in the response still raises, and a response carrying only
+    restore tokens passes and is restored.
+    """
+    from typing import Final
+
+    from litellm.exceptions import BlockedPiiEntityError
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, PiiAction, PiiEntityType
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode=["pre_call", "post_call"],
+        default_on=True,
+        output_parse_pii=True,
+        presidio_filter_scope="both",
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        pii_entities_config={PiiEntityType.EMAIL_ADDRESS: PiiAction.BLOCK, PiiEntityType.PERSON: PiiAction.MASK},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "post_call_mode_block"})
+    for callback in callbacks:
+        callback._get_session_iterator = _make_fake_presidio_session([])
+
+    async def dispatch(content: str) -> str:
+        data: Final = {"metadata": {"tags": [], "pii_tokens": {"<PERSON_1>": "John Smith"}}}
+        response: Final = ModelResponse(
+            choices=[Choices(message=Message(role="assistant", content=content), index=0)]
+        )
+        selected: Final = tuple(
+            callback for callback in callbacks if callback.should_run_guardrail(data, GuardrailEventHooks.post_call)
+        )
+        for callback in selected:
+            data["guardrail_to_apply"] = callback
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+            )
+        return response.choices[0].message.content
+
+    with pytest.raises(BlockedPiiEntityError):
+        await dispatch("<PERSON_1> can be reached at alice@example.com")
+    restored: Final = await dispatch("<PERSON_1> sent no new PII")
+    assert restored == "John Smith sent no new PII", restored
 
 
 def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(
