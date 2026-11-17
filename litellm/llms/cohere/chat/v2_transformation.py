@@ -18,6 +18,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_object_list,
     as_str_mapping,
     drops_unsupported_params,
@@ -267,8 +268,7 @@ def _translated_to_thinking(param: str, value: object) -> bool:
 
 
 def _allowed_openai_params(litellm_params: Mapping[str, object]) -> frozenset[str]:
-    allowed: Final = as_object_list(litellm_params.get("allowed_openai_params")) or ()
-    return frozenset(param for param in allowed if isinstance(param, str))
+    return frozenset(allowed_openai_param_names(litellm_params.get("allowed_openai_params")))
 
 
 def _params_cohere_takes(

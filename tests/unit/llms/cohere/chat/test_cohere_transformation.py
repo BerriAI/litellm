@@ -1414,14 +1414,21 @@ def test_cohere_v2_response_format_400_leaves_out_its_contents(model: str, param
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "allowlist_of",
+    [pytest.param(lambda name: [name], id="list"), pytest.param(lambda name: name, id="string")],
+)
 def test_cohere_v2_allowed_openai_params_skip_the_unsupported_check(
     respx_mock: respx.MockRouter,
     model: str,
     params: Mapping[str, object],
     allowed: str,
     cohere_params: Mapping[str, object],
+    allowlist_of: Callable[[str], object],
 ) -> None:
-    body: Final = _cohere_v2_request_body(respx_mock, model, {**params, "allowed_openai_params": [allowed]})
+    body: Final = _cohere_v2_request_body(
+        respx_mock, model, {**params, "allowed_openai_params": allowlist_of(allowed)}
+    )
 
     assert {key: body.get(key) for key in cohere_params} == cohere_params
 
