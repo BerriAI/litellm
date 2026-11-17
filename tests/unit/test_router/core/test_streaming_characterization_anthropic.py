@@ -715,3 +715,14 @@ async def test_a_fallback_streams_error_frame_split_across_chunks_carries_the_pr
     message = frame_error_message(frames[1])
     assert message.startswith(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
     assert "fallback down" in message.removeprefix(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
+
+
+async def test_a_fallback_streams_crlf_error_frame_keeps_its_line_endings(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN.replace(b"\n", b"\r\n")))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames[1].count(b"\r\n") == FALLBACK_FRAME_DOWN.count(b"\n")
+    assert OUTCOME.replace("\n", "\\n") in frames[1].decode()

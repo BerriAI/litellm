@@ -1242,8 +1242,9 @@ _ANTHROPIC_PREAMBLE_EVENT_LINES: Final = frozenset((b"event: message_start", b"e
 
 
 def _is_anthropic_preamble_chunk(chunk: object) -> bool:
-    if isinstance(chunk, dict):
-        return chunk.get("type") in ("message_start", "ping")
+    event: Final = as_str_mapping(chunk)
+    if event is not None:
+        return event.get("type") in ("message_start", "ping")
     if not isinstance(chunk, (bytes, bytearray)):
         return False
     event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
@@ -1344,7 +1345,8 @@ def _error_line_with_message(line: bytes, message: str) -> bytes:
     error: Final = as_str_mapping(payload.get("error"))
     if payload.get("type") != "error" or error is None:
         return line
-    return b"data: " + json.dumps({**payload, "error": {**error, "message": message}}).encode()
+    line_end: Final = b"\r" if line.endswith(b"\r") else b""
+    return b"data: " + json.dumps({**payload, "error": {**error, "message": message}}).encode() + line_end
 
 
 def _hop_error_frame(
@@ -2032,6 +2034,9 @@ async def _responses_fallback_attempt(
     fallback_yielded = False  # rebind-ok: flipped on the first fallback item
     try:
         fallback_response = await attempt.fallback(trigger, continued)  # rebind-ok: rebound as the stream advances
+        hop: Final = getattr(fallback_response, "attempt", None)
+        if output_started and isinstance(hop, StreamAttempt):
+            hop.explain_failure = None
         prepared: Final = adopt_headers(fallback_response)
         if hasattr(fallback_response, "__aiter__"):
             spliced: Final = cast(  # cast-ok: the fallback's events
