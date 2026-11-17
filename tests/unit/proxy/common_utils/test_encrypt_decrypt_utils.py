@@ -336,7 +336,9 @@ def test_a_refused_derive_key_from_salt_key_leaves_the_salt_key_in_no_frame_loca
 
 _FIPS_SALT_KEY: Final = "sk-" + bytes(range(32)).hex()
 _FIPS_AT_REST_KEY: Final = hmac.digest(
-    _FIPS_SALT_KEY.encode(), (1).to_bytes(4, "big") + b"litellm-at-rest:aes-256-gcm:" + b"\x00" + (256).to_bytes(4, "big"), "sha256"
+    _FIPS_SALT_KEY.encode(),
+    (1).to_bytes(4, "big") + b"litellm-at-rest:aes-256-gcm:" + b"\x00" + (256).to_bytes(4, "big"),
+    "sha256",
 )
 
 
@@ -360,7 +362,9 @@ def test_fips_mode_writes_aes_gcm_under_the_kbkdf_key_with_a_nonce_from_openssl(
 
 
 @_needs_shared_openssl
-def test_fips_mode_refuses_values_it_did_not_write(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+def test_fips_mode_refuses_values_it_did_not_write(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
     legacy: Final = encrypt_value_helper("sk-secret-value")
     _use_aes(monkeypatch)
