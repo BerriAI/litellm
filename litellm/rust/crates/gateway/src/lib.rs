@@ -84,7 +84,10 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let client = pool.client(&http, ClientVariant::Provider)?;
     let secrets = Arc::new(environment_secrets(environment.clone(), client));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
+    Ok(Arc::new(
+        Gateway::new(resources, http, secrets, router)?
+            .with_client_side_credentials(config.general_settings.allow_client_side_credentials),
+    ))
 }
 
 pub fn install_crypto_provider() {
