@@ -3360,6 +3360,7 @@ async def prefetch_referenced_auth_objects(
     end_user_id: str | None,
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient | None,
+    request_model: object = None,
 ) -> None:
     """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold)."""
     bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
@@ -3368,18 +3369,18 @@ async def prefetch_referenced_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
         user_api_key_cache=user_api_key_cache,
         prisma_client=prisma_client,
-        before_read=arm_routing_cooldowns,
+        before_read=partial(arm_routing_cooldowns, request_model, team_id=valid_token.team_id),
     )
 
 
-def arm_routing_cooldowns() -> None:
+def arm_routing_cooldowns(model: object = None, *, team_id: str | None = None) -> None:
     """Declares the cooldown read routing takes later into the auth prefetch's native round trip, so a request whose
     auth objects come from Redis pays one round trip for both. Armed only when a prefetch reads Redis, so a request
     served from memory, or denied, reads no cooldowns early."""
     from litellm.proxy.proxy_server import llm_router  # noqa: PLC0415  # runtime global
 
-    if llm_router is not None:
-        RoutingContext(llm_router).arm_cooldown_prefetch()
+    if llm_router is not None and isinstance(model, str):
+        RoutingContext(llm_router).arm_cooldown_prefetch(model, team_id=team_id)
 
 
 def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:

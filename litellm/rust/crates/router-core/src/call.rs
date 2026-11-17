@@ -712,11 +712,7 @@ impl Core {
             .filter(|d| d.listed_for_team(listing_team))
             .map(|d| d.id.clone())
             .collect();
-        let cooling = self
-            .health
-            .active_cooldowns(&snapshot.registry.ids())
-            .await
-            .unwrap_or_default();
+        let cooling = self.health.active_cooldowns(&ids).await.unwrap_or_default();
         let remaining = ids
             .iter()
             .any(|id| !excluded.contains(id) && !cooling.iter().any(|(cooled, _)| cooled == id));

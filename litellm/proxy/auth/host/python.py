@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -264,7 +265,9 @@ class PythonAuthHost:
         await prefetch_identity_keys(
             identity_cache_keys(token or "", end_user_id=end_user_id, key_is_resolved=token is None),
             user_api_key_cache=self.user_api_key_cache,
-            before_read=arm_routing_cooldowns,
+            before_read=partial(
+                arm_routing_cooldowns, None if self.http is None else self.http.request_data.get("model")
+            ),
         )
 
     async def end_user(self, end_user_id: str | None) -> EndUserRow:
@@ -403,6 +406,7 @@ class PythonAuthHost:
             end_user_id=end_user.end_user_id,
             user_api_key_cache=self.user_api_key_cache,
             prisma_client=self.prisma_client,
+            request_model=None if self.http is None else self.http.request_data.get("model"),
         )
 
     async def key_owner(self, user_id: str) -> LiteLLM_UserTable | None:

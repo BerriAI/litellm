@@ -5,7 +5,8 @@ counters (`LowestTPMLoggingHandler_v2`) are one read of the native usage store.
 
 import time
 from collections.abc import Sequence
-from typing import Final
+from dataclasses import dataclass
+from typing import Final, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,9 +16,12 @@ from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.redis.stores.router_cooldowns import CooldownCacheValue, RouterCooldownStore
 from litellm.redis.stores.router_usage import UsageCounter
 from litellm.router import router_arguments
+from litellm.router_api import RoutingContext
 from litellm.router_config import build_router_config
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_utils import routing_prefetch
+from litellm.router_utils.cooldown_cache import CooldownCache
+from litellm.router_utils.routing_read_batch import RoutingPrefetch, RoutingReadBatch
 from litellm.utils import get_utc_datetime
 from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, ReadyPending, fake_pending, fake_send
 from tests.unit.conftest import redis_cache_double
@@ -28,7 +32,7 @@ _MODEL_GROUP = "claude"
 _MESSAGES = [{"role": "user", "content": "ping"}]
 
 
-def _deployment(deployment_id: str) -> dict:
+def _deployment(deployment_id: str) -> dict[str, object]:
     return {
         "model_name": _MODEL_GROUP,
         "litellm_params": {"model": "anthropic/claude-x", "api_key": "test", "mock_response": "pong"},
@@ -188,6 +192,67 @@ def _armed_store() -> tuple[RouterCooldownStore, FakeCooldowns]:
     store: Final = RouterCooldownStore(handle)
     store.put("dep-a", {"exception_received": "429", "status_code": "429", "timestamp": 1.0, "cooldown_time": 60}, 60)
     return store, handle
+
+
+@dataclass(frozen=True, slots=True)
+class _CooldownContext:
+    cooldowns: CooldownCache
+
+    def health(self) -> "_CooldownContext":
+        return self
+
+    def registry(self) -> "_CooldownContext":
+        return self
+
+    def names(self, *, kind: str) -> tuple[str, ...]:
+        return ("dep-a", "dep-b", "unrelated")
+
+
+def _cooldown_context(store: RouterCooldownStore) -> RoutingContext:
+    return cast(
+        RoutingContext, _CooldownContext(CooldownCache(store, 60, clock=lambda: 1.0))
+    )  # cast-ok: injected health view
+
+
+@pytest.mark.asyncio
+async def test_request_prefetch_reads_only_candidate_ids_and_is_reused_for_a_subset() -> None:
+    store, handle = _armed_store()
+    ctx: Final = _cooldown_context(store)
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # native request stand-ins
+        RoutingPrefetch.arm(ctx, None, [_deployment("dep-a"), _deployment("dep-b")])
+        cooled: Final = await RoutingReadBatch(None).async_get_cooldown_deployments(ctx, [_deployment("dep-a")], None)
+
+    assert cooled == ["dep-a"]
+    assert handle.declared == [("dep-a", "dep-b")]
+    assert natives.built[0].events == ["flush_pre", "resolve"]
+
+
+@pytest.mark.asyncio
+async def test_a_different_fallback_candidate_is_read_instead_of_reusing_primary_prefetch() -> None:
+    store, handle = _armed_store()
+    ctx: Final = _cooldown_context(store)
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # native request stand-ins
+        RoutingPrefetch.arm(ctx, None, [_deployment("dep-b")])
+        cooled: Final = await RoutingReadBatch(None).async_get_cooldown_deployments(ctx, [_deployment("dep-a")], None)
+
+    assert cooled == ["dep-a"]
+    assert handle.declared == [("dep-b",), ("dep-a",)]
+
+
+@pytest.mark.asyncio
+async def test_unknown_candidates_do_not_arm_a_global_read() -> None:
+    store, handle = _armed_store()
+    ctx: Final = _cooldown_context(store)
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # native request stand-ins
+        RoutingPrefetch.arm_cooldowns(ctx)
+        cooled: Final = await RoutingReadBatch(None).async_get_cooldown_deployments(ctx, [_deployment("dep-b")], None)
+
+    assert cooled == []
+    assert handle.declared == [("dep-b",)]
 
 
 @pytest.mark.asyncio

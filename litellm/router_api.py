@@ -1984,10 +1984,13 @@ class RoutingContext:
     ) -> None:
         return self._router._update_kwargs_before_fallbacks(model, kwargs, metadata_variable_name)
 
-    def arm_cooldown_prefetch(self) -> None:
+    def arm_cooldown_prefetch(self, model: str | None = None, *, team_id: str | None = None) -> None:
         from litellm.router_utils.routing_read_batch import RoutingPrefetch
 
-        RoutingPrefetch.arm_cooldowns(self)
+        if model is not None:
+            RoutingPrefetch.arm_cooldowns(
+                self, tuple(self.registry().names(model, kind="route_candidates", team_id=team_id))
+            )
 
     def arm_read_prefetch(
         self,
