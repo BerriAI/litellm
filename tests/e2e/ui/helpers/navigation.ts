@@ -37,7 +37,7 @@ export async function navigateToPage(page: PlaywrightPage, pageEnum: Page): Prom
   // assert against the default page.
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.goto(`/ui?page=${pageEnum}`);
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("complementary")).toBeVisible();
     const url = new URL(page.url());
     const onLegacyRoot = url.pathname.replace(/\/+$/, "").endsWith("/ui");
     if (!onLegacyRoot || url.searchParams.get("page") === pageEnum) {
@@ -79,7 +79,7 @@ export async function setAriaHidden(page: PlaywrightPage, hidden: boolean): Prom
   }
   await page.keyboard.press("Escape");
   await expect(panel).toBeHidden();
-  const aria = page.getByRole("banner").getByRole("button", { name: "Aria Agent", exact: true });
+  const aria = sidebarLink(page, "Aria Agent");
   if (premium && hidden) {
     await expect(aria).toBeHidden();
   } else {

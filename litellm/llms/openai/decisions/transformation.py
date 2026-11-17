@@ -307,10 +307,13 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
 
 
 def ir_to_openai_response(
-    response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
+    response: DecisionsIRResponse,
+    request: DecisionsIRRequest,
+    requested_model: str,
+    evidence_fields: frozenset[str] = frozenset(),
 ) -> OpenAIDecisionResponse:
     usage: Final = response.usage or DecisionsIRUsage()
-    return OpenAIDecisionResponse(
+    formatted: Final = OpenAIDecisionResponse(
         model=response.model or requested_model,
         answers=tuple(
             _openai_answer(question, answer)
@@ -327,6 +330,7 @@ def ir_to_openai_response(
             total_tokens=usage.input_tokens + usage.output_tokens,
         ),
     )
+    return formatted.model_copy(update={name: response.extra[name] for name in evidence_fields & response.extra.keys()})
 
 
 class OpenAIDecisionsConfig(BaseDecisionsConfig):

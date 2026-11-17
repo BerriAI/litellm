@@ -223,18 +223,18 @@ class TestAdvertisedLevelsAreTheForwardedLevels:
     "which levels does this deployment take" through two different readers, so the proxy advertised
     kimi-k3 max while /v1/messages quietly forwarded high. Both now resolve through one owner."""
 
-    KIMI_K3_SPELLINGS = (
+    KIMI_K3_PASSTHROUGH_SPELLINGS = (
         ("kimi-k3", "moonshot"),
         ("kimi-k3", "fireworks_ai"),
         ("kimi-k3-us", "fireworks_ai"),
-        ("FW-Kimi-K3", "azure_ai"),
     )
+    KIMI_K3_SPELLINGS = (*KIMI_K3_PASSTHROUGH_SPELLINGS, ("FW-Kimi-K3", "azure_ai"))
 
     @pytest.mark.parametrize("model, provider", KIMI_K3_SPELLINGS)
     def test_a_declared_level_is_forwarded_rather_than_degraded(self, local_model_cost_map, model, provider):
         assert normalize_reasoning_effort_value("max", model, provider) == "max"
 
-    @pytest.mark.parametrize("model, provider", KIMI_K3_SPELLINGS)
+    @pytest.mark.parametrize("model, provider", KIMI_K3_PASSTHROUGH_SPELLINGS)
     def test_a_level_the_entry_does_not_declare_still_degrades(self, local_model_cost_map, model, provider):
         """kimi-k3 declares low, high and max, so xhigh and minimal are absent from its set and keep
         falling through the chain rather than being waved past by the presence of a declaration."""
@@ -263,11 +263,12 @@ class TestAdvertisedLevelsAreTheForwardedLevels:
         for effort in ("minimal", "xhigh", "max"):
             assert normalize_reasoning_effort_value(effort, model, provider) in supported
 
-    def test_the_wider_perplexity_entry_keeps_the_levels_it_declares(self, local_model_cost_map):
-        """The entry describing that reseller declares a six-level set, and every one of them is
+    @pytest.mark.parametrize("model, provider", [("perplexity/kimi-k3", "perplexity"), ("FW-Kimi-K3", "azure_ai")])
+    def test_a_wider_entry_keeps_the_levels_it_declares(self, local_model_cost_map, model, provider):
+        """The entries describing that reseller and Foundry declare wider sets, and every level in them is
         forwarded, which is what the declared list exists to express."""
-        assert normalize_reasoning_effort_value("xhigh", "perplexity/kimi-k3", "perplexity") == "xhigh"
-        assert normalize_reasoning_effort_value("minimal", "perplexity/kimi-k3", "perplexity") == "minimal"
+        assert normalize_reasoning_effort_value("xhigh", model, provider) == "xhigh"
+        assert normalize_reasoning_effort_value("minimal", model, provider) == "minimal"
 
     def test_the_minimal_chain_clears_a_deployment_that_refuses_low(self, local_model_cost_map):
         """gpt-5.5-pro accepts medium, high and xhigh only, so the nearest level to ``minimal`` it
