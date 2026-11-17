@@ -12,7 +12,7 @@ These are target invariants. Where the code still lags them, the Notion page lis
 
 ## The core decides, hosts fetch
 
-- No IO, no pyo3, no axum. `AuthHost` in `host.rs` is the only way out, one trait for every path so a host implements it once. The operator's own code sits apart in `OperatorHooks`, which `AuthHost::operator_hooks` hands out only on a host that can run it. Methods return `impl Future + Send`, and the core takes `&impl AuthHost`, never `dyn`
+- No IO, no pyo3, no axum. `AuthHost` in `host.rs` is the only way out, one trait for every path so a host implements it once. The request body check is the one exception, with its own trait in `body/host.rs`, described under "Request body check". The operator's own code sits apart in `OperatorHooks`, which `AuthHost::operator_hooks` hands out only on a host that can run it. Methods return `impl Future + Send`, and the core takes `&impl AuthHost`, never `dyn`
 - A method fetches or stores one named thing, or runs one named host-owned step. Comparing, choosing, ordering and denying happen here. A method that still answers a decision goes in the last sections of `AuthHost`, with a TODO naming what has to move to Rust first, and takes the rows it decides on as arguments instead of reading host state
 - A host call exists because of what it touches, and that says how it leaves
   - A store port reads or writes one row, cache entry or remote document. It is permanent, and only its answerer changes when the bridge answers it natively
@@ -58,6 +58,21 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - When a host-owned step's TODO lands and the core decides it, its trait method goes too, together with everything listed below
 - When the bridge answers a read or write natively, the trait method stays, since every host still has to answer it. Only the Python side goes: its `RustAuthStep`, its bridge `Ask`, and its `answer.py` case and `PythonAuthHost` method, all in `litellm/proxy/auth/host/`
 - So the trait shrinks only by decisions, while the Python host shrinks by both. It reaches `custom_validate` alone only once every Prisma query has ported and `user_api_key_cache` has moved to Rust. Until then the reads that are left stay Python answers, and nothing schedules those ports
+
+## Request body check
+
+- `body::check` decides whether a caller's request body may reach a handler. Python's `is_request_body_safe` only calls it through `_native` and raises the text it returns
+- It asks the process through `body::Host` and `body::Deployments` in `body/host.rs`, not through `AuthHost`
+  - Every answer is state the process already holds in memory, and `is_request_body_safe` is a plain function that batches, prompts and RAG handlers call outside any auth call. So the traits are synchronous and nothing is stepped
+  - The bridge implements them in `python-bridge/src/auth/body.rs` by calling `litellm/rust_bridge/host/request_body.py` under the same names. Rust imports that module, so it is a `rust_bridge/host` module, unlike `PythonAuthHost`
+- The rules above still hold. One method per question, typed in and out, and pure logic is never a host call
+  - `decode`, `credential`, `deployments`, `group` and `alias` are reads every host answers from its own parser, credential store and router
+  - `form_metadata`, `url_destination_allowed`, `fallbacks` and `api_base_matches` still answer a rule. Each sits last in its trait with a TODO naming what has to reach Rust first
+- No rule reads a raw body. The host turns it into `Params` and `CallerValue`, which hold only what a rule may read and have no method that resolves a value as a secret
+- `Names` is built once from `HostTables`, the parameter lists Python still owns. `Policy` holds the `general_settings` facts, which the Python caller still passes on every call
+- Gaps against the invariants above
+  - A refusal is a `body::Rejection` in `error/body.rs`, with the caller's text in `Display`. It is not a `crate::Error` and has no `PublicDenial`, because every Python caller still raises it as a `ValueError`
+  - `body/surface.rs` names the routes whose bodies carry their own fields, outside `routes/table.rs`
 
 ## IO
 

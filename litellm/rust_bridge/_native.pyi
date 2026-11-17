@@ -1712,6 +1712,39 @@ def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
 def auth_first_denied_route(forwarded_routes: Sequence[str], denied_sources: Sequence[object]) -> str | None: ...
 def auth_jwt_team_routes_grant(route: str, team_allowed_routes: object) -> bool: ...
 def auth_allowed_routes_grant(route: str, *, key: object, team: object) -> bool: ...
+
+@final
+class RequestBodyNames:
+    def __new__(
+        cls,
+        *,
+        callback_params: Sequence[str],
+        blocked_callback_params: Sequence[str],
+        pricing_params: Sequence[str],
+        federation_params: Sequence[str],
+        token_exchange_params: Sequence[str],
+        github_copilot_params: Sequence[str],
+        upstream_bound_params: Sequence[str],
+    ) -> RequestBodyNames: ...
+    @property
+    def overrides(self) -> list[str]: ...
+    @property
+    def vertex_target(self) -> list[str]: ...
+
+def check_request_body(
+    body: Mapping[str, object],
+    *,
+    names: RequestBodyNames,
+    general_settings: Mapping[str, object],
+    router: object,
+    model: object,
+    route: str | None,
+    route_model: str | None,
+    team_id: str | None,
+    fallback_targets: Sequence[object],
+    defer_model_checks: bool,
+    defer_s3_buckets: bool,
+) -> str | None: ...
 @final
 class NativeAuthCache:
     def __new__(

@@ -4,10 +4,11 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
+import re
 import time
 from collections.abc import Callable, Mapping
-from types import SimpleNamespace
-from typing import Final, Optional
+from types import MappingProxyType, SimpleNamespace
+from typing import Final, Optional, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,7 +17,6 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
-    _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
@@ -445,6 +445,236 @@ def test_user_config_with_literal_credentials_is_allowed_with_client_side_opt_in
         )
         is True
     )
+
+
+def test_a_router_that_cannot_answer_fails_the_check_instead_of_passing_it() -> None:
+    with pytest.raises(AttributeError):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "caller-client"},
+            general_settings={},
+            llm_router=cast("Router", object()),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+def test_a_body_that_is_a_mapping_but_not_a_dict_is_checked_the_same() -> None:
+    with pytest.raises(ValueError, match="api_base is not allowed in request body"):
+        is_request_body_safe(
+            request_body=MappingProxyType({"model": "gpt-4o", "api_base": "https://attacker.example"}),
+            general_settings={},
+            llm_router=None,
+            model="gpt-4o",
+            route="/v1/chat/completions",
+        )
+
+
+def test_a_credential_whose_federation_fields_are_unset_may_be_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-plain",
+                credential_values={"api_key": "sk-stored", "anthropic_federation_rule_id": None},
+                credential_info={"custom_llm_provider": "anthropic"},
+            )
+        ],
+    )
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", "litellm_credential_name": "admin-plain"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("setting", "body"),
+    (
+        ("allowed_client_side_s3_buckets", {"s3_bucket_name": "b"}),
+        ("allowed_client_side_s3_endpoint_urls", {"s3_endpoint_url": "b"}),
+    ),
+)
+def test_an_allowlist_written_as_one_string_admits_none_of_its_characters(
+    setting: str, body: Mapping[str, str]
+) -> None:
+    with pytest.raises(ValueError, match=f"{next(iter(body))} is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "gpt-4o", **body},
+            general_settings={setting: "bucket"},
+            llm_router=None,
+            model="gpt-4o",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("flag", (False, None, 1, "true", "false", ["true"]))
+def test_only_a_true_flag_turns_client_side_credentials_on(flag: object) -> None:
+    with pytest.raises(ValueError, match="api_base is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "gpt-4o", "api_base": "https://caller.example.com"},
+            general_settings={"allow_client_side_credentials": flag},
+            llm_router=None,
+            model="gpt-4o",
+            route="/v1/chat/completions",
+        )
+
+
+def test_a_deferred_model_check_leaves_an_override_for_the_check_that_knows_the_team() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "caller-client"},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+            defer_model_checks=True,
+        )
+        is True
+    )
+
+
+def test_a_deferred_model_check_still_refuses_a_secret_reference() -> None:
+    with pytest.raises(ValueError, match="client_id holds a secret reference"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "os.environ/LITELLM_MASTER_KEY"},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+            defer_model_checks=True,
+        )
+
+
+def test_a_github_copilot_param_is_refused_as_github_copilot_authentication() -> None:
+    with pytest.raises(
+        ValueError, match="github_copilot_app_id is a server-owned GitHub Copilot authentication parameter"
+    ):
+        is_request_body_safe(
+            request_body={"model": "github_copilot/gpt-4o", "github_copilot_app_id": "12345"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="github_copilot/gpt-4o",
+            route="/v1/chat/completions",
+        )
+
+
+def test_a_url_valued_fallback_to_an_allowed_host_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["trusted.example"])
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "gpt-4", "fallbacks": [{"gpt-4": ["huggingface/https://trusted.example/v1"]}]},
+            general_settings={},
+            llm_router=None,
+            model="gpt-4",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+_SECRET_REFERENCE_REFUSAL: Final = (
+    "Rejected Request: {param} holds a secret reference, which only a deployment or credential a proxy admin "
+    "configures can carry."
+)
+_OVERRIDE_REFUSAL: Final = (
+    "Rejected Request: {param} is not allowed in request body. Clientside passthrough requires explicit admin opt-in "
+    "via either `general_settings.allow_client_side_credentials = true` (proxy-wide) or "
+    "`configurable_clientside_auth_params` on the deployment in your proxy config.yaml. Relevant Issue: "
+    "https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997"
+)
+_ENTRA_SIGN_IN_WITH_A_SECRET_REFERENCE: Final = MappingProxyType(
+    {
+        "model": "azure-group",
+        "tenant_id": "os.environ/LITELLM_MASTER_KEY",
+        "client_id": "caller-client",
+        "client_secret": "caller-secret",
+    }
+)
+_USER_CONFIG_WITH_A_SECRET_REFERENCE: Final = MappingProxyType(
+    {
+        "model": "caller-model",
+        "user_config": _user_config(
+            "model_list",
+            {
+                "model": "openai/gpt-4o",
+                "api_base": "https://caller.example.com",
+                "api_key": "os.environ/LITELLM_MASTER_KEY",
+            },
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("route", "body", "general_settings", "refusal"),
+    (
+        pytest.param(
+            "/v1/chat/completions",
+            _ENTRA_SIGN_IN_WITH_A_SECRET_REFERENCE,
+            {},
+            _SECRET_REFERENCE_REFUSAL.format(param="tenant_id"),
+            id="secret_reference_in_an_entra_param",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            _ENTRA_SIGN_IN_WITH_A_SECRET_REFERENCE,
+            {"allow_client_side_credentials": True},
+            _SECRET_REFERENCE_REFUSAL.format(param="tenant_id"),
+            id="secret_reference_despite_client_side_opt_in",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            _USER_CONFIG_WITH_A_SECRET_REFERENCE,
+            {"allow_client_side_credentials": True},
+            _SECRET_REFERENCE_REFUSAL.format(param="api_key"),
+            id="secret_reference_in_a_user_config_deployment",
+        ),
+        pytest.param(
+            "/idp/token",
+            {"grant_type": "client_credentials", "client_id": "app-1", "client_secret": "app-secret"},
+            {},
+            _OVERRIDE_REFUSAL.format(param="client_id"),
+            id="client_id_on_a_configured_pass_through",
+        ),
+        pytest.param(
+            "/idp/token",
+            {"grant_type": "client_credentials", "tenant_id": "caller-tenant"},
+            {},
+            _OVERRIDE_REFUSAL.format(param="tenant_id"),
+            id="tenant_id_on_a_configured_pass_through",
+        ),
+        pytest.param(
+            "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
+            {"contents": [], "client_id": "caller-client"},
+            {},
+            _OVERRIDE_REFUSAL.format(param="client_id"),
+            id="client_id_on_a_provider_pass_through",
+        ),
+    ),
+)
+def test_a_refused_body_reads_the_same_refusal_text(
+    route: str, body: Mapping[str, object], general_settings: Mapping[str, object], refusal: str
+) -> None:
+    model: Final = body.get("model")
+
+    with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+        is_request_body_safe(
+            request_body=dict(body),
+            general_settings=dict(general_settings),
+            llm_router=_azure_entra_router(),
+            model=model if isinstance(model, str) else "",
+            route=route,
+        )
 
 
 @pytest.mark.parametrize(
@@ -4364,17 +4594,9 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
             is True
         )
 
-    def test_admin_opt_in_per_deployment_allows_nvcf_function_id(self, monkeypatch):
+    def test_admin_opt_in_per_deployment_allows_nvcf_function_id(self):
         """The error message lists per-deployment ``configurable_clientside_auth_params``
         as a second opt-in. Cover that path too so it can't silently regress."""
-        from litellm.proxy.auth import auth_utils
-
-        monkeypatch.setattr(
-            auth_utils,
-            "_allow_model_level_clientside_configurable_parameters",
-            lambda model, param, request_body_value, llm_router, team_id=None: param == "nvcf_function_id",
-        )
-
         assert (
             is_request_body_safe(
                 request_body={
@@ -4382,7 +4604,7 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
                     "nvcf_function_id": "byok-function-id",
                 },
                 general_settings={},
-                llm_router=None,
+                llm_router=_opt_in_router("nvidia_riva/parakeet", ["nvcf_function_id"]),
                 model="nvidia_riva/parakeet",
             )
             is True
@@ -4451,15 +4673,7 @@ class TestIsRequestBodySafeBlocksRivaUseSsl:
             is True
         )
 
-    def test_admin_opt_in_per_deployment_allows_use_ssl(self, monkeypatch):
-        from litellm.proxy.auth import auth_utils
-
-        monkeypatch.setattr(
-            auth_utils,
-            "_allow_model_level_clientside_configurable_parameters",
-            lambda model, param, request_body_value, llm_router, team_id=None: param == "use_ssl",
-        )
-
+    def test_admin_opt_in_per_deployment_allows_use_ssl(self):
         assert (
             is_request_body_safe(
                 request_body={
@@ -4467,7 +4681,7 @@ class TestIsRequestBodySafeBlocksRivaUseSsl:
                     "use_ssl": True,
                 },
                 general_settings={},
-                llm_router=None,
+                llm_router=_opt_in_router("nvidia_riva/parakeet", ["use_ssl"]),
                 model="nvidia_riva/parakeet",
             )
             is True
@@ -4882,7 +5096,22 @@ class TestObservabilityCallbackBans:
         )
 
 
-def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
+def _opt_in_router(model: str, configurable_clientside_auth_params: list[str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "dummy-key",
+                    "configurable_clientside_auth_params": configurable_clientside_auth_params,
+                },
+            }
+        ]
+    )
+
+
+def test_model_level_allow_does_not_skip_subsequent_banned_params():
     """Greptile P1: ``_check_banned_params`` previously ``return``-ed when a
     deployment's ``configurable_clientside_auth_params`` permitted one
     banned field, exiting before any later banned field in the same body
@@ -4890,14 +5119,6 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
     where that bypass matters: a body pairing a model-level-allowed
     ``api_base`` with an observability credential like ``langfuse_host``
     must still reject on the second field, not silently pass."""
-    from litellm.proxy.auth import auth_utils
-
-    monkeypatch.setattr(
-        auth_utils,
-        "_allow_model_level_clientside_configurable_parameters",
-        lambda model, param, request_body_value, llm_router, team_id=None: param == "api_base",
-    )
-
     with pytest.raises(ValueError, match="Rejected Request: langfuse_host is not allowed in request") as exc:
         is_request_body_safe(
             request_body={
@@ -4906,40 +5127,25 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
                 "langfuse_host": "https://attacker.example",
             },
             general_settings={},
-            llm_router=None,
+            llm_router=_opt_in_router("gpt-4", ["api_base"]),
             model="gpt-4",
         )
     assert "langfuse_host" in str(exc.value)
 
 
 def test_observability_ban_covers_canonical_supported_callback_params():
-    """Guard test: every entry in the canonical
-    ``_supported_callback_params`` allow-list must end up either banned by
-    the proxy or explicitly safe-listed. New integrations added to that
-    list are banned by default (the safe failure mode); flagging them as
-    safe is an explicit decision recorded in
-    ``_SAFE_CLIENT_CALLBACK_PARAMS``."""
+    """Every entry in the canonical ``_supported_callback_params`` list is banned unless it is one of the two
+    informational per-request fields, so a new integration's params are banned by default."""
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         _request_blocked_callback_params,
         _supported_callback_params,
     )
-    from litellm.proxy.auth.auth_utils import (
-        _BANNED_REQUEST_BODY_PARAMS,
-        _SAFE_CLIENT_CALLBACK_PARAMS,
-    )
+    from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
 
     banned = set(_BANNED_REQUEST_BODY_PARAMS)
-    for param in _supported_callback_params:
-        assert param in banned or param in _SAFE_CLIENT_CALLBACK_PARAMS, (
-            f"{param} is in _supported_callback_params but neither banned nor "
-            f"safe-listed. Add it to _SAFE_CLIENT_CALLBACK_PARAMS if it is an "
-            f"informational per-request field; otherwise the derivation will "
-            f"ban it automatically."
-        )
-    for param in _request_blocked_callback_params:
-        assert param in banned, (
-            f"{param} is in _request_blocked_callback_params but is not banned at the proxy request-body boundary."
-        )
+
+    assert set(_supported_callback_params) - banned == {"langfuse_prompt_version", "langsmith_sampling_rate"}
+    assert set(_request_blocked_callback_params) <= banned
 
 
 # ── pricing injection (global model cost registry poisoning) ──────────────────
@@ -5991,14 +6197,20 @@ def test_configurable_clientside_parameters(allowed_param, input_value, should_r
             }
         ]
     )
-    resp = _allow_model_level_clientside_configurable_parameters(
-        model="dummy-model",
-        param="api_base",
-        request_body_value=input_value["api_base"],
-        llm_router=router,
-    )
-    print(resp)
-    assert resp == should_return_true
+
+    def check() -> bool:
+        return is_request_body_safe(
+            request_body={"model": "dummy-model", **input_value},
+            general_settings={},
+            llm_router=router,
+            model="dummy-model",
+        )
+
+    if should_return_true:
+        assert check() is True
+    else:
+        with pytest.raises(ValueError, match="Rejected Request: api_base is not allowed in request body"):
+            check()
 
 
 def test_get_customer_user_header_from_mapping_returns_customer_header_with_mixed_roles():
