@@ -3933,7 +3933,7 @@ async def test_process_group_patch_operations_remove_members_without_value_or_fi
     )
 
     assert final_members == set()
-    assert replace_target is None
+    assert replace_target == set()
 
 
 @pytest.mark.asyncio
@@ -4253,6 +4253,61 @@ async def test_patch_group_replace_stays_absolute_against_concurrent_roster(mock
     group = await patch_group(group_id=group_id, patch_ops=patch_ops)
 
     assert [member.value for member in group.members or []] == ["alice"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operations, expected",
+    [
+        ([SCIMPatchOperation(op="remove", path="members")], []),
+        (
+            [
+                SCIMPatchOperation(op="remove", path="members"),
+                SCIMPatchOperation(op="add", path="members", value=[{"value": "alice"}]),
+            ],
+            ["alice"],
+        ),
+    ],
+)
+async def test_patch_group_remove_every_member_clears_the_live_roster(mocker, operations, expected):
+    """A ``remove`` on ``members`` with no value or filter empties the roster, so it is
+    planned as a target like ``replace``. A member the snapshot read missed (a lagging
+    replica, or a request that added it after the read) is still removed by the
+    roster write, where a delta built from the snapshot would keep it."""
+    group_id = "team-remove-all-concurrent"
+    snapshot_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Group",
+        members_with_roles=[Member(user_id="zed", role="user")],
+        metadata={"externalId": "grp-ext"},
+    )
+    live_team = snapshot_team.model_copy(
+        update={"members_with_roles": [Member(user_id="zed", role="user"), Member(user_id="carol", role="user")]}
+    )
+    patch_ops = SCIMPatchOp(schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"], Operations=operations)
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=snapshot_team)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=snapshot_team)
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=_rows_by_exact_id(_user_row_for))
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    _stub_roster_sync(mocker, live_team)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    group = await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    assert [member.value for member in group.members or []] == expected
 
 
 @pytest.mark.parametrize(
