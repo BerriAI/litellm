@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import Field
@@ -35,6 +36,16 @@ class OpenAIModerationGuardrailConfigModel(BaseOpenAIModerationGuardrailConfigMo
     streaming_sampling_rate: int | None = Field(
         default=5,
         description="When streaming_end_of_stream_only is False, moderation runs every Nth streamed chunk. Ignored when streaming_end_of_stream_only is True.",
+    )
+
+    category_score_thresholds: Mapping[str, float] | None = Field(
+        default=None,
+        description="Per-category blocking thresholds, e.g. {\"sexual/minors\": 0.1, \"sexual\": 0.3}. When set, content is blocked only if a listed category's score is at or above its threshold, and the moderation API's own 'flagged' verdict is ignored. When unset, content is blocked whenever the moderation API flags it.",
+    )
+
+    moderate_images: bool | None = Field(
+        default=False,
+        description="If True, image inputs are also sent to the moderation API, one request per image. Requires 'omni-moderation-latest'. Defaults to False, which moderates text only.",
     )
 
     @staticmethod
