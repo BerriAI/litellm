@@ -39,6 +39,13 @@ Design constraints honored here:
   rewrite the client address), and the Rust forward mode, whose
   ``RustPeerMiddleware`` runs uvicorn's ``ProxyHeadersMiddleware`` with the
   ``FORWARDED_ALLOW_IPS`` trust (set that so it trusts no peer).
+- WebSocket scopes are not screened by guard's HTTP pipeline. The wrapper
+  enforces ``LITELLM_GUARD_BLOCKED_IPS`` and ``LITELLM_GUARD_ALLOWED_IPS``
+  (IPs or CIDRs) on the handshake, resolving the client the way guard does
+  (socket peer; ``X-Forwarded-For`` only from ``LITELLM_GUARD_TRUSTED_PROXIES``,
+  at ``LITELLM_GUARD_TRUSTED_PROXY_DEPTH``) and closing with 1008 before
+  accept on a miss. WebSocket scopes still get no rate limiting, no auto-ban
+  and no payload inspection, and those routes still go through key auth.
 - Rejections guard itself builds use guard's response shapes; the one
   rejection this wrapper builds (guard unavailable) uses litellm's
   OpenAI-error JSON shape (the ``AdmissionControlMiddleware`` model), so
@@ -49,11 +56,14 @@ from __future__ import annotations
 
 import importlib
 import os
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Callable, Mapping, Sequence
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address, ip_network
+from typing import Final, TypeAlias
 
+from pydantic import TypeAdapter
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
@@ -82,6 +92,104 @@ def _csv(raw: str | None) -> tuple[str, ...]:
     if not raw:
         return ()
     return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+IPAddress: TypeAlias = IPv4Address | IPv6Address
+IPNetwork: TypeAlias = IPv4Network | IPv6Network
+
+WS_POLICY_VIOLATION: Final = 1008
+
+
+def _strip_forwarded_port(raw: str) -> str:
+    candidate: Final = raw.strip()
+    if candidate.startswith("["):
+        return candidate[1:].partition("]")[0]
+    if candidate.count(":") == 1:
+        return candidate.partition(":")[0]
+    return candidate
+
+
+def _parse_ip(raw: str) -> IPAddress | None:
+    try:
+        address: Final = ip_address(_strip_forwarded_port(raw))
+    except ValueError:
+        return None
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
+def _parse_network(entry: str) -> IPNetwork | None:
+    try:
+        return ip_network(entry, strict=False)
+    except ValueError:
+        return None
+
+
+def _networks(entries: Sequence[str]) -> tuple[IPNetwork, ...]:
+    return tuple(network for network in map(_parse_network, entries) if network is not None)
+
+
+def _in_any(address: IPAddress, networks: Sequence[IPNetwork]) -> bool:
+    return any(address in network for network in networks)
+
+
+class _WebSocketScopeView(TypedDict):
+    """The slice of an ASGI websocket scope the IP check reads."""
+
+    headers: ReadOnly[Sequence[tuple[bytes, bytes]]]
+    client: NotRequired[ReadOnly[tuple[str, int] | None]]
+
+
+_WEBSOCKET_SCOPE_VIEW: Final = TypeAdapter(_WebSocketScopeView)
+
+
+def _websocket_peer_and_forwarded_for(scope: Scope) -> tuple[str | None, str | None]:
+    view: Final = _WEBSOCKET_SCOPE_VIEW.validate_python(scope)
+    client: Final = view.get("client")
+    forwarded_for: Final = next(
+        (value.decode("latin-1") for name, value in view["headers"] if name == b"x-forwarded-for"), None
+    )
+    return (client[0] if client else None), forwarded_for
+
+
+def _resolve_websocket_client(scope: Scope, trusted: Sequence[IPNetwork], depth: int) -> IPAddress | None:
+    """The client address the way guard-core resolves it on HTTP: the socket
+    peer, unless the peer is a trusted proxy, in which case the
+    ``X-Forwarded-For`` entry ``depth`` from the right (the rightmost
+    untrusted entry when proxies to its right are not all listed)."""
+    peer_text, forwarded_for = _websocket_peer_and_forwarded_for(scope)
+    peer: Final = _parse_ip(peer_text) if peer_text is not None else None
+    if peer is None or not _in_any(peer, trusted) or not forwarded_for:
+        return peer
+    chain: Final = [_parse_ip(entry) for entry in forwarded_for.split(",")]
+    if len(chain) < depth:
+        return peer
+    right_of_selected: Final = chain[len(chain) - depth + 1 :]
+    if any(entry is None or not _in_any(entry, trusted) for entry in right_of_selected):
+        first_untrusted: Final = next((e for e in reversed(chain) if e is None or not _in_any(e, trusted)), None)
+        return first_untrusted or peer
+    return chain[-depth] or peer
+
+
+def _websocket_client_permitted(scope: Scope) -> bool:
+    """Enforce LITELLM_GUARD_BLOCKED_IPS and LITELLM_GUARD_ALLOWED_IPS (IPs or
+    CIDRs) on a WebSocket handshake. Guard's pipeline only screens HTTP
+    scopes: rate limits, bans and payload inspection do not apply here."""
+    blocked: Final = _networks(_csv(_env_str("LITELLM_GUARD_BLOCKED_IPS")))
+    allowed: Final = _networks(_csv(_env_str("LITELLM_GUARD_ALLOWED_IPS")))
+    if not blocked and not allowed:
+        return True
+    trusted: Final = _networks(_csv(_env_str("LITELLM_GUARD_TRUSTED_PROXIES")))
+    client: Final = _resolve_websocket_client(scope, trusted, _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1))
+    permitted: Final = not (
+        (client is not None and _in_any(client, blocked))
+        or (allowed and (client is None or not _in_any(client, allowed)))
+    )
+    if not permitted and _env_bool("LITELLM_GUARD_PASSIVE_MODE"):
+        verbose_proxy_logger.warning("guard passive mode: WebSocket client %s would be rejected", client)
+        return True
+    return permitted
 
 
 def guard_enabled() -> bool:
@@ -235,11 +343,20 @@ class GuardMiddleware:
         return self._guard_asgi
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not guard_enabled():
+        if scope["type"] not in ("http", "websocket") or not guard_enabled():
             await self.app(scope, receive, send)
             return
 
         guard_asgi: Final = self._ensure_guard()
+        if scope["type"] == "websocket":
+            # Guard's pipeline only handles HTTP, so a WebSocket handshake
+            # gets the IP lists enforced here (and fails closed with the
+            # package missing). Closing before accept rejects the handshake.
+            if guard_asgi is None or not _websocket_client_permitted(scope):
+                await send({"type": "websocket.close", "code": WS_POLICY_VIOLATION})
+                return
+            await self.app(scope, receive, send)
+            return
         if guard_asgi is None:
             # Flag on, package missing: fail closed with 503 rather than
             # forward unscreened. The operator explicitly enabled the

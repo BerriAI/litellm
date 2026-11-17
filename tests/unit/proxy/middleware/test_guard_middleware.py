@@ -354,3 +354,90 @@ def test_server_client_ip_rewriting_is_off_when_guard_enabled(server, monkeypatc
 @pytest.mark.parametrize("server", ["uvicorn", "gunicorn"])
 def test_server_client_ip_rewriting_is_untouched_when_guard_disabled(server, monkeypatch):
     assert _server_config(server, monkeypatch, guard_on=False).proxy_headers is True
+
+
+def _ws_scope(peer, forwarded_for=None):
+    headers: Final = [(b"x-forwarded-for", forwarded_for.encode())] if forwarded_for else []
+    return {"type": "websocket", "path": "/v1/realtime", "headers": headers, "client": (peer, 50000)}
+
+
+async def _run_websocket(scope):
+    """Returns (reached_app, messages_sent_to_client)."""
+    reached: Final = []
+    sent: Final = []
+
+    async def app(scope, receive, send):
+        reached.append(True)
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        sent.append(message)
+
+    await GuardMiddleware(app)(scope, receive, send)
+    return bool(reached), sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocked", "allowed", "trusted", "depth", "peer", "forwarded_for", "admitted"),
+    [
+        ("203.0.113.0/24", "", "", "1", "203.0.113.7", None, False),
+        ("203.0.113.7", "", "", "1", "198.51.100.1", None, True),
+        ("", "198.51.100.0/24", "", "1", "203.0.113.7", None, False),
+        ("", "198.51.100.0/24", "", "1", "198.51.100.9", None, True),
+        # Untrusted peer forging an allowed address: X-Forwarded-For ignored.
+        ("", "198.51.100.0/24", "", "1", "203.0.113.7", "198.51.100.9", False),
+        # Trusted proxy: the forwarded client decides.
+        ("203.0.113.7", "", "10.0.0.0/8", "1", "10.1.1.1", "203.0.113.7", False),
+        ("", "198.51.100.0/24", "10.0.0.0/8", "1", "10.1.1.1", "198.51.100.9", True),
+        # The last entry is the one the nearest proxy saw; entries to its left are claims.
+        ("", "198.51.100.0/24", "10.0.0.0/8", "1", "10.1.1.1", "198.51.100.9, 203.0.113.7", False),
+        ("", "198.51.100.0/24", "10.0.0.0/8", "2", "10.1.1.1", "203.0.113.7, 198.51.100.9, 10.2.2.2", True),
+        ("", "198.51.100.0/24", "10.0.0.0/8", "3", "10.1.1.1", "203.0.113.7, 198.51.100.9, 10.2.2.2", True),
+        # Depth 2 selects the second entry from the right.
+        ("198.51.100.9", "", "10.0.0.0/8", "2", "10.1.1.1", "203.0.113.7, 198.51.100.9, 10.2.2.2", False),
+        ("203.0.113.7", "", "10.0.0.0/8", "2", "10.1.1.1", "203.0.113.7, 198.51.100.9, 10.2.2.2", True),
+        # No lists configured: nothing to enforce.
+        ("", "", "", "1", "203.0.113.7", None, True),
+    ],
+)
+async def test_websocket_scopes_enforce_ip_lists(
+    monkeypatch, blocked, allowed, trusted, depth, peer, forwarded_for, admitted
+):
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", blocked)
+    monkeypatch.setenv("LITELLM_GUARD_ALLOWED_IPS", allowed)
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", trusted)
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", depth)
+    reached, sent = await _run_websocket(_ws_scope(peer, forwarded_for))
+    assert reached is admitted
+    if not admitted:
+        assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+@pytest.mark.asyncio
+async def test_websocket_ip_lists_do_not_block_in_passive_mode(monkeypatch):
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", "203.0.113.7")
+    monkeypatch.setenv("LITELLM_GUARD_PASSIVE_MODE", "true")
+    reached, _ = await _run_websocket(_ws_scope("203.0.113.7"))
+    assert reached is True
+
+
+@pytest.mark.asyncio
+async def test_websocket_fails_closed_without_package(monkeypatch):
+    monkeypatch.setitem(sys.modules, "guard", None)
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    reached, sent = await _run_websocket(_ws_scope("198.51.100.1"))
+    assert reached is False
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passes_through_when_guard_disabled(monkeypatch):
+    monkeypatch.delenv("LITELLM_GUARD_ENABLED", raising=False)
+    monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", "203.0.113.7")
+    reached, _ = await _run_websocket(_ws_scope("203.0.113.7"))
+    assert reached is True
