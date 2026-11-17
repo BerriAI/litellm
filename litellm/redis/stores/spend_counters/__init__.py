@@ -92,8 +92,8 @@ class SpendCounterStore:
         return self._handle.has_redis
 
     def set_committed_ttl(self, ttl: float) -> None:
-        """The least TTL a Redis write gives a committed twin, which keeps it past the DB write that holds its
-        charges."""
+        """The least TTL a write gives a committed twin or a key, team, member, user, org, project or end user
+        lifetime counter, sized to the expected batch flush window, not a guarantee the DB write lands first."""
         self._handle.set_committed_ttl(ttl)
 
     @with_service_target(SPEND_COUNTERS_TARGET)

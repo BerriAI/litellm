@@ -56,8 +56,9 @@ impl SpendCounters {
         }
     }
 
-    /// The least TTL a Redis write gives a [`SpendCounter::Committed`] twin, so it outlives the DB
-    /// write that holds its charges and its next seed never reads a total still missing them.
+    /// The least TTL a write gives a [`SpendCounter::Committed`] twin or a lifetime counter, sized
+    /// to the configured batch flush window so a counter usually outlives the DB write that holds
+    /// its charges. A write that lags past it can still leave the counter to reseed short.
     pub fn set_committed_ttl(&self, ttl: Duration) {
         let millis = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
         self.committed_ttl_millis.store(millis, Ordering::Relaxed);
@@ -68,19 +69,25 @@ impl SpendCounters {
             SpendCounter::Committed(_)
             | SpendCounter::CustomerOrg(_)
             | SpendCounter::CustomerTeam(_)
-            | SpendCounter::CustomerMember(_) => default_ttl.max(Duration::from_millis(
-                self.committed_ttl_millis.load(Ordering::Relaxed),
-            )),
+            | SpendCounter::CustomerMember(_) => self.committed_floor(default_ttl),
+            counter if is_lifetime(counter) => self.committed_floor(default_ttl),
             _ => default_ttl,
         }
     }
 
-    /// A committed twin's expiry moves out on every charge, on a cluster too, so it never expires
-    /// while a charge it holds is still on its way to the DB.
+    fn committed_floor(&self, default_ttl: Duration) -> Duration {
+        default_ttl.max(Duration::from_millis(
+            self.committed_ttl_millis.load(Ordering::Relaxed),
+        ))
+    }
+
+    /// A committed twin's or lifetime counter's expiry moves out on every charge, on a cluster too,
+    /// to the TTL sized to the flush window.
     fn post_call_expiry(&self, counter: &SpendCounter, default_ttl: Duration) -> Expiry {
         let ttl = self.ttl(counter, default_ttl);
         match counter {
             SpendCounter::Committed(_) => Expiry::Refresh(ttl),
+            counter if is_lifetime(counter) => Expiry::Refresh(ttl),
             _ => Expiry::KeepExisting(ttl),
         }
     }
@@ -390,12 +397,17 @@ impl SpendCounters {
         Ok(self.cache.memory().delete(&counter.key())?)
     }
 
-    /// `DualCache.async_increment_cache(local_only=True)`, which passes `InMemoryCache` no TTL.
+    /// `DualCache.async_increment_cache(local_only=True)`, which passes `InMemoryCache` no TTL. A
+    /// lifetime counter's charge moves its deadline out like a Redis write would, so without Redis
+    /// it too outlives the DB write that holds the charge.
     pub fn increment_local(&self, counter: &SpendCounter, amount: Number) -> Result<Number, Error> {
-        Ok(self
-            .cache
-            .memory()
-            .increment(&counter.key(), amount, None)?)
+        let memory = self.cache.memory();
+        let key = counter.key();
+        if is_lifetime(counter) {
+            let ttl = self.ttl(counter, memory.default_ttl());
+            return Ok(memory.increment_refreshing(&key, amount, ttl)?);
+        }
+        Ok(memory.increment(&key, amount, None)?)
     }
 
     pub fn flush_local(&self) -> Result<(), Error> {
@@ -414,11 +426,138 @@ impl SpendCounters {
     }
 }
 
+/// An entity's lifetime counter, reseeded on a miss from the DB row the batch writer fills late.
+fn is_lifetime(counter: &SpendCounter) -> bool {
+    matches!(
+        counter,
+        SpendCounter::Key { window: None, .. }
+            | SpendCounter::Team { window: None, .. }
+            | SpendCounter::TeamMember { .. }
+            | SpendCounter::User(_)
+            | SpendCounter::Org(_)
+            | SpendCounter::Project(_)
+            | SpendCounter::EndUser(_)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SpendCounter, SpendCounters};
+    use crate::{Number, test_support::clock};
     use rstest::rstest;
-    use std::time::Duration;
+    use std::{sync::atomic::Ordering, time::Duration};
+
+    fn key(token: &str) -> SpendCounter {
+        SpendCounter::Key {
+            token: token.into(),
+            window: None,
+        }
+    }
+
+    #[rstest]
+    #[case::key(key("k"))]
+    #[case::team(SpendCounter::Team { team_id: "t".into(), window: None })]
+    #[case::team_member(SpendCounter::TeamMember { user_id: "u".into(), team_id: "t".into() })]
+    #[case::user(SpendCounter::User("u".into()))]
+    #[case::org(SpendCounter::Org("o".into()))]
+    #[case::project(SpendCounter::Project("p".into()))]
+    #[case::end_user(SpendCounter::EndUser("e".into()))]
+    fn without_redis_each_charge_keeps_a_lifetime_counter_for_its_lifetime_from_that_charge(
+        #[case] counter: SpendCounter,
+        #[values(12, 0)] memory_defaults: u64,
+    ) {
+        let (now, seconds) = clock();
+        let store = SpendCounters::with_clock(None, now);
+        let memory_default = store.cache.memory().default_ttl().as_secs();
+        let committed_ttl = (memory_defaults * memory_default).max(1);
+        store.set_committed_ttl(Duration::from_secs(committed_ttl));
+        let lifetime = committed_ttl.max(memory_default);
+
+        store
+            .increment_local(&counter, Number::Float(0.25))
+            .unwrap();
+        seconds.fetch_add(lifetime - 1, Ordering::SeqCst);
+        store
+            .increment_local(&counter, Number::Float(0.25))
+            .unwrap();
+        seconds.fetch_add(lifetime - 1, Ordering::SeqCst);
+        let kept = store.get_local(&counter).unwrap();
+        seconds.fetch_add(2, Ordering::SeqCst);
+
+        assert_eq!(kept, Some(Number::Float(0.5)));
+        assert_eq!(store.get_local(&counter).unwrap(), None);
+    }
+
+    #[rstest]
+    #[case::key_window(SpendCounter::Key { token: "k".into(), window: Some("1d".into()) })]
+    #[case::team_window(SpendCounter::Team { team_id: "t".into(), window: Some("1d".into()) })]
+    #[case::tag(SpendCounter::Tag("tag".into()))]
+    #[case::committed_twin(SpendCounter::Committed(Box::new(key("k"))))]
+    fn without_redis_a_charge_leaves_other_counters_on_their_first_deadline(
+        #[case] counter: SpendCounter,
+    ) {
+        let (now, seconds) = clock();
+        let store = SpendCounters::with_clock(None, now);
+        let memory_default = store.cache.memory().default_ttl().as_secs();
+        store.set_committed_ttl(Duration::from_secs(12 * memory_default));
+
+        store.increment_local(&counter, Number::Int(1)).unwrap();
+        seconds.fetch_add(memory_default - 1, Ordering::SeqCst);
+        store.increment_local(&counter, Number::Int(1)).unwrap();
+        let kept = store.get_local(&counter).unwrap();
+        seconds.fetch_add(2, Ordering::SeqCst);
+
+        assert_eq!(kept, Some(Number::Int(2)));
+        assert_eq!(store.get_local(&counter).unwrap(), None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn without_redis_a_reset_ttl_holds_while_no_charge_follows() {
+        let (now, seconds) = clock();
+        let store = SpendCounters::with_clock(None, now);
+        store.set_committed_ttl(Duration::from_secs(7_200));
+        let counter = key("k");
+        let reset_ttl = 60;
+
+        store
+            .set(
+                &counter,
+                Number::Float(0.0),
+                Some(Duration::from_secs(reset_ttl)),
+            )
+            .await
+            .unwrap();
+        seconds.fetch_add(reset_ttl - 1, Ordering::SeqCst);
+        let kept = store.get_local(&counter).unwrap();
+        seconds.fetch_add(2, Ordering::SeqCst);
+
+        assert_eq!(kept, Some(Number::Float(0.0)));
+        assert_eq!(store.get_local(&counter).unwrap(), None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn without_redis_a_charge_after_a_reset_moves_the_deadline_out_to_the_committed_ttl() {
+        let (now, seconds) = clock();
+        let store = SpendCounters::with_clock(None, now);
+        let committed_ttl = 7_200;
+        store.set_committed_ttl(Duration::from_secs(committed_ttl));
+        let counter = key("k");
+
+        store
+            .set(&counter, Number::Float(0.0), Some(Duration::from_secs(60)))
+            .await
+            .unwrap();
+        seconds.fetch_add(30, Ordering::SeqCst);
+        store.increment_local(&counter, Number::Float(1.0)).unwrap();
+        seconds.fetch_add(committed_ttl - 1, Ordering::SeqCst);
+        let kept = store.get_local(&counter).unwrap();
+        seconds.fetch_add(2, Ordering::SeqCst);
+
+        assert_eq!(kept, Some(Number::Float(1.0)));
+        assert_eq!(store.get_local(&counter).unwrap(), None);
+    }
 
     #[rstest]
     #[case::organization(SpendCounter::CustomerOrg("tenant:lifetime".into()))]
