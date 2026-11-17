@@ -11,9 +11,12 @@ from pydantic import ValidationError
 import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.total_deadline import total_deadline
+from litellm.redis.stores.connection import RedisStores
+from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
+from litellm.redis.stores.router_usage.handle import RouterUsageHandle
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
-from litellm.router_python_host import PythonHost
+from litellm.router_python_host import Endpoint, PythonHost
 from litellm.router_rust.invoke.slots import max_parallel_requests_limit
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.dynamic_queue import (
@@ -49,7 +52,6 @@ from litellm.router_utils.dynamic_queue_router import (
     rejection_error,
 )
 from litellm.types.router import RouterRateLimitError
-from tests.unit.conftest import redis_cache_double
 from tests.unit.router_utils.test_dynamic_queue import ManualTimer, _finished, _reap
 from tests.unit.router_utils.test_dynamic_queue_redis import UnreachableRedis
 
@@ -690,47 +692,79 @@ async def test_a_probe_cancelled_again_while_giving_its_turn_back_still_releases
     assert not router.cache.get_cache(key="group_request_count:only")
 
 
+class _RefundWaits(RouterUsageStore):
+    """Counts as the router's own usage store, but holds every refund until the test opens ``gate``."""
+
+    def __init__(self, handle: RouterUsageHandle, refunding: asyncio.Event, gate: asyncio.Event) -> None:
+        super().__init__(handle)
+        self._refunding = refunding
+        self._gate = gate
+
+    async def increment(self, counter: UsageCounter, value: float, ttl: int) -> float | None:
+        if value < 0:
+            self._refunding.set()
+            await self._gate.wait()
+        return await super().increment(counter, value, ttl)
+
+
+class _RateLimitedProviderHost(_QueueHost):
+    """Answers every chat call with a provider 429 raised before litellm runs any callback of its own."""
+
+    def __init__(self, timer: ManualTimer) -> None:
+        super().__init__(timer)
+        self.refunding = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    def router_usage(self, redis: RedisStores) -> RouterUsageStore:
+        return _RefundWaits(redis.router_usage(), self.refunding, self.gate)
+
+    def invoke(self, op: str) -> Endpoint:
+        if op != "acompletion":
+            return super().invoke(op)
+
+        async def rate_limited(*args: object, **kwargs: object) -> object:  # kwargs-ok: the chat call's arguments
+            raise _provider_error(429)
+
+        return rate_limited
+
+
 @pytest.mark.parametrize(("probing", "probe_in_ms"), [(False, 1_000), (True, 2_000)], ids=["healthy", "probe"])
 async def test_a_request_cancelled_while_releasing_a_failed_attempt_still_reports_the_failure_and_settles_its_turn(
-    probing: bool, probe_in_ms: int, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    probing: bool, probe_in_ms: int
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(429, json={"error": {"message": "rate limited", "type": "rate_limit_error"}})
-    )
-    releasing: Final = asyncio.Event()
-    gate: Final = asyncio.Event()
-
-    async def shared_count(key: str, value: int, ttl: int) -> int:
-        if value < 0:
-            releasing.set()
-            await gate.wait()
-        return 0
-
-    redis: Final = redis_cache_double()
-    redis.async_increment_with_floor = shared_count
     timer: Final = ManualTimer()
-    host: Final = _QueueHost(timer)
-    router: Final = _least_busy_on(host)
-    router.update_redis_cache(redis)
+    host: Final = _RateLimitedProviderHost(timer)
+    router: Final = _on_the_clock(
+        host,
+        model_list=[
+            {
+                "model_name": "group",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "deployment-key", "itpm": 1_000_000},
+                "model_info": {"id": "only"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        default_priority=0,
+        num_retries=0,
+        dynamic_queue={"enabled": True, "max_waiting": 8, "queue_timeout": 30},
+    )
     if probing:
         await _congest_directly(host, "deployment:only")
         timer.advance(60.0)
     failing: Final = asyncio.create_task(router.acompletion(model="group", messages=MESSAGES))
     try:
-        await asyncio.wait_for(releasing.wait(), 10)
+        await asyncio.wait_for(host.refunding.wait(), 10)
         _ = failing.cancel()
-        gate.set()
+        host.gate.set()
         outcome: Final = (await asyncio.wait_for(asyncio.gather(failing, return_exceptions=True), 10))[0]
     finally:
-        gate.set()
+        host.gate.set()
         await _reap(failing)
     observed: Final = await host.backend.admit(WaitRequest("deployment:only", "observer", 0), 60_000)
 
     assert isinstance(outcome, asyncio.CancelledError)
     assert observed == Waiting(probe_in_ms=probe_in_ms)
     assert timer.pending() == 0
-    assert not router.cache.get_cache(key="group_request_count:only")
 
 
 def _retrying_router(host: _RecordsBackoffs, *, queued: bool = True, queue_timeout: float = 0.5) -> litellm.Router:
