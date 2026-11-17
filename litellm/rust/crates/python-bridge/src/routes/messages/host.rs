@@ -6,6 +6,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use parking_lot::Mutex;
+
 use bytes::Bytes;
 use litellm_host::protocol::Reply;
 use litellm_host_python::{
@@ -230,6 +232,34 @@ fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
                 .extract()
         })
         .map(Vec::as_slice)
+}
+
+/// Installs the beta map Python loaded for a call whose betas are filtered, converting it again
+/// only when a reload replaced it.
+fn install_beta_headers_config(
+    py: Python<'_>,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+    api_base: Option<&str>,
+) -> PyResult<()> {
+    static INSTALLED: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
+    let loaded = py
+        .import(ROUTE_HOST_MODULE)?
+        .getattr("beta_headers_config")?
+        .call1((model, custom_llm_provider, api_base))?;
+    if loaded.is_none() {
+        return Ok(());
+    }
+    if INSTALLED
+        .lock()
+        .as_ref()
+        .is_some_and(|source| source.bind(py).is(&loaded))
+    {
+        return Ok(());
+    }
+    litellm_llms::anthropic::beta_headers::install_beta_headers_config(from_py(&loaded)?);
+    *INSTALLED.lock() = Some(loaded.unbind());
+    Ok(())
 }
 
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -626,6 +656,12 @@ impl MessagesPythonHost {
             .getattr("filters_beta_headers")?
             .call1((&model, custom_llm_provider.as_deref(), api_base.as_deref()))?
             .extract()?;
+        install_beta_headers_config(
+            py,
+            &model,
+            custom_llm_provider.as_deref(),
+            api_base.as_deref(),
+        )?;
         let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),
             None => self.merged_headers(py, arguments, filters_beta)?,

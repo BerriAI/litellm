@@ -57,7 +57,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_yaml(yaml: &str) -> Result<Self, Error> {
-        Ok(serde_yaml_ng::from_str(yaml)?)
+        Self::from_value(litellm_yaml::from_str(yaml)?)
     }
 
     pub fn from_value(document: Value) -> Result<Self, Error> {

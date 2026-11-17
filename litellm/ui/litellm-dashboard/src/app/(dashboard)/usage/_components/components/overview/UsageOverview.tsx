@@ -8,6 +8,7 @@ import type { OverviewTotals } from "./overviewData";
 import { Panel } from "./Primitives";
 import UsageStatStrip from "./UsageStatStrip";
 import UsageBreakdownChart from "./UsageBreakdownChart";
+import SpendDisplayCurrency from "./SpendDisplayCurrency";
 
 interface UsageOverviewProps {
   results: readonly DailyData[];
@@ -45,6 +46,7 @@ export default function UsageOverview({
         loading={loading}
         requestCountsPending={requestCountsPending}
         budget={budget}
+        spendDetails={<SpendDisplayCurrency usdSpend={totals.spend} loading={loading} />}
       />
 
       {subscriptionCosts}

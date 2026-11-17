@@ -48,6 +48,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -589,6 +590,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
+    PRICING_CURRENCY_FIELD,
 )
 
 _SECRET_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("os.environ/", OIDC_SECRET_REFERENCE_PREFIX)
@@ -2678,7 +2680,7 @@ def _cache_prediction_model_candidates(
 
 
 def _extract_model_candidates_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
@@ -2732,10 +2734,11 @@ def _extract_model_candidates_from_request(
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
         session: Final = request_data.get("session")
-        if isinstance(session, dict):
+        if isinstance(session, Mapping):
             _append_model_candidates(candidates, session.get("model"))
-    if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
-        _append_model_candidates(candidates, request_data["completion"].get("model"))
+    completion: Final = request_data.get("completion")
+    if uses_completion_model_sources and isinstance(completion, Mapping):
+        _append_model_candidates(candidates, completion.get("model"))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
@@ -2805,7 +2808,7 @@ def request_dispatched_to_provider_pass_through(request: Request) -> bool:
 
 
 def get_model_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
