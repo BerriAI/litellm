@@ -3798,6 +3798,48 @@ def _set_public_model_groups_links(public_model_groups_links: Mapping[str, JsonV
     litellm.public_model_groups_links = _PUBLIC_MODEL_GROUPS_LINKS.validate_python(public_model_groups_links)
 
 
+def _link_url(link: JsonValue) -> JsonValue:
+    return link.get("url") if isinstance(link, dict) else link
+
+
+def _link_index(link: JsonValue) -> int:
+    index: Final = link.get("index", 0) if isinstance(link, dict) else 0
+    return index if isinstance(index, int) else 0
+
+
+def _at_index(link: JsonValue, index: int) -> JsonValue:
+    return {**link, "index": index} if isinstance(link, dict) else {"url": link, "index": index}
+
+
+def _merged_useful_links(
+    stored: Mapping[str, JsonValue], *, requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue]
+) -> Mapping[str, JsonValue]:
+    edited: Final = {
+        name: link
+        for name, link in requested.items()
+        if name not in previous or _link_url(link) != _link_url(previous[name])
+    }
+    moved: Final = {
+        name: _at_index(stored[name], _link_index(link))
+        for name, link in requested.items()
+        if name in stored and name not in edited and _link_index(link) != _link_index(previous[name])
+    }
+    removed: Final = frozenset(previous).difference(requested)
+    kept: Final = {name: link for name, link in stored.items() if name not in removed}
+    return _added_links_after_taken_positions(
+        {**kept, **moved, **edited}, added=frozenset(requested).difference(previous)
+    )
+
+
+def _added_links_after_taken_positions(
+    links: Mapping[str, JsonValue], *, added: frozenset[str]
+) -> Mapping[str, JsonValue]:
+    taken: Final = frozenset(_link_index(link) for name, link in links.items() if name not in added)
+    tied: Final = tuple(name for name, link in links.items() if name in added and _link_index(link) in taken)
+    after_last: Final = max((_link_index(link) for link in links.values()), default=-1) + 1
+    return {**links, **{name: _at_index(links[name], after_last + offset) for offset, name in enumerate(tied)}}
+
+
 @router.post(
     "/model_hub/update_useful_links",
     description="Update useful links",
@@ -3825,11 +3867,12 @@ async def update_useful_links(
             )
 
         if request.previous_useful_links is not None:
-            stored_useful_links: Final = await proxy_config.apply_mapping_setting_delta(
+            requested_links: Final = _USEFUL_LINKS.validate_python(request.useful_links)
+            previous_links: Final = _USEFUL_LINKS.validate_python(request.previous_useful_links)
+            stored_useful_links: Final = await proxy_config.merge_mapping_setting(
                 section_name="litellm_settings",
                 key="public_model_groups_links",
-                requested=_USEFUL_LINKS.validate_python(request.useful_links),
-                previous=_USEFUL_LINKS.validate_python(request.previous_useful_links),
+                merge=lambda stored: _merged_useful_links(stored, requested=requested_links, previous=previous_links),
                 on_written=_set_public_model_groups_links,
             )
             return {

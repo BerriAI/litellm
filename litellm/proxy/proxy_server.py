@@ -5986,20 +5986,14 @@ def _first_of_each_alias_set(items: tuple[str, ...], aliases: Callable[[str], fr
     )
 
 
-def _with_mapping_delta(
+def _with_merged_mapping(
     section: Mapping[str, JsonValue],
     *,
     key: str,
-    requested: Mapping[str, JsonValue],
-    previous: Mapping[str, JsonValue],
+    merge: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]],
 ) -> Mapping[str, JsonValue]:
     current: Final = _CONFIG_SECTION_VALUES.validate_python(section.get(key) or {})
-    changed: Final = {
-        name: value for name, value in requested.items() if name not in previous or previous[name] != value
-    }
-    removed: Final = frozenset(previous).difference(requested)
-    kept: Final = {name: value for name, value in current.items() if name not in removed and name not in changed}
-    merged: Final = {**kept, **changed}
+    merged: Final = dict(merge(current))
     if merged == dict(current):
         return section
     return MappingProxyType({**section, key: merged})
@@ -6706,22 +6700,21 @@ class ProxyConfig:
                 on_written=on_written,
                 aliases=aliases,
             )
-        except (ValidationError, PrismaError):
+        except (ValidationError, PrismaError, httpx.HTTPError):
             verbose_proxy_logger.exception("Could not remove %s from %s.%s", item, section_name, key)
 
-    async def apply_mapping_setting_delta(
+    async def merge_mapping_setting(
         self,
         *,
         section_name: Section,
         key: str,
-        requested: Mapping[str, JsonValue],
-        previous: Mapping[str, JsonValue],
+        merge: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]],
         on_written: Callable[[Mapping[str, JsonValue]], None],
     ) -> Mapping[str, JsonValue]:
         section_rewrite: Final = await self._rewrite_setting(
             section_name=section_name,
             key=key,
-            rewrite=lambda section: _with_mapping_delta(section, key=key, requested=requested, previous=previous),
+            rewrite=lambda section: _with_merged_mapping(section, key=key, merge=merge),
             on_written=lambda section: on_written(_CONFIG_SECTION_VALUES.validate_python(section.get(key) or {})),
         )
         return _CONFIG_SECTION_VALUES.validate_python(section_rewrite.after.get(key) or {})

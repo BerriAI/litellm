@@ -37,7 +37,7 @@ from litellm.proxy.agent_endpoints.endpoints import (
 )
 from litellm.types.agents import AgentResponse, MakeAgentsPublicRequest, PatchAgentRequest
 from litellm.types.proxy.agent_identity import AgentIdentityBinding
-from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma
+from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma, StoredConfigRow
 
 
 def _sample_agent_card_params() -> dict:
@@ -1626,12 +1626,29 @@ async def test_delete_agent_leaves_the_config_file_alone_when_settings_are_not_s
     assert config_file.read_text() == config_text
 
 
+class _DisconnectingConfigRows(ConfigRows):
+    async def find_first(self, *, where: Mapping[str, str]) -> StoredConfigRow | None:
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+
+@pytest.mark.parametrize(
+    "stored_rows",
+    [
+        pytest.param(
+            ConfigRows({"litellm_settings": {"public_agent_groups": ["agent-1", 7]}}), id="the stored list is invalid"
+        ),
+        pytest.param(
+            _DisconnectingConfigRows({"litellm_settings": {"public_agent_groups": ["agent-1"]}}),
+            id="the database connection drops",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_delete_agent_still_deletes_when_the_stored_public_list_cannot_be_rewritten(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stored_rows: ConfigRows
 ) -> None:
-    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1", 7])
-    delete_agent_from_db: Final = _deletable_agent_one(monkeypatch, rows, registry)
+    _, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+    delete_agent_from_db: Final = _deletable_agent_one(monkeypatch, stored_rows, registry)
 
     response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
 

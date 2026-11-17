@@ -1254,6 +1254,17 @@ describe("AI Hub publication calls", () => {
 
     expect(JSON.parse(String(mockFetch.mock.calls.at(-1)?.[1]?.body))).toEqual(body);
   });
+
+  it.each([
+    () => Networking.makeAgentsPublicCall("token", ["agent-1"], []),
+    () => Networking.makeMCPPublicCall("token", ["server-1"], []),
+    () => Networking.makeModelGroupPublic("token", ["gpt-4"], []),
+  ])("rejects when the proxy refuses the publish", async (send) => {
+    const refusal = JSON.stringify({ detail: [{ type: "extra_forbidden", loc: ["body", "previous_model_groups"] }] });
+    global.fetch = vi.fn().mockResolvedValue(new Response(refusal, { status: 422 }));
+
+    await expect(send()).rejects.toThrow("extra_forbidden");
+  });
 });
 
 describe("uploadClaudeCodeSkill", () => {

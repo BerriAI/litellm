@@ -568,6 +568,11 @@ export const makeModelGroupPublic = async (
       previous_model_groups: previousModelGroups,
     }),
   });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error(errorData);
+  }
   return response.json();
 };
 
