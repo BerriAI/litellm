@@ -111,9 +111,15 @@ async def test_a_first_chunk_bad_request_is_raised_from_the_call_without_retry(
     assert host.deployments_called() == ["a"]
 
 
-def _gemini_stream_that_fails_to_open(sync: bool) -> Callable[..., CustomStreamWrapper]:
+GEMINI_REJECTION: Final = b'{"error": {"code": 400, "message": "gemini said no", "status": "INVALID_ARGUMENT"}}'
+GEMINI_CONTEXT_WINDOW_REJECTION: Final = (
+    b'{"error": {"code": 400, "message": "The input token count (1200000) exceeds the maximum number of tokens'
+    b' allowed (1048576).", "status": "INVALID_ARGUMENT"}}'
+)
+
+
+def _gemini_stream_that_fails_to_open(sync: bool, body: bytes = GEMINI_REJECTION) -> Callable[..., CustomStreamWrapper]:
     request: Final = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash")
-    body: Final = b'{"error": {"code": 400, "message": "gemini said no", "status": "INVALID_ARGUMENT"}}'
     sync_error: Final = MaskedHTTPStatusError(
         httpx.HTTPStatusError("gemini said no", request=request, response=httpx.Response(400, request=request)),
         message=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
@@ -154,6 +160,16 @@ def test_a_sync_gemini_stream_that_fails_to_open_raises_the_mapped_bad_request(
     core: Final = make_core(model_list=[deployment("a", "a")], num_retries=0)
     with pytest.raises(litellm.BadRequestError, match="gemini said no"):
         core.completion(model="a", messages=MESSAGES, stream=True)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+
+
+async def test_a_gemini_stream_that_fails_to_open_on_its_context_window_uses_the_context_window_chain(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", _gemini_stream_that_fails_to_open(sync=False, body=GEMINI_CONTEXT_WINDOW_REJECTION))
+    host.answer("openai/b", chat_stream("B"))
+    core: Final = build(make_core, fallbacks=None, context_window_fallbacks=[{"a": ["b"]}])
+    assert await collect_texts(await open_stream(core)) == "B"
+    assert host.deployments_called() == ["a", "b"]
 
 
 async def test_the_first_chunk_already_read_is_still_delivered_to_the_caller(
