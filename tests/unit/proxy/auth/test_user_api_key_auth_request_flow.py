@@ -7567,6 +7567,20 @@ async def test_builder_401_for_unknown_key_discloses_nothing_about_the_lookup():
 
 
 @pytest.mark.asyncio
+async def test_builder_raises_the_typed_key_not_found_error_naming_the_hash_it_looked_up():
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+    from litellm.proxy.proxy_server import hash_token
+
+    get_key_object = AsyncMock(side_effect=KeyNotFoundError("the-hash-the-store-read"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    assert type(exc_info.value) is KeyNotFoundError
+    assert exc_info.value.hashed_token == hash_token(token="sk-db-lookup-test")
+
+
+@pytest.mark.asyncio
 async def test_builder_succeeds_when_db_lookup_returns_valid_token():
     """Regression guard: a valid key still authenticates. Proves the 503
     conversion only fires on the failure path and never intercepts success."""

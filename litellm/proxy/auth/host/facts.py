@@ -33,7 +33,6 @@ class KeyFacts:
     team_id: str | None
     team_object_permission_id: str | None
     project_id: str | None
-    end_user_id: str | None
     last_refreshed_at: float | None
 
 
@@ -209,6 +208,5 @@ def key_facts(token: UserAPIKeyAuth) -> KeyFacts:
         team_id=token.team_id,
         team_object_permission_id=token.team_object_permission_id,
         project_id=token.project_id,
-        end_user_id=token.end_user_id,
         last_refreshed_at=token.last_refreshed_at,
     )

@@ -17,7 +17,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import AliasMissing, RegisteredAgentFacts, key_facts
+from litellm.proxy.auth.host.facts import AliasMissing, RegisteredAgentFacts
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
@@ -83,10 +83,6 @@ async def test_end_user_row_carries_the_id_it_was_asked_for_not_the_request_body
 @pytest.mark.asyncio
 async def test_an_end_user_id_is_kept_when_no_database_can_validate_it() -> None:
     assert await _host().validated_end_user_id("from-body") == "from-body"
-
-
-def test_key_facts_carry_the_keys_own_end_user() -> None:
-    assert key_facts(UserAPIKeyAuth(token="hashed", end_user_id="from-key")).end_user_id == "from-key"
 
 
 @pytest.mark.asyncio

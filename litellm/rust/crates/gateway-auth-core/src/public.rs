@@ -1,6 +1,6 @@
 use crate::{
-    BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, ModelAccessDenied, PremiumRequired,
-    RbacDenial, TeamDenial, VerifyDenial,
+    BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
+    PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
 };
 
 /// `ProxyErrorTypes` values a denial carries.
@@ -12,8 +12,6 @@ pub enum ErrorType {
     ExpiredKey,
     #[strum(serialize = "no_db_connection")]
     NoDbConnection,
-    #[strum(serialize = "token_not_found_in_db")]
-    TokenNotFoundInDb,
     #[strum(serialize = "auth_provider_unavailable")]
     AuthProviderUnavailable,
     #[strum(serialize = "model_cost_map_missing")]
@@ -49,6 +47,8 @@ pub enum PublicDenial {
     BudgetExceeded(BudgetExceeded),
     /// `TeamNotFoundError(team_id)`
     TeamNotFound { team_id: String },
+    /// `KeyNotFoundError(hashed_token)`, whose status, type, param and message are that class's own.
+    KeyNotFound { hash: KeyHash },
 }
 
 fn proxy(
@@ -117,7 +117,7 @@ impl KeyDenial {
                 status: 401,
                 detail: self.to_string(),
             },
-            Self::NotFound => proxy(401, self, ErrorType::TokenNotFoundInDb, Some("key")),
+            Self::NotFound { hash } => PublicDenial::KeyNotFound { hash: hash.clone() },
             Self::NoToken => http(401, self),
         }
     }
@@ -258,13 +258,8 @@ mod tests {
 
     #[rstest]
     #[case::not_found(
-        KeyDenial::NotFound.into(),
-        PublicDenial::Proxy {
-            status: 401,
-            message: "Authentication Error, Invalid API key provided.".to_owned(),
-            error_type: ErrorType::TokenNotFoundInDb,
-            param: Some("key".to_owned()),
-        }
+        KeyDenial::NotFound { hash: KeyHash::new("looked-up") }.into(),
+        PublicDenial::KeyNotFound { hash: KeyHash::new("looked-up") }
     )]
     #[case::no_db_configured(
         KeyDenial::NoDbConfigured.into(),

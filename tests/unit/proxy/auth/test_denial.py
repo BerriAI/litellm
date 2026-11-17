@@ -11,6 +11,7 @@ from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.auth_utils import is_invalid_virtual_key_error
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.rust_bridge._native import RustDenial
 
 
@@ -86,3 +87,16 @@ def test_gone_session_team_is_a_team_not_found() -> None:
 
     assert isinstance(error, TeamNotFoundError)
     assert error.status_code == 404
+
+
+def test_unknown_key_denial_is_the_typed_error_carrying_the_hash_the_core_looked_up() -> None:
+    error: Final = auth_denial.denial_error(RustDenial.KeyNotFound(hash="looked-up-hash"))
+
+    assert type(error) is KeyNotFoundError
+    assert (error.hashed_token, error.message, error.type, error.param, error.code) == (
+        "looked-up-hash",
+        "Authentication Error, Invalid API key provided.",
+        ProxyErrorTypes.token_not_found_in_db,
+        "key",
+        "401",
+    )
