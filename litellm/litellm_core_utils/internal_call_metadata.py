@@ -44,9 +44,20 @@ BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 
 ITPM_RESERVED_KEY: Final = "_litellm_itpm_reserved"
 OTPM_RESERVED_KEY: Final = "_litellm_otpm_reserved"
-ITPM_CACHE_KEY: Final = "_litellm_itpm_cache_key"
-OTPM_CACHE_KEY: Final = "_litellm_otpm_cache_key"
-IO_TOKEN_RESERVATION_KEYS: Final = frozenset({ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY})
+ITPM_COUNTER_KEY: Final = "_litellm_itpm_counter"
+OTPM_COUNTER_KEY: Final = "_litellm_otpm_counter"
+IO_TOKEN_ATTEMPT_KEY: Final = "_litellm_io_token_attempt"
+IO_TOKEN_RESERVATION_ID_KEY: Final = "_litellm_io_token_reservation_id"
+IO_TOKEN_RESERVATION_KEYS: Final = frozenset(
+    {
+        ITPM_RESERVED_KEY,
+        OTPM_RESERVED_KEY,
+        ITPM_COUNTER_KEY,
+        OTPM_COUNTER_KEY,
+        IO_TOKEN_ATTEMPT_KEY,
+        IO_TOKEN_RESERVATION_ID_KEY,
+    }
+)
 
 MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
 """Where auth records the model access groups that authorized the request, for the spend writer.

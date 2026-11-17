@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Literal
 
 from pydantic import ConfigDict, Field
@@ -240,4 +241,8 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     organization_id: str | None = Field(
         default=None,
         description="Default organization for new teams created without an explicit organization",
+    )
+    access_group_ids: Sequence[str] | None = Field(
+        default=None,
+        description="Default access groups attached to new teams created without explicit access_group_ids",
     )

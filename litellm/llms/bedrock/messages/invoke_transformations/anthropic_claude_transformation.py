@@ -23,6 +23,7 @@ from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    carries_signed_compaction_block,
     validated_object_mapping,
 )
 from litellm.llms.anthropic.messages.native.transformation import (
@@ -42,6 +43,7 @@ from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_native_output_format,
     bedrock_native_output_retry_requested,
+    bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     for_bedrock_json_tool_retry,
@@ -61,6 +63,7 @@ from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
 )
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported, aiter_bytes_then_close
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
@@ -81,6 +84,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -112,6 +116,13 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
+
+    def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+        if bedrock_supports_per_turn_control(
+            model, _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None))
+        ):
+            return frozenset({ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value})
+        return frozenset()
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
@@ -563,6 +574,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             "edits": retained_edits,
         }
 
+    @staticmethod
+    def _add_compaction_beta_for_bedrock_invoke(
+        anthropic_messages_request: Mapping[str, object],
+        beta_set: set[str],  # mutable-ok: the caller's beta set is grown in place, like the sibling helpers
+    ) -> None:
+        """``compaction`` and an adopted signed block both need the compact-2026-09-04 beta on Bedrock.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+        """
+        messages: Final = _MESSAGE_LIST.validate_python(anthropic_messages_request.get("messages") or ())
+        if isinstance(anthropic_messages_request.get("compaction"), dict) or carries_signed_compaction_block(messages):
+            beta_set.add("compact-2026-09-04")
+
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         return False
 
@@ -574,6 +598,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         headers: dict,
         anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
+        litellm_params: GenericLiteLLMParams,
     ) -> list[str]:
         anthropic_model_info: Final = AnthropicModelInfo()
         tools: Final = anthropic_messages_optional_request_params.get("tools")
@@ -630,6 +655,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
         )
+        self._add_compaction_beta_for_bedrock_invoke(anthropic_messages_request, beta_set)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
@@ -642,16 +668,22 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
+        model_supported_betas: Final = self.model_specific_anthropic_betas(model, litellm_params) & user_beta_set
         beta_provider: Final = self.beta_headers_provider
         filtered_betas: Final = sorted(
-            filter_and_transform_beta_headers(
-                beta_headers=list(beta_set),
-                provider=beta_provider,
-            )
+            {
+                *filter_and_transform_beta_headers(
+                    beta_headers=list(beta_set),
+                    provider=beta_provider,
+                ),
+                *model_supported_betas,
+            }
         )
 
         dropped_user_betas: Final = sorted(
-            b for b in user_beta_set if not filter_and_transform_beta_headers([b], provider=beta_provider)
+            b
+            for b in user_beta_set - model_supported_betas
+            if not filter_and_transform_beta_headers([b], provider=beta_provider)
         )
         if dropped_user_betas:
             verbose_logger.warning(
@@ -837,10 +869,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             headers=headers,
             anthropic_messages_request=anthropic_messages_request,
             injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,
+            litellm_params=litellm_params,
         )
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        if "compaction" in anthropic_messages_request and not (
+            isinstance(anthropic_messages_request["compaction"], dict) and "compact-2026-09-04" in filtered_betas
+        ):
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping `compaction`; compact-2026-09-04 is not served on this route"
+            )
+            del anthropic_messages_request["compaction"]
 
         final_request: Final = OBJECT_MAPPING_ADAPTER.validate_python(anthropic_messages_request)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
         gated: Final = strip_beta_gated_native_request(
@@ -892,7 +933,8 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
         )
         completion_stream: Final = aws_decoder.aiter_bytes(
-            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
+            aiter_bytes_then_close(httpx_response),
+            response_headers=httpx_response.headers,
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
@@ -964,7 +1006,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     @staticmethod
     async def _promote_message_stop_usage(
         completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
-    ) -> AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict]:
+    ) -> AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | Mapping[str, object]]:
         """
         Promote cache usage fields onto message_delta from message_stop (and,
         when stop lacks them, from message_start).  Ensures the final usage
@@ -974,69 +1016,72 @@ class AmazonAnthropicClaudeMessagesConfig(
         pending_delta: dict[str, Any] | None = None
         start_usage_snapshot: Mapping[str, object] | None = None
 
-        async for chunk in completion_stream:
-            if not isinstance(chunk, dict):
+        try:
+            async for chunk in completion_stream:
+                if not isinstance(chunk, dict):
+                    if pending_delta is not None:
+                        yield pending_delta
+                        pending_delta = None
+                    yield chunk
+                    continue
+
+                chunk_type = chunk.get("type")
+
+                if chunk_type == "message_start":
+                    msg: dict[str, object] = cast(dict[str, object], chunk.get("message") or {})
+                    u = msg.get("usage")
+                    if isinstance(u, dict):
+                        start_usage_snapshot = dict(u)
+                    if pending_delta is not None:
+                        yield pending_delta
+                        pending_delta = None
+                    yield chunk
+                    continue
+
+                if chunk_type == "message_delta":
+                    pending_delta = cast(dict[str, Any], chunk)
+                    continue
+
+                if chunk_type == "message_stop" and pending_delta is not None:
+                    stop_usage = dict(chunk.get("usage") or {})
+                    delta_usage = dict(pending_delta.get("usage") or {})
+
+                    for field in _CACHE_FIELDS:
+                        if field in stop_usage:
+                            delta_usage[field] = stop_usage[field]
+
+                    raw_input = stop_usage.get("input_tokens")
+                    if raw_input is not None:
+                        delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
+
+                    AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
+                        delta_usage, start_usage_snapshot
+                    )
+
+                    if delta_usage:
+                        pending_delta["usage"] = delta_usage
+
+                    yield pending_delta
+                    pending_delta = None
+                    yield chunk
+                    continue
+
                 if pending_delta is not None:
                     yield pending_delta
                     pending_delta = None
+
                 yield chunk
-                continue
 
-            chunk_type = chunk.get("type")
-
-            if chunk_type == "message_start":
-                msg: dict[str, object] = cast(dict[str, object], chunk.get("message") or {})
-                u = msg.get("usage")
-                if isinstance(u, dict):
-                    start_usage_snapshot = dict(u)
-                if pending_delta is not None:
-                    yield pending_delta
-                    pending_delta = None
-                yield chunk
-                continue
-
-            if chunk_type == "message_delta":
-                pending_delta = cast(dict[str, Any], chunk)
-                continue
-
-            if chunk_type == "message_stop" and pending_delta is not None:
-                stop_usage = dict(chunk.get("usage") or {})
+            if pending_delta is not None:
                 delta_usage = dict(pending_delta.get("usage") or {})
-
-                for field in _CACHE_FIELDS:
-                    if field in stop_usage:
-                        delta_usage[field] = stop_usage[field]
-
-                raw_input = stop_usage.get("input_tokens")
-                if raw_input is not None:
-                    delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
-
                 AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
                     delta_usage, start_usage_snapshot
                 )
-
                 if delta_usage:
                     pending_delta["usage"] = delta_usage
-
                 yield pending_delta
-                pending_delta = None
-                yield chunk
-                continue
-
-            if pending_delta is not None:
-                yield pending_delta
-                pending_delta = None
-
-            yield chunk
-
-        if pending_delta is not None:
-            delta_usage = dict(pending_delta.get("usage") or {})
-            AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
-                delta_usage, start_usage_snapshot
-            )
-            if delta_usage:
-                pending_delta["usage"] = delta_usage
-            yield pending_delta
+        finally:
+            await aclose_if_supported(completion_stream)
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):

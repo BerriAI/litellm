@@ -1,12 +1,18 @@
+import asyncio
 import os
+import threading
+from collections.abc import Iterator, Mapping
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.litellm_core_utils import logging_callback_manager
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 
 
@@ -307,9 +313,7 @@ async def test_generic_api_callback_settings_retry_config():
     }
 
     try:
-        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
-            callback_name
-        )
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(callback_name)
 
         assert isinstance(result, GenericAPILogger)
         assert result.endpoint == "https://example.com/api/logs"
@@ -344,3 +348,239 @@ def test_duplicate_multiple_loggers_test():
 
     assert langfuse_count == 1, "Should have exactly one LangfusePromptManagement instance"
     assert otel_count == 1, "Should have exactly one OpenTelemetry instance"
+
+
+_ENDPOINT_A: Final = "http://127.0.0.1:9/a"
+_ENDPOINT_B: Final = "http://127.0.0.1:9/b"
+_BEARER_HEADERS: Final = {"Authorization": "Bearer t"}
+
+
+@pytest.fixture
+def generic_api_logger_cache(monkeypatch: pytest.MonkeyPatch) -> dict[str, GenericAPILogger]:
+    cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", cache)
+    return cache
+
+
+def _use_generic_api_settings(monkeypatch: pytest.MonkeyPatch, **settings: object) -> None:
+    monkeypatch.setattr(litellm, "callback_settings", {"cb": {"callback_type": "generic_api", **settings}})
+
+
+def _resolve_generic_api_logger() -> GenericAPILogger:
+    logger: Final = LoggingCallbackManager.add_custom_callback_generic_api_str("cb")
+    assert isinstance(logger, GenericAPILogger)
+    return logger
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_generic_api_logger_reused_on_repeated_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers=_BEARER_HEADERS)
+
+    resolved: Final = tuple(_resolve_generic_api_logger() for _ in range(5))
+
+    try:
+        assert all(logger is resolved[0] for logger in resolved)
+    finally:
+        resolved[0].shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_generic_api_logger_empty_log_format_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers=_BEARER_HEADERS, log_format="")
+
+    with pytest.raises(ValueError, match="Invalid log_format"):
+        LoggingCallbackManager.add_custom_callback_generic_api_str("cb")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_generic_api_logger_recreated_and_old_flush_loop_stopped_on_config_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers=_BEARER_HEADERS)
+    logger_a: Final = _resolve_generic_api_logger()
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_B, headers=_BEARER_HEADERS)
+    logger_b: Final = _resolve_generic_api_logger()
+
+    try:
+        assert logger_a is not logger_b
+        await asyncio.wait_for(logger_a._flush_task, timeout=5)
+        assert not logger_b._flush_task.done()
+    finally:
+        logger_b.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_bad_replacement_config_does_not_evict_existing_logger(
+    monkeypatch: pytest.MonkeyPatch, generic_api_logger_cache: dict[str, GenericAPILogger]
+) -> None:
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers=_BEARER_HEADERS)
+    logger_a: Final = _resolve_generic_api_logger()
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers=_BEARER_HEADERS, log_format="bad_format")
+
+    try:
+        with pytest.raises(ValueError, match="Invalid log_format"):
+            LoggingCallbackManager.add_custom_callback_generic_api_str("cb")
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(logger_a._flush_task), timeout=0.05)
+        assert generic_api_logger_cache["cb"] is logger_a
+    finally:
+        logger_a.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_env_header_rotation_recreates_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers={"X-Static": "s"})
+    logger_a: Final = _resolve_generic_api_logger()
+
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    logger_b: Final = _resolve_generic_api_logger()
+
+    try:
+        assert logger_a is not logger_b
+        assert logger_b.headers["Authorization"] == "Bearer new"
+        await asyncio.wait_for(logger_a._flush_task, timeout=5)
+    finally:
+        logger_b.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_env_header_shadowed_by_config_reuses_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers={"Authorization": "Bearer from-config"})
+    logger_a: Final = _resolve_generic_api_logger()
+
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    logger_b: Final = _resolve_generic_api_logger()
+
+    try:
+        assert logger_a is logger_b
+    finally:
+        logger_a.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_empty_endpoint_resolved_from_env_reuses_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", _ENDPOINT_A)
+    _use_generic_api_settings(monkeypatch, endpoint="", headers=_BEARER_HEADERS)
+    logger_a: Final = _resolve_generic_api_logger()
+    logger_b: Final = _resolve_generic_api_logger()
+
+    try:
+        assert logger_a is logger_b
+        assert logger_a.endpoint == _ENDPOINT_A
+    finally:
+        logger_b.shutdown()
+        logger_a.shutdown()
+
+
+async def _resolve_generic_api_logger_on_its_own_loop() -> None:
+    _resolve_generic_api_logger()
+
+
+class _HeadersThatRotateFromAnotherThreadWhenRead(Mapping[str, str]):
+    def __init__(self) -> None:
+        self.rotation_thread: threading.Thread | None = None
+
+    def __getitem__(self, key: str) -> str:
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(())
+
+    def __len__(self) -> int:
+        if self.rotation_thread is None:
+            self.rotation_thread = threading.Thread(
+                target=asyncio.run, args=(_resolve_generic_api_logger_on_its_own_loop(),)
+            )
+            self.rotation_thread.start()
+            self.rotation_thread.join(timeout=0.2)
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_rotation_racing_another_thread_lists_only_the_cached_logger(
+    monkeypatch: pytest.MonkeyPatch, generic_api_logger_cache: dict[str, GenericAPILogger]
+) -> None:
+    for callback_list in ("callbacks", "success_callback", "_async_success_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers={})
+    litellm.logging_callback_manager.add_litellm_success_callback("cb")
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    headers: Final = _HeadersThatRotateFromAnotherThreadWhenRead()
+    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers=headers)
+
+    resolved: Final = _resolve_generic_api_logger()
+    assert headers.rotation_thread is not None
+    headers.rotation_thread.join()
+    listed: Final = tuple(callback for callback in litellm.success_callback if isinstance(callback, GenericAPILogger))
+
+    try:
+        assert generic_api_logger_cache["cb"] is resolved
+        assert listed == (resolved,)
+    finally:
+        resolved.shutdown()
+
+
+def test_get_callbacks_by_type_treats_both_failure_lists_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    for callback_list in (
+        "callbacks",
+        "success_callback",
+        "_async_success_callback",
+        "failure_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, callback_list, [])
+    manager = LoggingCallbackManager()
+    manager.add_litellm_callback("general_logger")
+    manager.add_litellm_success_callback("sync_success_logger")
+    manager.add_litellm_async_success_callback("async_success_logger")
+    manager.add_litellm_failure_callback("sync_failure_logger")
+    manager.add_litellm_async_failure_callback("async_failure_logger")
+    manager.add_litellm_success_callback("sync_success_and_async_failure_logger")
+    manager.add_litellm_async_failure_callback("sync_success_and_async_failure_logger")
+
+    callbacks_by_type = manager.get_callbacks_by_type()
+
+    assert set(callbacks_by_type["success"]) == {"sync_success_logger", "async_success_logger"}
+    assert set(callbacks_by_type["failure"]) == {"sync_failure_logger", "async_failure_logger"}
+    assert set(callbacks_by_type["success_and_failure"]) == {"general_logger", "sync_success_and_async_failure_logger"}
+
+
+def test_a_v2_callback_is_added_to_every_event_list_once_per_logger_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Hook, on
+
+    class Observer(CustomLoggerV2):
+        def __init__(self, bucket: str) -> None:
+            self.bucket = bucket
+
+        @on(Hook.attempt_ended)
+        def attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
+            return None
+
+    for callback_list in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    manager = LoggingCallbackManager()
+    first, twin, second = Observer("a"), Observer("a"), Observer("b")
+
+    for callback in (first, first, twin, second):
+        manager.add_litellm_success_callback(callback)
+        manager.add_litellm_failure_callback(callback)
+        manager.add_litellm_async_success_callback(callback)
+        manager.add_litellm_async_failure_callback(callback)
+
+    for callback_list in (
+        litellm.success_callback,
+        litellm._async_success_callback,
+        litellm.failure_callback,
+        litellm._async_failure_callback,
+    ):
+        assert callback_list == [first, second]

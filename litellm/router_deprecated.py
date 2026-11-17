@@ -32,6 +32,8 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, S
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeVar, overload
 
+from pydantic import TypeAdapter
+
 from litellm.router_api import ASSIGNABLE_ALIASES, SETTING_FIELDS, ChangeSet, RoutingContext
 from litellm.router_strategy.least_busy import picks_reserve
 
@@ -66,6 +68,8 @@ _P: Final = ParamSpec("_P")
 DEPRECATED_ROUTER_MEMBER_USES: Final[Counter[str]] = Counter()  # mutable-ok: the live tally _note increments
 
 _INTERNAL_PREFIX: Final = "litellm.router"
+
+_MEMBER_VALUE: Final = TypeAdapter(object)
 
 
 # Router's own attribute hooks: a write or delete through an old name passes through them first.
@@ -341,6 +345,7 @@ class DeprecatedRouterMembers:
     )
     fallback_access_check = _setting("fallback_access_check", lambda r: r.settings().fallback_access_check)
     fallback_budget_check = _setting("fallback_budget_check", lambda r: r.settings().fallback_budget_check)
+    fallback_rate_limit_check = _setting("fallback_rate_limit_check", lambda r: r.settings().fallback_rate_limit_check)
     # These three are declared with the attribute type Router gave them rather than the descriptor's:
     # protocols in router_utils and the proxy match Router on them, and protocol matching does not
     # see through a descriptor. Reads and writes still go through _setting at runtime.
@@ -935,7 +940,7 @@ def _name_members_after_router() -> None:
     # The old members were Router methods, so errors that name the method (a wrong-arity TypeError,
     # or "litellm.router.Router.<name>() argument after ** must be a mapping") keep naming it the
     # way they did before the members moved here.
-    for member in vars(DeprecatedRouterMembers).values():
+    for member in map(_MEMBER_VALUE.validate_python, vars(DeprecatedRouterMembers).values()):
         function = member.__func__ if isinstance(member, staticmethod) else member
         if inspect.isfunction(function):
             function.__qualname__ = f"Router.{function.__name__}"

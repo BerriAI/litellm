@@ -6,6 +6,8 @@ outside code reaches a Router member, or new dependencies slip past the shrink-o
 import ast
 import importlib.util
 import pathlib
+from types import ModuleType
+from typing import Final
 
 import pytest
 
@@ -56,3 +58,16 @@ def test_unlisted_class_level_use_fails_the_fence(surface_check):
 
 def test_unrelated_receivers_are_not_uses(surface_check):
     assert _uses(surface_check, "client.get_model_list()\nRouterConfig.model_list") == set()
+
+
+def test_python_scan_skips_nested_rust_builds(
+    surface_check: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdk: Final = tmp_path / "litellm"
+    rust_build: Final = sdk / "rust" / "target"
+    rust_build.mkdir(parents=True)
+    (rust_build / "generated.py").write_text("router.get_model_list()")
+    monkeypatch.setattr(surface_check, "ROOT", str(tmp_path))
+    assert tuple(surface_check._python_files()) == ()
+    (sdk / "router_user.py").write_text("router.get_model_list()")
+    assert tuple(relative for relative, _ in surface_check._python_files()) == ("litellm/router_user.py",)

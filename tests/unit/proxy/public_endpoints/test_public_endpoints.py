@@ -1,5 +1,3 @@
-from litellm.proxy.deps.repositories import get_plugin_upload_repository
-from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 import asyncio
 import json
 import re
@@ -20,7 +18,9 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.deps.repositories import get_plugin_upload_repository
 from litellm.proxy.public_endpoints import router
+from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -987,6 +987,57 @@ def test_public_model_hub_reports_the_newest_check_of_a_group_not_the_last_row_r
     app.dependency_overrides.clear()
 
 
+def test_public_model_hub_lists_each_deployments_prices_without_exposing_the_deployment() -> None:
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hub-public",
+                "litellm_params": {
+                    "model": "openai/hub-secret-backend-a",
+                    "api_base": "https://secret-a.internal",
+                    "api_key": "sk-secret-a",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+                "model_info": {"id": "hub-secret-id-a"},
+            },
+            {
+                "model_name": "hub-public",
+                "litellm_params": {
+                    "model": "openai/hub-secret-backend-b",
+                    "api_base": "https://secret-b.internal",
+                    "api_key": "sk-secret-b",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 4e-06,
+                },
+                "model_info": {"id": "hub-secret-id-b"},
+            },
+        ]
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.public_model_groups", ["hub-public"]),
+        patch("litellm.proxy.proxy_server.llm_router", llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        response: Final = TestClient(app).get("/public/model_hub")
+
+    assert response.status_code == 200, response.text
+    groups: Final = TypeAdapter(list[ModelGroupInfoProxy]).validate_json(response.text)
+    assert [dict(p.costs) for p in groups[0].deployment_pricing] == [
+        {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
+        {"input_cost_per_token": 3e-06, "output_cost_per_token": 4e-06},
+    ]
+    leaked: Final = [
+        secret
+        for secret in ("secret-a.internal", "secret-b.internal", "sk-secret", "hub-secret-backend", "hub-secret-id")
+        if secret in response.text
+    ]
+    assert leaked == [], response.text
+
+
 # ---------------------------------------------------------------------------
 # /public/agent_hub
 # ---------------------------------------------------------------------------
@@ -1232,6 +1283,18 @@ def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses
     }
     assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
     assert "embeddings" not in streamlake_endpoints
+
+
+def test_get_supported_endpoints_lists_webiq_search(reset_endpoints_cache: None) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    search: Final = next(endpoint for endpoint in response.json()["endpoints"] if endpoint["key"] == "search")
+    assert search["endpoint"] == "/search"
+    assert {"slug": "webiq", "display_name": "Microsoft Web IQ"} in search["providers"]
 
 
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
