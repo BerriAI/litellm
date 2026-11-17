@@ -557,9 +557,6 @@ async def test_the_failed_stream_is_closed_before_the_retry_is_opened(make_core:
     assert closed_when_retry_opens == [True]
 
 
-# --- a finished or dropped stream frees its request ------------------------------------------------------------
-
-
 class _RequestState:
     pass
 
