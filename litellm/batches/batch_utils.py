@@ -19,7 +19,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
 )
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
-from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
 
@@ -45,6 +45,10 @@ def _uses_native_vertex_output(
     model_name: str | None,
     first_row: Mapping[str, object] | None,
 ) -> bool:
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_native_gemini_batch_output_row
+
+        return first_row is not None and is_native_gemini_batch_output_row(first_row)
     if custom_llm_provider != "vertex_ai":
         return False
     if model_name and litellm.disable_vertex_batch_output_transformation:
@@ -594,6 +598,7 @@ def extract_file_access_credentials(
             # A federated deployment holds no api_key, so without these the fetch that reads a
             # finished batch's output has nothing to authenticate with and its cost is never billed.
             *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
+            *sorted(OPENAI_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:
@@ -773,6 +778,12 @@ def _get_batch_job_usage_from_response_body(
     _usage_dict: Final = response_body.get("usage", None) or {}
     if ResponseAPILoggingUtils.is_response_api_usage(_usage_dict):
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage_dict)
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_gemini_batch_usage_shape, usage_from_batch_output
+
+        gemini_usage: Final = cast(Mapping[str, object], _usage_dict)  # cast-ok: usage block comes from provider JSON
+        if is_gemini_batch_usage_shape(gemini_usage):
+            return usage_from_batch_output(gemini_usage)
     usage: Final[Usage] = Usage(**_usage_dict)
     if custom_llm_provider == "xai":
         from litellm.llms.xai.chat.transformation import XAIChatConfig

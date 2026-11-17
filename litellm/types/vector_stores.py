@@ -2,11 +2,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Final, Literal, TypeAlias
 
+from pydantic import AfterValidator, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+RETRIEVAL_QUERY_PARAMS: Final = ("retrievalQuery", "retrieval_query")
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
@@ -74,11 +77,29 @@ class VectorStoreInfoRequest(LiteLLMBaseModel):
     vector_store_id: str
 
 
+VectorStoreSearchImageMediaType: TypeAlias = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+
+class VectorStoreSearchQueryImage(TypedDict):
+    """Base64 image to search a multimodal vector store with, in place of a text query"""
+
+    type: ReadOnly[Literal["base64"]]
+    media_type: ReadOnly[VectorStoreSearchImageMediaType]
+    data: ReadOnly[str]
+
+
+class VectorStoreResultImageSource(TypedDict):
+    type: ReadOnly[Literal["base64"]]
+    media_type: ReadOnly[str]
+    data: ReadOnly[str]
+
+
 class VectorStoreResultContent(TypedDict, total=False):
     """Content of a vector store result"""
 
     text: str | None
     type: str | None
+    source: ReadOnly[VectorStoreResultImageSource]
 
 
 class VectorStoreSearchResult(TypedDict, total=False):
@@ -117,6 +138,7 @@ class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     max_num_results: int | None
     ranking_options: dict | None
     rewrite_query: bool | None
+    query_image: ReadOnly[VectorStoreSearchQueryImage | None]
 
 
 class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
@@ -320,6 +342,55 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
     "max_num_results",
     "ranking_options",
     "rewrite_query",
+    "query_image",
+]
+
+
+def _require_items(items: tuple[object, ...]) -> tuple[object, ...]:
+    if not items:
+        raise ValueError("must not be empty")
+    return items
+
+
+class OpenAIEqualityFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["eq", "ne"]
+    key: str
+    value: str | bool | int | float
+
+
+class OpenAIRangeFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["gt", "gte", "lt", "lte"]
+    key: str
+    value: StrictInt | StrictFloat
+
+
+class OpenAIMembershipFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["in", "nin"]
+    key: str
+    value: Annotated[
+        tuple[StrictStr | StrictInt | StrictFloat, ...], Field(fail_fast=True), AfterValidator(_require_items)
+    ]
+
+
+OpenAIComparisonFilter: TypeAlias = OpenAIEqualityFilter | OpenAIRangeFilter | OpenAIMembershipFilter
+
+
+class OpenAICompoundFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["and", "or"]
+    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], Field(fail_fast=True), AfterValidator(_require_items)]
+
+
+OpenAIVectorStoreFilter: TypeAlias = Annotated[
+    OpenAIComparisonFilter | OpenAICompoundFilter,
+    Field(discriminator="type"),
 ]
 
 
@@ -330,6 +401,7 @@ class VectorStoreToolParams:
     filters: dict | None = None
     max_num_results: int | None = None
     ranking_options: dict | None = None
+    rewrite_query: bool | None = None
 
     def to_dict(self) -> dict:
         """Convert to dict, excluding None values"""
@@ -339,6 +411,7 @@ class VectorStoreToolParams:
                 "filters": self.filters,
                 "max_num_results": self.max_num_results,
                 "ranking_options": self.ranking_options,
+                "rewrite_query": self.rewrite_query or None,
             }.items()
             if v is not None
         }

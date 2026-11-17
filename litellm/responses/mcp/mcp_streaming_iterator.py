@@ -3,6 +3,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    NO_GATEWAY_TOOLS,
+    GatewayTools,
+    allowed_tools_tool_choice_kept_on_follow_up,
+)
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
@@ -17,6 +22,7 @@ from litellm.types.llms.openai import (
     MCPListToolsCompletedEvent,
     MCPListToolsFailedEvent,
     MCPListToolsInProgressEvent,
+    ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -282,11 +288,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
+        tool_choice: object = None,
+        gateway: GatewayTools = NO_GATEWAY_TOOLS,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
+        self._follow_up_history: str | ResponseInputParam | None = self.original_request_params.get("input")
         self.should_auto_execute = self._should_auto_execute_tools()
 
         # Streaming state management
@@ -301,6 +310,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
+        self.tool_choice: Final = tool_choice
+        self.gateway: Final = gateway
         self.served_tools = tuple(served_tools) if served_tools is not None else None
 
         # Iterator references
@@ -745,10 +756,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         try:
             # Extract tool calls from the response
-            if self.collected_response is not None:
-                tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response)
-            else:
-                tool_calls = []
+            tool_calls: Final = (
+                LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                    LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response),
+                    self.tool_choice,
+                    self.gateway,
+                )
+                if self.collected_response is not None
+                else ()
+            )
             if not tool_calls:
                 return
             self.tool_call_round += 1
@@ -912,8 +928,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
-                    original_input=self.original_request_params.get("input"),
+                    original_input=self._follow_up_history,
                     preserve_reasoning=persistence_disabled,
+                )
+                self._follow_up_history = cast(  # cast-ok: helper returns valid input items
+                    "ResponseInputParam", follow_up_input
                 )
 
                 # Make follow-up call with streaming
@@ -926,7 +945,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 )
             else:
                 return
-            # Remove tool_choice to avoid forcing more tool calls
             follow_up_params.pop("tool_choice", None)
 
             if self.tool_call_round >= MAX_MCP_TOOL_CALL_ROUNDS:
@@ -937,6 +955,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 verbose_logger.warning(
                     "MCP auto-execute hit MAX_MCP_TOOL_CALL_ROUNDS=%s; forcing a text-only follow-up.",
                     MAX_MCP_TOOL_CALL_ROUNDS,
+                )
+            else:
+                follow_up_params.update(
+                    allowed_tools_tool_choice_kept_on_follow_up(self.original_request_params.get("tool_choice"))
                 )
 
             follow_up_response: Final = await aresponses(**follow_up_params)
