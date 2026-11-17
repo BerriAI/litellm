@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  type QueryClient,
   useInfiniteQuery,
   useQuery,
   UseQueryResult,
@@ -145,6 +146,12 @@ export const useInfiniteKeys = (pageSize: number, options: KeyListCallOptions = 
 };
 
 export const deletedKeyKeys = createQueryKeys("deletedKeys");
+
+export const invalidateKeyQueries = (queryClient: QueryClient) =>
+  Promise.allSettled(
+    [keyKeys, deletedKeyKeys, infiniteKeyKeys].map((keys) => queryClient.invalidateQueries({ queryKey: keys.all })),
+  );
+
 export const useDeletedKeys = (
   page: number,
   pageSize: number,

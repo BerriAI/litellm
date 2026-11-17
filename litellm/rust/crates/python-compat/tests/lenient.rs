@@ -1,4 +1,4 @@
-use litellm_python_compat::lenient::{IsTrue, Lenient, Truthy};
+use litellm_python_compat::lenient::{IsTrue, LaxBoolOr, Lenient, StrBool, Truthy};
 use rstest::rstest;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -69,4 +69,56 @@ fn items_of_a_malformed_list_are_none(
     #[case] expected: &[&str],
 ) {
     assert_eq!(list.items(), expected);
+}
+
+#[serde_as]
+#[derive(Deserialize)]
+struct Enforced(#[serde_as(as = "LaxBoolOr<true>")] bool);
+
+/// Expected values from pydantic 2.13.4: `TypeAdapter(bool).validate_python(value)`, or `True` where
+/// it raises, for the JSON value loaded with `json.loads`.
+#[rstest]
+#[case::true_(json!(true), true)]
+#[case::false_(json!(false), false)]
+#[case::text_true(json!("true"), true)]
+#[case::text_false(json!("false"), false)]
+#[case::capitalized(json!("True"), true)]
+#[case::padded_false(json!(" false"), true)]
+#[case::no(json!("no"), false)]
+#[case::off(json!("off"), false)]
+#[case::text_zero(json!("0"), false)]
+#[case::unknown_word(json!("maybe"), true)]
+#[case::zero(json!(0), false)]
+#[case::one(json!(1), true)]
+#[case::two(json!(2), true)]
+#[case::zero_float(json!(0.0), false)]
+#[case::one_float(json!(1.0), true)]
+#[case::null(json!(null), true)]
+#[case::list(json!([]), true)]
+#[case::mapping(json!({}), true)]
+fn lax_bool_or_falls_back_where_pydantic_raises(#[case] value: Value, #[case] expected: bool) {
+    assert_eq!(
+        serde_json::from_value::<Enforced>(value).unwrap().0,
+        expected
+    );
+}
+
+#[serde_as]
+#[derive(Deserialize)]
+struct TextFlag(#[serde_as(as = "StrBool")] bool);
+
+#[rstest]
+#[case::flag(json!(true), true)]
+#[case::false_flag(json!(false), false)]
+#[case::true_text(json!(" True "), true)]
+#[case::python_stripped_true_text(json!("\u{1c}true"), true)]
+#[case::false_text(json!("false"), false)]
+#[case::other_text(json!("yes"), false)]
+#[case::number(json!(1), false)]
+#[case::null(json!(null), false)]
+fn str_bool_is_true_only_for_true(#[case] value: Value, #[case] expected: bool) {
+    assert_eq!(
+        serde_json::from_value::<TextFlag>(value).unwrap().0,
+        expected
+    );
 }

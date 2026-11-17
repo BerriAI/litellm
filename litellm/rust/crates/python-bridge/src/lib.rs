@@ -13,6 +13,7 @@ mod logger;
 mod marshal;
 mod model_cost;
 mod model_registry;
+mod parallel_request_limiter;
 mod preflight;
 mod python_settings;
 mod redis;
@@ -29,7 +30,12 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
-    use crate::auth::{AuthCall, AuthSettings, DenialView, PlanView};
+    use crate::auth::{
+        AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
+        KeyContextView, MappedClaimsView, MappingView, PlanView, TeamGrantView, jwt_claims,
+        jwt_is_allowed_domain, jwt_is_jwt, jwt_key_mapping_cache_key, jwt_presents_claims,
+        jwt_unverified_claims,
+    };
     #[pymodule_export]
     use crate::auth::{
         auth_allowed_routes_grant, auth_first_denied_route, auth_jwt_team_routes_grant,
@@ -61,6 +67,10 @@ mod _native {
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::parallel_request_limiter::{
+        NativeParallelRequestLimiter, NativeParallelRequestLimiterState,
+    };
     #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
@@ -123,6 +133,10 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let _ = rustls::crypto::ring::default_provider().install_default();
+        module.add(
+            "JWT_ID_JAG_TYP",
+            litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
+        )?;
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -184,6 +198,8 @@ mod tests {
                 "GuardedReply",
                 "GaugesAcquired",
                 "GaugeOverLimit",
+                "NativeParallelRequestLimiter",
+                "NativeParallelRequestLimiterState",
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
@@ -232,10 +248,25 @@ mod tests {
                 "auth_route_matches_denied",
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
+                "JWT_ID_JAG_TYP",
                 "RustAuth",
+                "RustAuthOutcome",
                 "RustAuthSettings",
+                "RustAuthStep",
+                "RustClaimIdentity",
                 "RustDenial",
+                "RustIdentity",
+                "RustJwtMapping",
+                "RustKeyContext",
+                "RustMappedClaims",
                 "RustPlan",
+                "RustTeamGrant",
+                "jwt_claims",
+                "jwt_is_allowed_domain",
+                "jwt_is_jwt",
+                "jwt_key_mapping_cache_key",
+                "jwt_presents_claims",
+                "jwt_unverified_claims",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

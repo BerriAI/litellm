@@ -134,16 +134,13 @@ serviceAccounts:
     annotations: {}
     name: ""
 
-# Pre-install / pre-upgrade Helm hook that runs `prisma migrate deploy`
-# against the writer database, creating the LiteLLM schema (tables that
-# gateway + backend assume exist at startup: LiteLLM_Config,
-# LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...). Disable if your
-# pipeline runs migrations out-of-band.
-#
-# Runs the shared image with `args: [migrations]`, which the entrypoint
-# dispatches to the prisma migration runner without importing the proxy.
 migrationJob:
   enabled: true
+  mode: data-plane
+  controlPlane:
+    databaseSecret:
+      name: ""
+      key: database-url
   # Which controller is responsible for running the Job.
   #
   # `helm.enabled` renders the Helm pre-install / pre-upgrade hook, so the Job

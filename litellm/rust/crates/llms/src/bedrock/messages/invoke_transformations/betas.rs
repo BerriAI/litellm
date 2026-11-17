@@ -1,14 +1,12 @@
 use std::collections::BTreeSet;
 
-use litellm_llms_types::{
-    providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet},
-    recognized::python_truthy,
-};
+use litellm_llms_types::providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet};
+use litellm_python_compat::truthy::json_truthy;
 use serde_json::Value;
 
 use crate::{
     Error, ErrorDetail,
-    anthropic::beta_headers::BetaPolicy,
+    anthropic::beta_headers::{BetaPolicy, on_loaded_config},
     base_llm::{auth::Headers, messages::context::MessagesModelCapabilities},
 };
 
@@ -41,10 +39,13 @@ const COMPUTER_TOOL_BETAS: [(&str, &str); 3] = [
 const OPUS_4_5_EFFORT_PATTERNS: [&str; 2] = ["opus-4-5", "opus_4_5"];
 
 fn on_bedrock(beta: &str) -> Option<String> {
-    beta.parse::<AnthropicBeta>()
-        .unwrap_or_else(|never| match never {})
-        .on(BetaProvider::Bedrock)
-        .map(|beta| beta.as_str().to_string())
+    on_loaded_config(
+        &beta
+            .parse::<AnthropicBeta>()
+            .unwrap_or_else(|never| match never {}),
+        BetaProvider::Bedrock,
+    )
+    .map(|beta| beta.as_str().to_string())
 }
 
 /// Port of Python's `model_specific_anthropic_betas`.
@@ -286,7 +287,7 @@ fn get_anthropic_beta_list(
     {
         betas.insert(beta.into());
     }
-    if params.get("mcp_servers").is_some_and(python_truthy) {
+    if params.get("mcp_servers").is_some_and(json_truthy) {
         betas.insert("mcp-client-2025-04-04".into());
     }
     if messages.iter().any(|message| {

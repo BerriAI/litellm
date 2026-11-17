@@ -7,7 +7,7 @@ use litellm_secret_value::SecretValue;
 
 use litellm_auth_aws::bedrock_model_id_and_region;
 use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders};
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_env::resolve_non_empty;
 use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},

@@ -19,7 +19,11 @@ fn read(path: &Path) -> Result<Mapping, Error> {
         path: path.to_owned(),
         source,
     })?;
-    serde_yaml_ng::from_str(&text).map_err(|source| Error::ParseFile {
+    let document = litellm_yaml::from_str(&text).map_err(|source| Error::LoadFile {
+        path: path.to_owned(),
+        source,
+    })?;
+    serde_yaml_ng::from_value(document).map_err(|source| Error::ParseFile {
         path: path.to_owned(),
         source,
     })

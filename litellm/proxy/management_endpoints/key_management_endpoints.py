@@ -144,6 +144,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_regeneration_access_group_membership,
     sync_key_update_access_group_membership,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.managed_resource_owner_sync import repoint_key_owned_managed_resources
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -1098,7 +1099,7 @@ def _validate_caller_can_change_key_ownership(
     """
     Non-admin callers must not rebind a key's ``user_id`` to a different
     user. The ``user_id`` on a verification token is what
-    ``_return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
+    ``return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
     to derive the request's role; a non-admin rebinding their own key's
     ``user_id`` to a ``PROXY_ADMIN`` row promotes themselves.
 
@@ -3411,6 +3412,7 @@ async def _process_single_key_update(
     """
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
+    validate_budget_duration(update_key_request.budget_duration)
 
     check_permissions_caller_permission(
         data=update_key_request,
@@ -4467,6 +4469,8 @@ async def bulk_update_keys(
         - key: str - The key identifier (token) to update
         - budget_id: Optional[str] - Budget ID associated with the key
         - max_budget: Optional[float] - Max budget for key
+        - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+        - user_id: Optional[str] - Owner user ID, or null to remove the owner
         - team_id: Optional[str] - Team ID associated with key
         - tags: Optional[List[str]] - Tags for organizing keys
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
@@ -5237,12 +5241,13 @@ async def info_key_fn(
     )
 
     try:
+        if user_api_key_dict.impersonated_by is not None and key is None:
+            raise HTTPException(status_code=400, detail="A key must be specified when impersonating a user.")
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
         if not key:
             raise ProxyException(
@@ -8277,20 +8282,23 @@ async def block_key(
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                request_data=with_audit_actor(
+                    LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="blocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
                     ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="blocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    user_api_key_dict,
                 )
             )
         )
@@ -8391,20 +8399,23 @@ async def unblock_key(
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                request_data=with_audit_actor(
+                    LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="unblocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
                     ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="unblocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    user_api_key_dict,
                 )
             )
         )
@@ -8522,7 +8533,7 @@ async def _can_user_query_key_info(
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
-        or user_api_key_dict.api_key == key
+        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
         or key_info.user_id == user_api_key_dict.user_id
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,

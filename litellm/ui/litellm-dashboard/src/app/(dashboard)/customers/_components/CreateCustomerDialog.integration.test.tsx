@@ -58,6 +58,16 @@ afterEach(() => {
 });
 
 describe("CreateCustomerDialog", () => {
+  it("adds budget groups without a secure browser context", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });
+    renderWithProviders(<Harness />);
+    await userEvent.click(screen.getByRole("button", { name: "Add budget group" }));
+    fireEvent.change(screen.getByLabelText("Group 4 name"), { target: { value: "extra_group" } });
+    await userEvent.click(screen.getByRole("button", { name: "Add budget group" }));
+    expect(screen.getByLabelText("Group 4 name")).toHaveValue("extra_group");
+    expect(screen.getByLabelText("Group 5 name")).toHaveValue("");
+  });
+
   it("surfaces the free-tier 403 detail", async () => {
     freeTierReached = true;
     renderWithProviders(<Harness />);
