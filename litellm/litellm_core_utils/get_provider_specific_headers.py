@@ -4,6 +4,7 @@ from typing import Final, TypeVar
 
 from pydantic import TypeAdapter
 
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.utils import ProviderSpecificHeader
 
 _PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]] = TypeAdapter(
@@ -11,13 +12,13 @@ _PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderS
 )
 
 _HeaderValue: Final = TypeVar("_HeaderValue")
-_REPEATABLE_HEADERS: Final = frozenset({"anthropic-beta"})
+_CASE_INSENSITIVE_OVERRIDES: Final = frozenset({ANTHROPIC_USER_PROFILE_ID_HEADER})
 
 
 def override_headers(
     headers: Mapping[str, _HeaderValue], overrides: Mapping[str, _HeaderValue]
 ) -> dict[str, _HeaderValue]:  # mutable-ok: legacy callers pass the merged headers on as a dict
-    overridden: Final = frozenset(name.lower() for name in overrides) - _REPEATABLE_HEADERS
+    overridden: Final = frozenset(name.lower() for name in overrides) & _CASE_INSENSITIVE_OVERRIDES
     return {**{name: value for name, value in headers.items() if name.lower() not in overridden}, **overrides}
 
 

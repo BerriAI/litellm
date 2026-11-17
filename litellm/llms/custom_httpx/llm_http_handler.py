@@ -725,8 +725,8 @@ def _without_anthropic_beta(source: Mapping[str, object] | None) -> Mapping[str,
 
 
 def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Mapping[str, object]:
-    """Later sources win per header, in any letter case, except ``anthropic-beta``, which unions every source so
-    client betas never drop a deployment's configured ones."""
+    """Later sources win per header, except ``anthropic-beta``, which unions every source so client betas
+    never drop a deployment's configured ones."""
     entries: Final = tuple(chain.from_iterable((source or {}).items() for source in sources))
     beta_values: Final = tuple(
         cast("str | Sequence[str]", value)  # cast-ok: the merge helper skips non-str list entries

@@ -243,26 +243,26 @@ mod tests {
     }
 }
 
-/// Python's `_merge_messages_header_sources`: later sources win per header name in any casing,
-/// except `anthropic-beta` (any casing), whose values from every source are unioned, deduplicated
-/// and sorted into one lowercase `anthropic-beta` entry.
+const ANTHROPIC_USER_PROFILE_ID_HEADER: &str = "anthropic-user-profile-id";
+
+/// Python's `_merge_messages_header_sources`: later sources win per header name, and an
+/// `anthropic-user-profile-id` in any casing replaces earlier casings of it, except
+/// `anthropic-beta` (any casing), whose values from every source are unioned, deduplicated and
+/// sorted into one lowercase `anthropic-beta` entry.
 pub fn merge_messages_header_sources(
     sources: impl IntoIterator<Item = Map<String, Value>>,
 ) -> Map<String, Value> {
     let mut merged = Map::new();
     let mut betas = std::collections::BTreeSet::new();
     for source in sources {
-        let mut names = std::collections::HashMap::new();
-        for name in source.keys() {
-            *names.entry(name.to_ascii_lowercase()).or_insert(0_usize) += 1;
+        if source
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(ANTHROPIC_USER_PROFILE_ID_HEADER))
+        {
+            merged.retain(|existing, _| {
+                !existing.eq_ignore_ascii_case(ANTHROPIC_USER_PROFILE_ID_HEADER)
+            });
         }
-        merged.retain(
-            |existing, _| match names.get(&existing.to_ascii_lowercase()) {
-                Some(1) => source.contains_key(existing),
-                Some(_) => false,
-                None => true,
-            },
-        );
         for (name, value) in source {
             if !name.eq_ignore_ascii_case("anthropic-beta") {
                 merged.insert(name, value);
@@ -331,6 +331,18 @@ mod merge_tests {
         assert_eq!(
             Value::Object(merged),
             json!({"x-kept": "1", "anthropic-user-profile-id": "uprof_pinned"})
+        );
+    }
+
+    #[rstest]
+    fn other_headers_spelled_in_another_case_are_all_kept() {
+        let merged = merge_messages_header_sources([
+            map(json!({"X-Custom": "deployment"})),
+            map(json!({"x-custom": "client"})),
+        ]);
+        assert_eq!(
+            Value::Object(merged),
+            json!({"X-Custom": "deployment", "x-custom": "client"})
         );
     }
 
