@@ -880,8 +880,8 @@ class TestDashscopeCostCalculator:
                         }
                     ],
                 },
-                3e-06,
-                id="tier_without_a_one_hour_rate_bills_the_model_rate",
+                1.875e-06,
+                id="tier_without_a_one_hour_rate_bills_the_tier_write_rate",
             ),
         ],
     )
@@ -916,11 +916,13 @@ class TestDashscopeCostCalculator:
 
         prompt_cost, _ = dashscope_cost_per_token(model="qwen-one-hour-cache-write-test", usage=usage)
 
-        assert math.isclose(
-            prompt_cost,
-            (16 * 1.5e-06) + (2000 * 1.875e-06) + (8000 * expected_one_hour_rate),
-            rel_tol=1e-10,
+        expected_write_cost = (2000 * 1.875e-06) + (8000 * expected_one_hour_rate)
+        assert math.isclose(prompt_cost, (16 * 1.5e-06) + expected_write_cost, rel_tol=1e-10)
+
+        breakdown = get_token_type_cost_breakdown(
+            model="qwen-one-hour-cache-write-test", custom_llm_provider="dashscope", usage=usage
         )
+        assert math.isclose(breakdown.cache_creation_cost, expected_write_cost, rel_tol=1e-10)
 
     @pytest.mark.parametrize("malformed_split", ["1h", {"ephemeral_1h_input_tokens": "many"}])
     def test_dashscope_malformed_cache_write_split_bills_the_write_rate(self, malformed_split: object):

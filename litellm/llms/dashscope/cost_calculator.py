@@ -114,9 +114,7 @@ def _tier_rates(model_info: ModelInfo, tier: Mapping[str, object]) -> TokenRates
             if tier_declares_output
             else flat_rates.reasoning_rate
         ),
-        cache_creation_rates_by_ttl=MappingProxyType(
-            {**flat_rates.cache_creation_rates_by_ttl, **_long_ttl_cache_write_rates(tier)}
-        ),
+        cache_creation_rates_by_ttl=_long_ttl_cache_write_rates(tier),
     )
 
 
