@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING, VLLM_STREAM_PROMPT_FIELDS
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
 
 if TYPE_CHECKING:
     import httpx
@@ -77,6 +78,7 @@ def convert_model_response_to_streaming(
                     index=choice.index,
                     delta=_streaming_delta(cast(Choices, choice).message),
                     finish_reason=choice.finish_reason,
+                    logprobs=stored_attribute(choice, "logprobs"),
                 )
             )
         processed_chunk: Final = ModelResponseStream(
@@ -84,6 +86,7 @@ def convert_model_response_to_streaming(
             object="chat.completion.chunk",
             created=model_response.created,
             model=model_response.model,
+            system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
         ).model_copy(
             update={
@@ -92,6 +95,9 @@ def convert_model_response_to_streaming(
                 if (value := attribute_or_none(model_response, field)) is not None
             }
         )
+        service_tier: Final = stored_attribute(model_response, "service_tier")
+        if service_tier is not None:
+            set_extra_attribute(processed_chunk, "service_tier", service_tier)
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
         usage: Final = getattr(model_response, "usage", None)

@@ -294,16 +294,11 @@ def _anthropic_content_block_start_and_deltas(
             )
         case "thinking":
             signature: Final = block.get("signature")
-            signature_deltas: Final = (
-                ({"signature": signature, "type": "signature_delta"},)
-                if isinstance(signature, str) and signature
-                else ()
-            )
             return (
                 {"thinking": "", "signature": "", "type": "thinking"},
                 (
                     {"thinking": block.get("thinking") or "", "type": "thinking_delta"},
-                    *signature_deltas,
+                    {"signature": signature if isinstance(signature, str) else "", "type": "signature_delta"},
                 ),
             )
         case "redacted_thinking":
@@ -508,6 +503,32 @@ async def _stamped_sse_frames(
             yield await _stamped_sse_frame(frame, safeguard_results)
     if open_frame:
         yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
+
+
+async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+    open_frame: Final = bytearray()
+    try:
+        async for chunk in stream:
+            if not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
+                if open_frame:
+                    yield bytes(open_frame)
+                    open_frame.clear()
+                yield chunk
+                continue
+            scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
+            open_frame.extend(chunk)
+            if not _ends_a_frame(open_frame, scan_from):
+                continue
+            *frames, unterminated = _SSE_FRAME_END.split(open_frame)
+            open_frame[:] = unterminated
+            for frame in frames:
+                yield bytes(frame)
+    except Exception:
+        if open_frame:
+            yield bytes(open_frame)
+        raise
+    if open_frame:
+        yield bytes(open_frame)
 
 
 class SafeguardedAnthropicSSEStream:

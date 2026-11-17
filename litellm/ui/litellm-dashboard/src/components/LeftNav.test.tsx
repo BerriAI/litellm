@@ -1,10 +1,32 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
-import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
+import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
+import LeftNav, { menuGroups, getBreadcrumb } from "./LeftNav";
+
+const Sidebar = ({ collapsed = false, ...props }: ComponentProps<typeof LeftNav> & { collapsed?: boolean }) => (
+  <SidebarProvider defaultOpen={!collapsed}>
+    <LeftNav {...props} />
+  </SidebarProvider>
+);
+
+const CloseOnBreakpointChange = () => {
+  useCloseMobileSidebarOn();
+  return null;
+};
+
+const PhoneShell = ({ railCollapsed = false }: { railCollapsed?: boolean }) => (
+  <SidebarProvider defaultOpen={!railCollapsed}>
+    <CloseOnBreakpointChange />
+    <SidebarTrigger />
+    <LeftNav />
+  </SidebarProvider>
+);
 
 vi.mock("../utils/roles", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/roles")>();
@@ -22,6 +44,7 @@ vi.mock("../utils/roles", async (importOriginal) => {
 });
 
 const navState = vi.hoisted(() => ({ pathname: "/ui/api-keys" }));
+const health = vi.hoisted(() => ({ version: undefined as string | undefined }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navState.pathname,
@@ -96,7 +119,7 @@ vi.mock("@/contexts/ThemeContext", () => ({
 
 // Version tag + logout target come from network hooks; keep them inert in unit tests.
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
-  useHealthReadinessDetails: () => ({ data: undefined }),
+  useHealthReadinessDetails: () => ({ data: health.version ? { litellm_version: health.version } : undefined }),
 }));
 vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
   useLogout: () => vi.fn(),
@@ -145,6 +168,7 @@ describe("Sidebar (leftnav)", () => {
   };
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     mockUseAuthorized.mockReset();
     mockUseOrganizations.mockReset();
     mockUseTeams.mockReset();
@@ -155,6 +179,7 @@ describe("Sidebar (leftnav)", () => {
     });
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
+    health.version = undefined;
     uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
     localStorage.removeItem("litellm_plugin_mode");
   });
@@ -187,7 +212,7 @@ describe("Sidebar (leftnav)", () => {
       </PluginModeProvider>,
     );
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
-    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active");
     expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
   });
 
@@ -680,14 +705,64 @@ describe("Sidebar (leftnav)", () => {
   it("marks the nav item for the current route active", () => {
     navState.pathname = "/ui/logs";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active");
     expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
+  });
+
+  it("closes the mobile drawer after following any link in it, including the page already open", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    navState.pathname = "/ui/api-keys";
+    health.version = "1.2.3";
+    renderWithProviders(<PhoneShell />);
+    for (const page of ["Virtual Keys", "Playground", "v1.2.3"]) {
+      fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+      fireEvent.click(within(await screen.findByRole("dialog", { name: "Sidebar" })).getByRole("link", { name: page }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
+    }
+  });
+
+  it("shows the full nav in the phone drawer when the desktop rail was left collapsed", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    navState.pathname = "/ui/search-tools";
+    renderWithProviders(<PhoneShell railCollapsed />);
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    const drawer = await screen.findByRole("dialog", { name: "Sidebar" });
+    expect(within(drawer).getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+    const tools = within(drawer).getByRole("button", { name: "Tools" });
+    expect(tools).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(tools);
+    expect(tools).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the phone drawer closed after the window widens to desktop and narrows again", async () => {
+    const breakpointListeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      matches: false,
+      media,
+      addEventListener: (_: string, listener: () => void) => breakpointListeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => breakpointListeners.delete(listener),
+    }));
+    const resizeTo = async (width: number) => {
+      vi.stubGlobal("innerWidth", width);
+      await act(async () => breakpointListeners.forEach((listener) => listener()));
+    };
+    vi.stubGlobal("innerWidth", 390);
+    renderWithProviders(<PhoneShell />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    expect(await screen.findByRole("dialog", { name: "Sidebar" })).toBeInTheDocument();
+    await resizeTo(1200);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
+    await resizeTo(390);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 300)));
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Toggle Sidebar" })).toBeInTheDocument();
   });
 
   it("marks Home active at the dashboard root", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active");
   });
 
   it("does not highlight Home when the Aria workspace is active", () => {
@@ -699,7 +774,7 @@ describe("Sidebar (leftnav)", () => {
   it("expands the parent group of the current nested route and marks the child active", () => {
     navState.pathname = "/ui/search-tools";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Search Tools" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Search Tools" })).toHaveAttribute("data-active");
     expect(screen.getByRole("button", { name: "Tools" })).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -730,17 +805,23 @@ describe("Sidebar (leftnav)", () => {
     expect(hrefs.filter((href) => href.startsWith("/ui/")).length).toBeGreaterThan(30);
   });
 
-  it("hides labels but keeps items reachable (icon + link) when collapsed to the rail", () => {
+  it("exposes the sidebar as a complementary landmark", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(within(screen.getByRole("complementary")).getByRole("link", { name: "Virtual Keys" })).toBeInTheDocument();
+  });
+
+  it("expands the rail and opens the group when a group is chosen while collapsed", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} collapsed />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(await screen.findByRole("link", { name: "Search Tools" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps items reachable by name and icon when collapsed to the rail", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} collapsed />);
-    expect(container.querySelector('[data-slot="sidebar"]')).toHaveAttribute("data-collapsed", "true");
-    // The item stays navigable in the icon-only rail: its link still renders with
-    // an icon (asserting the <a> + svg, not the text, so a removed icon would
-    // fail here), while the label is present but CSS-hidden.
-    const label = screen.getByText("Virtual Keys");
-    const link = label.closest("a");
-    expect(link).not.toBeNull();
-    expect(link!.querySelector("svg")).not.toBeNull();
-    expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
+    expect(container.querySelector('[data-slot="sidebar"]')).toHaveAttribute("data-collapsible", "icon");
+    const link = screen.getByRole("link", { name: "Virtual Keys" });
+    expect(link.querySelector("svg")).not.toBeNull();
   });
 
   it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
@@ -754,11 +835,17 @@ describe("Sidebar (leftnav)", () => {
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });
 
-  it("keeps a readable collapsed-rail tooltip for items whose label carries a badge", () => {
-    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+  it.each([
+    ["Cost Optimization", "/ui/cost-optimization"],
+    ["Projects", "/ui/projects"],
+  ])("titles the collapsed-rail link for %s without its badge text", (name, href) => {
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+    expect(screen.getByTitle(name)).toHaveAttribute("href", href);
+  });
 
-    expect(container.querySelector('a[href*="cost-optimization"]')).toHaveAttribute("title", "Cost Optimization");
-    expect(container.querySelector('a[href*="projects"]')).toHaveAttribute("title", "Projects");
+  it("leaves expanded-rail links untitled", () => {
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    expect(screen.queryByTitle("Cost Optimization")).not.toBeInTheDocument();
   });
 });
 

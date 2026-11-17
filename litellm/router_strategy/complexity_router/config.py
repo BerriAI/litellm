@@ -1667,6 +1667,29 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "idle time for the session's routing decisions rather than total session length"
         ),
     )
+    conversation_header: str | None = Field(
+        default=None,
+        description=(
+            "Request header whose value names the application conversation for session_affinity, "
+            "deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name "
+            "matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. "
+            "A request without a usable value (header missing, empty, or a redacted credential header, and "
+            "any SDK call without proxy request headers) gets no conversation-based reuse from this router and "
+            "never falls back to its session_id. A separately enabled Router-level session_affinity pre-call "
+            "check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. "
+            "Unset keeps the session_id behavior"
+        ),
+    )
+
+    @field_validator("conversation_header")
+    @classmethod
+    def _normalize_conversation_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name: Final = value.strip().lower()
+        if not name:
+            raise ValueError("conversation_header must be a non-empty header name")
+        return name
 
     plugins: list[RoutingPlugin] | None = Field(
         default=None,
