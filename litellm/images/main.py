@@ -834,12 +834,14 @@ def image_variation(
 
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
-_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
     try:
-        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+        return tuple(
+            item for item in _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params) if isinstance(item, str)
+        )
     except ValidationError:
         return ()
 

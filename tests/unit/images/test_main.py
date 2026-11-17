@@ -3,7 +3,7 @@ import base64
 import json
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from queue import SimpleQueue
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -472,9 +472,7 @@ class TestAimlImageGeneration:
                 custom_logger = TestCustomLogger()
                 litellm.logging_callback_manager._reset_all_callbacks()
                 litellm.callbacks = [custom_logger]
-                base_image_generation_call_args = (
-                    self.get_base_image_generation_call_args()
-                )
+                base_image_generation_call_args = self.get_base_image_generation_call_args()
                 litellm.set_verbose = True
                 # Pass dummy api_key so validate_environment passes; HTTP is mocked
                 response = await litellm.aimage_generation(
@@ -491,9 +489,7 @@ class TestAimlImageGeneration:
                 # print("response_cost", response._hidden_params["response_cost"])
 
                 logged_standard_logging_payload = custom_logger.standard_logging_payload
-                print(
-                    "logged_standard_logging_payload", logged_standard_logging_payload
-                )
+                print("logged_standard_logging_payload", logged_standard_logging_payload)
                 assert logged_standard_logging_payload is not None
                 assert logged_standard_logging_payload["response_cost"] is not None
                 assert logged_standard_logging_payload["response_cost"] > 0
@@ -508,9 +504,7 @@ class TestAimlImageGeneration:
                     response_dict["usage"] = dict(response_dict["usage"])
                 print("response usage=", response_dict.get("usage"))
 
-                assert (
-                    response.data is not None
-                )  # type guard for iteration (base fails here if None)
+                assert response.data is not None  # type guard for iteration (base fails here if None)
                 for d in response.data:
                     assert isinstance(d, Image)
                     print("data in response.data", d)
@@ -842,15 +836,23 @@ async def test_custom_handler_receives_the_callers_openai_image_edit_params(
 
 
 @pytest.mark.parametrize("operation", ["generation", "edit"])
+@pytest.mark.parametrize(
+    "additional_drop_params",
+    [
+        pytest.param(["response_format", "user", "studio_preset"], id="list"),
+        pytest.param(("response_format", "user", "studio_preset"), id="tuple"),
+        pytest.param(["response_format", "user", "studio_preset", None, 1], id="list-with-non-string-entries"),
+    ],
+)
 def test_custom_image_handler_is_not_handed_additional_drop_params(
-    custom_image_params: SimpleQueue[dict[str, object]], operation: str
+    custom_image_params: SimpleQueue[dict[str, object]], operation: str, additional_drop_params: Sequence[object]
 ) -> None:
     request: Final = {
         "model": "studio/flare-1",
         "prompt": "draw",
         **_OPENAI_IMAGE_PARAMS,
         "studio_preset": "matte",
-        "additional_drop_params": ["response_format", "user", "studio_preset"],
+        "additional_drop_params": additional_drop_params,
     }
 
     if operation == "edit":
