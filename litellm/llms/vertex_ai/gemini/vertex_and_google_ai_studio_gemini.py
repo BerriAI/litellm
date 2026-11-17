@@ -264,6 +264,14 @@ def _served_model_name(model_version: object) -> str | None:
     return model_version.split("@", 1)[0]
 
 
+def _requests_audio_mime_type(optional_params: Mapping[str, object]) -> bool:
+    match optional_params.get("responseFormat"):
+        case {"audio": {"mimeType": str()}}:
+            return True
+        case _:
+            return False
+
+
 _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
     {
         "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
@@ -2344,7 +2352,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     )
         return images
 
-    def _extract_audio_response_from_parts(self, parts: list[HttpxPartType]) -> ChatCompletionAudioResponse | None:
+    def _extract_audio_response_from_parts(
+        self, parts: list[HttpxPartType], keeps_requested_audio_format: bool
+    ) -> ChatCompletionAudioResponse | None:
         """Extract audio response from parts if present"""
         for part in parts:
             if "text" in part:
@@ -2360,7 +2370,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                                 transcript = ""  # Gemini doesn't provide transcript
 
                                 return ChatCompletionAudioResponse(
-                                    data=as_raw_pcm16_base64(media_type, audio_data),
+                                    data=audio_data
+                                    if keeps_requested_audio_format
+                                    else as_raw_pcm16_base64(media_type, audio_data),
                                     expires_at=expires_at,
                                     transcript=transcript,
                                 )
@@ -2377,7 +2389,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     transcript = ""  # Gemini doesn't provide transcript
 
                     return ChatCompletionAudioResponse(
-                        data=as_raw_pcm16_base64(mime_type, data), expires_at=expires_at, transcript=transcript
+                        data=data if keeps_requested_audio_format else as_raw_pcm16_base64(mime_type, data),
+                        expires_at=expires_at,
+                        transcript=transcript,
                     )
 
         return None
@@ -3154,7 +3168,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ) = VertexGeminiConfig().get_assistant_content_message(parts=candidate["content"]["parts"])
 
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                    parts=candidate["content"]["parts"],
+                    keeps_requested_audio_format=_requests_audio_mime_type(
+                        cast(Mapping[str, object], standard_optional_params)  # cast-ok: untyped shared signature
+                    ),
                 )
                 image_response = VertexGeminiConfig()._extract_image_response_from_parts(
                     parts=candidate["content"]["parts"]
