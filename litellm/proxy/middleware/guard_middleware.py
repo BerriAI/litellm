@@ -48,6 +48,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.proxy.auth.special_headers import SpecialHeaders
 
 GUARD_ENABLED_ENV: Final = "LITELLM_GUARD_ENABLED"
 GUARD_EXCLUDED_PATHS_ENV: Final = "LITELLM_GUARD_EXCLUDED_PATHS"
@@ -79,6 +80,23 @@ def guard_enabled() -> bool:
     """Read lazily per request so YAML ``environment_variables`` entries are
     seen (the ``LITELLM_ENABLE_HSTS`` pattern)."""
     return _env_bool(GUARD_ENABLED_ENV)
+
+
+def _credential_header_names() -> frozenset[str]:
+    """Header names guard must redact from its log lines.
+
+    Guard's built-in redaction covers only authorization, proxy-authorization,
+    cookie and x-api-key, yet its blocked-request warnings print the request
+    headers. The proxy also accepts a key in api-key, x-goog-api-key,
+    ocp-apim-subscription-key, x-litellm-api-key and the configured
+    ``litellm_key_header_name``. Read when the config is built (first request),
+    after the YAML settings are loaded.
+    """
+    from litellm.proxy import proxy_server
+
+    configured: Final = proxy_server.general_settings_view().get("litellm_key_header_name")
+    custom: Final = frozenset({configured.lower()}) if isinstance(configured, str) else frozenset[str]()
+    return SpecialHeaders.litellm_credential_header_names() | custom
 
 
 def _build_guard_config() -> object:
@@ -129,6 +147,7 @@ def _build_guard_config() -> object:
         "trusted_proxy_depth": _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1),
         "exclude_paths": list(_csv(_env_str(GUARD_EXCLUDED_PATHS_ENV)) or DEFAULT_EXCLUDED_PATHS),
         "ipinfo_token": ipinfo_token_env or None,
+        "log_sensitive_headers": _credential_header_names(),
     }
     return security_config_cls(**kwargs)
 

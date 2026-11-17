@@ -152,6 +152,7 @@ class _StubSecurityMiddleware:
     """Pass-through stand-in recording how the wrapper wired it."""
 
     instances: Final = []
+    seen_paths: Final = []
 
     def __init__(self, app, config=None):
         self.app: Final = app
@@ -159,7 +160,22 @@ class _StubSecurityMiddleware:
         _StubSecurityMiddleware.instances.append(self)
 
     async def __call__(self, scope, receive, send):
+        _StubSecurityMiddleware.seen_paths.append(scope["path"])
         await self.app(scope, receive, send)
+
+
+def _install_stub_guard(monkeypatch):
+    """Stub guard module so the wiring is exercised where the optional
+    package is absent."""
+    import types
+
+    stub_module: Final = types.ModuleType("guard")
+    stub_module.SecurityConfig = _StubSecurityConfig
+    stub_module.SecurityMiddleware = _StubSecurityMiddleware
+    monkeypatch.setitem(sys.modules, "guard", stub_module)
+    _StubSecurityMiddleware.instances.clear()
+    _StubSecurityMiddleware.seen_paths.clear()
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
 
 
 def test_enabled_wires_guard_with_env_config(monkeypatch):
@@ -275,3 +291,19 @@ def test_redis_stays_off_without_config(monkeypatch):
     config: Final = _build_guard_config()
     assert config.enable_redis is False
     assert config.redis_url is None
+
+
+def test_credential_headers_are_redacted_from_guard_logs(monkeypatch):
+    """Guard's blocked-request warnings print request headers; its default
+    redaction only knows authorization, proxy-authorization, cookie and
+    x-api-key, so every other header the proxy accepts as a key (and the
+    configured custom key header) must be added."""
+    from litellm.proxy import proxy_server
+    from litellm.types.proxy.auth.special_headers import SpecialHeaders
+
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Custom-Key"})
+    assert _client(_unique_ip()).get("/ping").status_code == 200
+    redacted: Final = _StubSecurityMiddleware.instances[-1].config.kwargs["log_sensitive_headers"]
+    assert SpecialHeaders.litellm_credential_header_names() <= redacted
+    assert "x-custom-key" in redacted
