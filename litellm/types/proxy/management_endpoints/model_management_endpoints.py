@@ -53,7 +53,7 @@ class UpdateUsefulLinksRequest(LiteLLMBaseModel):
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
     useful_links: dict[str, str | dict[str, object]]
-    previous_useful_links: dict[str, str | dict[str, object]] | None = Field(
+    previous_useful_links: Mapping[str, str | Mapping[str, object]] | None = Field(
         default=None,
         description=(
             "The useful links the caller started from. When set, only the links added, changed or removed relative "
