@@ -122,6 +122,9 @@ def test_patch_rename_is_rejected_and_model_keeps_working(gateway: Gateway) -> N
             "PATCH", f"/credentials/{name}", {"credential_name": name, "credential_info": {"description": "y"}}
         )
         assert same_name.status_code == 200, same_name.text
+        assert read_rows(
+            'SELECT credential_info FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
+        ) == [{"credential_info": {"custom_llm_provider": "openai", "description": "y"}}]
         assert _served_credential(gateway, name)["credential_info"] == {
             "custom_llm_provider": "openai",
             "description": "y",

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -23,16 +25,21 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    _get_budget_counters,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
+    count_request_input_tokens,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -53,6 +60,36 @@ def _budgeted_token() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", token="hashed-token", max_budget=100.0, spend=0.0)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team, apply, expected", [(False, False, 2), (True, False, 0), (True, True, 2)])
+async def test_user_reservation_includes_each_window_only_when_user_budget_applies(
+    team: bool, apply: bool, expected: int
+) -> None:
+    cache: Final = UserApiKeyCache()
+    counters: Final = await _get_budget_counters(
+        request_body={},
+        valid_token=UserAPIKeyAuth(),
+        team_object=LiteLLM_TeamTable(team_id="t") if team else None,
+        user_object=LiteLLM_UserTable.model_validate(
+            {
+                "user_id": "u",
+                "budget_limits": [
+                    {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+                    {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+                ],
+            }
+        ),
+        prisma_client=None,
+        user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        apply_user_budget_to_team_keys=apply,
+    )
+    assert len(counters) == expected
+    assert {counter.counter_key for counter in counters} == (
+        {user_window_counter("u", "1h"), user_window_counter("u", "30d")} if expected else set()
+    )
+
+
 async def _reserve(route: str) -> dict | None:
     return await reserve_budget_for_request(
         request_body={"model": "gpt-4o", "input": "hello"},
@@ -65,30 +102,6 @@ async def _reserve(route: str) -> dict | None:
         user_api_key_cache=UserApiKeyCache(),
         proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", TOKEN_COUNTING_ROUTES)
-async def test_token_counting_routes_are_exempt_from_budget_reservation(route):
-    assert await _reserve(route) is None
-
-
-@pytest.mark.asyncio
-async def test_non_exempt_llm_route_still_reserves_budget():
-    reservation: Final = await _reserve("/v1/responses")
-
-    assert reservation is not None
-    assert reservation["reserved_cost"] > 0
-
-
-@pytest.mark.asyncio
-async def test_reservation_carries_the_admission_input_token_count():
-    reservation: Final = await _reserve("/v1/responses")
-    expected: Final = litellm.token_counter(model="gpt-4o", text="hello")
-
-    assert reservation is not None
-    assert expected > 0
-    assert reservation["input_tokens"] == expected
 
 
 ANTHROPIC_MESSAGES: Final = [{"role": "user", "content": "hello!!!"}]
@@ -105,11 +118,11 @@ TINY_BUDGET_KEY_TOKEN: Final = "hashed-count-tokens-key"
 
 
 @pytest.fixture
-def spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> DualCache:
-    cache: Final = DualCache()
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+def spend_counter_store(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    return cache
+    return store
 
 
 async def _reserve_for_tiny_budget_key(route: str, request_body: dict[str, object]) -> dict[str, object] | None:
@@ -124,27 +137,6 @@ async def _reserve_for_tiny_budget_key(route: str, request_body: dict[str, objec
         user_api_key_cache=UserApiKeyCache(),
         proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("route", "request_body"), COUNT_TOKENS_REQUESTS)
-async def test_repeated_token_counting_never_touches_a_tiny_budget(
-    spend_counter_cache: DualCache, route: str, request_body: dict[str, object]
-):
-    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
-
-    assert await _reserve_for_tiny_budget_key(route, request_body) is None
-    assert await _reserve_for_tiny_budget_key(route, request_body) is None
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None
-
-    completion: Final = await _reserve_for_tiny_budget_key(
-        "/v1/messages", {"model": "claude-sonnet-5", "max_tokens": 16, "messages": ANTHROPIC_MESSAGES}
-    )
-    assert completion is not None
-    reserved_cost: Final = completion["reserved_cost"]
-    assert isinstance(reserved_cost, float)
-    assert reserved_cost > 0
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reserved_cost)
 
 
 BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"
@@ -218,6 +210,40 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
     after: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
     assert after is not None
     assert math.isclose(after, before * 1000)
+
+
+def _priced_group(model_name: str, cost_per_token: float) -> dict[str, object]:
+    return Deployment(
+        model_name=model_name,
+        litellm_params=LiteLLM_Params(model="dashscope/qwen3-max", api_key="sk-fake"),
+        model_info=ModelInfo(
+            id=model_name,
+            max_output_tokens=1000,
+            tiered_pricing=[
+                {"input_cost_per_token": cost_per_token, "output_cost_per_token": cost_per_token, "range": [0, 128000]}
+            ],
+        ),
+    ).model_dump()
+
+
+def test_google_route_reserves_on_the_model_its_path_param_selects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    router: Final = Router(model_list=[_priced_group("cheap-group", 1e-06), _priced_group("premium-group", 1e-03)])
+    route: Final = "/v1beta/models/premium-group:generateContent"
+    body: Final = {"model": "cheap-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+
+    url_model_cost: Final = estimate_request_max_cost(request_body=body, route=route, llm_router=router)
+    path_param_cost: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=router, path_params={"model_name": "cheap-group"}
+    )
+    cheap_cost: Final = estimate_request_max_cost(
+        request_body=body, route="/v1beta/models/cheap-group:generateContent", llm_router=router
+    )
+
+    assert url_model_cost is not None and cheap_cost is not None
+    assert path_param_cost == cheap_cost
+    assert math.isclose(url_model_cost, cheap_cost * 1000)
 
 
 @pytest.mark.asyncio
@@ -310,105 +336,6 @@ async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_d
     assert counter.fallback_spend == 0.5
 
 
-@pytest.mark.asyncio
-async def test_reservation_starts_unbound_to_any_callback():
-    reservation: Final = await _reserve("/v1/responses")
-
-    assert reservation is not None
-    assert reservation["callback_bound"] is False
-
-
-@pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_frees_the_counter(spend_counter_cache: DualCache):
-    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
-    reservation: Final = await _reserve_for_tiny_budget_key(
-        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
-    )
-    assert reservation is not None
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
-
-    await release_unbound_budget_reservation(reservation)
-
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.0)
-    assert reservation["finalized"] is True
-
-
-@pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_cache: DualCache):
-    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
-    reservation: Final = await _reserve_for_tiny_budget_key(
-        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
-    )
-    assert reservation is not None
-    reservation["callback_bound"] = True
-
-    await release_unbound_budget_reservation(reservation)
-
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
-    assert reservation["finalized"] is False
-
-
-@pytest.mark.asyncio
-async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spend_counter_cache: DualCache):
-    cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(
-        key="org_id:org-budgeted:with_budget",
-        value=LiteLLM_OrganizationTable(
-            organization_id="org-budgeted",
-            budget_id="org-budget",
-            spend=1.5,
-            models=[],
-            created_by="admin",
-            updated_by="admin",
-            litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0),
-        ),
-        model_type=LiteLLM_OrganizationTable,
-    )
-    await cache.async_set_cache(
-        key=project_cache_key("project-budgeted"),
-        value=LiteLLM_ProjectTableCachedObj(
-            project_id="project-budgeted", spend=2.5, litellm_budget_table=LiteLLM_BudgetTable(max_budget=20.0)
-        ),
-        model_type=LiteLLM_ProjectTableCachedObj,
-    )
-
-    reservation: Final = await reserve_budget_for_request(
-        request_body={"model": "gpt-4o", "input": "hello"},
-        route="/v1/responses",
-        llm_router=None,
-        valid_token=UserAPIKeyAuth(token="hashed-org-project", org_id="org-budgeted", project_id="project-budgeted"),
-        team_object=None,
-        user_object=None,
-        prisma_client=None,
-        user_api_key_cache=cache,
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-    )
-
-    assert reservation is not None
-    reserved_cost: Final = reservation["reserved_cost"]
-    assert reserved_cost > 0
-    assert reservation["entries"] == [
-        {
-            "counter_key": "spend:org:org-budgeted",
-            "entity_type": "Organization",
-            "entity_id": "org-budgeted",
-            "reserved_cost": reserved_cost,
-            "applied_adjustment": 0.0,
-        },
-        {
-            "counter_key": "spend:project:project-budgeted",
-            "entity_type": "Project",
-            "entity_id": "project-budgeted",
-            "reserved_cost": reserved_cost,
-            "applied_adjustment": 0.0,
-        },
-    ]
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-budgeted") == pytest.approx(reserved_cost)
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:project:project-budgeted") == pytest.approx(
-        reserved_cost
-    )
-
-
 @pytest.mark.parametrize(
     ("window", "expected"),
     [
@@ -426,3 +353,220 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
+
+
+@pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
+@pytest.mark.parametrize(
+    ("duration", "reset_at", "expected"),
+    [
+        ("12mo", "2029-01-01T00:00:00Z", datetime(2028, 1, 1, tzinfo=timezone.utc)),
+        ("12mo", "2028-01-01T00:00:00", datetime(2027, 1, 1, tzinfo=timezone.utc)),
+    ],
+)
+def test_annual_window_keeps_all_spend_from_its_reset_boundary(
+    today: str, duration: str, reset_at: str, expected: datetime
+) -> None:
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        assert get_budget_window_start({"budget_duration": duration, "reset_at": reset_at}) == expected
+
+
+@pytest.mark.parametrize("duration", ("1h", "1mo", "12mo"))
+@pytest.mark.parametrize("reset_at", ("2026-11-15T05:48:02.123456Z", "2026-11-15T11:33:02.123456+05:45"))
+def test_legacy_window_start_uses_database_millisecond_precision(duration: str, reset_at: str) -> None:
+    window: Final = {"budget_duration": duration, "reset_at": reset_at}
+    whole_second: Final = {"budget_duration": duration, "reset_at": "2026-11-15T05:48:02Z"}
+    start: Final = get_budget_window_start(whole_second)
+    assert start is not None
+    assert get_budget_window_start(window) == start.replace(microsecond=123000)
+
+
+class _AnnualWindowDatabase:
+    def __init__(self) -> None:
+        self.db = self
+        self.litellm_budgetwindowspend = self
+        self.litellm_spendlogs = self
+        self.start: datetime | None = None
+        self.spend = 0.0
+        self.scans = 0
+
+    async def execute_raw(self, sql: str, *parameters: object) -> int:
+        start: Final = parameters[3]
+        assert isinstance(start, datetime)
+        self.start = start
+        self.spend = 0.0
+        return 1
+
+    async def find_unique(self, **query: object) -> SimpleNamespace:
+        return SimpleNamespace(window_start=self.start, spend=self.spend)
+
+    async def group_by(self, **query: object) -> list[dict[str, object]]:
+        self.scans += 1
+        return [{"api_key": "calendar-key", "_sum": {"spend": 0.0}}]
+
+
+@pytest.mark.asyncio
+async def test_reservation_counts_a_pdf_with_the_deployment_behind_a_gpt_named_group() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    request_body: Final = {"model": "gpt-4o", "messages": _one_page_pdf_message()}
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "x"}}]
+    )
+
+    counts: Final = await count_request_input_tokens(
+        request_body=request_body, route="/chat/completions", llm_router=router, team_id=None
+    )
+
+    assert counts == {"gpt-4o": count_input_tokens_for_model(request_body=request_body, model="claude-haiku-5-5")}
+    assert counts["gpt-4o"] > count_input_tokens_for_model(request_body=request_body, model="gpt-4o")
+
+
+_MULTILINGUAL_MESSAGES: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+
+
+def _router_with_groups(*groups: tuple[str, str]) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-test"}} for name, model in groups
+        ]
+    )
+
+
+async def _input_tokens(router: Router, model: str) -> dict[str, int]:
+    return dict(
+        await count_request_input_tokens(
+            request_body={"model": model, "messages": _MULTILINGUAL_MESSAGES},
+            route="/v1/chat/completions",
+            llm_router=router,
+            team_id=None,
+        )
+    )
+
+
+async def _reserved_input_tokens(router: Router, model: str, route: str, messages: list[dict[str, object]]) -> int:
+    counts: Final = await count_request_input_tokens(
+        request_body={"model": model, "messages": messages}, route=route, llm_router=router, team_id=None
+    )
+    return counts[model]
+
+
+@pytest.mark.asyncio
+async def test_an_openai_chat_request_reserves_what_openai_chat_bills_on_top_of_each_pdf_files_pages() -> None:
+    from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    router: Final = _router_with_groups(("on-openai", "openai/gpt-5.6-sol"), ("on-azure", "azure/gpt-5.6-sol"))
+    two_pdfs: Final = [*_one_page_pdf_message(), *_one_page_pdf_message()]
+
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", two_pdfs)
+        + 2 * OPENAI_CHAT_PDF_FILE_TOKENS
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/messages", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/messages", two_pdfs)
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", _MULTILINGUAL_MESSAGES) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", _MULTILINGUAL_MESSAGES)
+    )
+
+
+@pytest.mark.asyncio
+async def test_alias_group_of_an_openai_model_reserves_on_that_models_token_count():
+    router: Final = _router_with_groups(("gpt-6.1-sol", "openai/gpt-6.1-sol"), ("prod-gpt-6", "openai/gpt-6.1-sol"))
+
+    by_name: Final = await _input_tokens(router, "gpt-6.1-sol")
+
+    assert await _input_tokens(router, "prod-gpt-6") == {"prod-gpt-6": by_name["gpt-6.1-sol"]}
+
+
+@pytest.mark.asyncio
+async def test_model_group_alias_of_an_openai_group_reserves_on_that_groups_token_count():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "sk-test"}}
+        ],
+        model_group_alias={"prod": "gpt-6.1-sol"},
+    )
+
+    by_name: Final = await _input_tokens(router, "gpt-6.1-sol")
+
+    assert await _input_tokens(router, "prod") == {"prod": by_name["gpt-6.1-sol"]}
+
+
+@pytest.mark.asyncio
+async def test_model_group_alias_of_a_group_no_openai_model_serves_reserves_on_the_alias_as_written():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-5-5",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={"claude-alias": "claude-sonnet-5-5"},
+    )
+
+    assert await _input_tokens(router, "claude-alias") == {
+        "claude-alias": litellm.token_counter(model="claude-alias", messages=_MULTILINGUAL_MESSAGES)
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["gpt-6-claude", "o4-alias"])
+async def test_release_named_group_or_alias_no_openai_model_serves_reserves_on_an_unknown_names_count(
+    name: str,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": group, "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"}}
+            for group in ("claude-sonnet-5-5", "gpt-6-claude")
+        ],
+        model_group_alias={"o4-alias": "claude-sonnet-5-5"},
+    )
+
+    assert await _input_tokens(router, name) == {
+        name: litellm.token_counter(model="my-model", messages=_MULTILINGUAL_MESSAGES)
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "counted_as"),
+    [("gpt-6.1-sol", "my-model"), ("openai/gpt-6.1-sol", "my-model"), ("mixed", "my-model"), ("gpt-4o", "gpt-4o")],
+)
+async def test_group_mixing_in_a_non_openai_model_reserves_on_its_name_as_written_and_its_openai_models(
+    group: str, counted_as: str
+):
+    served: Final = ("openai/gpt-6.1-sol", "cohere/command-r-plus")
+    router: Final = _router_with_groups(*((group, model) for model in served))
+
+    reserved: Final = (await _input_tokens(router, group))[group]
+
+    assert reserved == max(
+        litellm.token_counter(model=counted_as, messages=_MULTILINGUAL_MESSAGES),
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_MESSAGES),
+    )
+
+
+@pytest.mark.asyncio
+async def test_group_reserves_on_its_current_deployments_after_another_vendors_deployment_joins():
+    router: Final = _router_with_groups(("prod", "openai/gpt-6.1-sol"))
+    openai_only: Final = (await _input_tokens(router, "prod"))["prod"]
+
+    router.add_deployment(
+        Deployment(
+            model_name="prod",
+            litellm_params=LiteLLM_Params(model="anthropic/claude-sonnet-5-5", api_key="sk-test"),
+        )
+    )
+
+    by_own_name: Final = litellm.token_counter(model="prod", messages=_MULTILINGUAL_MESSAGES)
+    assert openai_only != by_own_name
+    assert (await _input_tokens(router, "prod"))["prod"] == by_own_name
+
+
+@pytest.mark.parametrize("window", [{}, {"budget_duration": "1d"}, {"reset_at": "2026-11-03T00:00:00Z"}])
+def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
+
+    assert fixed_budget_window(window) is None

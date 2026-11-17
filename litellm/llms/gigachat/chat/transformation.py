@@ -17,6 +17,8 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
@@ -38,6 +40,15 @@ else:
 
 _EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
 _JSON_VALUE: Final = TypeAdapter(object)
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_data(part: Mapping[str, object]) -> str | None:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            return file_data
+        case _:
+            return None
 
 
 def is_valid_json(value: str) -> bool:
@@ -160,7 +171,10 @@ class GigaChatConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:  # mutable-ok: base class contract returns dict
         """Map OpenAI parameters to GigaChat parameters."""
-        for param, value in non_default_params.items():
+        request_params: Final = tool_params_without_hosted_mcp(
+            dict(non_default_params), model=model, route="gigachat", drop_params=drop_params
+        )
+        for param, value in request_params.items():
             if param == "stream":
                 optional_params["stream"] = value
             elif param == "temperature":
@@ -295,7 +309,7 @@ class GigaChatConfig(BaseConfig):
 
     def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[object]]:
         """
-        Extract text and image attachments from a multimodal message content list.
+        Extract text, image and file attachments from a multimodal message content list.
 
         Args:
             content: List of content parts (OpenAI multimodal format)
@@ -320,6 +334,10 @@ class GigaChatConfig(BaseConfig):
                         file_id = self._upload_image(upload_url)
                         if file_id:
                             attachments.append(file_id)
+                elif (file_data := _file_part_data(_CONTENT_PART.validate_python(part))) and (
+                    uploaded_file_id := self._upload_image(file_data)
+                ):
+                    attachments.append(uploaded_file_id)
         text: Final = "\n".join(texts) if texts else ""
         return text, attachments
 
@@ -435,36 +453,37 @@ class GigaChatConfig(BaseConfig):
         choices: Final[list[Choices]] = []  # mutable-ok: accumulator for building response choices
         for choice in response_json.get("choices", []):
             message_data = choice.get("message", {})
-            finish_reason = choice.get("finish_reason", "stop")
+            finish_reason = _JSON_VALUE.validate_python(choice.get("finish_reason", "stop"))
 
-            if finish_reason == "function_call" and message_data.get("function_call"):
-                func_call = message_data["function_call"]
+            function_call = (
+                decoded_json_object(_JSON_VALUE.validate_python(message_data)).get("function_call")
+                if finish_reason == "function_call"
+                else None
+            )
+            if function_call:
+                func_call = decoded_json_object(function_call)
                 args = func_call.get("arguments", {})
+                args_mapping = as_str_mapping(args)
 
                 if is_structured_output:
-                    if isinstance(args, dict):
-                        content = json.dumps(args, ensure_ascii=False)
-                    else:
-                        content = str(args)
-                    message_data["content"] = content
-                    message_data.pop("function_call", None)
-                    message_data.pop("functions_state_id", None)
+                    message_data["content"] = (
+                        json.dumps(args_mapping, ensure_ascii=False) if args_mapping is not None else str(args)
+                    )
                     finish_reason = "stop"
                 else:
-                    if isinstance(args, dict):
-                        args = json.dumps(args, ensure_ascii=False)
+                    arguments = json.dumps(args_mapping, ensure_ascii=False) if args_mapping is not None else args
                     message_data["tool_calls"] = [
                         {
                             "id": f"call_{uuid.uuid4().hex[:24]}",
                             "type": "function",
                             "function": {
                                 "name": func_call.get("name", ""),
-                                "arguments": args,
+                                "arguments": arguments,
                             },
                         }
                     ]
-                    message_data.pop("function_call", None)
                     finish_reason = "tool_calls"
+                message_data.pop("function_call", None)
 
             message_data.pop("functions_state_id", None)
 

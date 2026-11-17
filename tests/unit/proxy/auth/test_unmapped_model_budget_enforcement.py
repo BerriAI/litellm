@@ -153,7 +153,7 @@ class TestUnmappedModelBudgetEnforcement:
         Regression test for the stale-cache bug surfaced in PR review:
         upgrading an explicitly free deployment to paid via ``upsert_deployment``
         (same deployment count, same router instance) must invalidate the
-        cached ``_is_model_cost_zero=True`` answer so budget checks resume
+        cached zero-cost answer so budget checks resume
         immediately — not after the next proxy restart.
         """
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -178,7 +178,6 @@ class TestUnmappedModelBudgetEnforcement:
         )
         # Warm the cache as zero-cost.
         assert is_model_cost_zero(model="ramping-model", llm_router=router) is True
-        assert router._zero_cost_cache.get("ramping-model") is True
 
         # In-place pricing update: same deployment count, same router id,
         # same model name. The pre-fix cache key was
@@ -200,9 +199,7 @@ class TestUnmappedModelBudgetEnforcement:
             )
         )
 
-        # Cache must have been cleared by ``_invalidate_model_group_info_cache``.
-        assert router._zero_cost_cache == {}
-        # Subsequent call sees the new pricing and enforces budget.
+        # The next call sees the new pricing and enforces budget.
         assert is_model_cost_zero(model="ramping-model", llm_router=router) is False
 
     def test_strategy_router_alias_with_zero_pricing_enforces_budget(self):
@@ -759,15 +756,16 @@ class TestUnmappedModelBudgetEnforcement:
         from litellm.types.router import ModelGroupInfo
 
         mock_router = MagicMock(spec=Router)
-        mock_router.model_list = []
-        mock_router.get_model_group_info.return_value = ModelGroupInfo(
+        registry = mock_router.registry.return_value
+        registry.all.return_value = []
+        registry.group.return_value = ModelGroupInfo(
             model_group="paid-model",
             providers=["openai"],
             input_cost_per_token=0.001,
             output_cost_per_token=0.002,
         )
-        # Strip the attribute so the helper falls back to the no-cache path.
-        del mock_router._zero_cost_cache
+        # No zero-cost cache exposed, so the helper falls back to the no-cache path.
+        registry.zero_cost.return_value = None
 
         result = is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False

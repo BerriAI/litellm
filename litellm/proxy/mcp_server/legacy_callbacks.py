@@ -17,6 +17,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy.mcp_server.scope_challenge import (
+    LISTING_METHODS,
     OAuthScopeResponse,
     is_tool_call_request,
     scope_response_from_request,
@@ -111,6 +112,12 @@ def create_elicitation_callback(timeout: float | None = None) -> ElicitationCall
 def get_scope_response() -> OAuthScopeResponse | None:
     context: Final = get_active_mcp_request_ctx()
     return scope_response_from_request(context.request) if context is not None else None
+
+
+def get_listing_scope_response() -> OAuthScopeResponse | None:
+    """The response gate of the active request, when the SDK parsed that request as a listing."""
+    context: Final = get_active_mcp_request_ctx()
+    return get_scope_response() if context is not None and context.method in LISTING_METHODS else None
 
 
 async def record_upstream_tool_authorization(response: httpx2.Response, *, pending: OAuthScopeResponse | None) -> None:

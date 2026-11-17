@@ -1,16 +1,21 @@
+import json
 import math
+import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit, urlunsplit
 
 import httpx
 
 import litellm
-from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL
+from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL, DEEPGRAM_SPEAK_DEFAULT_MODEL
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.passthrough_endpoints.pass_through_endpoints import WebSocketSessionUsage
 from litellm.types.utils import LlmProviders
+from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
 
 _WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws", "wss": "wss", "ws": "ws"})
 DEEPGRAM_LISTEN_CALLBACK_PARAMS: Final = frozenset({"callback", "callback_method"})
@@ -199,3 +204,71 @@ def deepgram_listen_transcript(websocket_messages: Sequence[Mapping[str, object]
         if frame.get("type") == "Results"
         if (transcript := _final_transcript(frame)) is not None
     )
+
+
+_AURA_GENERATION: Final = re.compile(r"aura(?:-\d+)?(?=-[a-z])")
+
+
+def deepgram_speak_websocket_target(api_base: str | None, query_string: str) -> str:
+    speak_url: Final = urlsplit(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, "speak"))
+    scheme: Final = _WEBSOCKET_SCHEMES.get(speak_url.scheme, speak_url.scheme)
+    params: Final = _first_occurrences(query_string)
+    query: Final = params if params.get("model") else params.remove("model").add("model", DEEPGRAM_SPEAK_DEFAULT_MODEL)
+    return urlunsplit((scheme, speak_url.netloc, speak_url.path, str(query), ""))
+
+
+def deepgram_speak_model(upstream_url: str) -> str:
+    models: Final = parse_qs(urlparse(upstream_url).query).get("model")
+    return models[0] if models else DEEPGRAM_SPEAK_DEFAULT_MODEL
+
+
+def deepgram_speak_requested_model(query_string: str) -> str:
+    """Read off the upstream target, so the voice a key is authorized for is the voice Deepgram receives"""
+    return deepgram_speak_model(deepgram_speak_websocket_target(None, query_string))
+
+
+def deepgram_speak_registry_key(upstream_url: str) -> str:
+    """Deepgram bills every voice of an Aura generation at one rate, so ``aura-2-thalia-en`` is priced at the
+    ``deepgram/aura-2`` row"""
+    model: Final = deepgram_speak_model(upstream_url)
+    generation: Final = _AURA_GENERATION.match(model)
+    return f"{LlmProviders.DEEPGRAM.value}/{generation.group() if generation else model}"
+
+
+def deepgram_speak_character_rate(upstream_url: str) -> float | None:
+    """Only an exact registry hit counts, so a voice is never billed at a neighbouring row's rate"""
+    registry_key: Final = deepgram_speak_registry_key(upstream_url)
+    model_info: Final = lookup_model_info_for_registration(registry_key, LlmProviders.DEEPGRAM.value)
+    if isinstance(model_info, ModelInfoLookupMiss) or model_info["key"] != registry_key:
+        return None
+    return model_info.get("input_cost_per_character")
+
+
+@dataclass(frozen=True, slots=True)
+class DeepgramSpeakMeter:
+    """Holds the rate checked when the socket opened, so a cost-map reload mid-session can't change or drop the price"""
+
+    upstream_url: str
+    character_rate: float
+
+    def measure(self, client_text: str) -> int:
+        """Counts a Speak message's text as it is sent. Deepgram also speaks, and bills, unflushed text on its own (a
+        long buffer, Close, a close frame), so counting only flushed text would let a client get audio free, while
+        counting on send can only over-bill text Deepgram discards, such as a Clear or an oversized Speak. Never
+        raises, so a malformed frame can't end the session"""
+        try:
+            message: Final[object] = json.loads(client_text)
+        except (ValueError, RecursionError):
+            return 0
+        match message:
+            case {"type": "Speak", "text": str() as text}:
+                return len(text)
+            case _:
+                return 0
+
+    def price(self, total: int) -> WebSocketSessionUsage:
+        return WebSocketSessionUsage(
+            model=deepgram_speak_model(self.upstream_url),
+            custom_llm_provider=LlmProviders.DEEPGRAM.value,
+            response_cost=total * self.character_rate,
+        )

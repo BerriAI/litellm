@@ -12,7 +12,8 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import itertools
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from itertools import accumulate, chain, islice, product
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -59,7 +60,7 @@ def _chunk(content: str, finish_reason: str | None = None) -> ModelResponseStrea
 
 
 class _FakeStreamWrapper:
-    def __init__(self, chunks):
+    def __init__(self, chunks: Iterable[ModelResponseStream]) -> None:
         self._chunks = list(chunks)
         self.logging_obj = MagicMock()
 
@@ -80,14 +81,14 @@ class _FakeStreamWrapper:
         return self._chunks.pop(0)
 
 
-def _build_iterator(chunks) -> LiteLLMCompletionStreamingIterator:
+def _build_iterator(chunks, litellm_metadata: dict[str, object] | None = None) -> LiteLLMCompletionStreamingIterator:
     return LiteLLMCompletionStreamingIterator(
         model="claude-haiku-4-5",
         litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
         request_input="What is the weather in San Francisco?",
         responses_api_request={},
         custom_llm_provider="anthropic",
-        litellm_metadata={},
+        litellm_metadata=litellm_metadata or {},
     )
 
 
@@ -355,6 +356,319 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
         )
 
 
+_STREAMED_WEB_FETCH_CALL: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "message_start",
+        "message": {
+            "id": "msg_01Fetch",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+        },
+    },
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Fetch", "name": "web_fetch"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": '{"url": "https://example.com/"}'},
+    },
+    {"type": "content_block_stop", "index": 0},
+)
+_STREAMED_WEB_FETCH_RESULT: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_01Fetch",
+            "content": {"type": "web_fetch_result", "url": "https://example.com/"},
+        },
+    },
+    {"type": "content_block_stop", "index": 1},
+)
+
+
+def _streamed_text_then_weather_call(first_index: int) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": first_index, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": first_index, "delta": {"type": "text_delta", "text": "Fetched."}},
+        {"type": "content_block_stop", "index": first_index},
+        {
+            "type": "content_block_start",
+            "index": first_index + 1,
+            "content_block": {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": first_index + 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+        },
+        {"type": "content_block_stop", "index": first_index + 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 20},
+        },
+    )
+
+
+def _anthropic_web_fetch_stream_events(fetch_finished: bool) -> tuple[dict[str, object], ...]:
+    if fetch_finished:
+        return (*_STREAMED_WEB_FETCH_CALL, *_STREAMED_WEB_FETCH_RESULT, *_streamed_text_then_weather_call(2))
+    return (*_STREAMED_WEB_FETCH_CALL, *_streamed_text_then_weather_call(1))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("fetch_finished", "expected_status", "expected_search_events"),
+    [
+        pytest.param(
+            True,
+            "completed",
+            [
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED,
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ],
+            id="fetch_finished_in_this_turn",
+        ),
+        pytest.param(
+            False,
+            "in_progress",
+            [
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS,
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ],
+            id="fetch_still_waiting_on_its_result",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_streamed_anthropic_web_fetch_is_a_hosted_open_page_call(
+    sync_mode: bool,
+    fetch_finished: bool,
+    expected_status: str,
+    expected_search_events: list[ResponsesAPIStreamEvents],
+) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    chunks: Final = [parser.chunk_parser(event) for event in _anthropic_web_fetch_stream_events(fetch_finished)]
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="Fetch example.com and check the weather in Paris.",
+        responses_api_request={
+            "tools": [
+                {"type": "web_fetch_20250910", "name": "web_fetch"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [
+        (item.id, item.status, item.action.model_dump())
+        for item in completed.response.output
+        if item.type == "web_search_call"
+    ] == [("ws_srvtoolu_01Fetch", expected_status, {"type": "open_page", "url": "https://example.com/"})]
+    assert [
+        event.type
+        for event in events
+        if getattr(event, "item_id", getattr(getattr(event, "item", None), "id", None)) == "ws_srvtoolu_01Fetch"
+    ] == expected_search_events
+    assert [item.name for item in completed.response.output if item.type == "function_call"] == ["get_weather"]
+    assert not any(
+        event.item.name == "web_fetch"
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        and event.item.type == "function_call"
+    )
+
+
+_STREAMED_PENDING_CODE_EXECUTION: Final[tuple[dict[str, object], ...]] = (
+    _STREAMED_WEB_FETCH_CALL[0],
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Bash", "name": "bash_code_execution"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'},
+    },
+    {"type": "content_block_stop", "index": 0},
+    *_streamed_text_then_weather_call(1),
+)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_anthropic_code_execution_is_never_a_client_function_call(sync_mode: bool) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [parser.chunk_parser(event) for event in _STREAMED_PENDING_CODE_EXECUTION]
+        ),
+        request_input="List the files, then check the weather in Paris.",
+        responses_api_request={
+            "tools": [
+                {"type": "code_execution_20250825", "name": "code_execution"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    item_events: Final = [event for event in events if getattr(event, "item", None) is not None]
+    assert {event.item.call_id for event in item_events if event.item.type == "function_call"} == {"toolu_01Weather"}
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [item.call_id for item in completed.response.output if item.type == "function_call"] == ["toolu_01Weather"]
+
+
+def _streamed_anthropic_tool_search(search_arguments: str) -> tuple[dict[str, object], ...]:
+    half: Final = len(search_arguments) // 2
+    return (
+        _STREAMED_WEB_FETCH_CALL[0],
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Searching."}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Search", "name": "tool_search_tool_regex"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": search_arguments[:half]},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": search_arguments[half:]},
+        },
+        {"type": "content_block_stop", "index": 1},
+        *_streamed_text_then_weather_call(2)[3:],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("search_arguments", "expected_status", "expected_arguments"),
+    [
+        pytest.param('{"pattern": "weather"}', "completed", {"pattern": "weather"}, id="arguments_parse"),
+        pytest.param('{"pattern": ', "incomplete", {}, id="arguments_cut_off"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_streamed_anthropic_tool_search_keeps_its_place_before_the_function_call(
+    sync_mode: bool, search_arguments: str, expected_status: str, expected_arguments: dict[str, str]
+) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [parser.chunk_parser(event) for event in _streamed_anthropic_tool_search(search_arguments)]
+        ),
+        request_input="What is the weather in Paris right now?",
+        responses_api_request={
+            "tools": [
+                {"type": "tool_search", "execution": "server"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output: Final = completed.response.output
+    assert [item.type for item in output] == ["message", "tool_search_call", "function_call"]
+    assert (output[1].status, output[1].arguments) == (expected_status, expected_arguments)
+    search_item_events: Final = [
+        event for event in events if getattr(getattr(event, "item", None), "type", None) == "tool_search_call"
+    ]
+    assert [(event.type, event.output_index) for event in search_item_events] == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 1),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 1),
+    ]
+
+
+_STREAMED_PAUSED_WEB_SEARCH: Final[tuple[dict[str, object], ...]] = (
+    _STREAMED_WEB_FETCH_CALL[0],
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": '{"query": "next city"}'},
+    },
+    {"type": "content_block_stop", "index": 0},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "pause_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 5},
+    },
+)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_paused_anthropic_web_search_lists_only_the_unrun_search(sync_mode: bool) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [parser.chunk_parser(event) for event in _STREAMED_PAUSED_WEB_SEARCH]
+        ),
+        request_input="Find the next city.",
+        responses_api_request={"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [(item.type, item.status, item.action.query) for item in completed.response.output] == [
+        ("web_search_call", "in_progress", "next city")
+    ]
+    assert not any(_is_message_item(event) for event in events)
+
+
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
@@ -476,7 +790,6 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt.output_index == 0
-    assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Collect all remaining delta events from the pending queue by creating empty chunks
     delta_events = []
@@ -510,16 +823,10 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
         assert len(evt.delta) <= 10
         assert evt.item_id == "fc_call_test"
         assert evt.output_index == 0
-        assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Verify all deltas concatenated equal the original arguments
     concatenated = "".join(evt.delta for evt in delta_events)
     assert concatenated == large_arguments
-
-    # Verify sequence numbers are increasing
-    sequence_numbers = [evt.__dict__["sequence_number"] for evt in delta_events]
-    assert sequence_numbers == sorted(sequence_numbers)
-    assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
 
 
 def test_tool_call_delta_without_id_uses_index_mapping():
@@ -702,6 +1009,33 @@ async def test_streaming_events_share_the_chat_completion_response_id():
     decoded = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_ids[0])
     assert decoded["response_id"] == CHAT_COMPLETION_ID
     assert decoded["custom_llm_provider"] == "anthropic"
+
+
+class _ClosableStreamWrapper(_FakeStreamWrapper):
+    def __init__(self, chunks: Iterable[ModelResponseStream]) -> None:
+        super().__init__(chunks)
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_the_bridged_chat_completion_stream():
+    wrapper: Final = _ClosableStreamWrapper([_chunk("Hello"), _chunk("!", finish_reason="stop")])
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    await iterator.__anext__()
+    await iterator.aclose()
+
+    assert wrapper.closed is True
 
 
 def test_sync_streaming_events_share_the_chat_completion_response_id():
@@ -984,6 +1318,15 @@ def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelR
 def _with_reasoning(chunk: ModelResponseStream, reasoning: str) -> ModelResponseStream:
     choice: Final = chunk.choices[0]
     delta: Final = Delta(**{**choice.delta.model_dump(), "reasoning_content": reasoning})
+    return chunk.model_copy(
+        update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason=choice.finish_reason)]}
+    )
+
+
+def _with_citation(chunk: ModelResponseStream) -> ModelResponseStream:
+    choice: Final = chunk.choices[0]
+    annotations: Final = _annotation_only_chunk().choices[0].delta.annotations
+    delta: Final = Delta(**{**choice.delta.model_dump(), "annotations": annotations})
     return chunk.model_copy(
         update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason=choice.finish_reason)]}
     )
@@ -1431,6 +1774,56 @@ async def test_completed_output_follows_the_streamed_output_indexes(sync_mode: b
     assert [item.id for item in completed.response.output] == [event.item.id for event in added]
 
 
+_REASONING_ITEM_EVENT_TYPES: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+    }
+)
+
+
+def _reasoning_item_ids(events: list[BaseLiteLLMOpenAIResponseObject]) -> set[str]:
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    streamed_items: Final = {
+        event.item.id for event in events if getattr(getattr(event, "item", None), "type", None) == "reasoning"
+    }
+    scoped_events: Final = {
+        event.item_id for event in events if getattr(event, "type", None) in _REASONING_ITEM_EVENT_TYPES
+    }
+    completed_items: Final = {item.id for item in completed.response.output if item.type == "reasoning"}
+    return streamed_items | scoped_events | completed_items
+
+
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [_reasoning_then_text_chunks, _signed_thinking_and_text_in_one_chunk],
+    ids=["reasoning_then_text_chunks", "signed_thinking_and_text_in_one_chunk"],
+)
+@pytest.mark.parametrize(
+    "litellm_metadata, origin",
+    [({"encrypted_content_affinity_enabled": True, "model_info": {"id": "dep-1"}}, "dep-1"), ({}, None)],
+    ids=["affinity-on", "affinity-off"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_item_keeps_one_id_across_bridged_events_and_completed_output(
+    stream_chunks: StreamChunks, litellm_metadata: dict[str, object], origin: str | None, sync_mode: bool
+):
+    events: Final = await _collect_events(_build_iterator(stream_chunks(), litellm_metadata), sync_mode)
+
+    reasoning_ids: Final = _reasoning_item_ids(events)
+    assert len(reasoning_ids) == 1
+    decoded: Final = ResponsesAPIRequestUtils.decode_encrypted_item_id(next(iter(reasoning_ids)))
+    assert (decoded or {}).get("model_id") == origin
+    message_ids: Final = {event.item.id for event in events if _is_message_item(event)}
+    assert message_ids
+    assert [ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id) for item_id in message_ids] == [None]
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_reasoning_only_stream_lists_no_message_item_it_never_announced(sync_mode: bool):
@@ -1662,6 +2055,266 @@ async def test_a_compaction_block_without_its_summary_streams_no_compaction_item
     assert [item["type"] for item in events[-1]["response"]["output"]] == ["message"]
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("batches", [(5,), (2, 3)])
+@pytest.mark.parametrize("with_text", [True, False])
+@pytest.mark.parametrize("reasoning_first", [True, False])
+@pytest.mark.asyncio
+async def test_all_citation_batches_stream_before_message_done(
+    sync_mode: bool, batches: tuple[int, ...], with_text: bool, reasoning_first: bool
+) -> None:
+    annotations: Final = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 0,
+                "end_index": 5,
+                "url": f"https://example.com/{index}",
+                "title": f"Source {index}",
+            },
+        }
+        for index in range(sum(batches))
+    ]
+    citation_chunks: Final = tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        content="!" if with_text else "",
+                        annotations=annotations[end - size : end],
+                    ),
+                    finish_reason="stop" if end == len(annotations) else None,
+                )
+            ],
+        )
+        for size, end in zip(batches, accumulate(batches), strict=True)
+    )
+    reasoning_chunks: Final = _reasoning_then_text_chunks()[:1] if reasoning_first else ()
+    chunks: Final = (*reasoning_chunks, _chunk("Claim"), *citation_chunks)
+
+    events: Final = await _collect_events(_build_iterator(chunks), sync_mode)
+
+    added: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+    terminal: Final = events[-1]
+    message: Final = next(item for item in terminal.response.output if item.type == "message")
+    final_annotations: Final = [annotation.model_dump() for annotation in message.content[0].annotations]
+    assert [event.annotation for event in added] == final_annotations
+    assert len(added) == len(annotations)
+    assert [event.annotation_index for event in added] == list(range(len(annotations)))
+    message_index: Final = next(
+        event.output_index
+        for event in events
+        if event.type == "response.output_item.added" and event.item.type == "message"
+    )
+    assert all(event.item_id == message.id and event.output_index == message_index for event in added)
+    done_index: Final = next(index for index, event in enumerate(events) if event.type == "response.output_text.done")
+    assert all(events.index(event) < done_index for event in added)
+    assert message.content[0].text == "Claim" + ("!" * len(batches) if with_text else "")
+
+
+def _citation_after_reasoning_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me think"), _annotation_only_chunk())
+
+
+def _citation_with_reasoning_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_with_reasoning(_annotation_only_chunk(), "let me think"),)
+
+
+def _citation_between_reasoning_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me "), _annotation_only_chunk(), _reasoning_chunk("think"))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [_citation_after_reasoning_chunks, _citation_with_reasoning_chunks, _citation_between_reasoning_chunks],
+    ids=["citation_after_reasoning", "citation_with_reasoning", "citation_between_reasoning"],
+)
+@pytest.mark.asyncio
+async def test_citation_during_reasoning_streams_once_reasoning_closes(
+    stream_chunks: StreamChunks, sync_mode: bool
+) -> None:
+    chunks: Final = (*stream_chunks(), _chunk("Claim", finish_reason="stop"))
+    events: Final = await _collect_events(_build_iterator(chunks), sync_mode)
+
+    output: Final = events[-1].response.output
+    message_index: Final = next(index for index, item in enumerate(output) if item.type == "message")
+    message: Final = output[message_index]
+    reasoning: Final = next(item for item in output if item.type == "reasoning")
+    reasoning_done: Final = next(
+        index
+        for index, event in enumerate(events)
+        if event.type == "response.output_item.done" and event.item.type == "reasoning"
+    )
+    message_added: Final = next(index for index, event in enumerate(events) if _is_message_item(event))
+    part_added: Final = next(index for index, event in enumerate(events) if event.type == "response.content_part.added")
+    text_done: Final = next(index for index, event in enumerate(events) if event.type == "response.output_text.done")
+    citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+    reasoning_deltas: Final = [
+        index for index, event in enumerate(events) if event.type == "response.reasoning_summary_text.delta"
+    ]
+    summary_done: Final = next(event for event in events if event.type == "response.reasoning_summary_text.done")
+    text_delta: Final = next(event for event in events if event.type == "response.output_text.delta")
+
+    assert len(citations) == 1
+    assert reasoning_done < message_added < part_added < events.index(citations[0]) < text_done
+    assert all(index < reasoning_done for index in reasoning_deltas)
+    assert summary_done.text == reasoning.content[0].text == "let me think"
+    assert citations[0].item_id == message.id
+    assert citations[0].output_index == message_index
+    assert citations[0].annotation_index == 0
+    assert [event.annotation for event in citations] == [entry.model_dump() for entry in message.content[0].annotations]
+    assert ("sequence_number" in citations[0].model_dump()) == ("sequence_number" in text_delta.model_dump())
+    assert message.content[0].text == "Claim"
+
+
+def _citation_then_tool_call_finishing_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_annotation_only_chunk(), _tool_call_chunk(finish_reason="tool_calls"))
+
+
+def _reasoning_citation_then_tool_call_finishing_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me think"), *_citation_then_tool_call_finishing_chunks())
+
+
+def _reasoning_citation_tool_call_then_empty_finish_chunks() -> tuple[ModelResponseStream, ...]:
+    return (
+        _reasoning_chunk("let me think"),
+        _annotation_only_chunk(),
+        _tool_call_chunk(),
+        _chunk("", finish_reason="tool_calls"),
+    )
+
+
+def _citation_between_reasoning_then_empty_finish_chunks() -> tuple[ModelResponseStream, ...]:
+    return (*_citation_between_reasoning_chunks(), _chunk("", finish_reason="stop"))
+
+
+def _tool_call_then_citation_finishing_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_tool_call_chunk(), _annotation_only_chunk())
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [
+        _citation_then_tool_call_finishing_chunks,
+        _reasoning_citation_then_tool_call_finishing_chunks,
+        _reasoning_citation_tool_call_then_empty_finish_chunks,
+        _citation_between_reasoning_then_empty_finish_chunks,
+        _citation_between_reasoning_chunks,
+        _tool_call_then_citation_finishing_chunks,
+    ],
+    ids=[
+        "citation_then_tool_call",
+        "reasoning_citation_then_tool_call",
+        "reasoning_citation_tool_call_then_empty_finish",
+        "citation_between_reasoning_then_empty_finish",
+        "citation_between_reasoning_without_finish",
+        "tool_call_then_citation_without_text",
+    ],
+)
+@pytest.mark.asyncio
+async def test_streamed_citations_match_the_completed_message(stream_chunks: StreamChunks, sync_mode: bool) -> None:
+    events: Final = await _collect_events(_build_iterator(stream_chunks()), sync_mode)
+
+    output: Final = events[-1].response.output
+    completed_message_indexes: Final = [index for index, item in enumerate(output) if item.type == "message"]
+    completed_citations: Final = chain.from_iterable(
+        output[index].content[0].annotations for index in completed_message_indexes
+    )
+    completed_annotations: Final = [annotation.model_dump() for annotation in completed_citations]
+    streamed_message_indexes: Final = [event.output_index for event in events if _is_message_item(event)]
+    citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+    reasoning_done: Final = [
+        index
+        for index, event in enumerate(events)
+        if event.type == "response.output_item.done" and event.item.type == "reasoning"
+    ]
+    message_added: Final = [index for index, event in enumerate(events) if _is_message_item(event)]
+
+    assert len(citations) == 1
+    assert [event.annotation for event in citations] == completed_annotations
+    assert sorted(set(streamed_message_indexes)) == completed_message_indexes
+    assert all(event.output_index in completed_message_indexes for event in citations)
+    assert len(reasoning_done) == sum(item.type == "reasoning" for item in output)
+    assert all(index < added for index, added in product(reasoning_done, message_added))
+
+
+def _empty_text_citation_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_chunk(""), *_citation_then_tool_call_finishing_chunks())
+
+
+def _reasoning_empty_text_citation_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me think"), *_empty_text_citation_then_tool_call_chunks())
+
+
+def _empty_text_then_cited_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_chunk(""), _with_citation(_tool_call_chunk(finish_reason="tool_calls")))
+
+
+def _citation_tool_call_then_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_annotation_only_chunk(), _tool_call_chunk(), _chunk("Claim", finish_reason="tool_calls"))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("stream_chunks", "expected_order"),
+    [
+        (_empty_text_citation_then_tool_call_chunks, ("message", "function_call")),
+        (_reasoning_empty_text_citation_then_tool_call_chunks, ("reasoning", "message", "function_call")),
+        (_empty_text_then_cited_tool_call_chunks, ("message", "function_call")),
+        (_citation_tool_call_then_text_chunks, ("message", "function_call")),
+        (_citation_then_tool_call_finishing_chunks, ("message", "function_call")),
+        (_reasoning_citation_tool_call_then_empty_finish_chunks, ("reasoning", "message", "function_call")),
+    ],
+    ids=[
+        "empty_text_citation_then_tool_call",
+        "reasoning_empty_text_citation_then_tool_call",
+        "empty_text_then_cited_tool_call",
+        "citation_tool_call_then_text",
+        "citation_then_tool_call_without_text",
+        "reasoning_citation_tool_call_then_empty_finish",
+    ],
+)
+@pytest.mark.asyncio
+async def test_citation_before_a_tool_call_keeps_the_message_ahead_of_it(
+    stream_chunks: StreamChunks, expected_order: tuple[str, ...], sync_mode: bool
+) -> None:
+    events: Final = await _collect_events(_build_iterator(stream_chunks()), sync_mode)
+
+    added: Final = [event for event in events if event.type == "response.output_item.added"]
+    output: Final = events[-1].response.output
+    message_index: Final = expected_order.index("message")
+    citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+
+    assert tuple(event.item.type for event in added) == expected_order
+    assert [event.output_index for event in added] == list(range(len(expected_order)))
+    assert tuple(item.type for item in output) == expected_order
+    assert [event.output_index for event in citations] == [message_index]
+    assert [event.annotation for event in citations] == [
+        annotation.model_dump() for annotation in output[message_index].content[0].annotations
+    ]
+
+
+def test_disconnect_after_a_held_citation_still_bills_it() -> None:
+    iterator: Final = _build_iterator((*_citation_between_reasoning_chunks(), _chunk("Claim", finish_reason="stop")))
+    reasoning_deltas: Final = (event for event in iterator if event.type == "response.reasoning_summary_text.delta")
+    assert len(list(islice(reasoning_deltas, 2))) == 2
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None
+    messages: Final = [item for item in incomplete.response.output if item.type == "message"]
+    annotations: Final = chain.from_iterable(message.content[0].annotations for message in messages)
+    assert [annotation.url for annotation in annotations] == ["https://example.com"]
+
+
 def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_bill_as_hidden_response_cost() -> None:
     from litellm.litellm_core_utils.hidden_params import get_hidden_params
 
@@ -1691,3 +2344,100 @@ def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_b
         partial.response.usage.input_tokens,
         partial.response.usage.output_tokens,
     ), "the bill is priced on the partial's own usage"
+
+
+def _serialized_sequence_numbers(events: Iterable[BaseLiteLLMOpenAIResponseObject]) -> list[int]:
+    payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
+    assert all("sequence_number" in payload for payload in payloads), [
+        payload["type"] for payload in payloads if "sequence_number" not in payload
+    ]
+    return [payload["sequence_number"] for payload in payloads]
+
+
+def _long_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (*(_chunk(f"word{i} ") for i in range(300)), _chunk("end", finish_reason="stop"))
+
+
+def _text_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_text_opening_a_tool_call_chunk("Checking. "), _tool_arguments_chunk('{"x": 1}', finish_reason="tool_calls"))
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [
+        lambda: (_chunk("Hello"), _chunk("!", finish_reason="stop")),
+        _long_text_chunks,
+        _text_then_tool_call_chunks,
+        _reasoning_then_text_chunks,
+        _reasoning_and_text_in_one_chunk,
+        _reasoning_citation_then_tool_call_finishing_chunks,
+        lambda: (_tool_call_chunk(), _chunk("", finish_reason="tool_calls")),
+        lambda: (_refusal_chunk("I can't "), _refusal_chunk("help."), _chunk("", finish_reason="stop")),
+        lambda: (_chunk("Sure. "), _refusal_chunk("I can't help."), _chunk("", finish_reason="stop")),
+    ],
+    ids=[
+        "text",
+        "long_text",
+        "text_then_tool",
+        "reasoning_then_text",
+        "reasoning_and_text",
+        "citation_tool",
+        "tool",
+        "refusal",
+        "text_then_refusal",
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_every_event_serializes_its_position_in_the_stream_from_zero(stream: StreamChunks, sync_mode: bool):
+    iterator: Final = _build_iterator(stream())
+    events: Final = list(iterator) if sync_mode else [event async for event in iterator]
+
+    assert _serialized_sequence_numbers(events) == list(range(len(events)))
+
+
+def test_bridged_events_answer_dict_reads_of_their_number():
+    events: Final = list(_build_iterator((_chunk("Hello"), _chunk("!", finish_reason="stop"))))
+    positions: Final = list(range(len(events)))
+
+    assert [event["sequence_number"] for event in events] == positions
+    assert [event.get("sequence_number") for event in events] == positions
+    assert all("sequence_number" in event for event in events)
+
+
+def _refusal_chunk(refusal: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="gpt-5.5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=None, refusal=refusal),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_refusal_deltas_become_one_refusal_part_of_the_message(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [_refusal_chunk("I'm sorry, "), _refusal_chunk("I can't help with that."), _chunk("", finish_reason="stop")]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    parts_added: Final = [
+        event.model_dump()["part"] for event in events if event.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+    ]
+    refusal_done: Final = [event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE]
+    message_done: Final = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    finished: Final = events[-1]
+    expected_content: Final = [{"type": "refusal", "refusal": "I'm sorry, I can't help with that."}]
+    assert parts_added == [{"type": "refusal", "refusal": ""}]
+    assert [event.refusal for event in refusal_done] == [expected_content[0]["refusal"]]
+    assert [item.model_dump()["content"] for item in message_done] == [expected_content]
+    assert [item.model_dump()["content"] for item in finished.response.output] == [expected_content]
