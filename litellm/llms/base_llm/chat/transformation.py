@@ -72,8 +72,8 @@ class BaseLLMException(Exception):
 _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 
-def _client_header_names(client: object) -> frozenset[str]:
-    if not isinstance(client, (openai.OpenAI, openai.AsyncOpenAI)):
+def _client_header_names(client: openai.OpenAI | openai.AsyncOpenAI | None) -> frozenset[str]:
+    if client is None:
         return frozenset()
     sdk_user_agent: Final = f"{type(client).__name__}/Python {openai.__version__}"
     return frozenset(
@@ -86,7 +86,7 @@ def _client_header_names(client: object) -> frozenset[str]:
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
     headers: dict[str, object] | None,  # mutable-ok: returned as-is when there is nothing to add
-    client: object = None,
+    client: openai.OpenAI | openai.AsyncOpenAI | None = None,
 ) -> dict[str, object] | None:  # mutable-ok: becomes the request's outbound headers
     """
     `headers` plus any attribution header the caller didn't already set, on the

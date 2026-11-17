@@ -2871,14 +2871,13 @@ def _complete_custom_openai(
     attribution_source: Final = (
         provider_config if provider_config is not None else JSONProviderRegistry.get(custom_llm_provider)
     )
+    attribution_client: Final = (
+        client if isinstance(client, (openai.OpenAI, openai.AsyncOpenAI)) and not use_base_llm_http_handler else None
+    )
     outbound_headers: Final = (
         request_headers
         if attribution_source is None
-        else with_attribution_headers(
-            attribution_source.get_attribution_headers(),
-            request_headers,
-            None if use_base_llm_http_handler else client,
-        )
+        else with_attribution_headers(attribution_source.get_attribution_headers(), request_headers, attribution_client)
     )
 
     if extra_headers is not None and not use_base_llm_http_handler:

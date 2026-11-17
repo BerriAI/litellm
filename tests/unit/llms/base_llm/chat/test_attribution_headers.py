@@ -212,7 +212,11 @@ def test_sdk_client_headers_ignored_when_http_handler_drops_the_client(
             return_value=httpx.Response(200, content=_COMPLETION_BODY, headers={"content-type": "application/json"})
         )
         litellm.completion(
-            model=model, messages=[{"role": "user", "content": "hi"}], api_base=_API_BASE, api_key="k", client=sdk_client
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=_API_BASE,
+            api_key="k",
+            client=sdk_client,
         )
 
     assert route.calls.last.request.headers.get_list(header) == ["litellm"]
