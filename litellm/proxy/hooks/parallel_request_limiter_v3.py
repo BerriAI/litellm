@@ -158,6 +158,25 @@ class _ReconciledUsage:
         return max(0, self.prompt_tokens - self.cached_tokens)
 
 
+def _int_field(usage: Mapping[str, object], key: str) -> int:
+    value: Final = usage.get(key)
+    return value if isinstance(value, int) else 0
+
+
+def _anthropic_reconciled_usage(usage: Mapping[str, object]) -> _ReconciledUsage | None:
+    """Anthropic's own usage shape reports ``input_tokens`` without cache reads or cache writes,
+    so the prompt total is the sum of the three."""
+    cache_read_tokens: Final = _int_field(usage, "cache_read_input_tokens")
+    cache_write_tokens: Final = _int_field(usage, "cache_creation_input_tokens")
+    if not cache_read_tokens and not cache_write_tokens:
+        return None
+    return _ReconciledUsage(
+        prompt_tokens=_int_field(usage, "input_tokens") + cache_write_tokens + cache_read_tokens,
+        completion_tokens=_int_field(usage, "output_tokens"),
+        cached_tokens=cache_read_tokens,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RateLimitedModel:
     requested: str
@@ -4821,11 +4840,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         if isinstance(usage, Mapping):
+            prompt_details: Final = usage.get("prompt_tokens_details") or usage.get("input_tokens_details")
+            if not usage.get("prompt_tokens") and not isinstance(prompt_details, dict):
+                anthropic_usage: Final = _anthropic_reconciled_usage(usage)
+                if anthropic_usage is not None:
+                    return anthropic_usage
             raw_prompt_tokens: Final = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
             raw_completion_tokens: Final = usage.get("completion_tokens") or usage.get("output_tokens") or 0
             mapped_prompt_tokens: Final = raw_prompt_tokens if isinstance(raw_prompt_tokens, int) else 0
             mapped_completion_tokens: Final = raw_completion_tokens if isinstance(raw_completion_tokens, int) else 0
-            prompt_details: Final = usage.get("prompt_tokens_details") or usage.get("input_tokens_details")
             raw_cached_tokens: Final = (
                 (prompt_details.get("cached_tokens", 0) if isinstance(prompt_details, dict) else 0)
                 or usage.get("cache_read_input_tokens")

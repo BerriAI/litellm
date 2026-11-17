@@ -2988,16 +2988,27 @@ def test_anthropic_messages_usage_reconciles_split_project_quota(rate_limiter):
     billable_input, output_tokens, resolved = handler._resolve_io_token_reconcile_usage(
         {
             "usage": {
-                "input_tokens": 100,
+                "input_tokens": 40,
                 "output_tokens": 25,
-                "cache_read_input_tokens": 30,
+                "cache_creation_input_tokens": 60,
+                "cache_read_input_tokens": 900,
             }
         }
     )
 
     assert resolved is True
-    assert billable_input == 70
+    assert billable_input == 100, "uncached input plus cache writes, with cache reads left out"
     assert output_tokens == 25
+
+
+def test_usage_dict_with_prompt_tokens_keeps_cache_reads_inside_the_prompt_count(rate_limiter):
+    handler, _cache = rate_limiter
+
+    billable_input, output_tokens, resolved = handler._resolve_io_token_reconcile_usage(
+        {"usage": {"prompt_tokens": 100, "completion_tokens": 25, "cache_read_input_tokens": 30}}
+    )
+
+    assert (billable_input, output_tokens, resolved) == (70, 25, True)
 
 
 @pytest.mark.asyncio
