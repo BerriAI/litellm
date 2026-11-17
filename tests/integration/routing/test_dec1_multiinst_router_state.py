@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable, Iterator, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, TypeVar
 
@@ -42,7 +43,7 @@ from tests.integration.routing.dec1_routing_support import NO_DEPLOYMENTS, chat,
 pytestmark: Final = [pytest.mark.timeout(400), pytest.mark.shares_worker_state]
 
 COOLDOWN_SECONDS: Final = 30
-SHORT_COOLDOWN_SECONDS: Final = 3
+SHORT_COOLDOWN_SECONDS: Final = 10  # longer than the eventually + read throttle before the peer's first request
 COOLDOWN_READ_SECONDS: Final = 3  # DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS (1.0) plus a margin
 T = TypeVar("T")
 TOKENS_PER_ANSWER: Final = 8  # the scripted upstream's usage.total_tokens
@@ -80,18 +81,20 @@ def _cooldown(pair: Fleet, deployment_id: str) -> JsonValue:
 
 
 def test_a_peer_routes_to_a_deployment_again_once_its_shared_cooldown_ended(pair: Fleet) -> None:
-    """The weighted deployment of `state-expiry` sets `cooldown_time: 3` and answers 429 through the first instance.
+    """The weighted deployment of `state-expiry` sets `cooldown_time: 10` and answers 429 through the first instance.
+    (With 3 seconds the cooldown had already ended when the peer's first request arrived after the 3 second read
+    wait, so the peer correctly reached the recovered deployment.)
 
     The second instance must first serve the group from the healthy sibling, and once
-    `deployment:dec1-status-429-state-expiry:cooldown` has expired in Redis the second instance must send the
-    weighted deployment traffic again within 10 seconds (a 429 from it). A peer that kept its own memory copy past
-    the cooldown's end would keep a recovered deployment out of rotation.
+    `deployment:dec1-status-429-state-expiry:cooldown` has expired in Redis (within 20 seconds) the second instance
+    must send the weighted deployment traffic again within 10 seconds (a 429 from it). A peer that kept its own
+    memory copy past the cooldown's end would keep a recovered deployment out of rotation.
     """
     assert chat(pair.first, "state-expiry").status_code == 429
     eventually(lambda: _cooldown(pair, "dec1-status-429-state-expiry"), lambda raw: raw is not None, seconds=5)
     time.sleep(COOLDOWN_READ_SECONDS)
     assert chat(pair.second, "state-expiry").status_code == 200
-    eventually(lambda: _cooldown(pair, "dec1-status-429-state-expiry"), lambda raw: raw is None, seconds=10)
+    eventually(lambda: _cooldown(pair, "dec1-status-429-state-expiry"), lambda raw: raw is None, seconds=20)
     eventually(lambda: chat(pair.second, "state-expiry").status_code, lambda status: status == 429, seconds=10)
 
 
@@ -277,12 +280,21 @@ def usage_pair(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Fleet]:
 
 
 def _in_one_minute(action: Callable[[], T]) -> tuple[str, T]:
-    """Runs `action` until a run starts and ends in the same UTC minute, so per-minute counters are comparable."""
+    """Runs `action` until a run starts and ends in the same UTC minute, so per-minute counters are comparable.
+
+    Every run starts at the beginning of a fresh minute when fewer than 15 seconds are left, and a retry always
+    waits for the next minute, so a run never inherits counts that an earlier run left in its minute (CI run
+    44176682961 retried straight into a minute the first run had already used two requests of)."""
     while True:
+        if datetime.now(UTC).second >= 45:
+            started = utc_minute()
+            eventually(utc_minute, lambda minute, seen=started: minute != seen, seconds=20)
         before = utc_minute()
         result = action()
-        if utc_minute() == before:
+        after = utc_minute()
+        if after == before:
             return (before, result)
+        eventually(utc_minute, lambda minute, seen=after: minute != seen, seconds=65)
 
 
 def test_usage_routing_writes_an_rpm_counter_per_deployment_and_minute(usage_pair: Fleet) -> None:

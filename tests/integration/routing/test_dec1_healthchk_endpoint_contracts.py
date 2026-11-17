@@ -27,7 +27,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import string_value
+from tests.integration._support.client import object_value, string_value
 from tests.integration.routing.dec1_healthchk_support import (
     SLOW_SECONDS,
     UNREACHABLE_API_BASE,
@@ -262,14 +262,18 @@ def test_a_key_sees_and_probes_only_the_deployments_it_may_call(rig: Rig) -> Non
 def test_a_key_asking_for_a_model_it_may_not_call_is_403(rig: Rig) -> None:
     """The same kind of key, limited to `hc-ok-<run>`, asks `GET /health?model=hc-other-<run>`.
 
-    It must answer 403 with `key not allowed to health-check model hc-other-<run>` and probe nothing.
+    It must answer 403 and probe nothing. The refusal comes from the key's model check in auth, before the
+    health endpoint's own `key not allowed to health-check model` branch runs, so the body is the generic
+    `key_model_access_denied` error (`litellm/proxy/auth/model_access_denied.py:6`).
     """
     with rig.gateway.scenario() as scenario:
         key: Final = scenario.key(models=[OK_GROUP])
         before: Final = rig.upstream.count(OTHER_MODEL)
         response: Final = health(rig.gateway, key=key, model=OTHER_GROUP)
     assert response.status_code == 403, response.text
-    assert f"key not allowed to health-check model {OTHER_GROUP}" in response.text
+    error: Final = object_value(response.json()["error"])
+    assert error.get("type") == "key_model_access_denied", response.text
+    assert f"The requested model '{OTHER_GROUP}' is not available for this API key" in response.text
     assert rig.upstream.count(OTHER_MODEL) == before
 
 

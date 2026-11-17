@@ -25,7 +25,7 @@ from typing import Final
 
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway
+from tests.integration._support.client import Gateway, object_value
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 from tests.integration.authorization.dec1_limcap2_support import media_provider, transcribe
 from tests.integration.authorization.dec1_limcap3_support import RERANK_MODEL, rerank, rerank_reply
@@ -62,6 +62,15 @@ def _with_rerank(base: Callable[[Request], Reply]) -> Callable[[Request], Reply]
         return base(request)
 
     return answer
+
+
+def _rerank_entry(group: str, url: str, **params: JsonValue) -> dict[str, JsonValue]:
+    """A Cohere rerank deployment of `group` whose `api_base` is the wire URL itself, not `<url>/v1`.
+
+    `entry` already takes the URL as its `api_base` argument and appends `/v1`, so passing `api_base=` to it
+    again was a TypeError before any request (CI run 44176682961)."""
+    built: Final = entry(group, url, model=RERANK_MODEL, **params)
+    return {**built, "litellm_params": {**object_value(built["litellm_params"]), "api_base": url}}
 
 
 @contextmanager
@@ -185,7 +194,7 @@ def test_a_rerank_takes_one_request_of_model_capacity(gateway: Gateway, tmp_path
         _rig(
             gateway,
             tmp_path,
-            lambda group, url: [entry(group, url, rpm=1, model=RERANK_MODEL, api_base=url)],
+            lambda group, url: [_rerank_entry(group, url, rpm=1)],
             answer=_with_rerank(provider()),
         ) as (candidate, wire, group),
         candidate.scenario() as scenario,
@@ -210,7 +219,7 @@ def test_a_rerank_settles_no_tokens_on_the_model_window(gateway: Gateway, tmp_pa
             gateway,
             tmp_path,
             lambda group, url: [
-                entry(group, url, rpm=100, tpm=100000, model=RERANK_MODEL, api_base=url),
+                _rerank_entry(group, url, rpm=100, tpm=100000),
                 entry(chat_group, url, rpm=100, tpm=100000),
             ],
             answer=_with_rerank(provider()),

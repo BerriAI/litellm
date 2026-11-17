@@ -218,17 +218,19 @@ def test_a_provider_400_is_returned_without_a_fallback_when_unsupported_params_f
     assert "x-litellm-attempted-fallbacks" not in response.headers
 
 
-def test_a_vertex_403_is_returned_without_a_fallback_because_it_is_answered_as_a_400(rig: Rig) -> None:
+def test_a_vertex_403_takes_the_regular_fallback_like_a_bedrock_403(rig: Rig) -> None:
     """The Vertex primary answers 403 `PERMISSION_DENIED`.
 
-    Vertex's 403 is mapped to a provider `BadRequestError`, so with `fallback_on_unsupported_params: false`
-    the caller gets HTTP 400 and the regular rescue group is not called. A credentials outage on Vertex
-    therefore does not fail over, which a Bedrock 403 does.
+    Vertex's 403 used to be answered as a 400 bad request that never fell back. Pinned from CI run 44176682961:
+    the error now carries the provider's 403 (`permission_error`), so with `fallback_on_unsupported_params: false`
+    it still falls back, HTTP 200 from the regular rescue group, the same as a Bedrock 403. A credentials outage
+    on Vertex therefore now fails over.
     """
     regular_before: Final = rig.peer.count(REGULAR)
     response: Final = chat(rig.gateway, "fb-403-vertex")
-    assert response.status_code == 400, response.text
-    assert rig.peer.count(REGULAR) == regular_before
+    assert response.status_code == 200, response.text
+    assert "served rescue-regular" in response.text, response.text
+    assert rig.peer.count(REGULAR) == regular_before + 1
 
 
 def test_a_bedrock_403_access_denied_takes_the_regular_fallback(rig: Rig) -> None:

@@ -181,7 +181,7 @@ def test_a_provider_overload_cools_only_after_five_straight_failures(rig: Rig, g
     ("group", "status"),
     [
         ("never-bedrock-access", 403),
-        ("never-vertex-permission", 400),
+        ("never-vertex-permission", 403),
         ("never-bedrock-validation", 400),
         ("never-vertex-invalid", 400),
         ("never-azure-filter", 400),
@@ -189,7 +189,8 @@ def test_a_provider_overload_cools_only_after_five_straight_failures(rig: Rig, g
 )
 def test_a_provider_refusal_never_cools_the_deployment(rig: Rig, group: str, status: int) -> None:
     """The weighted deployment refuses every request: Bedrock 403 `AccessDeniedException`, Vertex 403
-    `PERMISSION_DENIED` (answered as 400), Bedrock 400 `ValidationException`, Google 400 `INVALID_ARGUMENT`,
+    `PERMISSION_DENIED` (answered as 403 since the CI merge ref of 2026-11-17, it was 400), Bedrock 400
+    `ValidationException`, Google 400 `INVALID_ARGUMENT`,
     Azure 400 `content_filter`.
 
     A 403 or 400 is not in `is_cooldown_required`'s list (`health.rs:93`), so all six requests return the

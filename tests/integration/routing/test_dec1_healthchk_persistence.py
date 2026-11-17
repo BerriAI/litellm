@@ -301,12 +301,15 @@ def test_an_outage_and_its_recovery_are_each_written_once_as_they_happen(backgro
     later restored.
 
     Within 30 seconds of the failure a newer row must say `unhealthy` with `unhealthy_count` 1 and an
-    `error_message`; within 30 seconds of the restore a newer row must say `healthy`. The stored statuses,
-    newest first, must then be exactly `healthy, unhealthy, healthy`: each transition is written immediately
-    and nothing in between.
+    `error_message`; within 30 seconds of the restore a newer row must say `healthy`. Exactly two rows must have
+    been added, so the newest three statuses are `healthy, unhealthy, healthy`: each transition is written
+    immediately and nothing in between. The module's `/health/latest` outage test flips the same deployment and
+    may run first, so the test counts from the rows it finds rather than from one.
     """
-    eventually(
-        lambda: health_rows(background.gateway, FLIP_GROUP), lambda found: len(found) == 1, seconds=CONVERGENCE_SECONDS
+    before: Final = eventually(
+        lambda: health_rows(background.gateway, FLIP_GROUP),
+        lambda found: len(found) >= 1 and found[0]["status"] == "healthy",
+        seconds=CONVERGENCE_SECONDS,
     )
     background.upstream.force(FLIP_MODEL, 500)
     try:
@@ -324,7 +327,8 @@ def test_an_outage_and_its_recovery_are_each_written_once_as_they_happen(backgro
         seconds=ROW_SECONDS,
     )
     statuses: Final = [row["status"] for row in health_rows(background.gateway, FLIP_GROUP)]
-    assert statuses == ["healthy", "unhealthy", "healthy"]
+    assert len(statuses) == len(before) + 2, statuses
+    assert statuses[:3] == ["healthy", "unhealthy", "healthy"]
 
 
 def test_latest_reflects_a_background_outage_for_the_deployment_id(background: Rig) -> None:

@@ -248,7 +248,8 @@ def test_text_completions_count_against_model_capacity(gateway: Gateway, tmp_pat
         assert complete(candidate, group, candidate.key).status_code == 200
         refused: Final = complete(candidate, group, candidate.key)
         assert refused.status_code == 429, refused.text
-        assert error_message(refused) == capacity_message(group, None, "requests", rpm=1)
+        # `/v1/completions` renders the limiter error with the exception class prefix (CI run 44176682961).
+        assert error_message(refused) == "litellm.RateLimitError: " + capacity_message(group, None, "requests", rpm=1)
 
 
 def test_a_batch_create_naming_a_capacity_limited_model_takes_one_capacity_request(

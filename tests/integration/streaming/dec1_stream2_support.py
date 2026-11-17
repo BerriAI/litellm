@@ -262,11 +262,14 @@ def deployed(
 ) -> Iterator[Rig]:
     """Register `provider` against an owned peer that answers with `respond`, and a key scoped to it.
 
-    Bedrock deployments point `aws_bedrock_runtime_endpoint` at the peer; every other provider uses
-    `api_base`. Extra keywords become `litellm_params` (prices, `keepalive_seconds`, `stream_timeout`)."""
+    Bedrock deployments point both `aws_bedrock_runtime_endpoint` and `api_base` at the peer: in CI run
+    44176682961 the native `/v1/messages` Bedrock invoke path ignored `aws_bedrock_runtime_endpoint` and called
+    the suite's shared upstream ("Unknown scenario"), while `api_base` reaches the peer on every Bedrock path.
+    Every other provider uses `api_base`. Extra keywords become `litellm_params` (prices, `keepalive_seconds`,
+    `stream_timeout`)."""
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         endpoint: Final[dict[str, JsonValue]] = (
-            {"aws_bedrock_runtime_endpoint": wire.url, "api_key": "synthetic-bedrock-token"}
+            {"aws_bedrock_runtime_endpoint": wire.url, "api_base": wire.url, "api_key": "synthetic-bedrock-token"}
             if provider.content_type == EVENT_STREAM
             else {"api_base": wire.url + provider.base_suffix, "api_key": PROVIDER_KEY}
         )

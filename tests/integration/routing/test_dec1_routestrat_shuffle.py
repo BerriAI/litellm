@@ -268,48 +268,54 @@ def test_a_key_whose_saved_weights_win_over_its_teams_weights(rig: Rig) -> None:
 
 
 @pytest.mark.parametrize(
-    ("weights", "detail"),
+    ("weights", "status", "detail"),
     [
         pytest.param(
             {"shuf-saved": {"dec1-routestrat-no-such-deployment": 1}},
+            400,
             "Unknown deployment ID in router weights: dec1-routestrat-no-such-deployment",
             id="unknown-id",
         ),
         pytest.param(
             {"shuf-other": {ident("ss-bedrock"): 1}},
+            400,
             f"Deployment {ident('ss-bedrock')} does not belong to model group shuf-other",
             id="wrong-group",
         ),
         pytest.param(
             {"shuf-saved": {ident("ss-bedrock"): 0, ident("ss-anthropic"): 0}},
-            "Invalid router weights. Replace or clear router_settings.weights.",
+            422,
+            "Each nonempty weights group must contain at least one positive weight",
             id="all-zero",
         ),
         pytest.param(
             {"shuf-saved": {ident("ss-bedrock"): -1}},
-            "Invalid router weights. Replace or clear router_settings.weights.",
+            422,
+            "Input should be greater than or equal to 0",
             id="negative",
         ),
         pytest.param(
             {"shuf-saved": {ident("ss-bedrock"): "1"}},
-            "Invalid router weights. Replace or clear router_settings.weights.",
+            422,
+            "Input should be a valid number",
             id="string-weight",
         ),
     ],
 )
 def test_key_generate_refuses_saved_router_weights_that_cannot_route(
-    rig: Rig, weights: dict[str, JsonValue], detail: str
+    rig: Rig, weights: dict[str, JsonValue], status: int, detail: str
 ) -> None:
     """`POST /key/generate` with `router_settings.weights` that name an unknown deployment id, a deployment under a
     group it does not belong to, only zero weights, a negative weight, or a weight written as a string.
 
-    Each answers HTTP 400 whose body contains the exact detail from
-    `litellm/proxy/management_endpoints/router_weights.py` (`_validate_router_weight_reference` and
-    `validate_router_settings_weights`). Without this check a key could be saved with weights that make every
-    request fail at routing.
+    An unknown id or a wrong group answers HTTP 400 with the detail from
+    `litellm/proxy/management_endpoints/router_weights.py`. The shape checks run earlier, in the request model's
+    `RouterWeights` type (`litellm/types/router_weights.py:7-17`: strict float, `ge=0`, one positive weight per
+    group), so those answer FastAPI's 422 with the pydantic message. Without these checks a key could be saved
+    with weights that make every request fail at routing.
     """
     response: Final = rig.gateway.request("POST", "/key/generate", {"router_settings": {"weights": weights}})
-    assert response.status_code == 400, response.text
+    assert response.status_code == status, response.text
     assert detail in response.text, response.text
 
 

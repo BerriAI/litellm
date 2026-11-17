@@ -63,7 +63,9 @@ def test_an_image_generation_takes_one_request_of_model_capacity(gateway: Gatewa
         assert generate_image(candidate, group, candidate.key).status_code == 200
         refused: Final = generate_image(candidate, group, candidate.key)
         assert refused.status_code == 429, refused.text
-        assert error_message(refused) == capacity_message(group, None, "requests", rpm=1)
+        # The image generation route renders the limiter error with the exception class prefix (CI run 44176682961);
+        # the image edit and chat routes do not.
+        assert error_message(refused) == "litellm.RateLimitError: " + capacity_message(group, None, "requests", rpm=1)
         assert image_posts(wire) == 1
 
 
@@ -114,7 +116,9 @@ def test_image_edits_and_generations_share_one_group_window(gateway: Gateway, tm
         assert edit_image(candidate, group, candidate.key).status_code == 200
         refused: Final = generate_image(candidate, group, candidate.key)
         assert refused.status_code == 429, refused.text
-        assert error_message(refused) == capacity_message(group, None, "requests", rpm=2)
+        # The image generation route renders the limiter error with the exception class prefix (CI run 44176682961);
+        # the image edit and chat routes do not.
+        assert error_message(refused) == "litellm.RateLimitError: " + capacity_message(group, None, "requests", rpm=2)
 
 
 def test_an_image_generation_by_a_priority_key_counts_in_its_priority_pool(gateway: Gateway, tmp_path: Path) -> None:

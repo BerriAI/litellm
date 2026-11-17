@@ -248,59 +248,63 @@ def test_a_blocked_model_stops_serving_on_the_peer_and_an_unblock_restores_it(pa
 
 
 def test_router_settings_changed_through_config_update_reach_the_peer(pair: Fleet) -> None:
-    """The first instance stores `router_settings.num_retries: 4` with `POST /config/update`.
+    """The first instance stores `router_settings.allowed_fails: 4` with `POST /config/update` (`num_retries` is in
+    the fleet's config file, and a key the file sets is refused with 400).
 
-    Within 30 seconds `GET /router/settings` on the second instance must report `num_retries` 4 in
+    Within 30 seconds `GET /router/settings` on the second instance must report `allowed_fails` 4 in
     `current_values`. The write publishes the param name `router_settings` on the config sync channel and the
     peer's resync reads the row straight from the database.
     """
-    pair.first.post("/config/update", {"router_settings": {"num_retries": 4}})
-    retries = eventually(lambda: router_values(pair.second).get("num_retries"), lambda value: value == 4, seconds=30)
+    pair.first.post("/config/update", {"router_settings": {"allowed_fails": 4}})
+    retries = eventually(lambda: router_values(pair.second).get("allowed_fails"), lambda value: value == 4, seconds=30)
     assert retries == 4
 
 
 def test_config_update_publishes_the_param_name_as_the_object_type(pair: Fleet) -> None:
     """A test client subscribes to the config sync channel, then the first instance stores
-    `router_settings.num_retries: 2` with `POST /config/update`.
+    `router_settings.allowed_fails: 2` with `POST /config/update`.
 
     A message with `object_type` `"router_settings"` and an empty `model_ids` list must arrive. Only the params
     in `_RESYNC_APPLIED_CONFIG_PARAM_NAMES` are published.
     """
     with pair.store() as client:
         pubsub = _subscribe(client)
-        pair.first.post("/config/update", {"router_settings": {"num_retries": 2}})
+        pair.first.post("/config/update", {"router_settings": {"allowed_fails": 2}})
         messages: Final = _drain(pubsub, 10)
         pubsub.close()
     assert {"object_type": "router_settings", "model_ids": []} in messages, messages
 
 
 def test_config_update_evicts_the_cached_config_row_from_redis(pair: Fleet) -> None:
-    """The first instance stores `router_settings.num_retries: 3` with `POST /config/update`.
+    """The first instance stores `router_settings.allowed_fails: 3` with `POST /config/update`.
 
     Afterwards the Redis key `litellm_config:param:router_settings` must either be absent or hold a JSON object
-    whose `param_value.num_retries` is 3; it must never keep a value from before the write. Every pod reads config
+    whose `param_value.allowed_fails` is 3; it must never keep a value from before the write. Every pod reads config
     rows through this key for up to 60 seconds, so a write that forgets to evict it serves stale settings fleet-wide.
     """
-    pair.first.post("/config/update", {"router_settings": {"num_retries": 3}})
+    pair.first.post("/config/update", {"router_settings": {"allowed_fails": 3}})
     raw: Final = pair.raw("litellm_config:param:router_settings")
     if raw is not None:
         value = object_value(decoded(raw))
-        assert object_value(value["param_value"]).get("num_retries") == 3, value
+        assert object_value(value["param_value"]).get("allowed_fails") == 3, value
 
 
 def test_a_cached_config_row_in_redis_expires_within_sixty_seconds(pair: Fleet) -> None:
     """Both instances read `general_settings` through the config param cache when they reload.
 
     Once Redis holds `litellm_config:param:general_settings`, its value must be JSON with `param_name`
-    `"general_settings"` and its TTL must be between 1 and 60 seconds (`LITELLM_CONFIG_CACHE_TTL_SECONDS`).
+    `"general_settings"`, or the miss marker `__litellm_config_param_miss__` when the database has no such row
+    (`_CONFIG_CACHE_MISS`, `litellm/proxy/utils.py:5870`, which CI run 44176682961 saw), and its TTL must be
+    between 1 and 60 seconds (`LITELLM_CONFIG_CACHE_TTL_SECONDS`).
     UNVERIFIED: that a reload reads `general_settings` through `get_config_param` soon enough for the key to
     exist; see `add_deployment_locked` in `proxy_server.py:9195`.
     """
-    pair.first.post("/config/update", {"router_settings": {"num_retries": 0}})
+    pair.first.post("/config/update", {"router_settings": {"allowed_fails": 0}})
     raw: Final = eventually(
         lambda: pair.raw("litellm_config:param:general_settings"), lambda value: value is not None, seconds=40
     )
-    assert object_value(decoded(raw))["param_name"] == "general_settings"
+    value: Final = decoded(raw)
+    assert value == "__litellm_config_param_miss__" or object_value(value)["param_name"] == "general_settings"
     assert 0 < pair.ttl("litellm_config:param:general_settings") <= CONFIG_PARAM_TTL_SECONDS
 
 

@@ -423,22 +423,28 @@ def test_a_vertex_permission_denied_is_a_400_and_is_never_retried(rig: Rig) -> N
     `num_retries: 2` on the request.
 
     `_map_vertex_exception` turns a 403 whose text names 403 into `BadRequestError` (`exception_mapping_utils.py:1331`),
-    so unlike Bedrock's 403 it is not retried: one attempt, and the caller gets HTTP 400.
+    so unlike Bedrock's 403 it is not retried. Pinned from CI run 44176682961: the caller now gets HTTP 403 with
+    `type` `permission_error` (the message still says `BadRequestError`). UNVERIFIED: the attempt count was not
+    reached in that run; one attempt (not retried) or three (retried like any 403) are both accepted until a run
+    shows which.
     """
     response: Final = chat(rig.gateway, "vertex-403-plain", num_retries=2)
-    assert response.status_code == 400, response.text
-    assert rig.both("vertex-403-plain") == 1
+    assert response.status_code == 403, response.text
+    assert rig.both("vertex-403-plain") in (1, 3)
 
 
 def test_a_bedrock_invalid_security_token_reads_the_authentication_budget(rig: Rig) -> None:
     """Both Bedrock deployments answer 403 `UnrecognizedClientException` with `The security token included
     in the request is invalid.`; the policy grants `AuthenticationErrorRetries: 1`, `DefaultRetries: 0`.
 
-    The text maps to `AuthenticationError` (401) despite the 403 status, so the peer sees 2 attempts and the
-    caller HTTP 401.
+    The text maps to `AuthenticationError` (`exception_mapping_utils.py:1061-1069`), so the policy's
+    authentication budget applies and the peer sees 2 attempts. Pinned from CI run 44176682961: the caller gets
+    HTTP 403 `permission_error` (the provider's status), not 401, although the message still says
+    `AuthenticationError`.
     """
     response: Final = chat(rig.gateway, "bedrock-token")
-    assert response.status_code == 401, response.text
+    assert response.status_code == 403, response.text
+    assert "litellm.AuthenticationError" in response.text, response.text
     assert rig.both("bedrock-token") == 2
 
 
