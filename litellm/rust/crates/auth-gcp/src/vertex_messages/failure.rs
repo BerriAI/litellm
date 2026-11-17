@@ -14,12 +14,9 @@ pub enum PythonException {
     Import,
     #[strum(serialize = "ValueError")]
     Value,
+    /// Only LiteLLM's own check that a project is a string raises it.
     #[strum(serialize = "TypeError")]
     Type,
-    #[strum(serialize = "AttributeError")]
-    Attribute,
-    #[strum(serialize = "IndexError")]
-    Index,
     #[strum(serialize = "OSError")]
     OS,
     #[strum(serialize = "google.auth.exceptions.DefaultCredentialsError")]
@@ -83,19 +80,6 @@ impl GoogleLoginFailure {
             ..Self::new(PythonException::Value, FILE_FAILURE_MESSAGE)
         }
     }
-
-    /// Python's `str()` of an exception raised with a message and its cause as two arguments.
-    pub(crate) fn caused_by(exception: PythonException, message: &str, cause: &Self) -> Self {
-        Self::new(
-            exception,
-            format!(
-                "({}, {}({}))",
-                python_repr(message),
-                short_name(cause.exception),
-                python_repr(&cause.message)
-            ),
-        )
-    }
 }
 
 /// Paths longer than this are logged by their length only.
@@ -114,7 +98,7 @@ fn path_for_log(path: &str) -> String {
     if length > MAX_LOGGED_PATH_LENGTH {
         return format!("<a {length}-character value>");
     }
-    python_repr(&REDACTOR.redact(path))
+    format!("'{}'", REDACTOR.redact(path))
 }
 
 impl From<GoogleLoginFailure> for Error {
@@ -123,55 +107,16 @@ impl From<GoogleLoginFailure> for Error {
     }
 }
 
-fn short_name(exception: PythonException) -> &'static str {
-    let name: &'static str = exception.into();
-    name.rsplit('.').next().unwrap_or(name)
-}
-
-/// Python's `repr()` of a string: single quotes unless the text holds one and no double quote.
-pub(crate) fn python_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let escaped: String = text
-        .chars()
-        .flat_map(|character| match character {
-            '\\' => vec!['\\', '\\'],
-            '\n' => vec!['\\', 'n'],
-            '\r' => vec!['\\', 'r'],
-            '\t' => vec!['\\', 't'],
-            character if character == quote => vec!['\\', character],
-            character => vec![character],
-        })
-        .collect();
-    format!("{quote}{escaped}{quote}")
-}
-
-/// Python's `str(type(value))` for a value parsed from JSON.
-pub(crate) fn python_type(value: &Value) -> &'static str {
+/// The kind of a JSON value, by the Python type name LiteLLM's own checks report it with.
+pub(crate) fn json_kind(value: &Value) -> &'static str {
     match value {
-        Value::Null => "<class 'NoneType'>",
-        Value::Bool(_) => "<class 'bool'>",
-        Value::Number(number) if number.is_f64() => "<class 'float'>",
-        Value::Number(_) => "<class 'int'>",
-        Value::String(_) => "<class 'str'>",
-        Value::Array(_) => "<class 'list'>",
-        Value::Object(_) => "<class 'dict'>",
-    }
-}
-
-/// Python's `type(value).__name__` for a value parsed from JSON, `NoneType` for a missing one.
-pub(crate) fn python_type_name(value: Option<&Value>) -> &'static str {
-    match value {
-        None | Some(Value::Null) => "NoneType",
-        Some(Value::Bool(_)) => "bool",
-        Some(Value::Number(number)) if number.is_f64() => "float",
-        Some(Value::Number(_)) => "int",
-        Some(Value::String(_)) => "str",
-        Some(Value::Array(_)) => "list",
-        Some(Value::Object(_)) => "dict",
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(number) if number.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
     }
 }
 
@@ -233,37 +178,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::plain("File a.json", "'File a.json'")]
-    #[case::single_quote("it's", "\"it's\"")]
-    #[case::both_quotes("it's \"x\"", "'it\\'s \"x\"'")]
-    #[case::newline("a\nb", "'a\\nb'")]
-    fn strings_are_quoted_as_python_repr_quotes_them(#[case] text: &str, #[case] expected: &str) {
-        assert_eq!(python_repr(text), expected);
-    }
-
-    #[rstest]
-    fn a_wrapped_failure_reads_as_python_s_two_argument_exception() {
-        let cause =
-            GoogleLoginFailure::new(PythonException::Malformed, "missing fields token_uri.");
-        let wrapped = GoogleLoginFailure::caused_by(
-            PythonException::DefaultCredentials,
-            "Failed to load service account credentials from /k.json",
-            &cause,
-        );
-        assert_eq!(
-            wrapped.message,
-            "('Failed to load service account credentials from /k.json', MalformedError('missing fields token_uri.'))"
-        );
-    }
-
-    #[rstest]
-    #[case::int(json!(1), "<class 'int'>")]
-    #[case::float(json!(1.5), "<class 'float'>")]
-    #[case::boolean(json!(true), "<class 'bool'>")]
-    #[case::list(json!(["p"]), "<class 'list'>")]
-    #[case::object(json!({"p": 1}), "<class 'dict'>")]
-    fn json_values_name_their_python_type(#[case] value: Value, #[case] expected: &str) {
-        assert_eq!(python_type(&value), expected);
+    #[case::int(json!(1), "int")]
+    #[case::float(json!(1.5), "float")]
+    #[case::boolean(json!(true), "bool")]
+    #[case::list(json!(["p"]), "list")]
+    #[case::object(json!({"p": 1}), "dict")]
+    fn json_values_name_their_kind(#[case] value: Value, #[case] expected: &str) {
+        assert_eq!(json_kind(&value), expected);
     }
 
     #[rstest]

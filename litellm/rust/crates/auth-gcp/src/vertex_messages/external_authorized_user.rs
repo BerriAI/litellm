@@ -14,7 +14,8 @@ use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 use super::{
     builders::token_failure,
     credentials::{Credentials, Expiry, Loaded, Minted, REFRESH_THRESHOLD, RefreshFuture},
-    failure::{GoogleLoginFailure, PythonException, python_repr, python_str},
+    failure::{GoogleLoginFailure, PythonException, python_str},
+    service_account::{invalid_lifetime, not_an_object},
     transport::Requests,
 };
 
@@ -130,10 +131,7 @@ pub(crate) fn oauth_error(body: &str) -> GoogleLoginFailure {
             ))
         })
         .unwrap_or_else(|| body.to_owned());
-    GoogleLoginFailure::new(
-        PythonException::OAuth,
-        format!("({}, {})", python_repr(&details), python_repr(body)),
-    )
+    GoogleLoginFailure::new(PythonException::OAuth, details)
 }
 
 impl ExternalAuthorizedUser {
@@ -164,17 +162,13 @@ impl ExternalAuthorizedUser {
         if status != reqwest::StatusCode::OK {
             return Err(oauth_error(&body));
         }
-        let granted: Map<String, Value> = serde_json::from_str(&body)
-            .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))?;
+        let Ok(granted) = serde_json::from_str::<Map<String, Value>>(&body) else {
+            return Err(not_an_object());
+        };
         let lifetime = granted
             .get("expires_in")
             .and_then(Value::as_f64)
-            .ok_or_else(|| {
-                GoogleLoginFailure::new(
-                    PythonException::Type,
-                    "unsupported type for timedelta seconds component: NoneType",
-                )
-            })?;
+            .ok_or_else(invalid_lifetime)?;
         if let Some(rotated) = granted.get("refresh_token") {
             *self.lock() = Some(python_str(Some(rotated)));
         }
@@ -308,17 +302,14 @@ mod tests {
     #[rstest]
     #[case::described(
         json!({"error": "invalid_grant", "error_description": "expired", "error_uri": "https://e"}),
-        "('Error code invalid_grant: expired - https://e', '{\"error\":\"invalid_grant\",\"error_description\":\"expired\",\"error_uri\":\"https://e\"}')"
+        "Error code invalid_grant: expired - https://e"
     )]
     #[case::not_an_oauth_error(
         json!({"message": "no"}),
-        "('{\"message\":\"no\"}', '{\"message\":\"no\"}')"
+        r#"{"message":"no"}"#
     )]
     #[tokio::test]
-    async fn a_refused_refresh_raises_python_s_oauth_error(
-        #[case] answer: Value,
-        #[case] expected: &str,
-    ) {
+    async fn a_refused_refresh_is_an_oauth_error(#[case] answer: Value, #[case] expected: &str) {
         let (url, _seen, _server) = sts(vec![(400, answer)]).await;
         let source = external_account_authorized_user(&refreshable(&url), "/k.json").unwrap();
         assert_eq!(

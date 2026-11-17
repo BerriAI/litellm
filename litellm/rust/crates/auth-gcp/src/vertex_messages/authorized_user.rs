@@ -12,8 +12,8 @@ use time::OffsetDateTime;
 
 use super::{
     credentials::{Credentials, Loaded, Minted, RefreshFuture},
-    failure::{GoogleLoginFailure, PythonException, python_str, python_type_name},
-    service_account::{expiry, granted, refused, response_data, token_endpoint_request},
+    failure::{GoogleLoginFailure, PythonException, python_str},
+    service_account::{expiry, granted, refused, token_endpoint_request},
     transport::Requests,
 };
 use crate::constants::CLOUD_PLATFORM_SCOPE;
@@ -59,6 +59,13 @@ fn field(info: &Map<String, Value>, name: &str) -> Option<String> {
         .map(|value| python_str(Some(value)))
 }
 
+fn invalid_expiry() -> GoogleLoginFailure {
+    GoogleLoginFailure::new(
+        PythonException::Value,
+        "Authorized user info has an expiry that is not a YYYY-MM-DDTHH:MM:SS time.",
+    )
+}
+
 /// `datetime.strptime(expiry.rstrip("Z").split(".")[0], "%Y-%m-%dT%H:%M:%S")` for a truthy expiry.
 fn check_expiry(info: &Map<String, Value>) -> Result<(), GoogleLoginFailure> {
     let text = match info.get("expiry") {
@@ -66,15 +73,7 @@ fn check_expiry(info: &Map<String, Value>) -> Result<(), GoogleLoginFailure> {
         Some(Value::String(text)) if text.is_empty() => return Ok(()),
         Some(Value::Number(number)) if number.as_f64() == Some(0.0) => return Ok(()),
         Some(Value::String(text)) => text,
-        Some(other) => {
-            return Err(GoogleLoginFailure::new(
-                PythonException::Attribute,
-                format!(
-                    "'{}' object has no attribute 'rstrip'",
-                    python_type_name(Some(other))
-                ),
-            ));
-        }
+        Some(_) => return Err(invalid_expiry()),
     };
     let seconds = text
         .trim_end_matches('Z')
@@ -86,12 +85,7 @@ fn check_expiry(info: &Map<String, Value>) -> Result<(), GoogleLoginFailure> {
         time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]"),
     )
     .map(|_| ())
-    .map_err(|_| {
-        GoogleLoginFailure::new(
-            PythonException::Value,
-            format!("time data '{seconds}' does not match format '%Y-%m-%dT%H:%M:%S'"),
-        )
-    })
+    .map_err(|_| invalid_expiry())
 }
 
 fn load(
@@ -190,23 +184,11 @@ impl AuthorizedUser {
     }
 }
 
-/// `reauth.refresh_grant` on a refused answer: a text body is the error itself, an
-/// `invalid_grant` with a rapt subtype asks to log in again, anything but a dict crashes on
-/// `.get`, and the rest is `_handle_error_response`'s.
+/// `reauth.refresh_grant` on a refused answer: an `invalid_grant` with a rapt subtype asks to
+/// log in again, and anything else is the endpoint's refusal.
 fn refusal(body: &str) -> GoogleLoginFailure {
-    let data = response_data(body);
-    let fields = match &data {
-        Value::String(text) => return GoogleLoginFailure::new(PythonException::Refresh, text),
-        Value::Object(fields) => fields,
-        other => {
-            return GoogleLoginFailure::new(
-                PythonException::Attribute,
-                format!(
-                    "'{}' object has no attribute 'get'",
-                    python_type_name(Some(other))
-                ),
-            );
-        }
+    let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(body) else {
+        return refused(body);
     };
     let subtype = fields.get("error_subtype").and_then(Value::as_str);
     if fields.get("error").and_then(Value::as_str) == Some("invalid_grant")
@@ -289,7 +271,7 @@ mod tests {
     #[case::invalid_grant(
         json!({"error": "invalid_grant", "error_description": "Token has been expired or revoked."}),
         PythonException::Refresh,
-        "('invalid_grant: Token has been expired or revoked.', {'error': 'invalid_grant', 'error_description': 'Token has been expired or revoked.'})"
+        "invalid_grant: Token has been expired or revoked."
     )]
     #[case::rapt(
         json!({"error": "invalid_grant", "error_subtype": "invalid_rapt"}),
@@ -297,7 +279,7 @@ mod tests {
         REAUTH_NEEDED
     )]
     #[case::text(json!("denied"), PythonException::Refresh, "denied")]
-    #[case::list(json!(["denied"]), PythonException::Attribute, "'list' object has no attribute 'get'")]
+    #[case::list(json!(["denied"]), PythonException::Refresh, r#"["denied"]"#)]
     #[tokio::test]
     async fn a_refused_refresh_raises_what_refresh_grant_raises(
         #[case] answer: Value,
@@ -335,9 +317,9 @@ mod tests {
     #[case::text(json!("2026-11-16T12:00:00.5Z"), None)]
     #[case::bad_text(
         json!("soon"),
-        Some((PythonException::Value, "time data 'soon' does not match format '%Y-%m-%dT%H:%M:%S'"))
+        Some((PythonException::Value, "Authorized user info has an expiry that is not a YYYY-MM-DDTHH:MM:SS time."))
     )]
-    #[case::number(json!(5), Some((PythonException::Attribute, "'int' object has no attribute 'rstrip'")))]
+    #[case::number(json!(5), Some((PythonException::Value, "Authorized user info has an expiry that is not a YYYY-MM-DDTHH:MM:SS time.")))]
     fn a_saved_expiry_is_parsed_at_load(
         #[case] expiry: Value,
         #[case] expected: Option<(PythonException, &str)>,
