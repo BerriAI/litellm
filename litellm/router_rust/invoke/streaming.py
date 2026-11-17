@@ -85,7 +85,7 @@ if TYPE_CHECKING:
 MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS: Final = 200
 MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
-RESPONSES_TERMINAL_EVENT_TYPES: Final = (
+_RESPONSES_TERMINAL_EVENT_TYPES: Final = (
     ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
     ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
     ResponsesAPIStreamEvents.RESPONSE_FAILED,
@@ -1645,7 +1645,7 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
             if self.completed_response is None:
                 self.completed_response = getattr(self._source_iterator, "completed_response", None)
             raise
-        if self.completed_response is None and getattr(chunk, "type", None) in RESPONSES_TERMINAL_EVENT_TYPES:
+        if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
             self.completed_response = chunk  # pyright: ignore[reportAttributeAccessIssue]  # the terminal event
         self._yielded_first_chunk = True
         sequence_number: Final = getattr(chunk, "sequence_number", None)

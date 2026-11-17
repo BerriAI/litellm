@@ -180,6 +180,7 @@ def test_a_responses_stream_the_client_drops_mid_stream_is_freed_without_a_clean
     uncached_gateway: Gateway, no_cleanup_pass: None
 ) -> None:
     gateway: Final = uncached_gateway
+    _HELD_OPEN.clear()
     try:
         _drop_mid_stream(gateway)
         before: Final = _log_records(gateway)
