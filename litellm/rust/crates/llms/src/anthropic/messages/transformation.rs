@@ -203,7 +203,7 @@ fn is_foundry_url(url: &str) -> bool {
         })
 }
 
-pub(crate) fn is_claude_model(model: &str) -> bool {
+pub fn is_claude_model(model: &str) -> bool {
     model.to_lowercase().contains("claude")
 }
 
@@ -351,7 +351,7 @@ pub(crate) fn transform_messages_request(
         strip_encrypted_reasoning_blocks_restoring_redacted_data,
         strip_raw_encrypted_reasoning_blocks,
     );
-    let messages = if is_claude_model(&request.model) {
+    let messages = if context.claude_base_model || is_claude_model(&request.model) {
         map_messages(
             messages,
             strip_unsigned_thinking_blocks,
@@ -1420,6 +1420,7 @@ mod tests {
                     drop_params: true,
                     drops_unsupported_params: false,
                     global_drop_params: false,
+                    claude_base_model: false,
                 }
             );
             return;

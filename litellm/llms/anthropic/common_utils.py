@@ -2208,9 +2208,10 @@ def strip_unsignable_thinking_blocks_for_claude(
 ) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking blocks Claude cannot verify (no signature, or another provider's
-    encrypted reasoning) before the request reaches a Claude model on any route,
-    since Claude answers 400 to them, a pending tool turn included. Other targets
-    (DeepSeek, MiniMax, GLM) need their unsigned reasoning replayed.
+    encrypted reasoning) before /v1/messages sends the request to a Claude model on
+    the native or chat adapter route, since Claude answers 400 to them, a pending
+    tool turn included. Other targets (DeepSeek, MiniMax, GLM) need their unsigned
+    reasoning replayed.
     """
     if not any("claude" in name.lower() for name in (model, base_model or "")):
         return messages
