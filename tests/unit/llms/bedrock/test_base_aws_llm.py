@@ -3255,6 +3255,35 @@ class TestGetBedrockModelIdArnHandling:
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "bedrock/invoke/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "invoke/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ],
+    )
+    def test_region_path_segment_selects_the_region_and_leaves_the_model_id(self, model: str, monkeypatch):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"):
+            monkeypatch.delenv(name, raising=False)
+
+        assert (self._call(model), BaseAWSLLM()._get_aws_region_name(optional_params={}, model=model)) == (
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us-gov-west-1",
+        )
+
+    def test_explicit_region_beats_the_region_path_segment(self):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        model: Final = "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0"
+        assert (
+            BaseAWSLLM()._get_aws_region_name(optional_params={"aws_region_name": "us-gov-east-1"}, model=model)
+            == "us-gov-east-1"
+        )
+
     def test_bare_arn_is_encoded(self):
         """Direct ARN without routing prefix must also be URL-encoded."""
         model_id = self._call(self.ARN)
