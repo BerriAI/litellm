@@ -9,6 +9,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, proxy_request_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -560,6 +561,9 @@ class PassThroughEndpointLogging:
                 call=agents_call,
                 httpx_response=httpx_response,
                 request_body=_JSON_OBJECT.validate_python(request_body),
+                request_headers=proxy_request_headers(
+                    as_str_mapping(logging_obj.model_call_details.get("litellm_params"))
+                ),
                 response_body=_JSON_OBJECT.validate_python(response_body) if isinstance(response_body, dict) else None,
                 start_time=start_time,
             )

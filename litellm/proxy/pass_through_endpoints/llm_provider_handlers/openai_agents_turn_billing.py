@@ -5,6 +5,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ from litellm.constants import (
     OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS,
     OPENAI_AGENTS_TURN_USAGE_SETTLE_SECONDS,
     OPENAI_AGENTS_TURNS_PAGE_LIMIT,
+    PASS_THROUGH_HEADER_PREFIX,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
@@ -30,6 +32,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -40,6 +43,8 @@ from .transcribe_passthrough_logging_handler import PassThroughLogDispatch
 _SESSION_ID: Final = re.compile(r"[A-Za-z0-9_-]+")
 _TERMINAL_TURN_STATUSES: Final = frozenset({"completed", "failed", "cancelled"})
 _TURN_STARTING_EVENT_TYPE: Final = "agent.session.input.message"
+_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project"})
+_TURN_CLAIM_KEY_PREFIX: Final = "openai_agents_turn_claim:"
 
 
 class AgentSpec(BaseModel):
@@ -60,12 +65,6 @@ class _SessionEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     session: _Session
-
-
-class _RequestAgent(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    agent: AgentSpec
 
 
 class _SessionCreateBody(BaseModel):
@@ -107,6 +106,7 @@ class AgentsTurnStart:
     session_id: str
     started_at: int
     agent: AgentSpec | None
+    scope_headers: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,13 +156,48 @@ class AgentsSessionsCall:
 
 
 class AgentsApiGet(Protocol):
-    def __call__(self, base_url: str, path: str) -> Awaitable[httpx.Response]: ...
+    def __call__(self, base_url: str, path: str, scope_headers: Mapping[str, str]) -> Awaitable[httpx.Response]: ...
 
 
-class _TurnClaims(Protocol):
-    def get_cache(self, key: str) -> object: ...
+class TurnClaimStore(Protocol):
+    async def async_set_cache(self, key: str, value: object, *, nx: bool, ttl: int) -> object: ...
 
-    def set_cache(self, key: str, value: object) -> None: ...
+    async def async_get_cache(self, key: str) -> object: ...
+
+
+class TurnClaims:
+    def __init__(self, shared_store: Callable[[], TurnClaimStore | None]) -> None:
+        self._shared_store: Final = shared_store
+        self._local: Final = InMemoryCache(
+            max_size_in_memory=OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE,
+            default_ttl=int(OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS),
+        )
+
+    async def claim(self, turn_id: str, claimant: str) -> bool:
+        if self._local.get_cache(turn_id) is not None:
+            return False
+        owner: Final = await self._shared_owner(turn_id, claimant)
+        self._local.set_cache(turn_id, owner)
+        return owner == claimant
+
+    async def _shared_owner(self, turn_id: str, claimant: str) -> object:
+        store: Final = self._shared_store()
+        if store is None:
+            return claimant
+        key: Final = f"{_TURN_CLAIM_KEY_PREFIX}{turn_id}"
+        try:
+            _ = await store.async_set_cache(key, claimant, nx=True, ttl=int(OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS))
+            stored: Final = await store.async_get_cache(key)
+        except Exception as e:  # noqa: BLE001  # a Redis outage keeps the claim in this worker, as DualCache's writes do
+            verbose_proxy_logger.warning("OpenAI Agents passthrough: shared turn claim failed, claiming locally: %s", e)
+            return claimant
+        return claimant if stored is None else stored
+
+
+def _coordination_redis() -> TurnClaimStore | None:
+    from litellm.proxy.proxy_server import redis_usage_cache
+
+    return redis_usage_cache
 
 
 def _sessions_route(path: str) -> _SessionsRoute | None:
@@ -190,11 +225,12 @@ def _has_input_message(request_body: Mapping[str, object]) -> bool:
     return any(event.type == _TURN_STARTING_EVENT_TYPE for event in events)
 
 
-def _request_agent(request_body: Mapping[str, object]) -> AgentSpec | None:
-    try:
-        return _RequestAgent.model_validate(request_body).agent
-    except ValidationError:
-        return None
+def _scope_headers(request_headers: Mapping[str, object] | None) -> Mapping[str, str]:
+    forwarded: Final = BasePassthroughUtils.pass_through_prefixed_headers(
+        {name: value for name, value in (request_headers or {}).items() if isinstance(value, str)}
+    )
+    named: Final = ((name[len(PASS_THROUGH_HEADER_PREFIX) :].lower(), value) for name, value in forwarded.items())
+    return MappingProxyType({name: value for name, value in named if name in _SCOPE_HEADERS})
 
 
 def _session_from_body(response_body: object) -> _Session | None:
@@ -248,6 +284,7 @@ def openai_agents_sessions_call(url_route: str, custom_llm_provider: object) -> 
 def _turn_start(
     call: AgentsSessionsCall,
     request_body: Mapping[str, object],
+    request_headers: Mapping[str, object] | None,
     relayed_session: Callable[[], _Session | None],
     start_time: datetime,
 ) -> AgentsTurnStart | None:
@@ -261,7 +298,8 @@ def _turn_start(
         base_url="/".join((call.origin, *target.prefix)),
         session_id=target.session_id,
         started_at=math.floor(start_time.timestamp()),
-        agent=(session.agent if session is not None else None) or _request_agent(request_body),
+        agent=session.agent if session is not None else None,
+        scope_headers=_scope_headers(request_headers),
     )
 
 
@@ -269,29 +307,32 @@ def agents_turn_start_from_response(
     call: AgentsSessionsCall,
     httpx_response: httpx.Response,
     request_body: Mapping[str, object],
+    request_headers: Mapping[str, object] | None,
     response_body: Mapping[str, object] | None,
     start_time: datetime,
 ) -> AgentsTurnStart | None:
     if not httpx_response.is_success or httpx_response.request.method != "POST":
         return None
-    return _turn_start(call, request_body, lambda: _session_from_body(response_body), start_time)
+    return _turn_start(call, request_body, request_headers, lambda: _session_from_body(response_body), start_time)
 
 
 def agents_turn_start_from_stream(
     call: AgentsSessionsCall,
     request_body: Mapping[str, object],
+    request_headers: Mapping[str, object] | None,
     raw_bytes: Sequence[bytes],
     start_time: datetime,
 ) -> AgentsTurnStart | None:
     return _turn_start(
         call,
         request_body,
+        request_headers,
         lambda: _streamed_session(split_sse_lines(b"".join(raw_bytes).decode("utf-8", errors="replace"))),
         start_time,
     )
 
 
-async def live_agents_api_get(base_url: str, path: str) -> httpx.Response:
+async def live_agents_api_get(base_url: str, path: str, scope_headers: Mapping[str, str]) -> httpx.Response:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         openai_passthrough_base_url,
         openai_passthrough_credential,
@@ -302,7 +343,7 @@ async def live_agents_api_get(base_url: str, path: str) -> httpx.Response:
         {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
     )
     return await get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint).client.get(
-        f"{base_url}/{path}", headers={**auth_headers, "openai-beta": "agents=v1"}
+        f"{base_url}/{path}", headers={**scope_headers, **auth_headers, "openai-beta": "agents=v1"}
     )
 
 
@@ -345,14 +386,12 @@ class OpenAIAgentsTurnBiller:
         get: AgentsApiGet,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
+        claims: TurnClaims | None = None,
     ) -> None:
         self._get: Final = get
         self._sleep: Final = sleep
         self._clock: Final = clock
-        self._claims: Final[_TurnClaims] = InMemoryCache(
-            max_size_in_memory=OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE,
-            default_ttl=int(OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS),
-        )
+        self._claims: Final = claims if claims is not None else TurnClaims(shared_store=lambda: None)
         self._tasks: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio holds tasks weakly
 
     def schedule(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> "asyncio.Task[None]":
@@ -392,7 +431,7 @@ class OpenAIAgentsTurnBiller:
                 continue
             failures = 0
             turn = (
-                self._claim(page, turn_start, claimant)
+                await self._claim(page, turn_start, claimant)
                 if claimed_turn_id is None
                 else next((seen for seen in page.data if seen.id == claimed_turn_id), None)
             )
@@ -410,20 +449,19 @@ class OpenAIAgentsTurnBiller:
                 return _UnbilledTurn(reason=f"turn {turn.id} ended without reporting usage")
         return _UnbilledTurn(reason=f"turn usage did not arrive within {OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS}s")
 
-    def _claim(self, page: _TurnsPage, turn_start: AgentsTurnStart, claimant: str) -> _Turn | None:
+    async def _claim(self, page: _TurnsPage, turn_start: AgentsTurnStart, claimant: str) -> _Turn | None:
         candidates: Final = sorted(
             (turn for turn in reversed(page.data) if turn.created_at >= turn_start.started_at),
             key=lambda turn: turn.created_at,
         )
         for turn in candidates:
-            if self._claims.get_cache(turn.id) is None:
-                self._claims.set_cache(turn.id, claimant)
+            if await self._claims.claim(turn.id, claimant):
                 return turn
         return None
 
     async def _fetch(self, turn_start: AgentsTurnStart, path: str) -> bytes | None:
         try:
-            response: Final = await self._get(turn_start.base_url, path)
+            response: Final = await self._get(turn_start.base_url, path, turn_start.scope_headers)
         except httpx.HTTPError as e:
             verbose_proxy_logger.warning("OpenAI Agents passthrough: GET %s failed: %s", path, e)
             return None
@@ -497,4 +535,6 @@ class OpenAIAgentsTurnBiller:
         )
 
 
-openai_agents_turn_biller: Final = OpenAIAgentsTurnBiller(get=live_agents_api_get)
+openai_agents_turn_biller: Final = OpenAIAgentsTurnBiller(
+    get=live_agents_api_get, claims=TurnClaims(shared_store=_coordination_redis)
+)
