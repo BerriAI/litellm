@@ -373,8 +373,8 @@ async def create_credential(
             _CREDENTIAL_DICT_ADAPTER.validate_python(credential_values),
             credential_info,
         )
+        _reject_non_admin_wif_fields(server_owned_wif_fields_written(copilot_values), user_api_key_dict)
         normalized_values: Final = _without_keys(copilot_values, blank_app_fields(copilot_values))
-        _reject_non_admin_wif_fields(server_owned_wif_fields_written(normalized_values), user_api_key_dict)
         _validate_github_app_values(normalized_values)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict

@@ -3544,6 +3544,24 @@ def test_create_github_app_never_stores_a_blank_app_field(credential_store: _Ins
     assert "github_copilot_app_private_key" not in listed.json()["credentials"][0]["credential_values"]
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_non_admin_cannot_create_a_credential_with_a_blank_app_field(
+    credential_store: _InstallCredentialStore, blank: str
+) -> None:
+    create: Final = AsyncMock()
+    credential_store(create=create)
+    response: Final = _post_credential(
+        {
+            "credential_name": "copilot-app",
+            "credential_values": {"github_copilot_app_private_key": blank},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        },
+        auth=_as_non_admin,
+    )
+    assert response.status_code == 403, response.text
+    create.assert_not_awaited()
+
+
 @pytest.fixture
 def app_pem() -> str:
     from cryptography.hazmat.primitives import serialization
