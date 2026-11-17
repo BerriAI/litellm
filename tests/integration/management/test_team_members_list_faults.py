@@ -205,7 +205,9 @@ def test_pages_stay_correct_while_one_of_two_workers_is_killed_mid_burst(
         def read_pages(reader: int) -> tuple[tuple[bool, int, str], ...]:
             page: Final = reader % 3 + 1
             outcomes: list[tuple[bool, int, str]] = []  # mutable-ok: appended by one reader thread until told to stop
-            while not stop.is_set():
+            while not stop.is_set() or (
+                killed.is_set() and not any(after and status == 200 for after, status, _ in outcomes)
+            ):
                 after_kill = killed.is_set()
                 try:
                     with httpx.Client(base_url=base_url, timeout=15, trust_env=False) as fresh:
