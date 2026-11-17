@@ -33,6 +33,7 @@ class HostFacts:
     master_key: str | None
     premium: bool
     has_db: bool
+    db_configured: bool = False
     ui_login: bool = True
     proxy_budget: bool = False
     metrics_require_auth: bool = True
@@ -106,6 +107,7 @@ def proxy_settings() -> RustAuthSettings:
             master_key=proxy_server.master_key,
             premium=proxy_server.premium_user,
             has_db=proxy_server.prisma_client is not None,
+            db_configured=proxy_server.prisma_client is not None or proxy_server.database_url_configured,
             ui_login=proxy_server.ui_login_enabled,
             proxy_budget=litellm.max_budget > 0,
             metrics_require_auth=litellm.require_auth_for_metrics_endpoint is not False,

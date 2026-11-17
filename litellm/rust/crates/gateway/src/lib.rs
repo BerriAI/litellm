@@ -1,4 +1,3 @@
-mod auth;
 mod error;
 mod redis;
 pub use error::Error;
@@ -18,7 +17,7 @@ use http_body_util::BodyExt;
 use litellm_config::Config;
 use litellm_config_load::{ConfigEnvironment, environment_values};
 use litellm_env::{Lookup, ProcessEnvironment};
-use litellm_gateway_auth::Auth;
+use litellm_gateway_auth::{Auth, BearerOrXApiKey};
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
@@ -115,65 +114,15 @@ pub async fn build_redis(
     redis::connect(config, &*lookup, &resources).await
 }
 
-pub async fn build_mcp(
-    config: &Config,
-    shutdown: tokio_util::sync::CancellationToken,
-    pool: &HttpClientPool,
-    http: &litellm_http::HttpClientConfig,
-) -> Result<Option<litellm_gateway_mcp::ConfiguredGateway>, Error> {
-    if !config.mcp_tools.is_empty() {
-        return Err(Error::McpSetting("mcp_tools".into()));
-    }
-    if config.mcp_servers.is_empty() {
-        return Ok(None);
-    }
-    if let Some(setting) = config
-        .general_settings
-        .additional_fields
-        .keys()
-        .chain(config.litellm_settings.additional_fields.keys())
-        .find(|key| key.starts_with("mcp_"))
-    {
-        return Err(Error::McpSetting(setting.clone()));
-    }
-    if !config.guardrails.is_empty()
-        || !config.policies.is_empty()
-        || !config.policy_attachments.is_empty()
-    {
-        return Err(Error::McpGuardrails);
-    }
-    Auth::from_config(config).validate().await?;
-    let client = pool.client(http, ClientVariant::NoRedirect)?;
-    Ok(Some(
-        litellm_gateway_mcp::ConfiguredGateway::connect(
-            &config.mcp_servers,
-            (*client).clone(),
-            shutdown,
-        )
-        .await?,
-    ))
-}
-
-pub fn router(
-    inference: Arc<Gateway>,
-    config: &Config,
-    ui: Option<Router>,
-    mcp: Option<Router>,
-) -> Router {
-    let auth = Auth::from_config(config);
-    let inference = litellm_gateway_inference::router(inference)
-        .merge(mcp.unwrap_or_default())
-        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+pub fn router(inference: Arc<Gateway>, config: &Config) -> Router {
+    let auth = Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey));
+    litellm_gateway_inference::router(inference)
         .route_layer(axum::middleware::from_fn_with_state(
             auth,
             litellm_gateway_auth::authenticate,
         ))
-        .layer(axum::middleware::from_fn(log_request));
-    let health = Router::new().route("/health/readiness", axum::routing::get(readiness));
-    match ui {
-        Some(ui) => inference.merge(ui).merge(health),
-        None => inference.merge(health),
-    }
+        .layer(axum::middleware::from_fn(log_request))
+        .route("/health/readiness", axum::routing::get(readiness))
 }
 
 async fn readiness() -> axum::Json<serde_json::Value> {

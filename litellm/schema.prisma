@@ -2091,6 +2091,8 @@ model LiteLLM_ShadowEvalJob {
   ends_at           DateTime
   stopped_at        DateTime?
   stopped_by        String?  // operator who stopped it early; null when it ended on its own
+  rubric            String?  // criteria both responses are graded against; null on preference-only jobs
+  rubric_version    Int?     // grading contract the rubric job runs under; set exactly when rubric is
 
   @@index([group_id])
   @@index([target_type, target_id])
@@ -2114,6 +2116,8 @@ model LiteLLM_ShadowEvalAttempt {
   real_classifier_cost   Float @default(0)
   shadow_classifier_cost Float @default(0)
   real_cache_hit Boolean @default(false)
+  real_grade   Int?     // rubric jobs: 1-5 grade of the response the caller received; null = ungraded
+  shadow_grade Int?     // rubric jobs: 1-5 grade of the shadow response; null = ungraded
   error        String?
   created_at   DateTime @default(now())
 
