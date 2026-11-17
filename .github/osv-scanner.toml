@@ -11,22 +11,22 @@ reason = "filelock WindowsFileLock ignores mode in every release from 3.10.0 bef
 [[IgnoredVulns]]
 id = "GHSA-pcg2-g6cj-q92c"
 ignoreUntil = 2027-02-01
-reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's HTTP header parsing is never reached; remove this entry once 3.10 is dropped"
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6.1; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's HTTP header parsing is never reached; remove this entry once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-pw9p-v7r6-gx4p"
 ignoreUntil = 2027-02-01
-reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's RedirectHandler is never reached; remove this entry once 3.10 is dropped"
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6.1; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's RedirectHandler is never reached; remove this entry once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-r4j5-9xpp-3985"
 ignoreUntil = 2027-02-01
-reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's chunked body reading is never reached; remove this entry once 3.10 is dropped"
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6.1; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's chunked body reading is never reached; remove this entry once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-45c3-73f7-pv4m"
 ignoreUntil = 2027-02-01
-reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.0; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
+reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.2; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
 
 [[IgnoredVulns]]
 id = "GHSA-mmhr-3c5m-f64f"
@@ -40,3 +40,23 @@ ecosystem = "PyPI"
 vulnerability.ignore = true
 effectiveUntil = 2027-02-01
 reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups and of the mlflow extra stays on 12.3.0; 3.11+ is on 13.0.0; pillow has never shipped an older-major release after the next major (no 10.x after 11.0.0, no 11.x after 12.0.0), so 13.x is the only fix line; extended to 2027-02-01 with maintainer approval, same date as every other Python 3.10 entry; remove once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-vvf4-9x63-8xvv"
+ignoreUntil = 2027-02-01
+reason = "dnspython 2.9.2 is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.2; the advisory is memory and CPU use when dns.rdata.from_text parses a WKS record from attacker-controlled zone file text, and litellm only reaches dnspython through pydantic EmailStr, which never parses zone files or does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
+
+[[IgnoredVulns]]
+id = "GHSA-5cjw-f85j-cv6r"
+ignoreUntil = 2027-02-01
+reason = "tornado 6.6.1 is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6.1; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's RedirectHandler is never reached; remove this entry once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-6655-6qjp-jx7x"
+ignoreUntil = 2027-02-01
+reason = "soupsieve 3.0.2 is the first fix and requires Python >= 3.11.5, so Python 3.10 and 3.11.0-3.11.4 resolve 2.10 while newer Python versions resolve 4.1. The advisory is exponential regex backtracking when compiling an untrusted CSS selector. litellm declares beautifulsoup4 in its ci dependency group and uses BeautifulSoup only in tests/code_coverage_tests/bedrock_pricing.py, which calls find and find_all and never compiles a CSS selector; no runtime litellm code imports soupsieve or beautifulsoup4. Remove once 3.10 is dropped and the minimum Python version is at least 3.11.5"
+
+[[IgnoredVulns]]
+id = "GHSA-7g44-g9rc-x53w"
+ignoreUntil = 2027-02-01
+reason = "soupsieve 3.0.2 is the first fix and requires Python >= 3.11.5, so Python 3.10 and 3.11.0-3.11.4 resolve 2.10 while newer Python versions resolve 4.1. The advisory is unbounded recursion when parsing an untrusted CSS selector with deeply nested pseudo-classes. litellm declares beautifulsoup4 in its ci dependency group and uses BeautifulSoup only in tests/code_coverage_tests/bedrock_pricing.py, which calls find and find_all and never parses a CSS selector; no runtime litellm code imports soupsieve or beautifulsoup4. Remove once 3.10 is dropped and the minimum Python version is at least 3.11.5"

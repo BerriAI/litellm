@@ -73,7 +73,30 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "supports_prompt_caching": True,
         "supports_reasoning": True,
     },
+    "gpt-6.1-terra": {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1.03e-06,
+        "output_cost_per_token": 5.15e-06,
+        "input_cost_per_token_flex": 5.15e-07,
+        "output_cost_per_token_flex": 2.575e-06,
+        "input_cost_per_token_priority": 2.06e-06,
+        "output_cost_per_token_priority": 1.03e-05,
+        "cache_read_input_token_cost": 5.15e-08,
+        "cache_creation_input_token_cost": 1.2875e-06,
+        "cache_creation_input_token_cost_above_12hr": 2.575e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
+    },
     "gpt-6-luna": {
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
         "output_cost_per_token_priority": 1e-06,
         "input_cost_per_token_priority": 2e-07,
         "output_cost_per_token_flex": 2.5e-07,
@@ -115,6 +138,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "mode": "chat",
         "input_cost_per_token": 1.13e-06,
         "output_cost_per_token": 1.05e-06,
+        "cache_read_input_token_cost": 1.13e-07,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.005,
             "search_context_size_medium": 0.008,
@@ -965,6 +989,27 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 1.51e-06,
         "output_cost_per_token": 7.51e-06,
     },
+    "gpt-image-2.6-sunburst": {
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "input_cost_per_token": 5.02e-06,
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+    },
+    "gpt-4o-mini-tts": {
+        "litellm_provider": "openai",
+        "mode": "audio_speech",
+        "input_cost_per_token": 6.1e-07,
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_second": 0.00025,
+    },
+    "gpt-4o-transcribe": {
+        "litellm_provider": "openai",
+        "mode": "audio_transcription",
+        "input_cost_per_token": 2.52e-06,
+        "input_cost_per_audio_token": 6e-06,
+        "output_cost_per_token": 1e-05,
+    },
     "text-embedding-3-large": {"litellm_provider": "openai", "mode": "embedding", "input_cost_per_token": 1.3e-07},
     "gpt-5.4": {
         "litellm_provider": "openai",
@@ -1323,6 +1368,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "supports_function_calling": True,
     },
     "gpt-6.1-sol": {
+        "cache_creation_input_token_cost_above_12hr": 5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
         "output_cost_per_token_priority": 2e-05,
         "input_cost_per_token_priority": 4e-06,
         "output_cost_per_token_flex": 5e-06,
@@ -1529,6 +1580,13 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "supports_function_calling": True,
     },
     "gpt-6-sol": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_12hr": 5.5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
         "cache_read_input_token_cost": 2.2e-07,
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_flex": 1.1e-06,
@@ -1551,6 +1609,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
     },
     "gpt-6-astra": {
+        "cache_creation_input_token_cost_above_12hr": 3e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
         "cache_read_input_token_cost": 1.2e-06,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 3e-05,

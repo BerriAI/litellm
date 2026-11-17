@@ -94,10 +94,24 @@ def test_token_redaction_masks_known_token_shapes(token: str) -> None:
             "-----BEGIN PRIVATE KEY-----\nREDACTED",
         ),
         ("-----BEGIN BAD-----\n-----END PRIVATE KEY-----", "-----BEGIN BAD-----\n-----END PRIVATE KEY-----"),
+        (
+            "eyJa-sk-short-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----",
+            "eyJa-sk-shortREDACTED",
+        ),
     ),
 )
 def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> None:
     assert redact_tokens(text) == expected
+
+
+@pytest.mark.parametrize("character", ("é", "²", "\u0301", "\U00014153", "\u1c89"))
+def test_token_boundaries_follow_python_unicode_version(character: str) -> None:
+    token: Final = "ghp_" + "A" * 36
+    key: Final = "AKIA" + "A" * 16
+    expected_token: Final = token if character.isalnum() else "REDACTED"
+    expected_key: Final = key if character.isalnum() else "REDACTED"
+    assert redact_tokens(character + token) == character + expected_token
+    assert redact_tokens(key + character) == expected_key + character
 
 
 @pytest.mark.parametrize(
@@ -120,6 +134,29 @@ def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> N
 def test_failed_jwt_header_does_not_hide_other_tokens(content: str, expected: str) -> None:
     prefix: Final = "eyJa-"
     assert redact_tokens(prefix + content) == prefix + expected
+
+
+@pytest.mark.parametrize("suffix", ("", "..signature", ".body."))
+def test_failed_jwt_run_masks_each_embedded_bounded_key(suffix: str) -> None:
+    run: Final = "eyJaaaaaaaaaa-AKIA" + "A" * 16 + "-"
+    expected: Final = "eyJaaaaaaaaaa-REDACTED-"
+    assert redact_tokens(run * 24_000 + suffix) == expected * 24_000 + suffix
+
+
+@pytest.mark.parametrize(
+    "text, replacement, expected",
+    (
+        ("\u0301sk-" + "a" * 20, "hidden", "\u0301hidden"),
+        ("²sk-" + "a" * 20, "hidden", "²sk-" + "a" * 20),
+        ("\ud800sk-" + "a" * 20, "hidden", "\ud800hidden"),
+        ("sk-" + "a" * 20, r"\n", "\n"),
+        ("sk-" + "a" * 20, "", ""),
+    ),
+)
+def test_token_redaction_preserves_unicode_and_replacement_semantics(
+    text: str, replacement: str, expected: str
+) -> None:
+    assert redact_tokens(text, replacement) == expected
 
 
 @pytest.fixture(autouse=True)

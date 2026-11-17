@@ -1,26 +1,37 @@
 mod keys;
 mod types;
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use litellm_python_compat::{Value, json};
 use litellm_redis_client::{Declared, RedisBatch, commands};
+use parking_lot::Mutex;
 
 pub use self::keys::is_key_object;
 pub use self::types::Settings;
 use crate::{
-    Error, Number, Pending, RequestRedis, Send,
+    Error, Number, Pending, RequestRedis, Send, codec,
     dual_cache::DualCache,
-    memory::{Clock, lock, system_clock},
+    failure_log::redis_failure,
+    memory::{Clock, system_clock},
     remote::{Remote, RemoteSlot},
     request::ready,
 };
 
 /// `RedisCache.async_increment_if_present`, byte for byte, sent as `EVAL` like it.
 const INCREMENT_IF_PRESENT: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then return false end return redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])";
+
+/// `SET` the entry only while its generation is the one the lease read.
+const SET_LEASED: &str = "if (redis.call('GET', KEYS[2]) or '') ~= ARGV[1] then return 0 end redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3]) return 1";
+
+/// The `DEL` and a new generation as one step, whatever order a batch sends its ops in. `DEL`
+/// leads so a Redis at its memory limit still deletes the entry.
+const DELETE_VOIDING_LEASES: &str = "local deleted = redis.call('DEL', KEYS[1]) redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2]) return deleted";
+
+const GENERATION_LABEL: &str = "auth_cache_generation";
+
+/// Longer than any load a lease covers. A generation that expired reads like one never written.
+const GENERATION_TTL: Duration = Duration::from_secs(600);
 
 /// The proxy's auth object cache with `enable_redis_auth_cache` on: `UserApiKeyCache`'s two
 /// `DualCache` partitions, so churn in management objects cannot evict user-key objects, in front of
@@ -54,13 +65,13 @@ impl AuthCache {
     }
 
     pub fn settings(&self) -> Settings {
-        *lock(&self.settings)
+        *self.settings.lock()
     }
 
     /// `UserApiKeyCache.update_cache_ttl` and `update_in_memory_max_size` on both partitions, which
     /// keep what they hold.
     pub fn reconfigure(&self, settings: Settings) {
-        *lock(&self.settings) = settings;
+        *self.settings.lock() = settings;
         self.key_objects.reconfigure(settings.memory());
         self.objects.reconfigure(settings.memory());
     }
@@ -130,9 +141,85 @@ impl AuthCache {
         self.partition(key).declare_set(send, key, value, ttl)
     }
 
-    /// `DualCache.async_delete_cache_pre_call`, memory now and the `DEL` on the batch `send` picks.
+    /// `DualCache.async_delete_cache_pre_call`, memory now and the `DEL` on the batch `send` picks,
+    /// in one script with the write that voids the key's leases.
     pub fn declare_delete(&self, send: Send<'_>, key: &str) -> Result<Pending<()>, Error> {
-        self.partition(key).declare_delete(send, key)
+        let partition = self.partition(key);
+        let Some((client, generation)) = self
+            .redis
+            .client()
+            .and_then(|client| Some((client, client.sibling_key(key, GENERATION_LABEL)?)))
+        else {
+            return partition.declare_delete(send, key);
+        };
+        partition.memory().delete(key)?;
+        if let Some(misses) = send.misses(client) {
+            misses.note([key.to_owned()]);
+        }
+        let deleted = send.batch(client).add(commands::eval_source::<usize>(
+            DELETE_VOIDING_LEASES,
+            &[key, &generation],
+            (new_generation(), GENERATION_TTL.as_secs()),
+        ));
+        Ok(Box::pin(
+            async move { Ok(deleted.resolve().await.map(drop)?) },
+        ))
+    }
+
+    /// The generation of `key` every pod shares, read on a cache miss before the database read
+    /// that will fill it and handed to [`AuthCache::set_leased`]. Every delete of the key starts a
+    /// new one. `None` without Redis, before the first delete, and when Redis did not answer.
+    pub async fn lease(&self, key: &str) -> Option<String> {
+        let client = self.redis.client()?;
+        let generation = client.sibling_key(key, GENERATION_LABEL)?;
+        client
+            .send(commands::get::<String>(&generation))
+            .await
+            .unwrap_or_else(|error| {
+                redis_failure!(&error, "an auth cache lease was not read from Redis");
+                None
+            })
+    }
+
+    /// The Redis `SET` of `key`, refused when the key was deleted on any pod since `lease` was
+    /// read: the value may predate the write behind that delete. Memory is the caller's to write.
+    /// Also refused for a key no generation key can share a slot with, which no delete could void.
+    /// `true` without Redis, and when Redis failed or `json.dumps` refuses the value, which only
+    /// log as in [`AuthCache::set`].
+    pub async fn set_leased(
+        &self,
+        key: &str,
+        lease: Option<&str>,
+        value: Value,
+        ttl: Option<Duration>,
+    ) -> bool {
+        let Some(remote) = self.redis.get() else {
+            return true;
+        };
+        let ttl = ttl
+            .or(self.partition(key).default_in_memory_ttl())
+            .unwrap_or(remote.default_ttl);
+        let written = match codec::dumps(value) {
+            Err(error) => Err(error),
+            Ok(encoded) => match remote.client.sibling_key(key, GENERATION_LABEL) {
+                None => Ok(false),
+                Some(generation) => {
+                    remote
+                        .client
+                        .send(commands::eval_source(
+                            SET_LEASED,
+                            &[key, &generation],
+                            (lease.unwrap_or_default(), encoded, ttl.as_secs()),
+                        ))
+                        .await
+                }
+            }
+            .map_err(Error::from),
+        };
+        written.unwrap_or_else(|error| {
+            redis_failure!(&error, "LiteLLM Cache: exception in async add_cache");
+            true
+        })
     }
 
     /// `UserApiKeyCache.async_set_cache_pipeline`: the key-object entries in one pipeline, then
@@ -196,16 +283,45 @@ impl AuthCache {
         }))
     }
 
-    /// `UserApiKeyCache.async_delete_cache_keys`: the key-object partition and the rest as two
-    /// concurrent `DualCache.async_delete_cache_keys`. Both run even when one fails.
+    /// `UserApiKeyCache.async_delete_cache_keys`. Memory is dropped before the first wait on
+    /// Redis. A key deletes in one script with the write that voids its leases, all of them in one
+    /// pipeline. Keys no generation can share a slot with go as `DualCache.async_delete_cache_keys`
+    /// per partition. Every part runs even when another fails.
     pub async fn delete(&self, keys: &[String]) -> Result<(), Error> {
-        let (key_objects, others): (Vec<String>, Vec<String>) =
-            keys.iter().cloned().partition(|key| is_key_object(key));
-        let (key_objects, others) = tokio::join!(
+        keys.iter().try_for_each(|key| self.delete_local(key))?;
+        let Some(client) = self.redis.client() else {
+            return Ok(());
+        };
+        let pipeline = RedisBatch::pipelined(client.clone());
+        let (leased, plain): (Vec<_>, Vec<_>) = keys
+            .iter()
+            .map(|key| (key, client.sibling_key(key, GENERATION_LABEL)))
+            .partition(|(_, generation)| generation.is_some());
+        let deleted: Vec<_> = leased
+            .into_iter()
+            .filter_map(|(key, generation)| Some((key, generation?)))
+            .map(|(key, generation)| {
+                pipeline.add(commands::eval_source::<usize>(
+                    DELETE_VOIDING_LEASES,
+                    &[key, &generation],
+                    (new_generation(), GENERATION_TTL.as_secs()),
+                ))
+            })
+            .collect();
+        let (key_objects, others): (Vec<String>, Vec<String>) = plain
+            .into_iter()
+            .map(|(key, _)| key.clone())
+            .partition(|key| is_key_object(key));
+        let (deleted, key_objects, others) = tokio::join!(
+            Declared::all(deleted),
             self.key_objects.delete_keys(&key_objects),
             self.objects.delete_keys(&others)
         );
-        key_objects.and(others)
+        deleted
+            .into_iter()
+            .try_for_each(|reply| Ok(reply.map(drop)?))
+            .and(key_objects)
+            .and(others)
     }
 
     /// `RedisCache.async_batch_get_cache` for keys the caller found missing in memory, one `MGET` on
@@ -255,4 +371,8 @@ impl AuthCache {
             &self.objects
         }
     }
+}
+
+fn new_generation() -> String {
+    uuid::Uuid::new_v4().to_string()
 }

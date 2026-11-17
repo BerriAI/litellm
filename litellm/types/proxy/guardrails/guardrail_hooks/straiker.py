@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, Field
 
@@ -11,6 +11,7 @@ from .base import GuardrailConfigModel
 StraikerWebhookEventType = Literal["pre_call", "post_call"]
 StraikerWebhookStreamPhase = Literal["none", "assembled"]
 StraikerWebhookAction = Literal["NONE", "BLOCKED", "GUARDRAIL_INTERVENED"]
+StraikerStreamMode: TypeAlias = Literal["buffered", "streaming"]
 
 STRAIKER_WEBHOOK_SCHEMA_VERSION: Final = "1"
 
@@ -91,18 +92,27 @@ class StraikerWebhookResponse(LiteLLMBaseModel):
     texts: list[str] | None = None
     schema_version: str | None = None
     turn_id: str | None = Field(default=None, alias="turnId")
+    #: The v3 reply's own answer, `allow`, `detect` or `block`, and the turn's details, as the
+    #: guardrail logs them. `action` above is the v1 vocabulary the guardrail acts on.
+    verdict: str | None = None
+    #: Every control that fired, in detect or block mode; `blocked_by` is the subset that blocked.
+    controls: tuple[str, ...] = ()
+    events_scored: int | None = None
+    session_id: str | None = None
 
 
 class StraikerGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     timeout: float | None = Field(
         default=5.0,
         gt=0.0,
-        description="Per-attempt HTTP timeout in seconds.",
+        description="Per-attempt HTTP timeout in seconds. An attempt that times out is not retried.",
     )
     max_retries: int | None = Field(
         default=2,
         ge=0,
-        description="Retries on transient HTTP (408/429/5xx) and network errors.",
+        description=(
+            "Retries on HTTP 408, 429, 500, 502, 503 and 504 and on connection errors. Timeouts are not retried."
+        ),
     )
     initial_backoff: float | None = Field(
         default=0.1,
@@ -116,7 +126,10 @@ class StraikerGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     )
     unreachable_fallback: Literal["fail_open", "fail_closed"] | None = Field(
         default="fail_closed",
-        description="Behavior when Straiker is unreachable after retries.",
+        description=(
+            "Behavior when Straiker cannot give a verdict: a timeout, a connection error, or HTTP "
+            "408, 429, 500, 502, 503 or 504 once retries are spent. Other errors follow fail_on_error."
+        ),
     )
     fail_on_error: bool | None = Field(
         default=True,
@@ -129,6 +142,17 @@ class StraikerGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
         default=524288,
         gt=0,
         description="Maximum serialized webhook payload size sent to Straiker.",
+    )
+    stream_mode: StraikerStreamMode | None = Field(
+        default="buffered",
+        description=(
+            "How a streamed response reaches the client when post_call is on. 'buffered' (default) "
+            "withholds every chunk until Straiker has checked the whole response, so a blocked "
+            "response never reaches the client. 'streaming' sends chunks as they arrive and checks "
+            "the assembled response at the end, holding back only the stream's final frames: a "
+            "block then ends the stream with the block message, but the text before it has "
+            "already been delivered."
+        ),
     )
     api_version: Literal["v1", "v3"] | None = Field(
         default=None,

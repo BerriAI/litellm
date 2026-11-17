@@ -142,31 +142,40 @@ describe("LoginPage", () => {
     });
   });
 
-  it("should call router.push to SSO when jwt is invalid and auto_redirect_to_sso is true", async () => {
-    const invalidToken = "invalid-token";
-    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: {
-        auto_redirect_to_sso: true,
-        server_root_path: "/",
-        proxy_base_url: null,
-        sso_configured: true,
-      },
-      isLoading: false,
-    });
-    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
-    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+  it.each([null, "/ui/?page=usage"])(
+    "navigates the document to SSO automatically with return URL %s",
+    async (returnUrl) => {
+      if (returnUrl) {
+        document.cookie = `litellm_return_url=${encodeURIComponent(returnUrl)}; Path=/`;
+      }
+      const invalidToken = "invalid-token";
+      (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          auto_redirect_to_sso: true,
+          server_root_path: "/",
+          proxy_base_url: null,
+          sso_configured: true,
+        },
+        isLoading: false,
+      });
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
+      (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <LoginPage />
-      </QueryClientProvider>,
-    );
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <LoginPage />
+        </QueryClientProvider>,
+      );
 
-    await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith("http://localhost:4000/sso/key/generate");
-    });
-  });
+      await waitFor(() => {
+        expect(mockAssignDocument).toHaveBeenCalledWith(
+          `http://localhost:4000/sso/key/generate${returnUrl ? `?redirect_to=${encodeURIComponent(returnUrl)}` : ""}`,
+        );
+      });
+      expect(mockPush).not.toHaveBeenCalled();
+    },
+  );
 
   it("should not call router when jwt is invalid and auto_redirect_to_sso is false", async () => {
     const invalidToken = "invalid-token";
@@ -278,6 +287,11 @@ describe("LoginPage", () => {
     });
 
     expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Login with SSO" }));
+    expect(mockAssignDocument).toHaveBeenCalledWith(
+      `http://localhost:4000/sso/key/generate?return_to=${encodeURIComponent(`${window.location.origin}/ui/login/`)}`,
+    );
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it("should show disabled Login with SSO button with popover when sso_configured is false", async () => {

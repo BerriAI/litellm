@@ -1,5 +1,9 @@
 use litellm_config::Value;
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
+use litellm_python_compat::{
+    flags::{self, lower_is_true, str_to_bool},
+    json::from_json,
+};
 use litellm_redis_resolve::{Entry, Kwargs, SETTINGS, is_present, setting};
 
 use super::configured::{ConfiguredRedis, Nulls};
@@ -100,10 +104,10 @@ fn fallbacks(layered: &Kwargs, has_provider: bool, lookup: &dyn Lookup) -> Kwarg
     };
     let gcp = value("gcp_service_account").is_some();
     let azure = value("azure_redis_ad_token")
-        .is_some_and(|token| text(token).is_some_and(|token| token.eq_ignore_ascii_case("true")));
+        .is_some_and(|token| text(token).is_some_and(|token| lower_is_true(&token)));
     let aws = layered
         .get("aws_iam_auth")
-        .is_some_and(|entry| coerces_to_true(&entry.value));
+        .is_some_and(|entry| flags::coerces_to_true(&from_json(entry.value.clone())));
     let azure_settings = match azure && !gcp {
         true => fill(AZURE),
         false => Kwargs::new(),
@@ -151,31 +155,8 @@ fn fallback(
     })
 }
 
-// get_secret reads an environment value of true or false, in any case and padding, as a bool
-fn secret_flag(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
 fn secret(value: String) -> serde_json::Value {
-    secret_flag(&value).map_or(serde_json::Value::String(value), serde_json::Value::Bool)
-}
-
-// _coerces_to_true: text is read like _str_to_bool, anything else by its truthiness
-fn coerces_to_true(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::String(text) => {
-            matches!(text.to_ascii_lowercase().as_str(), "true" | "1" | "yes")
-        }
-        serde_json::Value::Null => false,
-        serde_json::Value::Bool(flag) => *flag,
-        serde_json::Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        serde_json::Value::Array(items) => !items.is_empty(),
-        serde_json::Value::Object(entries) => !entries.is_empty(),
-    }
+    str_to_bool(&value).map_or(serde_json::Value::String(value), serde_json::Value::Bool)
 }
 
 fn text(value: &serde_json::Value) -> Option<String> {
@@ -213,7 +194,7 @@ fn environment_reference(value: &Value, lookup: &dyn Lookup) -> Value {
     match value {
         Value::String(text) => match text.strip_prefix("os.environ/") {
             Some(name) => lookup.get(name).map_or(Value::Null, |value| {
-                secret_flag(&value).map_or(Value::String(value), Value::Bool)
+                str_to_bool(&value).map_or(Value::String(value), Value::Bool)
             }),
             None => value.clone(),
         },

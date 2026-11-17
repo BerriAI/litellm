@@ -1,11 +1,11 @@
 import io
 import json
-from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from os import PathLike
-from typing import Final, Literal, TypeVar
+from typing import IO, Final, Literal, TypeVar
 
 from openai.types import Batch
 from pydantic import TypeAdapter, ValidationError
@@ -19,6 +19,8 @@ from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, canonical_video_id, is_video_status_call_type
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_UTF8_BOM: Final = b"\xef\xbb\xbf"
 _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
 _PAYLOAD_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
@@ -236,7 +238,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_li
             # that followed it). Returning the partial `output` would silently
             # drop those rows; return the unchanged original so the provider
             # rejects the batch loudly instead of accepting a truncated one.
-            verbose_logger.error("error parsing trailing batch content: %s...", buffer[:100])
+            verbose_logger.error("error parsing trailing batch content after line %d", last_written_line)
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)
@@ -254,6 +256,65 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_li
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         # return the original file content if there is an error replacing the model name
         return file_content
+
+
+def rewrite_rows_naming_model(file_content: FileTypes, model: str, new_model: str, output_file: IO[bytes]) -> FileTypes:
+    source: Final = file_content[1] if isinstance(file_content, tuple) else file_content
+    if model == new_model or isinstance(source, PathLike) or not _rewound(source):
+        return file_content
+    renamed_rows: Final = (
+        sum(_copy_line_renaming_model(line, model, new_model, output_file) for line in _lines(source))
+        if any(_renamed_row(line, model, new_model) is not None for line in _lines(source))
+        else 0
+    )
+    if not isinstance(source, bytes):
+        source.seek(0)
+    if not renamed_rows:
+        return file_content
+    output_file.seek(0)
+    return output_file
+
+
+def _rewound(source: IO[bytes] | bytes) -> bool:
+    if isinstance(source, bytes):
+        return True
+    try:
+        source.seek(0)
+    except OSError:
+        return False
+    return True
+
+
+def _lines(source: IO[bytes] | bytes) -> Iterator[bytes]:
+    if isinstance(source, bytes):
+        return iter(io.BytesIO(source))
+    source.seek(0)
+    return iter(source)
+
+
+def _copy_line_renaming_model(line: bytes, model: str, new_model: str, output_file: IO[bytes]) -> bool:
+    renamed: Final = _renamed_row(line, model, new_model)
+    output_file.write(line if renamed is None else renamed)
+    return renamed is not None
+
+
+def _renamed_row(line: bytes, model: str, new_model: str) -> bytes | None:
+    row_text: Final = line.rstrip(b"\r\n")
+    bom: Final = _UTF8_BOM if row_text.startswith(_UTF8_BOM) else b""
+    try:
+        row: Final = _JSON_OBJECT.validate_json(row_text.removeprefix(bom))
+        body: Final = _JSON_OBJECT.validate_python(row.get("body"))
+    except ValidationError:
+        return None
+    if body.get("model") != model:
+        return None
+    try:
+        renamed: Final = json.dumps(
+            {**row, "body": {**body, "model": new_model}}, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+    except ValueError:
+        return None
+    return bom + renamed.encode("utf-8") + line[len(row_text) :]
 
 
 def get_router_metadata_variable_name(function_name: str | None) -> str:

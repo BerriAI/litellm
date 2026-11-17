@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from litellm.models.alert import (
     Alert,
+    AlertBulkResult,
+    AlertBulkUpdate,
     AlertFilter,
     AlertID,
     AlertStatus,
@@ -12,7 +14,12 @@ from litellm.models.alert import (
     AlertView,
     AlertViewPage,
 )
-from litellm.models.performance_alert import AlertMonitoring, AlertMonitoringUpdate, ModelDeprecationMonitoringUpdate
+from litellm.models.performance_alert import (
+    AlertMonitoring,
+    AlertMonitoringUpdate,
+    AlertThresholdsUpdate,
+    ModelDeprecationMonitoringUpdate,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.deps.repositories import AlertMonitoringRepositoryDep, AlertRepositoryDep
@@ -60,6 +67,13 @@ async def list_alerts(
     return AlertViewPage(data=await store.enrich(page.data), next_cursor=page.next_cursor)
 
 
+@router.patch("/alerts", response_model=AlertBulkResult, summary="Resolve or dismiss matching open alerts")
+async def update_open_alerts(data: AlertBulkUpdate, user: Auth, repository: AlertRepositoryDep) -> AlertBulkResult:
+    """Update all matching open saved alerts, including unloaded pages. Only gateway admins can write."""
+    store: Final = _authorized_store(user, repository, write=True)
+    return AlertBulkResult(updated=await store.set_open_status(data, user.user_id or "proxy-admin"))
+
+
 @router.get("/alerts/monitoring", response_model=AlertMonitoring, summary="Read alert monitoring settings")
 async def get_monitoring(user: Auth, repository: AlertMonitoringRepositoryDep) -> AlertMonitoring:
     """Read the gateway's opt-out setting and free allowance. Requires a gateway admin or view-only admin."""
@@ -71,12 +85,18 @@ async def get_monitoring(user: Auth, repository: AlertMonitoringRepositoryDep) -
 
 @router.patch("/alerts/monitoring", response_model=AlertMonitoring, summary="Enable or disable alert monitoring")
 async def update_monitoring(
-    data: AlertMonitoringUpdate | ModelDeprecationMonitoringUpdate, user: Auth, repository: AlertMonitoringRepositoryDep
+    data: AlertMonitoringUpdate | ModelDeprecationMonitoringUpdate | AlertThresholdsUpdate,
+    user: Auth,
+    repository: AlertMonitoringRepositoryDep,
 ) -> AlertMonitoring:
     """Change monitoring for every worker using this database. Only gateway admins can write. Keeps saved alerts."""
     _authorize(user, write=True)
     if repository is None:
         raise HTTPException(status_code=503, detail="Alerts require a database connection")
+    if isinstance(data, AlertThresholdsUpdate):
+        if (await repository.monitoring()).alert_limit is not None:
+            raise HTTPException(status_code=403, detail="Custom alert thresholds require Enterprise")
+        return await repository.set_thresholds(data.thresholds)
     if isinstance(data, ModelDeprecationMonitoringUpdate):
         return await repository.set_model_deprecations_enabled(data.model_deprecations_enabled)
     if data.enabled and (await repository.monitoring()).disabled_by_config:

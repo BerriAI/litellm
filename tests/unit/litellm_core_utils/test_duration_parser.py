@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.duration_parser import (
     get_annual_budget_window_start,
     get_budget_window_start,
     get_next_standardized_reset_time,
+    is_annual_budget_duration,
 )
 
 
@@ -246,6 +247,37 @@ def test_annual_reset_and_window_start(
 
 
 @pytest.mark.parametrize(
+    "long_spelling,short_form",
+    [
+        ("12months", "12mo"),
+        ("12mos", "12mo"),
+        ("1month", "1mo"),
+        ("7days", "7d"),
+        ("2weeks", "2w"),
+        ("1hour", "1h"),
+        ("5min", "5m"),
+        ("30sec", "30s"),
+    ],
+)
+def test_long_unit_spelling_resets_on_the_schedule_it_is_charged_for(long_spelling: str, short_form: str) -> None:
+    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
+    assert duration_in_seconds_from(now, long_spelling) == duration_in_seconds_from(now, short_form)
+    reset: Final = get_next_standardized_reset_time(long_spelling, now, "UTC")
+    assert reset == get_next_standardized_reset_time(short_form, now, "UTC")
+    assert get_budget_window_start(long_spelling, reset) == get_budget_window_start(short_form, reset)
+    assert is_annual_budget_duration(long_spelling) == is_annual_budget_duration(short_form)
+
+
+def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset() -> None:
+    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="1 month or 12 month"):
+        get_next_standardized_reset_time("3mo", now, "UTC")
+    reset: Final = get_next_standardized_reset_time("3months", now, "UTC")
+    assert reset == datetime(2026, 11, 14, tzinfo=timezone.utc)
+    assert get_budget_window_start("3months", reset) == datetime(2026, 11, 13, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
     "zone,reset_at,expected",
     (
         ("UTC", "2029-01-01T00:00:00+00:00", "2028-01-01T00:00:00+00:00"),
@@ -267,6 +299,16 @@ def test_annual_window_survives_timestamp_storage(
     }[storage]
 
     assert get_annual_budget_window_start(stored, zone) == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("microsecond", (0, 123000, 123456, 123999, 999999))
+@pytest.mark.parametrize("duration", ("1s", "1h", "1d", "1w", "30d", "1mo", "12mo"))
+def test_calendar_window_start_matches_database_millisecond_precision(duration: str, microsecond: int) -> None:
+    reset: Final = datetime(2026, 11, 15, 5, 48, 2, microsecond, tzinfo=timezone.utc)
+    expected: Final = get_budget_window_start(duration, reset.replace(microsecond=0)).replace(
+        microsecond=microsecond // 1000 * 1000
+    )
+    assert get_budget_window_start(duration, reset) == expected
 
 
 class TestResetTimeOfDay(unittest.TestCase):
@@ -445,7 +487,7 @@ class TestGetBudgetWindowStart(unittest.TestCase):
 
     def test_unrecognized_duration_is_the_one_day_window_the_scheduler_falls_back_to(self):
         self.assertEqual(
-            get_budget_window_start("1hr", datetime(2024, 1, 16, tzinfo=timezone.utc)),
+            get_budget_window_start("1y", datetime(2024, 1, 16, tzinfo=timezone.utc)),
             datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
 
