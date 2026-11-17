@@ -102,9 +102,7 @@ class GenerateContentToCompletionHandler:
         if isinstance(plain_adapter_logging_obj, LiteLLMLoggingObj):
             plain_adapter_logging_obj.set_logged_call_type(completion_call_type.value)
         if isinstance(logging_obj, LiteLLMLoggingObj):
-            logging_obj.update_messages(completion_request["messages"])
-        if stream and isinstance(logging_obj, LiteLLMLoggingObj):
-            logging_obj.stream_options = stream_options
+            logging_obj.apply_adapter_request(completion_request["messages"], stream_options)
         completion_kwargs: Final = GenerateContentCompletionKwargs(
             **_TranslatedCompletionKwargs(
                 **dict[str, object](
