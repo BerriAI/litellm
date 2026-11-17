@@ -236,7 +236,7 @@ impl MetadataCallerIdentity {
             .map_err(|error| token_failure(&error))?;
         if status != 200 {
             return Err(refresh_error(format!(
-                "Unable to retrieve AWS Session Token: {}",
+                "The EC2 metadata service refused a session token: {}",
                 body
             )));
         }
@@ -251,13 +251,15 @@ impl MetadataCallerIdentity {
             return Ok(region);
         }
         let Some(url) = self.region_url.as_deref().filter(|url| !url.is_empty()) else {
-            return Err(refresh_error("Unable to determine AWS region"));
+            return Err(refresh_error(
+                "No AWS region is set and the credential_source names no region_url.",
+            ));
         };
         let session_token = self.session_token(requests).await?;
         let (status, body) = self.get(requests, url, session_token.as_deref()).await?;
         if status != 200 {
             return Err(refresh_error(format!(
-                "Unable to retrieve AWS region: {body}"
+                "The EC2 metadata service refused the region: {body}"
             )));
         }
         let mut region = body;
@@ -284,13 +286,13 @@ impl MetadataCallerIdentity {
         let session_token = self.session_token(requests).await?;
         let Some(url) = &self.security_credentials_url else {
             return Err(refresh_error(
-                "Unable to determine the AWS metadata server security credentials endpoint",
+                "The credential_source names no AWS security credentials url.",
             ));
         };
         let (status, role) = self.get(requests, url, session_token.as_deref()).await?;
         if status != 200 {
             return Err(refresh_error(format!(
-                "Unable to retrieve AWS role name {role}"
+                "The EC2 metadata service refused the role name: {role}"
             )));
         }
         let (status, body) = self
@@ -298,12 +300,12 @@ impl MetadataCallerIdentity {
             .await?;
         if status != 200 {
             return Err(refresh_error(format!(
-                "Unable to retrieve AWS security credentials: {body}"
+                "The EC2 metadata service refused the security credentials: {body}"
             )));
         }
         let Ok(granted) = serde_json::from_str::<MetadataCredentials>(&body) else {
             return Err(refresh_error(
-                "Unable to retrieve AWS security credentials: the metadata service's reply is not a JSON object",
+                "The EC2 metadata service's security credentials are not a JSON object.",
             ));
         };
         Ok(litellm_auth_aws::Credentials::new(
@@ -357,7 +359,7 @@ pub(crate) fn metadata_aws_credentials(
     let Some(source) = &info.credential_source else {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
-            "A valid credential source or AWS security credentials supplier must be provided.",
+            "The AWS external account credentials name no credential_source.",
         ));
     };
     let environment_id = source.environment_id.clone().unwrap_or_default();
@@ -368,13 +370,13 @@ pub(crate) fn metadata_aws_credentials(
     let (Some(version), Some(verification_url)) = (version, verification_url) else {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidResource,
-            "No valid AWS 'credential_source' provided",
+            "The AWS credential_source needs an awsN environment_id and a regional_cred_verification_url.",
         ));
     };
     if version.parse::<u64>().ok() != Some(1) {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
-            format!("aws version '{version}' is not supported in the current build."),
+            format!("AWS credential_source version {version} is not supported."),
         ));
     }
     let subject = MetadataCallerIdentity {
@@ -672,9 +674,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_version(json!({"environment_id": "aws", "regional_cred_verification_url": "u"}), PythonException::InvalidResource, "No valid AWS 'credential_source' provided")]
-    #[case::no_url(json!({"environment_id": "aws1"}), PythonException::InvalidResource, "No valid AWS 'credential_source' provided")]
-    #[case::version_two(json!({"environment_id": "aws2", "regional_cred_verification_url": "u"}), PythonException::InvalidValue, "aws version '2' is not supported in the current build.")]
+    #[case::no_version(json!({"environment_id": "aws", "regional_cred_verification_url": "u"}), PythonException::InvalidResource, "The AWS credential_source needs an awsN environment_id and a regional_cred_verification_url.")]
+    #[case::no_url(json!({"environment_id": "aws1"}), PythonException::InvalidResource, "The AWS credential_source needs an awsN environment_id and a regional_cred_verification_url.")]
+    #[case::version_two(json!({"environment_id": "aws2", "regional_cred_verification_url": "u"}), PythonException::InvalidValue, "AWS credential_source version 2 is not supported.")]
     fn a_metadata_source_is_checked_as_google_auth_checks_it(
         #[case] source: Value,
         #[case] exception: PythonException,

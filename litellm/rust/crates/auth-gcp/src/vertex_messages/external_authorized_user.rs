@@ -21,7 +21,7 @@ use super::{
     transport::Requests,
 };
 
-const CANNOT_REFRESH: &str = "The credentials do not contain the necessary fields need to refresh the access token. You must specify refresh_token, token_url, client_id, and client_secret.";
+const CANNOT_REFRESH: &str = "The external account authorized user credentials need refresh_token, token_url, client_id and client_secret to refresh.";
 
 /// A workforce identity user's file, as `Credentials.from_info` reads it.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -84,7 +84,7 @@ pub(crate) fn external_account_authorized_user(
     let unloadable = || {
         GoogleLoginFailure::new(
             PythonException::DefaultCredentials,
-            format!("Failed to load external account authorized user credentials from {file}"),
+            format!("The external account authorized user credentials in {file} cannot be used."),
         )
     };
     let expiry = match info.expiry.as_deref() {
@@ -128,7 +128,7 @@ pub(crate) fn oauth_error(body: &str) -> GoogleLoginFailure {
             error_uri,
             ..
         }) => format!(
-            "Error code {code}{}{}",
+            "The token endpoint refused the refresh with {code}{}{}",
             error_description.map_or_else(String::new, |text| format!(": {text}")),
             error_uri.map_or_else(String::new, |text| format!(" - {text}")),
         ),
@@ -299,7 +299,7 @@ mod tests {
     #[rstest]
     #[case::described(
         json!({"error": "invalid_grant", "error_description": "expired", "error_uri": "https://e"}),
-        "Error code invalid_grant: expired - https://e"
+        "The token endpoint refused the refresh with invalid_grant: expired - https://e"
     )]
     #[case::not_an_oauth_error(
         json!({"message": "no"}),
@@ -339,7 +339,7 @@ mod tests {
             error,
             GoogleLoginFailure::new(
                 PythonException::DefaultCredentials,
-                "Failed to load external account authorized user credentials from /k.json"
+                "The external account authorized user credentials in /k.json cannot be used."
             )
         );
     }

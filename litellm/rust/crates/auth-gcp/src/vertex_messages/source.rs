@@ -173,25 +173,6 @@ fn invalid_file(path: &str, problem: String) -> GoogleLoginFailure {
     })
 }
 
-/// Python's `f"{e.strerror} ({type(e).__name__})"` for the `OSError` `open()` raises.
-fn unreadable_reason(path: &str, error: &std::io::Error) -> String {
-    if path.contains('\0') {
-        return "embedded null byte (ValueError)".into();
-    }
-    let class = match error.kind() {
-        std::io::ErrorKind::NotFound => "FileNotFoundError",
-        std::io::ErrorKind::PermissionDenied => "PermissionError",
-        std::io::ErrorKind::IsADirectory => "IsADirectoryError",
-        std::io::ErrorKind::NotADirectory => "NotADirectoryError",
-        _ => "OSError",
-    };
-    let text = error.to_string();
-    let strerror = text
-        .rsplit_once(" (os error ")
-        .map_or(text.as_str(), |(strerror, _)| strerror);
-    format!("{strerror} ({class})")
-}
-
 fn unusable(problem: &str) -> GoogleLoginFailure {
     GoogleLoginFailure::new(
         PythonException::Value,
@@ -212,7 +193,7 @@ fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
     let bytes = std::fs::read(path).map_err(|error| {
         GoogleLoginFailure::credentials_file(UnusableFile::Unreadable {
             path: path.into(),
-            reason: unreadable_reason(path, &error),
+            reason: error.to_string(),
         })
     })?;
     let contents =
@@ -322,24 +303,24 @@ mod tests {
         "/nonexistent/vertex.json",
         UnusableFile::Unreadable {
             path: "/nonexistent/vertex.json".into(),
-            reason: "No such file or directory (FileNotFoundError)".into(),
+            reason: "No such file or directory (os error 2)".into(),
         }
     )]
     #[case::directory(
         "/",
         UnusableFile::Unreadable {
             path: "/".into(),
-            reason: "Is a directory (IsADirectoryError)".into(),
+            reason: "Is a directory (os error 21)".into(),
         }
     )]
     #[case::null_byte(
         "/tmp/a\0b",
         UnusableFile::Unreadable {
             path: "/tmp/a\0b".into(),
-            reason: "embedded null byte (ValueError)".into(),
+            reason: "file name contained an unexpected NUL byte".into(),
         }
     )]
-    fn an_unreadable_file_names_its_path_and_python_s_os_error(
+    fn an_unreadable_file_names_its_path_and_the_reason(
         #[case] path: &str,
         #[case] expected: UnusableFile,
     ) {

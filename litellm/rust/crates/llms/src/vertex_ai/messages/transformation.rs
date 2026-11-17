@@ -11,7 +11,6 @@ use litellm_llms_types::{
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, VERSION_HEADER},
     recognized::Recognized,
 };
-use litellm_python_compat::{Value as PythonValue, repr::repr};
 use litellm_router_types::LitellmParams;
 use serde_json::{Value, json};
 
@@ -262,13 +261,9 @@ pub fn vertex_connection_params(
 /// `get_vertex_region`'s warning when it overrides a configured location the model does not
 /// support.
 fn warn_unsupported_region(model: &str, configured: &str, supported: &[String], routed: &str) {
-    let supported = supported
-        .iter()
-        .map(|region| repr(&PythonValue::Str(region.clone())))
-        .collect::<Vec<_>>()
-        .join(", ");
     litellm_tracing::warn!(
-        "Vertex AI model '{model}' does not support region '{configured}' (supported: [{supported}]). Routing to '{routed}'."
+        "Vertex AI model {model} is not served in {configured}, so the call goes to {routed} (served in {}).",
+        supported.join(", ")
     );
 }
 
@@ -1458,7 +1453,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unsupported(Some("us-east5"), vec!["Vertex AI model 'claude-fz-regional-5-5@default' does not support region 'us-east5' (supported: ['europe-west1', 'asia-southeast1']). Routing to 'europe-west1'.".to_owned()])]
+    #[case::unsupported(Some("us-east5"), vec!["Vertex AI model claude-fz-regional-5-5@default is not served in us-east5, so the call goes to europe-west1 (served in europe-west1, asia-southeast1).".to_owned()])]
     #[case::supported(Some("asia-southeast1"), vec![])]
     #[case::unconfigured(None, vec![])]
     fn an_overridden_region_warns_as_get_vertex_region_does(

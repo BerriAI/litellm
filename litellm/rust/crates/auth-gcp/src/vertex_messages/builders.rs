@@ -20,8 +20,7 @@ use crate::{
 
 pub(crate) type TokenSource = Arc<dyn GcpTokenSource>;
 
-const NO_CREDENTIAL_SOURCE: &str =
-    "A valid credential source or a subject token supplier must be provided.";
+const NO_CREDENTIAL_SOURCE: &str = "The external account credentials name no credential_source.";
 
 fn value_failure(error: impl std::fmt::Display) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Value, error.to_string())
@@ -59,15 +58,13 @@ pub(crate) fn service_account(info: &ServiceAccountInfo) -> Result<Loaded, Googl
         let missing = missing.join(", ");
         return Err(GoogleLoginFailure::new(
             PythonException::Malformed,
-            format!(
-                "Service account info was not in the expected format, missing fields {missing}."
-            ),
+            format!("The service account key is missing {missing}."),
         ));
     }
     if info.private_key.is_none() {
         return Err(GoogleLoginFailure::new(
             PythonException::Malformed,
-            "The private_key field was not found in the service account info.",
+            "The service account key has no private_key.",
         ));
     }
     service_account_grant(info)
@@ -149,15 +146,15 @@ mod tests {
     #[rstest]
     #[case::impersonated_type(
         json!({"type": "impersonated_service_account", "client_email": "a@b"}),
-        "Service account info was not in the expected format, missing fields token_uri."
+        "The service account key is missing token_uri."
     )]
     #[case::unknown_type(
         json!({"type": "weird"}),
-        "Service account info was not in the expected format, missing fields client_email, token_uri."
+        "The service account key is missing client_email, token_uri."
     )]
     #[case::no_private_key(
         json!({"client_email": "a@b", "token_uri": "https://oauth2.googleapis.com/token"}),
-        "The private_key field was not found in the service account info."
+        "The service account key has no private_key."
     )]
     fn service_account_info_is_checked_as_google_auth_checks_it(
         #[case] configured: Value,

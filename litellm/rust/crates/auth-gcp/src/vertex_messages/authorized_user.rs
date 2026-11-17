@@ -22,8 +22,10 @@ use crate::constants::CLOUD_PLATFORM_SCOPE;
 const DEFAULT_UNIVERSE_DOMAIN: &str = "googleapis.com";
 /// `_exponential_backoff`'s first wait.
 const FIRST_RETRY_WAIT: Duration = Duration::from_secs(1);
-const CANNOT_REFRESH: &str = "The credentials do not contain the necessary fields need to refresh the access token. You must specify refresh_token, token_uri, client_id, and client_secret.";
-const REAUTH_NEEDED: &str = "Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.";
+const CANNOT_REFRESH: &str =
+    "The authorized user credentials need refresh_token, client_id and client_secret to refresh.";
+const REAUTH_NEEDED: &str =
+    "Google asks to log in again. Run `gcloud auth application-default login`.";
 
 /// Authorized user info, as `Credentials.from_authorized_user_info` reads it. The fields it
 /// requires are `Some(None)` when null, which it accepts and only fails to refresh with.
@@ -115,7 +117,7 @@ fn load(
         return Err(GoogleLoginFailure::new(
             PythonException::Value,
             format!(
-                "Authorized user info was not in the expected format, missing fields {}.",
+                "The authorized user credentials are missing {}.",
                 missing.join(", ")
             ),
         ));
@@ -149,7 +151,7 @@ impl AuthorizedUser {
             return Err(GoogleLoginFailure::new(
                 PythonException::Refresh,
                 format!(
-                    "User credential refresh is only supported in the default googleapis.com universe domain, but the current universe domain is {}. If you created the credential with an access token, it's likely that the provided token is expired now, please update your code with a valid token.",
+                    "Authorized user credentials refresh only in the googleapis.com universe domain, not {}.",
                     self.universe_domain.as_deref().unwrap_or("None")
                 ),
             ));
@@ -203,13 +205,14 @@ fn refusal(body: &str) -> GoogleLoginFailure {
     let Some(refusal) = TokenRefusal::parse(body) else {
         return refused(body);
     };
-    if refusal.error.as_deref() == Some("invalid_grant")
+    if refusal.rejects_the_grant()
         && matches!(
             refusal.error_subtype.as_deref(),
             Some("invalid_rapt" | "rapt_required")
         )
     {
-        return GoogleLoginFailure::new(PythonException::Refresh, REAUTH_NEEDED);
+        return GoogleLoginFailure::new(PythonException::Refresh, REAUTH_NEEDED)
+            .rejecting_the_grant();
     }
     refused(body)
 }
@@ -289,25 +292,33 @@ mod tests {
     #[case::invalid_grant(
         json!({"error": "invalid_grant", "error_description": "Token has been expired or revoked."}),
         PythonException::Refresh,
-        "invalid_grant: Token has been expired or revoked."
+        "invalid_grant: Token has been expired or revoked.",
+        true
     )]
     #[case::rapt(
         json!({"error": "invalid_grant", "error_subtype": "invalid_rapt"}),
         PythonException::Refresh,
-        REAUTH_NEEDED
+        REAUTH_NEEDED,
+        true
     )]
-    #[case::text(json!("denied"), PythonException::Refresh, "denied")]
-    #[case::list(json!(["denied"]), PythonException::Refresh, r#"["denied"]"#)]
+    #[case::text(json!("denied"), PythonException::Refresh, "denied", false)]
+    #[case::list(json!(["denied"]), PythonException::Refresh, r#"["denied"]"#, false)]
     #[tokio::test]
     async fn a_refused_refresh_raises_what_refresh_grant_raises(
         #[case] answer: Value,
         #[case] exception: PythonException,
         #[case] message: &str,
+        #[case] rejected: bool,
     ) {
         let endpoint = endpoint(vec![(400, answer)]).await;
+        let failure = user(&endpoint.url, json!({})).mint().await.unwrap_err();
         assert_eq!(
-            user(&endpoint.url, json!({})).mint().await.unwrap_err(),
-            GoogleLoginFailure::new(exception, message)
+            (
+                failure.exception,
+                failure.message.as_str(),
+                failure.grant_rejected
+            ),
+            (exception, message, rejected)
         );
         assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
     }
@@ -330,9 +341,7 @@ mod tests {
             loaded.err(),
             (!missing.is_empty()).then(|| GoogleLoginFailure::new(
                 PythonException::Value,
-                format!(
-                    "Authorized user info was not in the expected format, missing fields {missing}."
-                )
+                format!("The authorized user credentials are missing {missing}.")
             ))
         );
     }
@@ -341,7 +350,7 @@ mod tests {
     #[case::null_refresh_token(json!({"refresh_token": null}), CANNOT_REFRESH)]
     #[case::other_universe(
         json!({"universe_domain": "example.com"}),
-        "User credential refresh is only supported in the default googleapis.com universe domain, but the current universe domain is example.com. If you created the credential with an access token, it's likely that the provided token is expired now, please update your code with a valid token."
+        "Authorized user credentials refresh only in the googleapis.com universe domain, not example.com."
     )]
     #[tokio::test]
     async fn credentials_that_cannot_refresh_are_refused_without_a_request(
