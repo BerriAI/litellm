@@ -481,8 +481,9 @@ def _create_realtime_transcription_session_with_headers(**header_kwargs: dict[st
         "realtime_transcription_session",
     ),
 )
+@pytest.mark.parametrize("header_name", ("Authorization", "authorization"))
 def test_json_provider_without_its_key_sends_the_callers_authorization_header(
-    monkeypatch: pytest.MonkeyPatch, call: Callable[..., object], header_param: str
+    monkeypatch: pytest.MonkeyPatch, call: Callable[..., object], header_param: str, header_name: str
 ):
     import respx
 
@@ -495,10 +496,10 @@ def test_json_provider_without_its_key_sends_the_callers_authorization_header(
 
     with respx.mock() as upstream:
         route: Final = upstream.route().respond(200, json=_CHAT_COMPLETION)
-        call(**{header_param: _HEADER_AUTH})
+        call(**{header_param: {header_name: "Bearer sk-header"}})
 
     assert route.call_count == 1
-    assert route.calls.last.request.headers["authorization"] == "Bearer sk-header"
+    assert route.calls.last.request.headers.get_list("authorization") == ["Bearer sk-header"]
 
 
 def test_json_provider_chat_on_the_http_handler_sends_the_callers_authorization_header(

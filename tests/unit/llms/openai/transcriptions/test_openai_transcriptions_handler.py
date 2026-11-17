@@ -104,3 +104,25 @@ def test_openai_compatible_transcription_is_billed_from_its_providers_cost_row(
     assert response._hidden_params["response_cost"] == pytest.approx(
         2 * litellm.model_cost[model]["input_cost_per_second"]
     )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ("helicone/whisper-1", "vercel_ai_gateway/openai/whisper-1"))
+def test_openai_compatible_transcription_without_its_own_cost_row_is_billed_at_openais_price(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    import respx
+
+    import litellm
+
+    monkeypatch.setenv("HELICONE_API_KEY", "sk-helicone-test")
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "vck-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock() as upstream:
+        upstream.route().respond(200, json={"text": "four score"})
+        response = litellm.transcription(model=model, file=("clip.wav", _silent_wav(seconds=2)))
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        2 * litellm.model_cost["whisper-1"]["input_cost_per_second"]
+    )

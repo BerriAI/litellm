@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, TypeVar
 
 import httpx
 
@@ -58,6 +58,18 @@ class OpenAILikeBase:
             elif endpoint_type == "embeddings":
                 api_base = join_api_base(api_base, "embeddings")
         return api_base, headers
+
+
+_HeaderValue: Final = TypeVar("_HeaderValue")
+
+
+def with_canonical_authorization(
+    custom_llm_provider: str | None,
+    headers: dict[str, _HeaderValue] | None,  # mutable-ok: callers pass it on to handlers typed dict
+) -> dict[str, _HeaderValue] | None:  # mutable-ok: same
+    if headers is None or not JSONProviderRegistry.exists(custom_llm_provider or ""):
+        return headers
+    return {"Authorization" if name.lower() == "authorization" else name: value for name, value in headers.items()}
 
 
 def _sets_authorization(headers: Mapping[str, object] | None) -> bool:

@@ -68,7 +68,7 @@ from ..llms.openai.realtime.handler import (
     confirm_session_started,
 )
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
-from ..llms.openai_like.common_utils import missing_json_provider_key_error
+from ..llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from ..llms.soniox.realtime.transformation import SonioxRealtimeOptions, soniox_realtime_health_check
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
@@ -289,6 +289,11 @@ async def _realtime_http_bearer_token(
     return bearer_token or ""
 
 
+def _caller_extra_headers(custom_llm_provider: str, kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    extra_headers: Final = as_str_mapping(kwargs.get("extra_headers"))
+    return None if extra_headers is None else with_canonical_authorization(custom_llm_provider, dict(extra_headers))
+
+
 async def _get_realtime_http_extra_headers(
     provider_config: BaseRealtimeHTTPConfig | None,
     litellm_params: GenericLiteLLMParams,
@@ -352,7 +357,7 @@ async def acreate_realtime_client_secret(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    caller_extra_headers: Final = as_str_mapping(kwargs.get("extra_headers"))
+    caller_extra_headers: Final = _caller_extra_headers(custom_llm_provider, kwargs)
     if missing_key_error := missing_json_provider_key_error(
         custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False, caller_extra_headers
     ):
@@ -543,7 +548,7 @@ async def acreate_realtime_transcription_session(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    caller_extra_headers: Final = as_str_mapping(kwargs.get("extra_headers"))
+    caller_extra_headers: Final = _caller_extra_headers(custom_llm_provider, kwargs)
     if missing_key_error := missing_json_provider_key_error(
         custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False, caller_extra_headers
     ):

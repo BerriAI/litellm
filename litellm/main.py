@@ -163,7 +163,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
 )
 from litellm.llms.openai.common_utils import get_openai_credentials
-from litellm.llms.openai_like.common_utils import missing_json_provider_key_error
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -2020,7 +2020,7 @@ def _complete_text_completion_openai(
 
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
 
-    headers = headers or litellm.headers
+    headers = with_canonical_authorization(custom_llm_provider, headers or litellm.headers)
 
     ## LOAD CONFIG - if set
     config: Final = litellm.OpenAITextCompletionConfig.get_config()
@@ -2888,7 +2888,7 @@ def _complete_custom_openai(
     client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict: Final = ctx.custom_prompt_dict
-    extra_headers = ctx.extra_headers
+    extra_headers = with_canonical_authorization(custom_llm_provider, ctx.extra_headers)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
@@ -2928,7 +2928,7 @@ def _complete_custom_openai(
         or _openai_key_fallback(custom_llm_provider)
     )
 
-    headers = headers or litellm.headers
+    headers = with_canonical_authorization(custom_llm_provider, headers or litellm.headers)
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
