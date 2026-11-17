@@ -786,6 +786,13 @@ fn hosted_request(
     })
 }
 
+fn unsendable_url(provider: MessagesProvider, url: &str) -> Option<UnsendableUrl> {
+    provider
+        .refuses_unsendable_urls()
+        .then(|| UnsendableUrl::of(url))
+        .flatten()
+}
+
 async fn send_recovering(
     http: &litellm_http::Client,
     transport: Option<&dyn Transport>,
@@ -802,7 +809,7 @@ async fn send_recovering(
         if let Some(value) = &request.unencodable_request_header {
             return Err(Error::transport(UnencodableHeader::Sent(value.clone())));
         }
-        if let Some(unsendable) = UnsendableUrl::of(&request.wire.url) {
+        if let Some(unsendable) = unsendable_url(request.provider, &request.wire.url) {
             return Err(Error::transport(unsendable));
         }
         // The credential header built from the caller's api_key never passes the caller header
@@ -1294,6 +1301,31 @@ mod tests {
     use super::*;
     use crate::{MessagesSettings, MessagesShaping, common_utils::messages_provider};
     use litellm_inference::provider::resolve_llm_provider;
+
+    #[rstest]
+    #[case::anthropic(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::Anthropic,
+        false
+    )]
+    #[case::azure_ai(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::AzureAi,
+        false
+    )]
+    #[case::vertex_ai(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::VertexAi,
+        true
+    )]
+    fn only_vertex_ai_refuses_a_url_with_a_control_character(
+        #[case] provider: litellm_core_utils::get_llm_provider_logic::LlmProviders,
+        #[case] refused: bool,
+    ) {
+        let provider = crate::common_utils::messages_provider(provider, "claude-sonnet-4-5")
+            .expect("provider");
+        assert_eq!(
+            super::unsendable_url(provider, "https://api.example.com/v1\t/messages").is_some(),
+            refused
+        );
+    }
 
     #[fixture]
     fn shaping() -> MessagesShaping {

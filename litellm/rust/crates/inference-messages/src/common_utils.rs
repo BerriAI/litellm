@@ -34,6 +34,12 @@ impl MessagesProvider {
         self.config
     }
 
+    /// Only Vertex AI refuses a URL holding a control character: every other provider sends it as
+    /// reqwest cleans it, as on main.
+    pub(crate) fn refuses_unsendable_urls(self) -> bool {
+        self.provider == LlmProviders::VertexAi
+    }
+
     /// Python's `MESSAGES_SERVICE_TIER_PROVIDERS`: everyone else has `service_tier` dropped.
     pub(crate) fn accepts_service_tier(self) -> bool {
         matches!(
