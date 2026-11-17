@@ -752,6 +752,19 @@ def _router_with_executed_batch_model() -> Router:
                 "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
                 "model_info": {"id": "vertex-batch-keep-id"},
             },
+            *(
+                {
+                    "model_name": "azure-mixed",
+                    "litellm_params": {
+                        "model": f"azure/{sku}",
+                        "api_key": f"{sku}-key",
+                        "api_base": f"https://{sku}.openai.azure.com",
+                        "drop_params": drop_params,
+                    },
+                    "model_info": {"id": f"{sku}-id", "mode": mode},
+                }
+                for sku, mode, drop_params in (("chat-sku", "chat", False), ("batch-sku", "batch", True))
+            ),
             {
                 "model_name": "gpt-5.4-nano-batch",
                 "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-openai"},
@@ -1028,7 +1041,7 @@ def test_batch_upload_rejects_a_bucket_off_the_team_allowlist_before_the_provide
 
 @pytest.mark.parametrize(
     "model, expected_drop_params",
-    [("vertex-batch-drop", True), ("vertex-batch-keep", False)],
+    [("vertex-batch-drop", True), ("vertex-batch-keep", False), ("azure-mixed", True)],
 )
 def test_batch_upload_for_a_provider_model_carries_the_deployment_drop_params(
     batch_upload_seams, model: str, expected_drop_params: bool
