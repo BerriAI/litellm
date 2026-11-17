@@ -360,7 +360,6 @@ def stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping
 
 
 def _stream_ttft_seconds(value: object) -> float | None:
-    """A ``stream_ttft_timeout`` as seconds: a number or numeric string. A boolean, null or other value is none."""
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
@@ -370,9 +369,7 @@ def _stream_ttft_seconds(value: object) -> float | None:
 
 
 def is_requested_stream_ttft_timeout(value: object) -> bool:
-    """Whether a request's ``stream_ttft_timeout`` is a value the caller chose, so it overrides the deployment's.
-    Null, a boolean or a non-numeric string is not a choice; zero, a negative or a non-finite number is one
-    (it turns the timer off)."""
+    """Null, a boolean or a non-numeric string keeps the deployment value. Zero or a negative overrides it."""
     return _stream_ttft_seconds(value) is not None
 
 
