@@ -16,7 +16,7 @@ from litellm.types.files import (
     get_file_mime_type_from_extension,
     get_file_type_from_extension,
 )
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 

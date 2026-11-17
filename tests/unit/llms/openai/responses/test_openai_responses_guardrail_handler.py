@@ -4224,6 +4224,26 @@ class TestProvenancePatching:
 
         assert _input_item_provenance(["not a mapping"], []) is None
 
+    def test_provenance_reads_a_self_named_namespace_echo_with_the_request_tools(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        tools = [{"type": "namespace", "name": "search", "tools": [{"type": "function", "name": "search"}]}]
+        raw_input = [
+            {"role": "user", "content": "Search for the release notes."},
+            {"type": "function_call", "name": "search", "namespace": "search", "call_id": "call_1", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "found"},
+        ]
+        expected = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=raw_input, responses_api_request={"tools": tools}
+        )
+
+        assert expected[1]["tool_calls"][0]["function"]["name"] == "search__search"
+        assert _input_item_provenance(raw_input, expected, tools) is not None
+        assert _input_item_provenance(raw_input, expected) is None
+
     def test_provenance_bails_when_expected_messages_disagree(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
 
