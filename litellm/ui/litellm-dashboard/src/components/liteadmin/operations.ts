@@ -1,5 +1,6 @@
 import { zodFunction } from "openai/helpers/zod";
 import { z } from "zod";
+import { v4 as uuidv4 } from "uuid";
 import { apiClient } from "@/components/networking";
 import i18n from "@/i18n/i18n";
 import { ApiError } from "@/lib/http/client";
@@ -165,7 +166,7 @@ export function createLiteAdminOperations(context: OperationContext) {
             mode === "read"
               ? undefined
               : {
-                  id: crypto.randomUUID(),
+                  id: uuidv4(),
                   name,
                   title,
                   arguments: {
@@ -212,7 +213,7 @@ export function createLiteAdminOperations(context: OperationContext) {
           if (name === "get_team_usage_data") reportScope = "All teams";
           if (name === "get_tag_usage_data") reportScope = "All tags";
           const source = kind === "usage" ? usageChartSource(result, args, context.access, reportScope) : undefined;
-          const sourceId = source ? crypto.randomUUID() : undefined;
+          const sourceId = source ? uuidv4() : undefined;
           if (source && sourceId) usageSources.set(sourceId, source);
           return {
             operation: name,

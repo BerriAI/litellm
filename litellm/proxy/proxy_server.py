@@ -1058,6 +1058,9 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     sync_ui_settings_to_general_settings,
 )
+from litellm.proxy.ui_crud_endpoints.reference_rates_endpoints import (
+    router as reference_rates_endpoints_router,
+)
 from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
     router as user_banner_endpoints_router,
 )
@@ -1643,6 +1646,26 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             yield state
 
 
+def register_prompt_cache_alerts(
+    settings: Mapping[str, object], prisma: PrismaClient | None, resources: AsyncExitStack
+) -> None:
+    """Off unless `general_settings.prompt_cache_alerts` is true and a database and a shared salt exist. The logger
+    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends."""
+    if settings.get("prompt_cache_alerts") is not True or prisma is None:
+        return
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
+
+    salt: Final = get_salt_key()
+    if not salt:
+        return
+    from litellm.integrations.prompt_cache_alerts.detector import prompt_cache_alert_logger
+    from litellm.repositories.alert_repository import AlertRepository
+
+    logger: Final = prompt_cache_alert_logger(AlertRepository(prisma), lambda: redis_usage_cache, salt)
+    litellm.logging_callback_manager.add_litellm_callback(logger)
+    resources.callback(litellm.logging_callback_manager.remove_callback_from_all_lists, logger)
+
+
 @asynccontextmanager
 async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
@@ -1942,6 +1965,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
         redis_usage_cache=redis_usage_cache,
     )
+    register_prompt_cache_alerts(general_settings_view(), prisma_client, resources)
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
@@ -6035,7 +6059,7 @@ def _bind_general_settings_store(settings: SettingsStore) -> None:
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
 
 
-def _current_general_settings() -> Mapping[str, object]:
+def current_general_settings() -> Mapping[str, object]:
     """The live ``general_settings``, whichever object a config reload has bound since the caller was created."""
     return general_settings
 
@@ -12090,14 +12114,14 @@ class ProxyStartupEvent:
             scheduler=scheduler,
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
-            read_general_settings=_current_general_settings,
+            read_general_settings=current_general_settings,
         )
 
         from litellm.proxy.spend_tracking.performance_alerts import RUN_INTERVAL, run_performance_alerts
         from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
 
         async def run_performance_alerts_job() -> None:
-            if _current_general_settings().get("performance_alerts_enabled", True) is True:
+            if current_general_settings().get("performance_alerts_enabled", True) is True:
                 await run_performance_alerts(PerformanceAlertRepository(prisma_client, enterprise=premium_user is True))
 
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
@@ -12119,7 +12143,7 @@ class ProxyStartupEvent:
             email_connected: Final = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_SENDER_EMAIL"))
             if not email_connected and not slack.performance_alert_webhooks():
                 return
-            if _current_general_settings().get("performance_alerts_enabled", True) is not True:
+            if current_general_settings().get("performance_alerts_enabled", True) is not True:
                 return
             if not (
                 await PerformanceAlertRepository(prisma_client, enterprise=premium_user is True).monitoring()
@@ -12183,7 +12207,7 @@ class ProxyStartupEvent:
             )
 
         ### SPEND LOG CLEANUP ###
-        cleanup_settings: Final = _current_general_settings()
+        cleanup_settings: Final = current_general_settings()
         _register_spend_log_cleanup_jobs(scheduler, prisma_client, cleanup_settings)  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # apscheduler is untyped
         if _wants_cleanup_jobs(cleanup_settings):
             proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
@@ -12438,7 +12462,7 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client,
                 cache=proxy_logging_obj.internal_usage_cache.dual_cache,
                 email_logger=expiry_email_logger,
-                default_days=lambda: configured_key_expiry_alert_days(_current_general_settings()),
+                default_days=lambda: configured_key_expiry_alert_days(current_general_settings()),
                 pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             )
         except Exception:  # noqa: BLE001  # a setup failure must not stop later background jobs registering
@@ -14646,7 +14670,6 @@ async def _route_realtime_websocket_session(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=route_model,
             route_type="_arealtime",
         )
     except Exception as e:
@@ -23140,6 +23163,7 @@ app.include_router(ui_crud_endpoints_router)
 app.include_router(moyai_router)
 app.include_router(user_banner_endpoints_router)
 app.include_router(latest_release_endpoints_router)
+app.include_router(reference_rates_endpoints_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)

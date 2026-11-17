@@ -17,6 +17,7 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
+import itertools
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
@@ -66,6 +67,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_OTPM_DESCRIPTOR_KEY,
     ReservationWindowIdentity,
     WindowGuardedIncrement,
+    coalesce_rate_limit_descriptors,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -145,13 +147,14 @@ class BatchFileUsage(LiteLLMBaseModel):
     total_tokens: int
     request_count: int
     output_tokens: int = 0
-    # Keyed by each row's own `body.model`, distinct from `total_tokens`/
+    # Keyed by the models each row is charged to (its own `body.model`, and the
+    # alias a model-routed upload routed by), distinct from `total_tokens`/
     # `output_tokens` (the whole-file totals charged to the file-bound/
     # top-level routing model's key/team/model limits). A batch's rows can
     # each target a different model, so the project's per-model ITPM/OTPM
     # quota for a row's actual model must be charged with that row's own
     # tokens -- see `_create_project_io_descriptors_for_models`.
-    per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
+    per_model_usage: dict[tuple[str, ...], dict[str, int]] = Field(default_factory=dict)
 
 
 def _rows_were_rewritten_on_upload(input_file_id: str) -> bool:
@@ -246,6 +249,37 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return file_bound_model
 
         return _batch_create_routing_model(_BATCH_BODY_ADAPTER.validate_python(data))
+
+    def _routing_alias_by_row_model(self, routing_alias: str | None) -> Mapping[str, str]:
+        """Map the model a model-routed upload writes into its rows back to the alias it routed by.
+
+        A key's allowlist and project quotas name the proxy alias, while the uploaded
+        rows name the deployment's model. A row that maps here runs on the alias's own
+        deployment, so the alias is what the key has to be granted. Its project quota is
+        charged to the alias and to the model the row names, since the uploaded file no
+        longer says which of the two the caller wrote.
+        """
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            batch_row_model_for_deployment,
+            get_credentials_for_model,
+        )
+        from litellm.proxy.proxy_server import llm_router
+
+        if routing_alias is None or llm_router is None:
+            return MappingProxyType({})
+        try:
+            credentials: Final = get_credentials_for_model(
+                llm_router=llm_router,
+                model_id=routing_alias,
+                operation_context="batch input file read (rate limiting)",
+            )
+        except HTTPException:
+            return MappingProxyType({})
+        deployment_model: Final = credentials.get("model")
+        provider: Final = credentials.get("custom_llm_provider")
+        if not isinstance(deployment_model, str) or not isinstance(provider, str):
+            return MappingProxyType({})
+        return MappingProxyType({batch_row_model_for_deployment(deployment_model, provider): routing_alias})
 
     def _resolve_batch_provider(self, batch_model: str | None) -> str | None:
         """Resolve the provider from the deployment that serves ``batch_model``.
@@ -353,36 +387,56 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     def _create_project_io_descriptors_for_models(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        per_model_usage: Mapping[str, Mapping[str, int]],
-    ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: see below
+        per_model_usage: Mapping[tuple[str, ...], Mapping[str, int]],
+    ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: callers extend these lists
         """Build project ITPM/OTPM descriptors charged against each row's own model.
 
-        One descriptor pair per distinct `body.model` found in the JSONL,
-        each incremented only by that model's own counted usage -- never the
-        whole-batch total -- so a quota-limited model can't hide behind an
-        unlimited routing model, and an unrelated model's rows can't inflate
-        a different model's counter.
+        One descriptor pair per distinct project counter the JSONL's rows are
+        charged to, incremented by the usage of every row charged to it -- never
+        the whole-batch total -- so a quota-limited model can't hide behind an
+        unlimited routing model, an unrelated model's rows can't inflate a
+        different model's counter, and rows whose names share one counter add
+        to it once, held to the lowest limit any of those names sets.
         """
-        extra_descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: see above
-        extra_increments: Final[list[IncrementAmounts]] = []  # mutable-ok: see above
-        for model, usage in per_model_usage.items():
-            model_descriptors: list[RateLimitDescriptor] = []  # mutable-ok: reset per loop iteration, not module state
-            self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_from_metadata(
-                user_api_key_dict=user_api_key_dict,
-                requested_model=model,
-                descriptors=model_descriptors,
+        charges: Final = tuple(
+            itertools.chain.from_iterable(
+                self._project_io_charges(user_api_key_dict, models, usage) for models, usage in per_model_usage.items()
             )
-            for descriptor in model_descriptors:
-                extra_descriptors.append(descriptor)
-                extra_increments.append(
-                    {
-                        "requests": 0,
-                        "tokens": usage.get("output_tokens", 0)
-                        if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
-                        else usage.get("total_tokens", 0),
-                    }
-                )
-        return extra_descriptors, extra_increments
+        )
+        descriptors: Final = coalesce_rate_limit_descriptors(tuple(descriptor for descriptor, _ in charges))
+        return (
+            list(descriptors),
+            [
+                {
+                    "requests": 0,
+                    "tokens": sum(
+                        tokens
+                        for charged, tokens in charges
+                        if (charged["key"], charged["value"]) == (descriptor["key"], descriptor["value"])
+                    ),
+                }
+                for descriptor in descriptors
+            ],
+        )
+
+    def _project_io_charges(
+        self, user_api_key_dict: UserAPIKeyAuth, models: Sequence[str], usage: Mapping[str, int]
+    ) -> tuple[tuple["RateLimitDescriptor", int], ...]:
+        model_descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: the limiter appends into a sink
+        self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_for_models(
+            user_api_key_dict=user_api_key_dict,
+            requested_models=models,
+            descriptors=model_descriptors,
+        )
+        return tuple(
+            (
+                descriptor,
+                usage.get("output_tokens", 0)
+                if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+                else usage.get("total_tokens", 0),
+            )
+            for descriptor in model_descriptors
+        )
 
     def _should_skip_batch_input_file_processing(
         self,
@@ -774,11 +828,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 if descriptor.get("key") in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 else None
             )
-            model_usage: Final = batch_usage.per_model_usage.get(descriptor_model) if descriptor_model else None
+            charged_usage: Final = tuple(
+                usage for models, usage in batch_usage.per_model_usage.items() if descriptor_model in models
+            )
             batch_token_count: Final = (
-                (model_usage or {}).get("output_tokens", batch_usage.output_tokens)
+                (
+                    sum(usage.get("output_tokens", 0) for usage in charged_usage)
+                    if charged_usage
+                    else batch_usage.output_tokens
+                )
                 if descriptor.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
-                else (model_usage or {}).get("total_tokens", batch_usage.total_tokens)
+                else (
+                    sum(usage.get("total_tokens", 0) for usage in charged_usage)
+                    if charged_usage
+                    else batch_usage.total_tokens
+                )
                 if descriptor.get("key") == PROJECT_ITPM_DESCRIPTOR_KEY
                 else batch_usage.total_tokens
             )
@@ -948,7 +1012,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         Returns:
             BatchFileUsage with total_tokens, output_tokens, request_count, and
-            per_model_usage (each row's own totals, keyed by its `body.model`)
+            per_model_usage (each row's own totals, keyed by the models it is charged to)
         """
         descriptor_otpm_limits: Final = tuple(
             int(v)
@@ -987,6 +1051,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
             target_model_names: Final = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
+            routing_alias_by_row_model: Final = (
+                MappingProxyType({})
+                if is_managed_file
+                else self._routing_alias_by_row_model(
+                    (self._get_file_bound_batch_model(data) or _batch_create_routing_model(data)) if data else None
+                )
+            )
             if is_managed_file and user_api_key_dict is not None:
                 file_content = await self._fetch_managed_file_content(
                     file_id=file_id,
@@ -1026,10 +1097,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Counting stays best-effort, so a legitimate (e.g. multimodal) row
             # the counter can't measure is estimated, not hard-rejected.
             models: Final[set] = set()
-            # Keyed by each row's own `body.model`, so the project ITPM/OTPM
+            # Keyed by the models each row is charged to, so the project ITPM/OTPM
             # quota for that model is charged with only its own rows' tokens,
             # never the whole batch's -- see `_create_project_io_descriptors_for_models`.
-            per_model_usage: Final[dict[str, dict[str, int]]] = {}
+            per_model_usage: Final[dict[tuple[str, ...], dict[str, int]]] = {}
             total_tokens = 0
             output_tokens = 0  # rebind-ok: accumulated per JSONL row in the loop below
             request_count = 0
@@ -1046,7 +1117,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     output_tokens += entry_output_tokens
                     continue
 
-                model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
+                row_model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
+                model: str | None = routing_alias_by_row_model.get(row_model, row_model) if row_model else None
                 if model:
                     models.add(model)
 
@@ -1064,9 +1136,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens
 
-                if model:
+                if isinstance(model, str) and isinstance(row_model, str):
                     model_usage = per_model_usage.setdefault(
-                        model, {"total_tokens": 0, "output_tokens": 0, "request_count": 0}
+                        tuple(dict.fromkeys((model, row_model))),
+                        {"total_tokens": 0, "output_tokens": 0, "request_count": 0},
                     )
                     model_usage["total_tokens"] += entry_total_tokens
                     model_usage["output_tokens"] += entry_output_tokens
@@ -1363,7 +1436,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
             routing_model: Final = self._get_batch_routing_model(data)  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
             row_tokens_by_model: Final[Mapping[str, int]] = MappingProxyType(
-                {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
+                {
+                    row_model: usage.get("total_tokens", 0)
+                    for (*_, row_model), usage in batch_usage.per_model_usage.items()
+                }
                 if not (isinstance(input_file_id, str) and _rows_were_rewritten_on_upload(input_file_id))
                 else {}
             )

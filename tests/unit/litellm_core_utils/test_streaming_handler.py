@@ -43,6 +43,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
 )
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
@@ -56,6 +57,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 from litellm import completion
 from typing import Tuple
 
@@ -9495,17 +9497,18 @@ class TestContinuationDisqualifiers:
 
 @pytest.mark.asyncio
 async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     model = "gpt-5.6-luna"
     warm_tokenizer(model)
-    messages = [{"role": "user", "content": text * 100}]
-    content_chunks = [_make_chunk(text) for _ in range(100)]
+    messages = [{"role": "user", "content": uncounted_text()}]
+    completion = uncounted_text()
+    content_chunks = [_make_chunk(completion[start : start + 25_000]) for start in range(0, len(completion), 25_000)]
     stop_chunk = ModelResponseStream(
         id="test",
         created=1741037890,
@@ -9534,7 +9537,7 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
 
     chunks, took, lags = await timed_with_loop_lags(consume)
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == text * 100
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == completion
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
@@ -10143,3 +10146,43 @@ async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passe
         (delta.function_call.name, delta.function_call.arguments) for delta in deltas if delta.function_call is not None
     ] == [("get_weather", '{"city": "Paris"}')]
     assert [delta.tool_calls for delta in deltas if delta.tool_calls] == []
+
+
+@pytest.mark.asyncio
+async def test_async_stream_success_log_survives_garbage_collection_while_its_callback_is_pending() -> None:
+    model: Final = "gpt-4o"
+    async with weakly_parked_logger() as logger:
+        logging_obj: Final = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2026, 11, 16, 12, 0, 0),
+            litellm_call_id="parked-chat-stream",
+            function_id="parked-chat-stream",
+            dynamic_async_success_callbacks=[logger],
+        )
+        logging_obj.update_environment_variables(
+            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "parked-chat-stream"}
+        )
+        wrapper: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-parked", created=1763294400, model=model, choices=choices)
+                    for choices in (
+                        [StreamingChoices(index=0, delta=Delta(role="assistant", content="Hello there"))],
+                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+
+        received: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in wrapper if chunk.choices])
+        survived: Final = await logger.survives_collection()
+        await drain_logging_tasks()
+
+        assert (received, survived, logger.parks, logger.finished.is_set()) == ("Hello there", True, 1, True)

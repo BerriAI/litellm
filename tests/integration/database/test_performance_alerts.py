@@ -13,8 +13,14 @@ import pytest_asyncio
 from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes
 from psycopg import sql
 
-from litellm.models.alert import AlertDetection, DeprecationEvidence
-from litellm.models.performance_alert import FREE_ALERT_LIMIT, SweepOwnershipLostError, SweepState
+from litellm.models.alert import AlertDetection, DeprecationEvidence, PromptCacheEvidence
+from litellm.models.performance_alert import (
+    DEFAULT_THRESHOLDS,
+    FREE_ALERT_LIMIT,
+    PerformanceAlertThresholds,
+    SweepOwnershipLostError,
+    SweepState,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.performance_alerts import run_performance_alerts
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -143,6 +149,38 @@ async def fixture() -> AsyncIterator[Fixture]:
             write_rows('DELETE FROM "LiteLLM_PerformanceAlertState"', ())
         finally:
             await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_thresholds_persist_and_change_detection_but_free_uses_defaults(fixture: Fixture) -> None:
+    from litellm.repositories.config_repository import ConfigRepository
+
+    config: Final = ConfigRepository(fixture.client, use_writer=True)
+    previous: Final = await config.get_param("performance_alert_thresholds")
+    custom: Final = PerformanceAlertThresholds.model_validate({"spend": {"multiplier": 2, "minimum_increase": 20}})
+    enterprise: Final = PerformanceAlertRepository(fixture.client, enterprise=True)
+    free: Final = PerformanceAlertRepository(fixture.client, enterprise=False)
+    resource: Final = f"{fixture.prefix}-custom-threshold"
+    _seed("team", resource, Day(spend=10), Day(spend=40))
+    try:
+        assert (await enterprise.set_thresholds(custom)).thresholds == custom
+        restarted: Final = PerformanceAlertRepository(fixture.client, enterprise=True)
+        assert (await restarted.monitoring()).thresholds == custom
+        assert (await free.monitoring()).thresholds == DEFAULT_THRESHOLDS
+        with pytest.raises(PermissionError, match="Enterprise"):
+            await free.set_thresholds(custom)
+        claim: Final = await free.claim(timedelta(0))
+        assert claim is not None
+        state: Final = SweepState(day=DAY, scope="team", cursor=fixture.prefix)
+        await free.evaluate_page(claim.owner, state, 25)
+        assert fixture.saved() == {}
+        await restarted.evaluate_page(claim.owner, state, 25)
+        assert fixture.saved() == {(resource, "spend"): ("team", "open")}
+    finally:
+        await config.set_param(
+            "performance_alert_thresholds",
+            previous.param_value if previous else DEFAULT_THRESHOLDS.model_dump(mode="json"),
+        )
 
 
 @pytest.mark.asyncio
@@ -277,7 +315,13 @@ async def test_retries_status_changes_deletion_and_reconnect_do_not_restore_allo
 async def test_opt_out_is_shared_and_config_false_cannot_be_overridden(fixture: Fixture, gateway: Gateway) -> None:
     response: Final = gateway.request("GET", "/alerts/monitoring")
     assert response.status_code == 200, response.text
-    assert response.json() == {"enabled": True, "alerts_used": 0, "alert_limit": 5, "disabled_by_config": False}
+    assert response.json() == {
+        "enabled": True,
+        "model_deprecations_enabled": True,
+        "alerts_used": 0,
+        "alert_limit": None if os.environ.get("LITELLM_LICENSE") else FREE_ALERT_LIMIT,
+        "disabled_by_config": False,
+    }
     claim: Final = await fixture.repository.claim(timedelta(0))
     assert claim is not None
     disabled: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": False})
@@ -325,7 +369,9 @@ async def test_admin_can_opt_out_while_a_detection_batch_holds_the_state_lock(
 
 
 @pytest.mark.asyncio
-async def test_existing_performance_alerts_consume_allowance_but_deprecations_do_not(fixture: Fixture) -> None:
+async def test_existing_performance_alerts_consume_allowance_but_deprecations_and_prompt_cache_do_not(
+    fixture: Fixture,
+) -> None:
     start: Final = datetime(2026, 1, 8, tzinfo=timezone.utc)
     await fixture.alerts.record(
         AlertDetection(
@@ -335,6 +381,24 @@ async def test_existing_performance_alerts_consume_allowance_but_deprecations_do
             window_start=start,
             window_end=start + timedelta(days=1),
             evidence=DeprecationEvidence(deprecation_date=DAY + timedelta(days=90)),
+        )
+    )
+    await fixture.alerts.record(
+        AlertDetection(
+            type="prompt_cache",
+            resource_type="deployment",
+            resource_id=f"{fixture.prefix}-deployment",
+            window_start=start,
+            window_end=start + timedelta(seconds=3),
+            evidence=PromptCacheEvidence(
+                config_fingerprint="config-1",
+                prefix_fingerprint="prefix-1",
+                provider="anthropic",
+                provider_model="claude-sonnet-5-5",
+                consecutive_misses=3,
+                proven_write_tokens=2048,
+                ttl_seconds=300,
+            ),
         )
     )
     assert (await fixture.repository.monitoring()).alerts_used == 0
