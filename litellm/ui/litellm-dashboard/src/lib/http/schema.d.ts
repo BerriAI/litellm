@@ -48650,8 +48650,19 @@ export interface components {
              * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
              */
             router_names: string[];
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
             /** Shadow Percentage */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Status
              * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
@@ -49917,6 +49928,12 @@ export interface components {
              * @description Percentage of each target's requests to duplicate through the router
              */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Team Ids
              * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
