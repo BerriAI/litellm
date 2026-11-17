@@ -2619,6 +2619,12 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _openai_key_fallback(custom_llm_provider: str | None) -> str | None:
+    if JSONProviderRegistry.exists(custom_llm_provider or ""):
+        return None
+    return litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+
+
 def _missing_provider_key_error(ctx: CompletionDispatchContext) -> AuthenticationError | None:
     return missing_json_provider_key_error(
         ctx.custom_llm_provider,
@@ -2669,8 +2675,7 @@ def _complete_custom_openai(
     api_key = (
         api_key
         or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-        or litellm.openai_key
-        or get_secret("OPENAI_API_KEY")
+        or _openai_key_fallback(custom_llm_provider)
     )
 
     headers = headers or litellm.headers

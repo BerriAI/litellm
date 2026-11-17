@@ -501,6 +501,26 @@ def test_json_provider_without_its_key_sends_the_callers_authorization_header(
     assert route.calls.last.request.headers["authorization"] == "Bearer sk-header"
 
 
+def test_json_provider_chat_on_the_http_handler_sends_the_callers_authorization_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import respx
+
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("PARASAIL_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+
+    with respx.mock() as upstream:
+        route: Final = upstream.route().respond(200, json=_CHAT_COMPLETION)
+        _complete_with_headers(extra_headers=_HEADER_AUTH, client=HTTPHandler())
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-header"
+
+
 def _transcribe_with_headers(**header_kwargs: dict[str, str]) -> object:
     import litellm
 
