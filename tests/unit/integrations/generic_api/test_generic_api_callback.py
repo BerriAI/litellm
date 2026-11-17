@@ -17,7 +17,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.gcs_pubsub.pub_sub import *
-from litellm.integrations.generic_api.generic_api_callback import LOG_FORMAT_TYPES, GenericAPILogger
+from litellm.integrations.generic_api.generic_api_callback import API_EVENT_TYPES, LOG_FORMAT_TYPES, GenericAPILogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -987,5 +987,94 @@ async def test_retired_logger_finishes_its_in_flight_send_and_hands_queued_logs_
         old.shutdown()
         replacement.shutdown()
         await old._flush_task
+        await replacement._flush_task
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ("success", "failure"))
+@pytest.mark.parametrize("use_v1", (False, True))
+async def test_retired_logger_sends_late_events_through_its_replacement(
+    monkeypatch: pytest.MonkeyPatch, event: str, use_v1: bool
+) -> None:
+    monkeypatch.setattr(litellm, "generic_api_use_v1", use_v1)
+    sink: Final = _InProcessLogSink()
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    old: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "old"},
+        async_httpx_client=handler,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    replacement: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "new"},
+        async_httpx_client=handler,
+        batch_size=1,
+        flush_interval=3600,
+    )
+    try:
+        old.shutdown(replacement=replacement)
+        await asyncio.wait_for(old._flush_task, timeout=5)
+        log_event: Final = old.async_log_success_event if event == "success" else old.async_log_failure_event
+        await log_event({"standard_logging_object": {"id": "late"}}, {"id": "late", "usage": {}}, None, None)
+        delivered: Final = tuple(
+            (logged["id"], request.headers["Authorization"])
+            for request in sink.requests
+            for logged in _batch_events(request.content, "json_array")
+        )
+        assert delivered == (("late", "new"),)
+    finally:
+        replacement.shutdown()
+        await replacement._flush_task
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old_event_types", "new_event_types", "sent_with"),
+    (
+        (None, ["llm_api_failure"], "old"),
+        (["llm_api_success", "llm_api_failure"], ["llm_api_success"], "old"),
+        (["llm_api_success"], ["llm_api_success"], "new"),
+        (["llm_api_success"], ["llm_api_failure", "llm_api_success"], "new"),
+        (["llm_api_success"], None, "new"),
+    ),
+)
+async def test_queued_logs_go_to_the_replacement_only_when_it_accepts_every_event_type_of_the_retired_logger(
+    old_event_types: list[API_EVENT_TYPES] | None, new_event_types: list[API_EVENT_TYPES] | None, sent_with: str
+) -> None:
+    sink: Final = _InProcessLogSink()
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    old: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "old"},
+        event_types=old_event_types,
+        async_httpx_client=handler,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    replacement: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "new"},
+        event_types=new_event_types,
+        async_httpx_client=handler,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    try:
+        await old.async_log_success_event({"standard_logging_object": {"id": "queued-success"}}, None, None, None)
+        old.shutdown(replacement=replacement)
+        await asyncio.wait_for(old._flush_task, timeout=5)
+        await replacement.flush_queue()
+        delivered: Final = tuple(
+            (logged["id"], request.headers["Authorization"])
+            for request in sink.requests
+            for logged in _batch_events(request.content, "json_array")
+        )
+        assert delivered == (("queued-success", sent_with),)
+    finally:
+        replacement.shutdown()
         await replacement._flush_task
         await handler.close()
