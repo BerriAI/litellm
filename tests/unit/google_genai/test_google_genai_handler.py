@@ -7,6 +7,7 @@ import asyncio
 import datetime
 import json
 import logging
+import re
 import threading
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +16,8 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -454,6 +457,17 @@ class _SuccessRows(CustomLogger):
         self.rows.append((payload["cache_hit"], payload["model_group"], payload["model"]))
 
 
+class _LoggedInputs(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inputs: list[object] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
+        self.inputs.append(kwargs.get("messages"))
+
+
 @pytest.fixture
 def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -477,21 +491,21 @@ _INPUT_COST_PER_TOKEN: Final = 0.001
 _OUTPUT_COST_PER_TOKEN: Final = 0.002
 
 
+def _grok_deployment() -> dict[str, object]:
+    return {
+        "model_name": "grok-group",
+        "litellm_params": {
+            "model": "hosted_vllm/grok",
+            "api_base": "http://upstream.test/v1",
+            "api_key": "k",
+            "input_cost_per_token": _INPUT_COST_PER_TOKEN,
+            "output_cost_per_token": _OUTPUT_COST_PER_TOKEN,
+        },
+    }
+
+
 def _adapter_router() -> litellm.Router:
-    return litellm.Router(
-        model_list=[
-            {
-                "model_name": "grok-group",
-                "litellm_params": {
-                    "model": "hosted_vllm/grok",
-                    "api_base": "http://upstream.test/v1",
-                    "api_key": "k",
-                    "input_cost_per_token": _INPUT_COST_PER_TOKEN,
-                    "output_cost_per_token": _OUTPUT_COST_PER_TOKEN,
-                },
-            }
-        ]
-    )
+    return litellm.Router(model_list=[_grok_deployment()])
 
 
 def _upstream_reply(stream: bool) -> httpx.Response:
@@ -691,9 +705,9 @@ async def test_generate_content_adapter_success_is_logged_once_on_the_request(
         lambda: bool(logged.events) and bool(per_request_calls), message="the request's success callbacks ran"
     )
 
-    assert logged.events == [("success", entrypoint, _ADAPTER_CALL_ID, "grok-group")]
+    assert logged.events == [("success", "acompletion", _ADAPTER_CALL_ID, "grok-group")]
     assert logged.response_costs == [pytest.approx(3 * _INPUT_COST_PER_TOKEN + 1 * _OUTPUT_COST_PER_TOKEN)]
-    assert per_request_calls == [(entrypoint, _ADAPTER_CALL_ID)]
+    assert per_request_calls == [("acompletion", _ADAPTER_CALL_ID)]
     assert _litellm_error_messages(_litellm_errors) == []
 
 
@@ -719,9 +733,9 @@ def test_sync_generate_content_adapter_success_is_logged_once_on_the_request(
         )
     wait_until(lambda: bool(logged.events) and bool(per_request_calls), message="the request's success callbacks ran")
 
-    assert logged.events == [("success", "generate_content", _ADAPTER_CALL_ID, "grok-group")]
+    assert logged.events == [("success", "completion", _ADAPTER_CALL_ID, "grok-group")]
     assert logged.response_costs == [pytest.approx(3 * _INPUT_COST_PER_TOKEN + 1 * _OUTPUT_COST_PER_TOKEN)]
-    assert per_request_calls == [("generate_content", _ADAPTER_CALL_ID)]
+    assert per_request_calls == [("completion", _ADAPTER_CALL_ID)]
     assert _litellm_error_messages(_litellm_errors) == []
 
 
@@ -1008,7 +1022,7 @@ async def test_generate_content_adapter_failure_is_logged_once(
             )
     await await_until(lambda: bool(logged.events), message="the request's failure was logged")
 
-    assert logged.events == [("failure", entrypoint, _ADAPTER_CALL_ID, "grok-group")]
+    assert logged.events == [("failure", "acompletion", _ADAPTER_CALL_ID, "grok-group")]
 
 
 def test_sync_generate_content_adapter_failure_is_logged_once(_httpx_transport: None, monkeypatch: pytest.MonkeyPatch):
@@ -1027,7 +1041,140 @@ def test_sync_generate_content_adapter_failure_is_logged_once(_httpx_transport: 
             )
     wait_until(lambda: bool(logged.events), message="the request's failure was logged")
 
-    assert logged.events == [("failure", "generate_content", _ADAPTER_CALL_ID, "grok-group")]
+    assert logged.events == [("failure", "completion", _ADAPTER_CALL_ID, "grok-group")]
+
+
+_CARD_NUMBER: Final = re.compile(r"\d{4}-\d{4}-\d{4}-\d{4}")
+
+
+async def _fake_presidio_analyze(request: web.Request) -> web.Response:
+    text: Final = (await request.json())["text"]
+    return web.json_response(
+        [
+            {"entity_type": "CREDIT_CARD", "start": match.start(), "end": match.end(), "score": 0.9}
+            for match in _CARD_NUMBER.finditer(text)
+        ]
+    )
+
+
+async def _fake_presidio_anonymize(request: web.Request) -> web.Response:
+    payload: Final = await request.json()
+    return web.json_response(
+        {
+            "text": _CARD_NUMBER.sub("<CREDIT_CARD>", payload["text"]),
+            "items": [{"entity_type": span["entity_type"], "operator": "replace"} for span in payload["analyzer_results"]],
+        }
+    )
+
+
+@pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
+@pytest.mark.asyncio
+async def test_generate_content_adapter_prompt_is_masked_by_a_logging_only_guardrail(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str, stream: bool
+):
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
+    from litellm.types.guardrails import PiiAction, PiiEntityType
+
+    presidio: Final = web.Application()
+    presidio.router.add_post("/analyze", _fake_presidio_analyze)
+    presidio.router.add_post("/anonymize", _fake_presidio_anonymize)
+    logged: Final = _LoggedInputs()
+
+    async with TestServer(presidio) as server:
+        guardrail: Final = OPTIONAL_PresidioPIIMasking(
+            guardrail_name="mask-logs",
+            default_on=True,
+            logging_only=True,
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.MASK},
+        )
+        monkeypatch.setattr(litellm, "callbacks", [guardrail, logged])
+        with respx.mock() as upstream:
+            upstream.route(host="upstream.test").mock(return_value=_upstream_reply(stream))
+            response: Final = await getattr(_adapter_router(), entrypoint)(
+                model="grok-group", contents=[{"role": "user", "parts": [{"text": "My card is 4111-1111-1111-1111"}]}]
+            )
+            if stream:
+                await _drain(response)
+        await await_until(lambda: bool(logged.inputs), message="the request's success callback ran")
+        await guardrail._close_http_session()
+
+    assert logged.inputs == [[{"role": "user", "content": "My card is <CREDIT_CARD>"}]]
+
+
+_GEMINI_INPUT_COST_PER_TOKEN: Final = 0.004
+_GEMINI_OUTPUT_COST_PER_TOKEN: Final = 0.008
+
+
+@pytest.mark.asyncio
+async def test_generate_content_fallback_from_an_adapter_model_to_gemini_logs_the_gemini_call(
+    _httpx_transport: None, _litellm_errors: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.litellm_core_utils.rules import Rules
+    from litellm.utils import function_setup
+
+    logged: Final = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    contents: Final = [{"role": "user", "parts": [{"text": "Hello"}]}]
+    proxy_logging_obj, _ = function_setup(
+        "agenerate_content",
+        Rules(),
+        datetime.datetime.now(),
+        model="grok-group",
+        contents=contents,
+        litellm_call_id=_ADAPTER_CALL_ID,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            _grok_deployment(),
+            {
+                "model_name": "gemini-group",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.0-flash",
+                    "api_base": "http://gemini.test",
+                    "api_key": "k",
+                    "input_cost_per_token": _GEMINI_INPUT_COST_PER_TOKEN,
+                    "output_cost_per_token": _GEMINI_OUTPUT_COST_PER_TOKEN,
+                },
+            },
+        ],
+        fallbacks=[{"grok-group": ["gemini-group"]}],
+    )
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "upstream overloaded"}})
+        )
+        upstream.route(host="gemini.test").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+                    "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 4},
+                },
+            )
+        )
+        await router.agenerate_content(
+            model="grok-group",
+            contents=contents,
+            litellm_call_id=_ADAPTER_CALL_ID,
+            litellm_logging_obj=proxy_logging_obj,
+        )
+    await await_until(
+        lambda: any(outcome == "success" for outcome, *_ in logged.events), message="the fallback's success was logged"
+    )
+
+    successes: Final = [
+        (event, cost) for event, cost in zip(logged.events, logged.response_costs) if event[0] == "success"
+    ]
+    assert successes == [
+        (
+            ("success", "agenerate_content", _ADAPTER_CALL_ID, "gemini-group"),
+            pytest.approx(3 * _GEMINI_INPUT_COST_PER_TOKEN + 1 * _GEMINI_OUTPUT_COST_PER_TOKEN),
+        )
+    ]
+    assert _litellm_error_messages(_litellm_errors) == []
 
 
 def _stream_chunk(content: str | None, finish_reason: str | None, usage: Usage | None = None) -> ModelResponseStream:
