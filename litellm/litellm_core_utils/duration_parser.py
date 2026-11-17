@@ -223,7 +223,7 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     value: Final = int(match.group(1))
     spelled_unit: Final = match.group(2)
     unit: Final = _extract_from_regex(duration)[1] or spelled_unit
-    if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
+    if unit == "mo" and spelled_unit != "mo" and value != 1:
         return value, spelled_unit
     return value, unit
 

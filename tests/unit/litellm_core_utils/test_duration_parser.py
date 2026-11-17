@@ -435,3 +435,9 @@ def test_a_month_starting_now_matches_duration_in_seconds():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("duration", ["12months", "12month"])
+def test_twelve_month_spellings_still_reset_without_annual_support(duration):
+    now = datetime(2026, 11, 16, 10, tzinfo=timezone.utc)
+    assert get_next_standardized_reset_time(duration, now, "UTC") == datetime(2026, 11, 17, tzinfo=timezone.utc)
