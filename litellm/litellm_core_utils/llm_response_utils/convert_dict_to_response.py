@@ -4,7 +4,7 @@ import re
 import time
 import traceback
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, cast
@@ -179,9 +179,9 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
 
 
 def _drop_choice_fields(choice: StreamingChoices, fields: Iterable[str]) -> None:
-    for field in fields:
-        if hasattr(choice, field):
-            delattr(choice, field)
+    for name in fields:
+        if hasattr(choice, name):
+            delattr(choice, name)
 
 
 def _vllm_choice_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
@@ -224,7 +224,7 @@ _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 @dataclass(frozen=True, slots=True)
 class _ReplayChunk:
     delta: Delta
-    provider_specific_fields: Mapping[str, object] = _NO_FIELDS
+    provider_specific_fields: Mapping[str, object] = field(default_factory=lambda: _NO_FIELDS)
 
 
 def _replay_pieces(
