@@ -3329,6 +3329,25 @@ class TestToolTransformation:
         assert result["admin__run"] == ("admin", "run")
         assert "run" not in result
 
+    def test_namespace_tool_name_map_prefers_a_sent_name_over_another_members_bare_name(self):
+        tools = [
+            {
+                "type": "namespace",
+                "name": "x",
+                "tools": [{"type": "function", "name": "foo", "parameters": {"type": "object"}}],
+            },
+            {
+                "type": "namespace",
+                "name": "y",
+                "tools": [{"type": "function", "name": "x__foo", "parameters": {"type": "object"}}],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
+
+        assert result["x__foo"] == ("x", "foo")
+        assert result["y__x__foo"] == ("y", "x__foo")
+
     def test_transform_tools_rejects_flattened_name_collision(self):
         tools = [
             {

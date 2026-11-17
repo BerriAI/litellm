@@ -2714,7 +2714,7 @@ class LiteLLMCompletionResponsesConfig:
             (chat_member_name(namespace, tool_name), (namespace, tool_name))
             for namespace, tool_name in namespace_entries
         )
-        return MappingProxyType(dict(qualified_entries + unambiguous_entries))
+        return MappingProxyType(dict(unambiguous_entries + qualified_entries))
 
     @staticmethod
     def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
