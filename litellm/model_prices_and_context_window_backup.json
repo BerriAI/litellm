@@ -87373,5 +87373,88 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second derived from the 5s and 10s clip prices by resolution ($0.50/$1.00 at 540p, $1.00/$2.00 at 720p, $2.00/$4.00 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_720p": 0.2,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second derived from the 5s clip prices by resolution ($0.15 at 540p, $0.30 at 720p, $1.20 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR ($0.60 at 720p, $2.40 at 1080p per 5s) and HDR+EXR ($0.90, $3.60) are not modeled"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.24,
+        "output_cost_per_second_720p": 0.06,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/reframe": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per started source second by resolution; output_cost_per_second is the default resolution 540p rate ($0.06), which has no tier field"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.36,
+        "output_cost_per_second_720p": 0.12,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/reframe",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second derived from the 5s and 10s clip prices by resolution ($0.72/$1.44 at 540p, $1.08/$2.16 at 720p, $2.16/$4.32 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR and HDR+EXR prices are not modeled"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.144,
+        "output_cost_per_second_1080p": 0.432,
+        "output_cost_per_second_720p": 0.216,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
