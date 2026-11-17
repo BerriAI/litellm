@@ -4615,6 +4615,16 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             "missing ['finish_reason', 'is_finished', 'text'], unexpected ['choices']",
             id="openai-shaped",
         ),
+        pytest.param(
+            {"is_finished": False, "content": "hello"},
+            "missing ['finish_reason', 'text', 'usage'], unexpected ['content']",
+            id="placeholder-flag-with-foreign-key",
+        ),
+        pytest.param(
+            {"text": "", "content": "hello"},
+            "missing ['finish_reason', 'is_finished', 'usage'], unexpected ['content']",
+            id="empty-text-with-foreign-key",
+        ),
         pytest.param("hello", "expected a dict, got str", id="not-a-dict"),
     ],
 )
@@ -4650,6 +4660,13 @@ def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
             ],
             id="partial",
         ),
+        pytest.param(
+            [
+                {"text": None, "is_finished": None, "finish_reason": None, "usage": None, "id": "chunk-0"},
+                {"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, "id": "chunk-1"},
+            ],
+            id="complete-with-null-values",
+        ),
     ],
 )
 def test_custom_provider_stream_keeps_generic_values_of_chunks_with_extra_keys(
@@ -4669,12 +4686,57 @@ def test_custom_provider_stream_keeps_generic_values_of_chunks_with_extra_keys(
     assert assembled.choices[0].finish_reason == "length"
 
 
-def test_custom_provider_stream_ends_with_stop_when_finished_chunk_has_no_finish_reason(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_finish_reason(
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=iter([{"text": "hello"}, {"is_finished": True}]),
+        completion_stream=iter(
+            [
+                {"text": "The answer", "is_finished": True, "finish_reason": None, "usage": None},
+                {"text": "", "is_finished": False, "finish_reason": "", "usage": None},
+                {"text": " continues", "is_finished": True, "finish_reason": "length", "usage": None},
+            ]
+        ),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "The answer continues"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    ("chunks", "finish_reason"),
+    [
+        pytest.param([{"text": "hello"}, {"is_finished": True}], "stop", id="no-earlier-reason"),
+        pytest.param(
+            [{"text": "hello", "finish_reason": "length"}, {"is_finished": True}],
+            "length",
+            id="partial-earlier-reason",
+        ),
+        pytest.param(
+            [
+                {"text": "hello", "is_finished": False, "finish_reason": "length", "usage": None},
+                {"text": "", "is_finished": True, "finish_reason": "", "usage": None},
+            ],
+            "length",
+            id="complete-earlier-reason",
+        ),
+    ],
+)
+def test_custom_provider_stream_finished_chunk_without_reason_keeps_earlier_reason_or_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    chunks: list[dict[str, object]],
+    finish_reason: str,
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
         model="custom-model",
         logging_obj=MagicMock(),
         custom_llm_provider="my-custom-llm",
@@ -4683,7 +4745,7 @@ def test_custom_provider_stream_ends_with_stop_when_finished_chunk_has_no_finish
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
 
-    assert assembled.choices[0].finish_reason == "stop"
+    assert assembled.choices[0].finish_reason == finish_reason
     assert "Unmapped finish_reason" not in caplog.text
 
 

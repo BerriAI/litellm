@@ -1633,8 +1633,9 @@ class CustomStreamWrapper:
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             generic_finish_reason: Final = anthropic_response_obj.get("finish_reason", "")
             completion_obj["content"] = anthropic_response_obj.get("text", "")
-            if anthropic_response_obj.get("is_finished", False):
-                self.received_finish_reason = generic_finish_reason or "stop"
+            finish_reason_is_null: Final = generic_chunk is not None and generic_chunk.get("finish_reason", "") is None
+            if anthropic_response_obj.get("is_finished", False) and not finish_reason_is_null:
+                self.received_finish_reason = generic_finish_reason or self.intermittent_finish_reason or "stop"
 
             if generic_finish_reason:
                 self.intermittent_finish_reason = generic_finish_reason
@@ -3257,9 +3258,10 @@ def generic_chunk_shape_error(chunk: object) -> str | None:
     if fields is None:
         return f"expected a dict, got {type(chunk).__name__}"
     unexpected: Final = sorted(key for key in fields if key not in _GCHUNK_FIELDS)
-    if not unexpected or any(fields.get(key) is not None for key in _GCHUNK_VALUE_FIELDS):
+    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))
+    if not unexpected or not missing or any(fields.get(key) for key in _GCHUNK_VALUE_FIELDS):
         return None
-    return f"missing {sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))}, unexpected {unexpected}"
+    return f"missing {missing}, unexpected {unexpected}"
 
 
 def convert_generic_chunk_to_model_response_stream(
