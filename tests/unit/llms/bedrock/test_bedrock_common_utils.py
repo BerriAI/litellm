@@ -563,6 +563,22 @@ def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points
     assert litellm.model_cost[model]["cache_read_input_token_cost"] > 0
 
 
+def test_a_catalog_cache_point_opt_out_keeps_the_old_flag_for_older_clients_reading_the_remote_catalog(
+    local_model_cost_map: None,
+) -> None:
+    opted_out: Final = tuple(
+        (key, entry["litellm_provider"])
+        for key, entry in litellm.model_cost.items()
+        if entry.get("supports_bedrock_converse_cache_point") is False and entry.get("supports_prompt_caching") is True
+    )
+
+    assert opted_out
+    assert {
+        key: litellm.get_model_info(model=key, custom_llm_provider=provider)["supports_prompt_cache_breakpoint"]
+        for key, provider in opted_out
+    } == dict.fromkeys((key for key, _ in opted_out), False)
+
+
 def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_model_cost_map):
     from litellm import Router
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
