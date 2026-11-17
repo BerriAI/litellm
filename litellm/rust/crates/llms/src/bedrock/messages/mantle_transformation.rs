@@ -42,8 +42,7 @@ use crate::{
 
 use super::invoke_transformations::{
     anthropic_claude_transformation::{
-        bearer_token, invoke_headers, region_from_model,
-        native_output_fallback_litellm_params,
+        bearer_token, invoke_headers, native_output_fallback_litellm_params, region_from_model,
         should_retry_anthropic_messages_without_native_output,
     },
     request::{
