@@ -1072,7 +1072,11 @@ async def _managed_authorization_scope(
     kept_scope: Final = (
         None
         if prior_grant is None or asks_for_wildcard(scope)
-        else " ".join(name for name in prior_grant.get("scopes") or () if not requestable or name in requestable)
+        else " ".join(
+            name
+            for name in prior_grant.get("scopes") or ()
+            if not requestable or requestable.issuperset(name.split(","))
+        )
     )
     merged_scope: Final = union_scopes(kept_scope, scope)
     selected_scope: Final = (

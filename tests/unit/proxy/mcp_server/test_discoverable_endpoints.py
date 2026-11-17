@@ -15074,6 +15074,8 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
         (["tools.read"], "mcp_allowed", "tools.read mcp_allowed"),
         (["api://app/tools.read"], "tools.read", "tools.read"),
         (["api://app/tools.read", "tools.read"], "tools.write", "tools.read tools.write"),
+        (["tools.read,tools.list"], "tools.read", "tools.read,tools.list tools.read"),
+        (["tools.read,api://app/tools.write"], "tools.read", "tools.read"),
     ],
 )
 async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(
@@ -15093,7 +15095,9 @@ async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcar
 
     _, signing_key = jwt_oauth_identity
     monkeypatch.setenv("LITELLM_SALT_KEY", "scope-grant-test-salt")
-    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client", "scopes": ["tools.read"]})
+    server = _cimd_oauth_server().model_copy(
+        update={"client_id": "scope-client", "scopes": ["tools.read", "tools.list"]}
+    )
     global_mcp_server_manager.registry[server.server_id] = server
     credential = db.encrypt_value_helper(
         json.dumps({"type": "oauth2", "access_token": "old-access", "scopes": prior_scopes})
