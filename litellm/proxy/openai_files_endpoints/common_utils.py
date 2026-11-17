@@ -27,6 +27,7 @@ from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -639,6 +640,10 @@ async def get_authorized_credentials_for_model(
     )
 
 
+def batch_row_model_for_deployment(deployment_model: str, custom_llm_provider: str) -> str:
+    return get_llm_provider(model=deployment_model, custom_llm_provider=custom_llm_provider)[0]
+
+
 def deployment_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
@@ -1017,6 +1022,7 @@ async def handle_model_based_routing(
     data: dict,
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
+    resolves_managed_file_ids: bool = False,
 ) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
@@ -1025,6 +1031,11 @@ async def handle_model_based_routing(
     param or body field), so it is authorized against the caller's key, team, org and
     project grants before any deployment credentials are resolved.
 
+    A LiteLLM managed file id is not model-routed when this proxy resolves managed file ids
+    itself, since its managed files hook maps it to the provider file id of each deployment
+    it lives on. A proxy without that hook, like one with no database chained to another
+    LiteLLM proxy, still forwards the id to the named model, which may own it.
+
     Args:
         file_id: File ID (may contain embedded model info)
         request: FastAPI request object
@@ -1032,6 +1043,7 @@ async def handle_model_based_routing(
         data: Request data dictionary
         user_api_key_dict: The authenticated caller
         check_file_id_encoding: Whether to check for embedded model in file_id
+        resolves_managed_file_ids: Whether this proxy's managed files hook is loaded
 
     Returns:
         Tuple of (should_use_model_routing, model_used, original_file_id, credentials)
@@ -1044,6 +1056,9 @@ async def handle_model_based_routing(
         HTTPException: If router unavailable or model not found
         ProxyException: If the caller is not allowed to use the model
     """
+    if resolves_managed_file_ids and is_base64_encoded_unified_file_id(file_id):
+        return False, None, None, None
+
     model_from_id, model_from_param = extract_model_from_sources(
         file_id=file_id,
         request=request,

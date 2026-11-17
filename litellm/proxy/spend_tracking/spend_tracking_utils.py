@@ -72,6 +72,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
+from litellm.litellm_core_utils.redact_messages import numeric_compression_stats
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.secret_redaction import redact_tokens
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -668,7 +669,7 @@ async def get_logging_payload_async(
     from litellm.proxy.proxy_server import general_settings_view
 
     call_kwargs: Final[Mapping[str, object]] = kwargs if kwargs is not None else MappingProxyType({})
-    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is not False
+    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is True
     build: Final = partial(
         get_logging_payload,
         kwargs=dict(_spend_log_worker_kwargs(call_kwargs)) if offload else dict(call_kwargs),
@@ -1535,7 +1536,7 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
 def _without_tokens(value: str) -> str:
     from litellm.proxy.proxy_server import general_settings_view
 
-    if general_settings_view().get("redact_tokens_in_spend_logs") is False:
+    if general_settings_view().get("redact_tokens_in_spend_logs") is not True:
         return value
     return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
 
@@ -1584,7 +1585,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
-    and logprobs. Token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
+    and logprobs. When enabled, token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
     """
     if visited is None:
         visited = set()
@@ -1790,27 +1791,6 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
 
 
-_NUMERIC_COMPRESSION_STAT_KEYS: Final = (
-    "tokens_before",
-    "tokens_after",
-    "tokens_saved",
-    "compression_ratio",
-)
-
-
-def _numeric_compression_stats_from_guardrail_response(
-    guardrail_response: object,
-) -> dict[str, int | float] | None:
-    if not isinstance(guardrail_response, dict):
-        return None
-    stats: Final = {
-        key: value
-        for key, value in guardrail_response.items()
-        if key in _NUMERIC_COMPRESSION_STAT_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool)
-    }
-    return stats or None
-
-
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
@@ -1821,7 +1801,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     stats-only dict; spend aggregation reads them via
     ``extract_compression_saved_tokens``.
     """
-    preserved_stats: Final = _numeric_compression_stats_from_guardrail_response(entry.get("guardrail_response"))
+    preserved_stats: Final = numeric_compression_stats(entry)
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
         **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},

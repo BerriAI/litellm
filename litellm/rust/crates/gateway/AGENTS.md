@@ -1,5 +1,6 @@
 - Keep this crate a thin composition layer: mount endpoint routers and serve the supplied listener
 - Server lifecycle and shared inbound middleware belong here, including client authentication, rate limiting, and request logging
+- Inference and `/mcp-rest` routes authenticate with `BearerOrXApiKey`, since the proxy accepts an Anthropic `x-api-key` there. MCP protocol routes keep `Bearer`, since the proxy's MCP admission never reads `x-api-key`
 - Endpoint paths, request handling, model resolution, and response encoding belong to the mounted crates. Provider execution belongs to the `inference-<fmt>` crates and `llms`
 - Inject shared state and infrastructure. Avoid global runtimes, duplicate client pools, and abstractions for hypothetical endpoint groups
 - Test mounting and server lifecycle through public HTTP behavior. Test endpoint semantics in the owning crate

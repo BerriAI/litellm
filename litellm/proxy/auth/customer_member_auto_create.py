@@ -7,6 +7,7 @@ a default budget the member is registered with no budget: its spend is tracked a
 assigns one.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 AUTO_CREATE_ACTOR: Final = "x-litellm-customer-member-id"
 AUTO_CREATE_ORG_ACTOR: Final = "x-litellm-customer-org-alias"
 DEFAULT_TEAM_ALIAS: Final = "default"
+_ONE_ORGANIZATION_REGISTRATION_AT_A_TIME: Final = asyncio.Lock()
 
 
 def default_team_id(customer_org_id: str) -> str:
@@ -79,13 +81,16 @@ async def ensure_customer_organization(
 ) -> Organization | Failure:
     """The organization row carrying ``customer_org_alias``, created with the alias as its id when absent, so a
     customer's first request is charged to it. Two workers registering the same alias at once both end up with
-    the one row."""
+    the one row. Every organization create waits on one database-wide lock inside its transaction, so a worker
+    opens one registration transaction at a time and a burst of new aliases queues here instead of holding every
+    writer connection until the transactions time out."""
     from litellm.proxy.proxy_server import premium_user
 
     hierarchy: Final = CustomerHierarchy(prisma_client, premium_user=premium_user)
-    created: Final = await hierarchy.create_organization(
-        OrganizationCreate(customer_org_id=customer_org_alias, alias=customer_org_alias), AUTO_CREATE_ORG_ACTOR
-    )
+    async with _ONE_ORGANIZATION_REGISTRATION_AT_A_TIME:
+        created: Final = await hierarchy.create_organization(
+            OrganizationCreate(customer_org_id=customer_org_alias, alias=customer_org_alias), AUTO_CREATE_ORG_ACTOR
+        )
     if isinstance(created, Failure) and created.code in (ErrorCode.ALREADY_EXISTS, ErrorCode.ALIAS_ALREADY_EXISTS):
         return await hierarchy.get_organization(customer_org_alias)
     if not isinstance(created, Failure):

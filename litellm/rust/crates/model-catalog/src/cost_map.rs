@@ -6,7 +6,7 @@ use sha1::{Digest, Sha1};
 
 use crate::bundled::BUNDLED_REGISTRY;
 use crate::catalog::{Catalog, FALLBACK_GENERALIZATIONS, IntegrityLimits};
-use crate::error::Error;
+use crate::error::{Error, ErrorKind, Repr};
 
 /// Which document is installed: the `git_blob_id` of its bytes and the ETag it was served with
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,10 +62,19 @@ impl CostMap {
         BUNDLED.clone()
     }
 
-    /// Reads a fetched document. One that does not parse, or that has fewer models than `limits` allow against the
-    /// bundled one, is refused. Every alias problem it has is logged
+    /// Reads a fetched document. One that does not parse, that has a top-level value a host table cannot serve as a
+    /// row, or that has fewer models than `limits` allow against the bundled one, is refused. Every alias problem it
+    /// has is logged
     pub fn read(body: &[u8], etag: Option<String>, limits: IntegrityLimits) -> Result<Self, Error> {
         let loaded = Catalog::parse(body)?;
+        if let Some(key) = loaded
+            .errors
+            .iter()
+            .find(|error| error.kind() == ErrorKind::NotAnObject)
+            .and_then(Error::key)
+        {
+            return Err(Error::from_key(&key, Repr::UnservableValue));
+        }
         loaded
             .value
             .check_size(BUNDLED.base.catalog.model_count(), limits)?;
