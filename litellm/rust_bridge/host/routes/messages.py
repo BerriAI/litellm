@@ -897,6 +897,27 @@ def _signing_failure(kind: str) -> Exception | None:
     return None
 
 
+_STS_FAILURE: Final = TypeAdapter(tuple[str, str, str, str])
+
+
+def _sts_failure(failure: object) -> Exception | None:
+    """The exception Python's AWS credential code lets through for an STS call that failed, which the
+    Bedrock Mantle signer does not wrap: botocore's own class, or `AwsAuthError` for a refused web identity token."""
+    from botocore.exceptions import ClientError, EndpointConnectionError
+
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+
+    try:
+        kind, operation, code, message = _STS_FAILURE.validate_python(failure)
+    except ValidationError:
+        return None
+    if kind == "invalid_web_identity_token":
+        return AwsAuthError(status_code=401, message=f"AWS STS rejected the web identity token: {message}")
+    if kind == "rejected":
+        return ClientError({"Error": {"Code": code, "Message": message}}, operation)
+    return EndpointConnectionError(endpoint_url="AWS STS") if kind == "unreachable" else None
+
+
 def _bedrock_credential_failure(
     error: Exception, request: Mapping[str, object], request_provider: str
 ) -> Exception | None:
@@ -909,8 +930,11 @@ def _bedrock_credential_failure(
     if not isinstance(kind, str):
         return None
     known: Final = _signing_failure(kind)
-    if request_provider == "bedrock_mantle" and not isinstance(known, AwsAuthError):
-        return _raised(ValueError(MANTLE_AUTH_FAILED))
+    if request_provider == "bedrock_mantle":
+        sts: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
+        if sts is not None:
+            return _raised(sts)
+        return _raised(known if isinstance(known, AwsAuthError) else ValueError(MANTLE_AUTH_FAILED))
     if known is not None:
         return _raised(known)
     call: Final = _provider_call(request)

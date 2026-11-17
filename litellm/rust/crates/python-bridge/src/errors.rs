@@ -47,6 +47,8 @@ const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
 /// Python's `get_llm_provider` raised the refusal while resolving the provider, which it wraps
 /// into its own `BadRequestError`.
 const MESSAGES_PROVIDER_RESOLUTION: &str = "messages_provider_resolution";
+/// Why the STS call made for the credentials failed, as `(kind, operation, code, message)`.
+const MESSAGES_STS_FAILURE: &str = "messages_sts_failure";
 /// The provider replied with a body litellm refuses to read, which Python raises as `APIError` 500.
 const MESSAGES_REFUSED_REPLY: &str = "messages_refused_reply";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
@@ -75,15 +77,39 @@ fn credential_failure(error: &Error) -> Option<&'static str> {
     }
 }
 
-fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
-    let innermost = std::iter::successors(Some(error), |&cause| cause.source())
+fn innermost_aws_error<'a>(
+    error: &'a (dyn StdError + 'static),
+) -> Option<&'a litellm_auth_aws::Error> {
+    std::iter::successors(Some(error), |&cause| cause.source())
         .filter_map(|cause| {
             cause
                 .downcast_ref::<litellm_auth_aws::Error>()
                 .or_else(|| cause.downcast_ref::<Source>()?.downcast_ref())
         })
-        .last();
-    match innermost {
+        .last()
+}
+
+fn sts_failure(error: &Error) -> Option<(&'static str, &'static str, String, String)> {
+    let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
+        return None;
+    };
+    Some(match innermost_aws_error(auth)?.sts_failure()? {
+        litellm_auth_aws::StsFailure::InvalidWebIdentityToken { message } => {
+            ("invalid_web_identity_token", "", String::new(), message)
+        }
+        litellm_auth_aws::StsFailure::Rejected {
+            operation,
+            code,
+            message,
+        } => ("rejected", operation, code, message),
+        litellm_auth_aws::StsFailure::Unreachable => {
+            ("unreachable", "", String::new(), String::new())
+        }
+    })
+}
+
+fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
+    match innermost_aws_error(error) {
         Some(litellm_auth_aws::Error::WebIdentityTokenReference) => "web_identity_reference",
         Some(litellm_auth_aws::Error::MissingWebIdentityToken) => "missing_web_identity_token",
         Some(failure) if failure.is_empty_default_chain() => "no_credentials",
@@ -288,6 +314,9 @@ pub(crate) fn route_failure(
             }
             if let Some(failure) = credential_failure(&error) {
                 value.setattr(MESSAGES_CREDENTIAL_FAILURE, failure)?;
+            }
+            if let Some(failure) = sts_failure(&error) {
+                value.setattr(MESSAGES_STS_FAILURE, failure)?;
             }
             native
         }

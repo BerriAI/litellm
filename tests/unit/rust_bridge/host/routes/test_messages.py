@@ -2983,6 +2983,44 @@ def test_a_bedrock_credential_failure_raises_what_python_signing_raises(kind: st
     assert mapped.__traceback__ is not None
 
 
+@pytest.mark.parametrize(
+    ("sts_failure", "raised", "status"),
+    (
+        pytest.param(
+            ("rejected", "AssumeRole", "AccessDenied", "denied"), "ClientError", None, id="assume-role-denied"
+        ),
+        pytest.param(
+            ("rejected", "AssumeRoleWithWebIdentity", "ExpiredTokenException", "expired"),
+            "ClientError",
+            None,
+            id="expired-token",
+        ),
+        pytest.param(("invalid_web_identity_token", "", "", "bad"), "AwsAuthError", 401, id="invalid-web-identity"),
+        pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", None, id="sts-unreachable"),
+        pytest.param(None, "ValueError", None, id="no-sts-call"),
+    ),
+)
+def test_a_bedrock_mantle_sts_failure_raises_the_class_the_mantle_signer_lets_through(
+    sts_failure: tuple[str, str, str, str] | None, raised: str, status: int | None
+) -> None:
+    from botocore.exceptions import ClientError
+
+    native: Final = _credential_failure("replay")
+    native.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+
+    mapped: Final = messages_host.map_failure(
+        native, {"model": _BEDROCK_MANTLE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock_mantle"
+    )
+
+    assert type(mapped).__name__ == raised
+    assert getattr(mapped, "status_code", None) == status
+    assert mapped.__traceback__ is not None
+    if isinstance(mapped, ClientError):
+        assert sts_failure is not None
+        assert mapped.response.get("Error", {}).get("Code") == sts_failure[2]
+        assert mapped.operation_name == sts_failure[1]
+
+
 @pytest.mark.usefixtures("no_aws_credentials")
 def test_an_access_key_without_its_secret_raises_the_partial_credentials_error_python_signing_raises(
     monkeypatch: pytest.MonkeyPatch,
