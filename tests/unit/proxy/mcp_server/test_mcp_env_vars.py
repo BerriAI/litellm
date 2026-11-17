@@ -1784,11 +1784,9 @@ def test_fips_mode_identifier_lock_keys_are_truncated_sha256() -> None:
 
 @pytest.mark.skipif(not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach")
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_mode", "blake2b_refused")
-async def test_fips_mode_merge_user_env_vars_takes_its_lock_without_blake2b(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("fips_mode", "blake2b_refused", "env_vars_salt_key")
+async def test_fips_mode_merge_user_env_vars_takes_its_lock_without_blake2b() -> None:
     from litellm.proxy.mcp_server.db import merge_user_env_vars
-
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
 
     merged: Final = await merge_user_env_vars(
         _transactional_env_vars_prisma(), "alice", "srv-1", {"TOKEN": "abc"}, allowed_names=["TOKEN"]
