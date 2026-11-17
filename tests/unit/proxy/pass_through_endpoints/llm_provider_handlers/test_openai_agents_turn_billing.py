@@ -876,6 +876,32 @@ async def test_a_proxy_shutdown_logs_a_waiting_row_with_the_usage_reported_so_fa
     assert (billed_usage == TURN_USAGE) != any(SESSION_ID in message for message in caplog.messages)
 
 
+async def _unanswered_get(base_url: str, path: str, scope_headers: Mapping[str, str]) -> httpx.Response:
+    _ = await asyncio.Event().wait()
+    raise AssertionError(f"{base_url}/{path} never answers")
+
+
+@pytest.mark.asyncio
+async def test_a_shutdown_that_runs_out_of_time_logs_a_waiting_row_at_zero_before_it_ends(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+):
+    rows: Final = _SpendRows()
+    biller: Final = OpenAIAgentsTurnBiller(get=_unanswered_get, sleep=_blocked_sleep, clock=_Clock())
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await _relay_call(
+            biller, rows, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "3c5e7a9c-1e3a-4c5e-8a7c-9e1a3c5e7a93"
+        )
+        await biller.drain(timeout=0.2)
+        logged_before_drain_ended: Final = rows.logged.is_set()
+    row: Final = await rows.only_row()
+
+    assert logged_before_drain_ended
+    assert row["total_tokens"] == 0
+    assert not row["spend"]
+    assert any(SESSION_ID in message and "shut down" in message for message in caplog.messages)
+
+
 @pytest.mark.asyncio
 async def test_transient_poll_failures_still_bill_the_turn(local_model_cost_map: None):
     api: Final = _AgentsApi(
