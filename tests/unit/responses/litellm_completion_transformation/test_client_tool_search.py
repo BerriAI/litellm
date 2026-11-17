@@ -1,6 +1,7 @@
 from typing import Final
 
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 
 _CODEX_TOOL_SEARCH: Final = {"type": "tool_search", "execution": "client"}
@@ -66,3 +67,25 @@ def test_deferred_request_tools_are_held_back_only_when_the_client_searches() ->
 
     assert with_search.tools == (_CODEX_TOOL_SEARCH, _SHELL)
     assert without_search.tools == (_SHELL, deferred)
+
+
+def test_a_loaded_deferred_tool_keeps_its_deferral_so_its_calls_read_back_as_namespace_equals_name() -> None:
+    deferred: Final = {**_SHELL, "name": "deploy", "defer_loading": True}
+    loaded_plain: Final = {**_SHELL, "name": "deploy", "description": "loaded copy"}
+
+    bridged: Final = bridge_client_tool_search(
+        [_SEARCH_CALL, _search_output(loaded_plain)], [_CODEX_TOOL_SEARCH, _SHELL, deferred]
+    )
+
+    assert bridged.tools == (_CODEX_TOOL_SEARCH, _SHELL, {**loaded_plain, "defer_loading": True})
+    assert LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+        LiteLLMCompletionResponsesConfig.request_tools({"tools": list(bridged.tools)})
+    ) == {"deploy": ("deploy", "deploy")}
+
+
+def test_a_loaded_tool_that_was_never_deferred_stays_undeferred() -> None:
+    loaded_lint: Final = {**_SHELL, "name": "lint"}
+
+    bridged: Final = bridge_client_tool_search([_SEARCH_CALL, _search_output(loaded_lint)], [_CODEX_TOOL_SEARCH])
+
+    assert bridged.tools == (_CODEX_TOOL_SEARCH, loaded_lint)

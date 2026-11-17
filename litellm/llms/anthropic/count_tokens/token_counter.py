@@ -2,7 +2,7 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -11,14 +11,22 @@ from pydantic import JsonValue
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    malformed_message_error,
+    messages_count_options,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import (
+    BaseTokenCounter,
+    deployment_litellm_params,
+    deployment_timeout,
+    optional_str,
+)
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -65,42 +73,74 @@ class AnthropicTokenCounter(BaseTokenCounter):
         Returns:
             TokenCountResponse with token count, or None if counting fails
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
-
         if not messages:
             return None
 
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
+        litellm_params: Final = deployment_litellm_params(deployment)
         match translated := await anthropic_count_fields(
             model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
         ):
             case ChatCountTranslationError():
                 return translated.response(request_model, model_to_use, "anthropic_api")
             case AnthropicCountFields():
-                return await self.count_tokens(
+                return await self._count(
                     model_to_use=model_to_use,
-                    messages=[dict(message) for message in translated.messages],
-                    contents=contents,
-                    deployment=deployment,
+                    messages=translated.messages,
+                    litellm_params=litellm_params,
                     request_model=request_model,
-                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    tools=translated.tools,
                     system=translated.system,
-                    messages_format="anthropic",
-                    output_format=output_format,
-                    context_management=context_management,
                     count_options=translated.options,
+                    context_management=context_management,
                 )
             case None:
                 pass
 
-        deployment = deployment or {}
-        litellm_params: Final = deployment.get("litellm_params", {})
-        api_base: Final = litellm_params.get("api_base")
+        if (malformed := malformed_message_error(messages)) is not None:
+            return malformed.response(request_model, model_to_use, "anthropic_api")
+
+        match options := await asyncify(messages_count_options)(
+            AnthropicMessagesConfig(),
+            model_to_use,
+            messages,
+            count_options,
+            litellm_params,
+        ):
+            case ChatCountTranslationError():
+                return options.response(request_model, model_to_use, "anthropic_api")
+            case _:
+                return await self._count(
+                    model_to_use=model_to_use,
+                    messages=messages,
+                    litellm_params=litellm_params,
+                    request_model=request_model,
+                    tools=tools,
+                    system=system,
+                    count_options=options,
+                    context_management=context_management,
+                )
+
+    async def _count(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, JsonValue]],
+        litellm_params: Mapping[str, object],
+        request_model: str,
+        tools: Sequence[Mapping[str, JsonValue]] | None,
+        system: JsonValue,
+        count_options: Mapping[str, JsonValue],
+        context_management: CountContextManagement | None,
+    ) -> TokenCountResponse | None:
+        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
+
+        api_base: Final = optional_str(litellm_params.get("api_base"))
 
         try:
             configured_auth_header: Final = await AnthropicModelInfo.aget_auth_header(
-                api_key=litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key,
+                api_key=optional_str(litellm_params.get("api_key")) or litellm.anthropic_key or litellm.api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 allow_workload_identity=True,
@@ -126,14 +166,15 @@ class AnthropicTokenCounter(BaseTokenCounter):
 
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                messages=messages,
+                messages=[dict(message) for message in messages],
                 auth_header=auth_header,
                 api_base=api_base,
-                tools=tools,
+                tools=None if tools is None else [dict(tool) for tool in tools],
                 system=system,
                 optional_params=count_options,
                 context_management=context_management.spec if context_management is not None else None,
                 drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
+                timeout=deployment_timeout(litellm_params),
             )
 
             if result is not None:

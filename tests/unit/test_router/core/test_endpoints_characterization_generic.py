@@ -195,7 +195,7 @@ async def test_sync_generic_endpoints_set_no_routing_hidden_params(
     assert response._hidden_params == {}
 
 
-@pytest.mark.parametrize("endpoint", ["ocr", "generate_content"])
+@pytest.mark.parametrize("endpoint", ["ocr", "video_generation"])
 async def test_sync_generic_endpoints_are_not_retried(make_core: MakeCore, host: EndpointHost, endpoint: str):
     host.answer("openai/d1", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
     _, request = ROUTED_SYNC[endpoint]
@@ -429,6 +429,29 @@ async def test_a_plain_response_id_without_a_model_fails_with_type_error(make_co
     with pytest.raises(TypeError, match="missing 1 required positional argument: 'model'"):
         await core.aget_responses(response_id="resp_plain")
     assert host.calls == []
+
+
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+@pytest.mark.parametrize("endpoint", ["avector_store_search", "vector_store_search"])
+async def test_a_deployments_raw_retrieval_query_never_reaches_a_routed_vector_store_search(
+    make_core: MakeCore, host: EndpointHost, endpoint: str, retrieval_query_param: str
+):
+    from_deployment: Final = {"text": "from the deployment"}
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "g",
+                "d1",
+                **{retrieval_query_param: from_deployment, "extra_body": {retrieval_query_param: from_deployment, "kept": 1}},
+            )
+        ]
+    )
+
+    await _call(core, endpoint, {"model": "g", "vector_store_id": "v", "query": "q"})
+
+    sent: Final = host.calls[0].kwargs
+    assert retrieval_query_param not in sent
+    assert sent["extra_body"] == {"kept": 1}
 
 
 # --- container ids ------------------------------------------------------------------------
