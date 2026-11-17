@@ -5662,6 +5662,69 @@ async def test_apply_guardrail_passes_a_response_model_armor_skipped_a_filter_on
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_hook",
+    [
+        GuardrailEventHooks.pre_call,
+        GuardrailEventHooks.during_call,
+        GuardrailEventHooks.post_call,
+        GuardrailEventHooks.pre_mcp_call,
+    ],
+)
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_apply_guardrail_fails_a_skipped_filter_only_for_post_mcp_call(event_hook, input_type):
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=True, event_hook=event_hook)
+    request_data: Final[dict] = {"metadata": {}}
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["a very large text"]}, request_data=request_data, input_type=input_type
+    )
+
+    assert result["texts"] == ["a very large text"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passes_a_request_with_a_skipped_filter_on_a_post_mcp_call_guardrail():
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=True)
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["a very large prompt"]}, request_data={"metadata": {}}, input_type="request"
+    )
+
+    assert result["texts"] == ["a very large prompt"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_a_text_that_appears_twice_in_a_tool_result_once():
+    guardrail = _post_mcp_call_guardrail([_clean_armor_response()], mask_response_content=False)
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["tool output", "tool output"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert _scanned_texts(guardrail) == ["tool output"]
+    assert result["texts"] == ["tool output", "tool output"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_every_copy_of_a_text_that_appears_twice_in_a_tool_result():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("ssn [REDACTED]"), _deidentified_armor_response("ssn [REDACTED]")]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120", "", "ssn 078-05-1120"]},
+        request_data={"metadata": {}},
+        input_type="response",
+    )
+
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120", "ssn 078-05-1120"]
+    assert result["texts"] == ["ssn [REDACTED]", "", "ssn [REDACTED]"]
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_does_not_release_masked_text_when_another_filter_was_skipped():
     skipped_with_mask: Final = _skipped_armor_response(
         cast(dict[str, object], _deidentified_armor_response("ssn [REDACTED]")["sanitizationResult"])["filterResults"]

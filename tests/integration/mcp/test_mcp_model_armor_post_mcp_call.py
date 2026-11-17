@@ -284,7 +284,7 @@ def test_a_tool_result_model_armor_flags_is_blocked_before_the_mcp_client_sees_i
 
     assert outcome.error is not None and "Response blocked by Model Armor" in outcome.raw, outcome.raw
     assert marker not in outcome.raw, f"{entry}: the flagged tool result reached the client: {outcome.raw}"
-    assert rig.scans(marker) == [(_sanitize_target(STRICT), f"{note}\n{note}\nnote")]
+    assert rig.scans(marker) == [(_sanitize_target(STRICT), f"{note}\nnote")]
 
 
 @pytest.mark.parametrize("entry", ENTRIES)
@@ -303,8 +303,7 @@ def test_a_deidentify_match_returns_the_sanitized_text_and_structured_content(ri
     ), outcome.raw
     assert SENSITIVE not in outcome.raw, outcome.raw
     assert rig.scans(marker) == [
-        (_sanitize_target(STRICT), f"{note}\n{note}\nnote"),
-        (_sanitize_target(STRICT), note),
+        (_sanitize_target(STRICT), f"{note}\nnote"),
         (_sanitize_target(STRICT), note),
     ]
 

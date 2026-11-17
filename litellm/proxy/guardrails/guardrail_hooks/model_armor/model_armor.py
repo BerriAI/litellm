@@ -421,15 +421,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             raise ModelArmorAPIError(detail)
 
         json_response: Final = _RESPONSE_JSON.validate_python(response.json())
-        armor_response: Final = _ModelArmorResponseRoot.model_validate(
+        return _ModelArmorResponseRoot.model_validate(
             await json_response if isinstance(json_response, _AwaitableJSON) else json_response
         ).root
-        if self._skipped_a_filter(armor_response) and not self._should_block_content(
-            armor_response, allow_sanitization=True
-        ):
-            verbose_proxy_logger.error("Model Armor skipped a filter, so the content was not fully scanned")
-            raise ModelArmorAPIError("Model Armor skipped a filter, so the content was not fully scanned")
-        return armor_response
 
     def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
         """
@@ -1329,7 +1323,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
+        unique_texts: Final = tuple(dict.fromkeys(text for text in inputs.get("texts") or () if text))
+        content: Final = "\n".join(unique_texts)
         if not content:
             return inputs
 
@@ -1353,10 +1348,23 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 GuardrailEventHooks.logging_only
             )
 
+        fails_on_a_skipped_filter: Final = input_type == "response" and self._event_hook_is_event_type(
+            GuardrailEventHooks.post_mcp_call
+        )
+
+        async def scanned(text: str) -> _ModelArmorResponse:
+            scan: Final = await self.make_model_armor_request(content=text, source=source, request_data=request_data)
+            if (
+                fails_on_a_skipped_filter
+                and self._skipped_a_filter(scan)
+                and not self._should_block_content(scan, allow_sanitization=True)
+            ):
+                verbose_proxy_logger.error("Model Armor skipped a filter, so the content was not fully scanned")
+                raise ModelArmorAPIError("Model Armor skipped a filter, so the content was not fully scanned")
+            return scan
+
         try:
-            armor_response: Final = await self.make_model_armor_request(
-                content=content, source=source, request_data=request_data
-            )
+            armor_response: Final = await scanned(content)
         except (ModelArmorAPIError, httpx.HTTPError) as e:
             if not fails_open(e):
                 raise
@@ -1403,23 +1411,20 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
         async def sanitized(text: str) -> str:
-            text_response: Final = await self.make_model_armor_request(
-                content=text, source="model_response", request_data=request_data
-            )
+            text_response: Final = await scanned(text)
             if self._should_block_content(text_response, allow_sanitization=True):
                 raise blocked_after_rescan(text_response)
             return self._get_sanitized_content(text_response) or text
 
-        texts: Final = list(inputs.get("texts") or ())
         try:
-            masked_texts: Final = [await sanitized(text) if text else text for text in texts]
+            rewrites: Final = {text: await sanitized(text) for text in unique_texts}
         except (ModelArmorAPIError, httpx.HTTPError) as e:
             if not fails_open(e):
                 raise
             return inputs
-        if "\n".join(text for text in masked_texts if text) != self._get_sanitized_content(armor_response):
+        if "\n".join(rewrites.values()) != self._get_sanitized_content(armor_response):
             raise blocked_after_rescan(armor_response)
-        return {**inputs, "texts": masked_texts}
+        return {**inputs, "texts": [rewrites.get(text, text) for text in inputs.get("texts") or ()]}
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
