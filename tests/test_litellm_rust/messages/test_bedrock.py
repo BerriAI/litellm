@@ -1080,6 +1080,10 @@ async def test_bedrock_mantle_invalid_region_raises_what_python_raises(
 
     assert type(rust_raised.value) is raised
     assert getattr(rust_raised.value, "status_code", None) == (400 if raised is litellm.BadRequestError else None)
+    if raised is litellm.BadRequestError:
+        # Python refuses the region while resolving the provider, so its error names no provider and the request's model.
+        assert getattr(rust_raised.value, "llm_provider", None) == ""
+        assert getattr(rust_raised.value, "model", None) == MANTLE_MODEL
     assert server.requests == []
 
 

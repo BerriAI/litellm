@@ -3408,6 +3408,19 @@ def _mantle_logger() -> Logging:
     )
 
 
+def test_a_bedrock_mantle_region_refused_resolving_the_provider_names_no_provider() -> None:
+    rust_error: Final = _refused(
+        "Invalid AWS region format: 'US-EAST-1'.", messages_provider="", messages_provider_model=_BEDROCK_MANTLE
+    )
+
+    mapped: Final = messages_host.map_failure(rust_error, {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle")
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+    assert mapped.llm_provider == ""  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == _BEDROCK_MANTLE  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+
+
 def test_a_mantle_route_refusal_logs_the_route_model_and_raises_the_model_id_rust_names() -> None:
     """Python's handler logs the route model before the Mantle config's transform refuses the call
     with the model id it hands the Bedrock invoke transform."""
