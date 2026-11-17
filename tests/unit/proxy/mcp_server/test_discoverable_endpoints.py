@@ -5015,7 +5015,7 @@ async def test_callback_legacy_state_requires_absent_issuer(monkeypatch, iss, ex
         _issuer_anchored_oauth_server(),
         iss=iss,
         monkeypatch=monkeypatch,
-        drop_state_keys=("expected_issuer", "configured_authorization_origin"),
+        drop_state_keys=("expected_issuer", "configured_authorization_endpoint"),
     )
     assert response.status_code == expected_status
 
@@ -5033,7 +5033,7 @@ async def test_callback_legacy_state_requires_absent_issuer(monkeypatch, iss, ex
         ("http://[::1]:54582/authorize", "http://[::1]:54582"),
     ),
 )
-async def test_callback_accepts_an_issuer_on_the_configured_authorization_origin(
+async def test_callback_accepts_an_issuer_on_the_configured_authorization_endpoint(
     monkeypatch: pytest.MonkeyPatch, authorization_url: str, iss: str
 ) -> None:
     from urllib.parse import parse_qs, urlparse
@@ -5060,6 +5060,9 @@ async def test_callback_accepts_an_issuer_on_the_configured_authorization_origin
     (
         "https://attacker.example.com",
         "https://idp.example.com.evil.com",
+        "https://idp.example.com/tenant-a",
+        "https://idp.example.com/oau",
+        "https://idp.example.com/oauth/authorize/extra",
         "http://idp.example.com",
         "ftp://idp.example.com",
         "https://idp.example.com:8443",
@@ -5086,7 +5089,7 @@ async def test_callback_accepts_an_issuer_on_the_configured_authorization_origin
         "https://idp.example.com:65536",
     ),
 )
-async def test_callback_rejects_an_issuer_off_the_configured_authorization_origin(
+async def test_callback_rejects_an_issuer_off_the_configured_authorization_endpoint(
     monkeypatch: pytest.MonkeyPatch, iss: str
 ) -> None:
     server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
@@ -5161,7 +5164,7 @@ async def test_callback_legacy_state_without_a_configured_origin(
         }
     )
     response, _ = await _authorize_then_callback(
-        server, iss, monkeypatch, drop_state_keys=("configured_authorization_origin",)
+        server, iss, monkeypatch, drop_state_keys=("configured_authorization_endpoint",)
     )
 
     assert response.status_code == expected_status
@@ -5169,7 +5172,7 @@ async def test_callback_legacy_state_without_a_configured_origin(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("iss, expected_status", (("https://idp.example.com", 302), ("https://other.example.com", 400)))
-async def test_callback_relays_an_error_only_from_the_configured_authorization_origin(
+async def test_callback_relays_an_error_only_from_the_configured_authorization_endpoint(
     monkeypatch: pytest.MonkeyPatch, iss: str, expected_status: int
 ) -> None:
     from urllib.parse import parse_qs, urlparse

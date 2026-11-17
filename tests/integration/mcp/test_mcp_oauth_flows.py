@@ -703,6 +703,7 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
     ("response_issuer", "status", "lands_on"),
     [
         pytest.param("{authorization_server}", 302, CLIENT_REDIRECT, id="authorization_server_origin"),
+        pytest.param("{authorization_server}/another-tenant", 400, None, id="another_path_on_the_origin"),
         pytest.param("http://127.0.0.1:9", 400, None, id="another_origin"),
     ],
 )
