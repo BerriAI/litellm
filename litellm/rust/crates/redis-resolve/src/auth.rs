@@ -1,3 +1,4 @@
+use litellm_python_compat::flags::lower_is_true;
 use litellm_redis_types::{Auth, AwsIamAuth, AzureAdAuth, ProviderHandle, StaticAuth};
 
 use crate::{
@@ -16,8 +17,8 @@ pub(super) fn redis_auth(
         (None, None) => {}
     }
     let gcp = text(options.gcp.service_account.as_ref());
-    let azure = text(options.azure.ad_token.as_ref())
-        .is_some_and(|enabled| enabled.eq_ignore_ascii_case("true"));
+    let azure =
+        text(options.azure.ad_token.as_ref()).is_some_and(|enabled| lower_is_true(&enabled));
     let aws = flag(options.aws.auth.as_ref())?;
     match (gcp, azure, aws) {
         (Some(service_account), azure, aws) => {

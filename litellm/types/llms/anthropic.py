@@ -747,7 +747,7 @@ class AnthropicResponseContentBlockToolUse(LiteLLMBaseModel):
 class AnthropicResponseContentBlockThinking(LiteLLMBaseModel):
     type: Literal["thinking"]
     thinking: str
-    signature: str | None
+    signature: str
 
 
 class AnthropicResponseContentBlockRedactedThinking(LiteLLMBaseModel):

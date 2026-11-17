@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, fmt, ops::Deref};
 use serde::{Deserialize, Deserializer};
 
 pub type Value = serde_yaml_ng::Value;
-pub type AdditionalFields = BTreeMap<String, Value>;
+/// The keys a config section has beyond its typed fields, printed as keys only.
+pub type AdditionalFields = Object;
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(transparent)]

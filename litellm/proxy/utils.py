@@ -101,6 +101,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.mcp.parked_stream_dispatch import held_round_spend
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -298,8 +299,17 @@ from litellm.proxy.hooks.parallel_request_limiter import (  # noqa: F401, RUF100
     _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401, RUF100  # legacy module exports
-    PROXY_MaxParallelRequestsHandler_v3,
+    ParallelRequestLimiterHook,
+    PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    enforce_mcp_server_rate_limits as _enforce_mcp_server_rate_limits,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3_native import (
+    ParallelRequestLimiterNativeLogger,
+    PreCallAuthScope,
+    native_parallel_request_limiter,
 )
 from litellm.proxy.hooks.sensitive_data_routing import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_SensitiveDataRoutingHandler,
@@ -404,6 +414,8 @@ class _TeamMembershipRow(TypedDict):
     team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
 
 
+_ROOTED_STREAM_LOGGING_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep tasks alive
+_MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS: Final = 64
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
@@ -1830,6 +1842,15 @@ object, meaning the request died (auth, body parsing, model resolution) before t
 object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
+FAILURE_ROW_ALREADY_WRITTEN_KEY: Final = "litellm_failure_row_already_written"
+FAILURE_ROW_ALREADY_WRITTEN: Final = object()
+"""An object, like ``REJECTED_BEFORE_REQUEST_SETUP``, so the client body cannot forge it."""
+
+GUARDRAIL_ENDPOINT_FAILURE_KEY: Final = "litellm_guardrail_endpoint_failure"
+GUARDRAIL_ENDPOINT_FAILURE: Final = object()
+"""Stored under ``GUARDRAIL_ENDPOINT_FAILURE_KEY`` by ``/apply_guardrail`` when a request it had set up fails, so the
+spend logs keep that failure although the route is not an LLM API route. A sentinel for the same reason as above."""
+
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
@@ -2476,6 +2497,12 @@ class ProxyLogging:
             }
             passed_in_args = {name: value for name, value in available_args.items() if name in expected_args}
             proxy_hook_obj = proxy_hook(**passed_in_args)
+            if isinstance(proxy_hook_obj, ParallelRequestLimiterHook) and not any(
+                isinstance(callback, ParallelRequestLimiterNativeLogger) for callback in litellm.callbacks
+            ):
+                litellm.logging_callback_manager.add_litellm_callback(
+                    native_parallel_request_limiter(proxy_hook_obj)  # pyright: ignore[reportArgumentType]  # a V2 native takes its list position like a legacy callback
+                )
             litellm.logging_callback_manager.add_litellm_callback(proxy_hook_obj)
 
             self.proxy_hook_mapping[hook] = proxy_hook_obj
@@ -2512,6 +2539,7 @@ class ProxyLogging:
         # Replace string entries in litellm.callbacks with initialized instances
         for idx, initialized_callback in string_callbacks_to_replace.items():
             litellm.callbacks[idx] = initialized_callback
+        litellm.logging_callback_manager.place_v2_companions(litellm.callbacks)
 
         # Fan ``litellm.callbacks`` (the "all events" registry) out into the
         # success/failure event lists eagerly, at startup. ``completion()`` does
@@ -3656,21 +3684,22 @@ class ProxyLogging:
             )
             request_fields: Final = KwargsFields(run.latest, PROXY_REQUEST_KEYS)
             try:
-                result: Final = await run_subscribers(
-                    subscribers,
-                    with_sources(
-                        request_fields,
-                        PRE_CALL_SOURCES,
-                        HookArgs(auth=run.user_api_key_dict, request=run.latest, call_type=run.call_type),
+                with PreCallAuthScope(run.user_api_key_dict):
+                    result: Final = await run_subscribers(
+                        subscribers,
+                        with_sources(
+                            request_fields,
+                            PRE_CALL_SOURCES,
+                            HookArgs(auth=run.user_api_key_dict, request=run.latest, call_type=run.call_type),
+                        )
+                        if subscribers.has_v2
+                        else request_fields,
+                        partial(self._pre_call_start, run),
+                        between=partial(self._pre_call_deferred_reroute, run),
+                        call=proxy_call_facts(run.latest, run.call_type, run.user_api_key_dict, run.endpoint_type.value)
+                        if subscribers.has_v2
+                        else None,
                     )
-                    if subscribers.has_v2
-                    else request_fields,
-                    partial(self._pre_call_start, run),
-                    between=partial(self._pre_call_deferred_reroute, run),
-                    call=proxy_call_facts(run.latest, run.call_type, run.user_api_key_dict, run.endpoint_type.value)
-                    if subscribers.has_v2
-                    else None,
-                )
             finally:
                 run.settle_parallel()
             run.latest = _request_dict(kwargs_after(raise_v2_abort(result)))
@@ -3723,21 +3752,11 @@ class ProxyLogging:
             ):
                 if run.call_type in MCP_GUARDRAIL_CALL_TYPES and run.user_api_key_dict is None:
                     return None
-                response: Final[Exception | str | Mapping[str, object] | None] = (
-                    await callback.async_pre_call_hook(
-                        user_api_key_dict=run.user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,
-                        call_type=run.call_type,
-                        endpoint_type=run.endpoint_type,
-                    )
-                    if isinstance(callback, PROXY_MaxParallelRequestsHandler_v3)
-                    else await callback.async_pre_call_hook(
-                        user_api_key_dict=run.user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,
-                        call_type=run.call_type,
-                    )
+                response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
+                    user_api_key_dict=run.user_api_key_dict,
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,
+                    call_type=run.call_type,
                 )
                 if response is not None:
                     updated = await self.process_pre_call_hook_response(  # rebind-ok: see above
@@ -4530,7 +4549,7 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
+        if not (RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route)):
             return False
         # Dashboard session keys poll info routes in the background; their failures are not user requests.
         if RouteChecks.is_dashboard_session_info_route(route, team_id):
@@ -5335,8 +5354,17 @@ class ProxyLogging:
         # completed.  unified_guardrail writes guardrail_information during
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
-        await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-        ProxyLogging.fire_deferred_stream_logging(request_data)
+        # Rebuilding the served output only feeds logging, so it runs after the stream closes,
+        # unless enough rebuilds are already pending that this stream should wait like it used to.
+        if len(_ROOTED_STREAM_LOGGING_TASKS) >= _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS:
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
+            ProxyLogging.fire_deferred_stream_logging(request_data)
+            return
+        ProxyLogging._spawn_rooted(
+            ProxyLogging._log_served_stream(
+                request_data, served_chunks, ProxyLogging._take_deferred_stream_logging(request_data)
+            )
+        )
 
     async def async_post_call_event_stream_iterator_hook(
         self,
@@ -5599,6 +5627,39 @@ class ProxyLogging:
         record_served_output_texts(logging_obj.model_call_details, texts)
 
     @staticmethod
+    async def _log_served_stream(
+        request_data: Mapping[str, object],
+        served_chunks: Sequence[object],
+        deferred_logging: Coroutine[object, object, object] | None,
+    ) -> None:
+        try:
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
+        finally:
+            if deferred_logging is not None:
+                _ = await deferred_logging
+
+    @staticmethod
+    def _spawn_rooted(work: Coroutine[object, object, None]) -> None:
+        task: Final = asyncio.create_task(work)
+        _ROOTED_STREAM_LOGGING_TASKS.add(task)
+        task.add_done_callback(_ROOTED_STREAM_LOGGING_TASKS.discard)
+
+    @staticmethod
+    def _take_deferred_stream_logging(request_data: Mapping[str, object]) -> Coroutine[object, object, object] | None:
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
+            return None
+        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
+            logging_obj, "_on_deferred_stream_complete", None
+        )
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        if _deferred_cb is None or _args is None:
+            return None
+        logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        return _deferred_cb(*_args)
+
+    @staticmethod
     def fire_deferred_stream_logging(request_data: dict) -> None:
         """
         Fire the deferred streaming logging callback after the full streaming
@@ -5608,17 +5669,9 @@ class ProxyLogging:
         scheduling via create_task (which would race with unified_guardrail's
         end-of-stream block).  This method retrieves and fires them.
         """
-        logging_obj: Final = request_data.get("litellm_logging_obj")
-        if logging_obj is None:
-            return
-        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
-            logging_obj, "_on_deferred_stream_complete", None
-        )
-        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
-        if _deferred_cb is not None and _args is not None:
-            logging_obj._on_deferred_stream_complete = None
-            logging_obj._deferred_stream_complete_args = None
-            asyncio.create_task(_deferred_cb(*_args))
+        deferred_logging: Final = ProxyLogging._take_deferred_stream_logging(request_data)
+        if deferred_logging is not None:
+            spawn_logging_task(asyncio.get_running_loop(), deferred_logging, task_name="Deferred stream success log")
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging
 
@@ -5657,7 +5710,7 @@ class ProxyLogging:
         so repeated cleanup cannot release another request's slot.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
-        if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        if not isinstance(limiter, ParallelRequestLimiterHook):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
@@ -5668,7 +5721,7 @@ class ProxyLogging:
         """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
         the legacy limiter keeps no record of its acquisitions and decrements unconditionally."""
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
-        if not isinstance(limiter, (PROXY_MaxParallelRequestsHandler_v3, _PROXY_MaxParallelRequestsHandler)):
+        if not isinstance(limiter, (ParallelRequestLimiterHook, _PROXY_MaxParallelRequestsHandler)):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
@@ -5678,9 +5731,9 @@ class ProxyLogging:
         server: "MCPServer",
     ) -> None:
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
-        if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        if not isinstance(limiter, ParallelRequestLimiterHook):
             return
-        await limiter.enforce_mcp_server_rate_limits(user_api_key_dict, server)
+        await _enforce_mcp_server_rate_limits(limiter, user_api_key_dict, server)
 
     def _init_response_taking_too_long_task(self, data: dict | None = None):
         """
