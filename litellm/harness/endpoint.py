@@ -34,6 +34,7 @@ from litellm.constants import (
     HARNESS_PROCESS_KILL_GRACE_SECONDS,
     HARNESS_SESSION_TOKEN_BYTES,
 )
+from litellm.exceptions import reported_class_names
 from litellm.harness.context import GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
@@ -427,7 +428,7 @@ def error_status(exc: BaseException) -> int:
 
 
 def error_body(exc: BaseException, message: str) -> dict[str, dict[str, str]]:  # mutable-ok: JSONResponse body
-    return {"error": {"type": type(exc).__name__, "message": message}}  # mutable-ok: JSONResponse body
+    return {"error": {"type": reported_class_names(exc)[0], "message": message}}  # mutable-ok: JSONResponse body
 
 
 def to_jsonable(obj: object) -> object:

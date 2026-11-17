@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, cast
 
 import httpx
+import openai
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -34,6 +35,14 @@ from ..exceptions import (
     ContextWindowExceededError,
     InternalServerError,
     NotFoundError,
+    OpenAIBadGatewayError,
+    OpenAIConflictBadRequestError,
+    OpenAIConflictError,
+    OpenAIConnectionError,
+    OpenAIGatewayTimeoutError,
+    OpenAIServerErrorBadRequestError,
+    OpenAIServiceUnavailableError,
+    OpenAIUnprocessableEntityError,
     PaymentRequiredError,
     PermissionDeniedError,
     RateLimitError,
@@ -321,6 +330,31 @@ def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
     return response if response is not None and (response.headers or response.content) else None
 
 
+_CONNECTION_FAILURE_CHAIN_DEPTH: Final = 8
+
+_OPENAI_INVALID_REQUEST_CLASSES: Final[Mapping[object, type[BadRequestError]]] = MappingProxyType(
+    {409: OpenAIConflictBadRequestError, 422: OpenAIUnprocessableEntityError}
+)
+
+
+def _is_connection_failure(error: BaseException) -> bool:
+    """An SDK or httpx failure to reach the provider; timeouts and LiteLLM's own connection classes do not count."""
+    if isinstance(error, (openai.APITimeoutError, APIConnectionError, OpenAIConnectionError, httpx.TimeoutException)):
+        return False
+    return isinstance(error, (openai.APIConnectionError, httpx.TransportError))
+
+
+def _caused_by_connection_failure(error: BaseException) -> bool:
+    cause: BaseException | None = error  # rebind-ok: walks the exception chain
+    for _ in range(_CONNECTION_FAILURE_CHAIN_DEPTH):
+        if cause is None:
+            return False
+        if _is_connection_failure(cause):
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -449,7 +483,12 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
                 body=getattr(original_exception, "body", None),
             )
-        raise BadRequestError(
+        invalid_request_class: Final = (
+            OpenAIServerErrorBadRequestError
+            if isinstance(invalid_request_status, int) and invalid_request_status >= 500
+            else _OPENAI_INVALID_REQUEST_CLASSES.get(invalid_request_status, BadRequestError)
+        )
+        raise invalid_request_class(
             message=f"{exception_provider} - {message}",
             llm_provider=custom_llm_provider,
             model=model,
@@ -541,8 +580,17 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
                 response=_upstream_reply(response),
             )
+        elif original_exception.status_code == 409:
+            raise OpenAIConflictError(
+                message=f"APIError: {exception_provider} - {message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                request=getattr(original_exception, "request", None),
+                litellm_debug_info=extra_information,
+                response=_upstream_reply(response),
+            )
         elif original_exception.status_code == 422:
-            raise BadRequestError(
+            raise OpenAIUnprocessableEntityError(
                 message=f"{exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -560,7 +608,14 @@ def _map_openai_exception(
                 body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 500:
-            raise InternalServerError(
+            server_error_class: Final = (
+                OpenAIConnectionError
+                if _upstream_reply(response) is None
+                and isinstance(original_exception, BaseException)
+                and _caused_by_connection_failure(original_exception)
+                else InternalServerError
+            )
+            raise server_error_class(
                 message=f"InternalServerError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -569,7 +624,7 @@ def _map_openai_exception(
                 body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 502:
-            raise BadGatewayError(
+            raise OpenAIBadGatewayError(
                 message=f"BadGatewayError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -577,7 +632,7 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
             )
         elif original_exception.status_code == 503:
-            raise ServiceUnavailableError(
+            raise OpenAIServiceUnavailableError(
                 message=f"ServiceUnavailableError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -585,7 +640,7 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
             )
         elif original_exception.status_code == 504:  # gateway timeout error
-            raise Timeout(
+            raise OpenAIGatewayTimeoutError(
                 message=f"Timeout Error: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,

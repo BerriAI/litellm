@@ -12,7 +12,7 @@
 import datetime
 import enum
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+from typing import Any, ClassVar, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
 import httpx
 import openai
@@ -628,7 +628,7 @@ class SyncRequestOverDeploymentTpmError(RequestOverDeploymentTpmError, ValueErro
 
 def logged_class_name(error: BaseException) -> str:
     logged: Final[object] = getattr(error, "logged_error_class", None)
-    return logged if isinstance(logged, str) else type(error).__name__
+    return logged if isinstance(logged, str) else reported_class_names(error)[0]
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
@@ -1028,6 +1028,191 @@ class APIConnectionError(openai.APIConnectionError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+
+class OpenAIUnprocessableEntityError(  # pyright: ignore[reportIncompatibleVariableOverride]  # both bases pin status_code, the reply sets it
+    BadRequestError, UnprocessableEntityError
+):
+    """A 422 from an OpenAI-style provider, also the ``UnprocessableEntityError`` the OpenAI SDK raises for it.
+
+    The two LiteLLM constructors take different arguments, so this one fills ``BadRequestError``'s fields and
+    hands the reply straight to ``openai.APIStatusError``, whose own ``super()`` lands on ``openai.APIError``."""
+
+    openai_sdk_parity: ClassVar = True
+
+    def __init__(
+        self,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
+    ) -> None:
+        self.message = f"litellm.BadRequestError: {message}"
+        self.model = model
+        self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        self.response = (
+            response
+            if response is not None and getattr(response, "_request", None) is not None
+            else _get_minimal_error_response()
+        )
+        openai.APIStatusError.__init__(self, self.message, response=self.response, body=body)
+
+
+class OpenAIConflictError(APIError, openai.ConflictError):
+    """A 409 from an OpenAI-style provider, also the ``openai.ConflictError`` the SDK raises for it"""
+
+    openai_sdk_parity: ClassVar = True
+
+    def __init__(
+        self,
+        message: str,
+        llm_provider: str | None,
+        model: str | None,
+        request: httpx.Request | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        body: object | None = None,
+        response: httpx.Response | None = None,
+    ) -> None:
+        self.llm_provider = llm_provider
+        self.model = model
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        openai.APIError.__init__(
+            self,
+            f"litellm.APIError: {message}",
+            request if request is not None else httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            body=body,
+        )
+        self.status_code = 409
+        self.response = (
+            response
+            if response is not None
+            else error_response_without_credentials(409, None, _NO_UPSTREAM_REQUEST_URL)
+        )
+        self.request_id = self.response.headers.get("x-request-id")
+
+
+class OpenAIGatewayTimeoutError(Timeout, openai.InternalServerError):
+    """A 504 from an OpenAI-style provider, also the ``openai.InternalServerError`` the SDK raises for it"""
+
+    openai_sdk_parity: ClassVar = True
+
+    def __init__(
+        self,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+        exception_status_code: int | None = None,
+        response: httpx.Response | None = None,
+    ) -> None:
+        openai.APIError.__init__(
+            self, "Request timed out.", httpx.Request(method="POST", url="https://api.openai.com/v1"), body=None
+        )
+        self.status_code = exception_status_code or 504
+        self.message = f"litellm.Timeout: {message}"
+        self.model = model
+        self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        self.headers = headers
+        self.response = (
+            response
+            if response is not None
+            else error_response_without_credentials(self.status_code, None, _NO_UPSTREAM_REQUEST_URL)
+        )
+        self.request_id = self.response.headers.get("x-request-id")
+
+
+class OpenAIConnectionError(InternalServerError, openai.APIConnectionError):
+    """A provider LiteLLM could not reach, also the ``openai.APIConnectionError`` the SDK raises for it"""
+
+    openai_sdk_parity: ClassVar = True
+
+    def __init__(
+        self,
+        message: str,
+        llm_provider: str | None,
+        model: str | None,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        body: object | None = None,
+        provider_status_code: int | None = None,
+    ) -> None:
+        self.provider_status_code = provider_status_code
+        self.llm_provider = llm_provider
+        self.model = model
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        self.response = error_response_without_credentials(500, response, _NO_UPSTREAM_REQUEST_URL)
+        openai.APIError.__init__(self, f"litellm.InternalServerError: {message}", self.response.request, body=body)
+        self.status_code = self.response.status_code
+        self.request_id = self.response.headers.get("x-request-id")
+        self.type = "internal_server_error"
+
+
+class OpenAIConflictBadRequestError(  # pyright: ignore[reportIncompatibleVariableOverride]  # both bases pin status_code, the reply sets it
+    BadRequestError, openai.ConflictError
+):
+    """A 409 ``invalid_request_error`` from an OpenAI-style provider, also the ``openai.ConflictError`` the SDK raises
+    for it"""
+
+    openai_sdk_parity: ClassVar = True
+
+
+class OpenAIServerErrorBadRequestError(  # pyright: ignore[reportIncompatibleVariableOverride]  # BadRequestError pins status_code, the reply sets it
+    BadRequestError, openai.InternalServerError
+):
+    """A 5xx ``invalid_request_error`` from an OpenAI-style provider, also the ``openai.InternalServerError`` the SDK
+    raises for it"""
+
+    openai_sdk_parity: ClassVar = True
+
+
+class OpenAIBadGatewayError(BadGatewayError, openai.InternalServerError):
+    """A 502 from an OpenAI-style provider, also the ``openai.InternalServerError`` the SDK raises for it"""
+
+    openai_sdk_parity: ClassVar = True
+
+
+class OpenAIServiceUnavailableError(ServiceUnavailableError, openai.InternalServerError):
+    """A 503 from an OpenAI-style provider, also the ``openai.InternalServerError`` the SDK raises for it"""
+
+    openai_sdk_parity: ClassVar = True
+
+
+def reported_class_names(error: BaseException) -> tuple[str, ...]:
+    """The class names an error is reported under: retry, allowed-fails and cooldown policies, logs, Prometheus and
+    batch output.
+
+    A class that sets ``openai_sdk_parity`` exists only so the error is also what the OpenAI SDK raises for the same
+    reply, and its first base is the LiteLLM class it stands in for. Its names are that base's MRO, so readers keep
+    seeing what they saw before. The names matter because the router matches by bare name, and
+    ``openai.InternalServerError`` shares a name with ``litellm.InternalServerError``. Lookups by class identity, as
+    in ``get_retry_from_policy``, need no such step, since no SDK base a parity class adds is a key there."""
+    mro: Final = type(error).__mro__
+    parity_at: Final = next((index for index, cls in enumerate(mro) if "openai_sdk_parity" in vars(cls)), None)
+    if parity_at is None:
+        return tuple(cls.__name__ for cls in mro)
+    stands_in_for: Final = mro[parity_at].__bases__[0]
+    return (*(cls.__name__ for cls in mro[:parity_at]), *(cls.__name__ for cls in stands_in_for.__mro__))
 
 
 # raised if an invalid request (not get, delete, put, post) is made

@@ -12,7 +12,16 @@ from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm import completion
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    OpenAIConflictBadRequestError,
+    OpenAIConnectionError,
+    OpenAIServerErrorBadRequestError,
+    OpenAIServiceUnavailableError,
+    OpenAIUnprocessableEntityError,
+    logged_class_name,
+    reported_class_names,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -1400,6 +1409,14 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
     assert message in excinfo.value.message
 
 
+_OPENAI_INVALID_REQUEST_CLASS: Final = {
+    409: OpenAIConflictBadRequestError,
+    422: OpenAIUnprocessableEntityError,
+    500: OpenAIServerErrorBadRequestError,
+    503: OpenAIServerErrorBadRequestError,
+}
+
+
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
 @pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
 def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
@@ -1416,7 +1433,8 @@ def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_
             custom_llm_provider=provider,
         )
 
-    assert type(excinfo.value) is litellm.BadRequestError
+    assert type(excinfo.value) is _OPENAI_INVALID_REQUEST_CLASS.get(status_code, litellm.BadRequestError)
+    assert isinstance(excinfo.value, litellm.BadRequestError)
     assert message in excinfo.value.message
 
 
@@ -1555,19 +1573,25 @@ OPENAI_SHAPED = {
     503: (litellm.ServiceUnavailableError, 503),
 }
 
+OPENAI_MAPPED: Final = {
+    402: (litellm.APIError, 402),
+    422: (OpenAIUnprocessableEntityError, 422),
+    503: (OpenAIServiceUnavailableError, 503),
+}
+
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
-    "ai21": {402: (litellm.APIError, 402)},
+    "ai21": OPENAI_MAPPED,
     "azure": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
-    "azure_ai": {402: (litellm.APIError, 402)},
+    "azure_ai": OPENAI_MAPPED,
     "bedrock": {
         500: (litellm.ServiceUnavailableError, 503),
     },
     "databricks": {
         422: (litellm.BadRequestError, 400),
     },
-    "deepseek": {402: (litellm.APIError, 402)},
-    "fireworks_ai": {402: (litellm.APIError, 402)},
-    "groq": {402: (litellm.APIError, 402)},
+    "deepseek": OPENAI_MAPPED,
+    "fireworks_ai": OPENAI_MAPPED,
+    "groq": OPENAI_MAPPED,
     "huggingface": {
         402: (litellm.APIError, 402),
         403: (litellm.APIError, 403),
@@ -1578,7 +1602,7 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "inferenceapis": {
         422: (litellm.BadRequestError, 400),
     },
-    "mistral": {402: (litellm.APIError, 402)},
+    "mistral": OPENAI_MAPPED,
     "nlp_cloud": {
         402: (litellm.RateLimitError, 429),
         403: (litellm.AuthenticationError, 403),
@@ -1587,9 +1611,9 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         500: (litellm.APIError, 500),
         503: (litellm.APIError, 503),
     },
-    "openai": {402: (litellm.APIError, 402)},
+    "openai": OPENAI_MAPPED,
     "openrouter": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
-    "perplexity": {402: (litellm.APIError, 402)},
+    "perplexity": OPENAI_MAPPED,
     "replicate": {
         403: (litellm.APIError, 500),
         404: (litellm.APIError, 500),
@@ -1598,12 +1622,12 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         500: (litellm.ServiceUnavailableError, 503),
         503: (litellm.APIError, 500),
     },
-    "runwayml": {402: (litellm.APIError, 402)},
+    "runwayml": OPENAI_MAPPED,
     "sagemaker": {
         500: (litellm.ServiceUnavailableError, 503),
     },
-    "together_ai": {402: (litellm.APIError, 402)},
-    "xai": {402: (litellm.APIError, 402)},
+    "together_ai": OPENAI_MAPPED,
+    "xai": OPENAI_MAPPED,
 }
 
 PROVIDERS_WITH_A_HANDLER = (
@@ -3525,3 +3549,120 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+def _openai_client_answering(reply: int | Literal["refused"], error_type: str = "x") -> OpenAI:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if reply == "refused":
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(reply, json={"error": {"message": f"upstream {reply}", "type": error_type, "code": None}})
+
+    return OpenAI(api_key="sk-fake", max_retries=0, http_client=httpx.Client(transport=httpx.MockTransport(answer)))
+
+
+def _sdk_error(reply: int | Literal["refused"], error_type: str = "x") -> openai.APIError:
+    with pytest.raises(openai.APIError) as raised:
+        _openai_client_answering(reply, error_type).chat.completions.create(
+            model="gpt-5.6", messages=[{"role": "user", "content": "hi"}]
+        )
+    return raised.value
+
+
+def _litellm_error(reply: int | Literal["refused"], error_type: str = "x") -> Exception:
+    with pytest.raises(openai.APIError) as raised:
+        completion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            client=_openai_client_answering(reply, error_type),
+        )
+    return raised.value
+
+
+@pytest.mark.parametrize("reply", [409, 422, 502, 503, 504, "refused"])
+def test_openai_error_is_also_what_the_openai_sdk_raises_for_the_same_reply(reply: int | Literal["refused"]) -> None:
+    sdk_error: Final = _sdk_error(reply)
+    litellm_error: Final = _litellm_error(reply)
+
+    assert isinstance(litellm_error, type(sdk_error)), (type(litellm_error).__mro__, type(sdk_error))
+
+
+def _mro_names(cls: type) -> tuple[str, ...]:
+    return tuple(klass.__name__ for klass in cls.__mro__)
+
+
+@pytest.mark.parametrize(
+    ("reply", "litellm_class", "status_code", "reported_names"),
+    [
+        (409, litellm.APIError, 409, _mro_names(litellm.APIError)),
+        (422, litellm.BadRequestError, 422, _mro_names(litellm.BadRequestError)),
+        (502, litellm.BadGatewayError, 502, ("BadGatewayError", *_mro_names(openai.APIStatusError))),
+        (503, litellm.ServiceUnavailableError, 503, ("ServiceUnavailableError", *_mro_names(openai.APIStatusError))),
+        (504, litellm.Timeout, 504, _mro_names(litellm.Timeout)),
+        ("refused", litellm.InternalServerError, 500, _mro_names(litellm.InternalServerError)),
+    ],
+)
+def test_openai_error_keeps_its_litellm_class_status_message_and_reported_names(
+    reply: int | Literal["refused"], litellm_class: type[Exception], status_code: int, reported_names: tuple[str, ...]
+) -> None:
+    litellm_error: Final = _litellm_error(reply)
+
+    assert isinstance(litellm_error, litellm_class)
+    assert getattr(litellm_error, "status_code") == status_code
+    assert str(litellm_error).startswith(f"litellm.{litellm_class.__name__}: ")
+    assert logged_class_name(litellm_error) == litellm_class.__name__
+    assert reported_class_names(litellm_error) == reported_names
+
+
+@pytest.mark.parametrize("reply", [409, 422, 500, 502, 503, 504])
+def test_openai_invalid_request_error_is_also_the_sdk_class_and_stays_a_bad_request(reply: int) -> None:
+    sdk_error: Final = _sdk_error(reply, "invalid_request_error")
+    litellm_error: Final = _litellm_error(reply, "invalid_request_error")
+
+    assert isinstance(litellm_error, type(sdk_error)), (type(litellm_error).__mro__, type(sdk_error))
+    assert isinstance(litellm_error, litellm.BadRequestError)
+    assert getattr(litellm_error, "status_code") == reply
+    assert str(litellm_error).startswith("litellm.BadRequestError: ")
+    assert reported_class_names(litellm_error) == _mro_names(litellm.BadRequestError)
+
+
+def _wrapped_500(cause: BaseException, response: httpx.Response | None = None) -> OpenAIError:
+    try:
+        raise cause
+    except BaseException:
+        try:
+            raise OpenAIError(status_code=500, message="upstream call failed", response=response)
+        except OpenAIError as wrapped:
+            return wrapped
+
+
+_SENT: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+
+
+@pytest.mark.parametrize(
+    ("original_exception", "is_connection_error"),
+    [
+        (_wrapped_500(httpx.ConnectError("refused", request=_SENT)), True),
+        (_wrapped_500(openai.APIConnectionError(request=_SENT)), True),
+        (_wrapped_500(openai.APITimeoutError(request=_SENT)), False),
+        (_wrapped_500(httpx.ReadTimeout("slow", request=_SENT)), False),
+        (_wrapped_500(ValueError("not a transport failure")), False),
+        (_wrapped_500(litellm.APIConnectionError(message="mapped elsewhere", llm_provider="openai", model="m")), False),
+        (_wrapped_500(OpenAIConnectionError(message="mapped already", llm_provider="openai", model="m")), False),
+        (
+            _wrapped_500(
+                httpx.ConnectError("refused", request=_SENT),
+                response=httpx.Response(500, json={"error": {"message": "upstream"}}, request=_SENT),
+            ),
+            False,
+        ),
+    ],
+)
+def test_openai_500_is_a_connection_error_only_when_no_reply_came_back(
+    original_exception: OpenAIError, is_connection_error: bool
+) -> None:
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(model="gpt-5.6", original_exception=original_exception, custom_llm_provider="openai")
+
+    assert isinstance(raised.value, openai.APIConnectionError) is is_connection_error
+    assert raised.value.status_code == 500
+    assert raised.value.type == "internal_server_error"

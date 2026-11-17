@@ -21,6 +21,14 @@ import litellm
 import pytest
 
 from litellm.exceptions import (
+    OpenAIBadGatewayError,
+    OpenAIConflictBadRequestError,
+    OpenAIConflictError,
+    OpenAIConnectionError,
+    OpenAIGatewayTimeoutError,
+    OpenAIServerErrorBadRequestError,
+    OpenAIServiceUnavailableError,
+    OpenAIUnprocessableEntityError,
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
@@ -215,6 +223,32 @@ def test_should_preserve_exception_class_name_for_unrelated_exceptions():
     assert PrometheusLogger._get_exception_class_name(ValueError("nope")) == (
         "ValueError"
     )
+
+
+@pytest.mark.parametrize(
+    ("error", "label"),
+    [
+        (OpenAIConflictError(message="409", llm_provider="openai", model="m"), "Openai.APIError"),
+        (
+            OpenAIUnprocessableEntityError(message="422", llm_provider="openai", model="m"),
+            "Openai.BadRequestError",
+        ),
+        (OpenAIConflictBadRequestError(message="409", llm_provider="openai", model="m"), "Openai.BadRequestError"),
+        (OpenAIServerErrorBadRequestError(message="500", llm_provider="openai", model="m"), "Openai.BadRequestError"),
+        (OpenAIBadGatewayError(message="502", llm_provider="openai", model="m"), "Openai.BadGatewayError"),
+        (
+            OpenAIServiceUnavailableError(message="503", llm_provider="openai", model="m"),
+            "Openai.ServiceUnavailableError",
+        ),
+        (OpenAIGatewayTimeoutError(message="504", llm_provider="openai", model="m"), "Openai.Timeout"),
+        (
+            OpenAIConnectionError(message="refused", llm_provider="openai", model="m"),
+            "Openai.InternalServerError",
+        ),
+    ],
+)
+def test_should_label_openai_sdk_parity_errors_with_the_class_they_replaced(error: Exception, label: str) -> None:
+    assert PrometheusLogger._get_exception_class_name(error) == label
 
 
 # ---------------------------------------------------------------------------
