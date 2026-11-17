@@ -1526,6 +1526,7 @@ class LLMCachingHandler:
             "proxy_server_request": kwargs.get("proxy_server_request", None),
             "stream_response": kwargs.get("stream_response", {}),
             "custom_llm_provider": custom_llm_provider,
+            "vertex_location": kwargs.get("vertex_location") or kwargs.get("vertex_ai_location"),
         }
 
         if litellm.cache is not None:

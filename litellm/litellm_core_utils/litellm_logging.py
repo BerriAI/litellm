@@ -1043,6 +1043,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
+        self.passthrough_model_parameters: Mapping[str, object] | None = None
+        self.passthrough_stream: bool | None = None
         self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -3322,7 +3324,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if request_params.get("no-log", False) is True:
             # proxy cost tracking cal backs should run
 
-            if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
+            if not (
+                isinstance(callback, CustomLogger)
+                and (callback.runs_on_no_log_requests or "_PROXY_" in callback.__class__.__name__)
+            ):
                 verbose_logger.debug("no-log request, skipping logging for %s event", event_hook)
                 return False
 
@@ -6999,6 +7004,15 @@ def build_custom_logger_compatible_class(
         anthropic_cache_control_hook: Final = AnthropicCacheControlHook()
         _in_memory_loggers.append(anthropic_cache_control_hook)
         return anthropic_cache_control_hook
+    elif logging_integration == "prefix_block_hashes":
+        from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrefixBlockHashes):
+                return callback
+        prefix_block_hashes: Final = PrefixBlockHashes()
+        _in_memory_loggers.append(prefix_block_hashes)
+        return prefix_block_hashes
     elif logging_integration == "vector_store_pre_call_hook":
         from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
             VectorStorePreCallHook,
@@ -7499,6 +7513,12 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "prefix_block_hashes":
+            from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrefixBlockHashes):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
@@ -8741,7 +8761,7 @@ def get_standard_logging_object_payload(
             kwargs=kwargs,
         )
 
-        stream: bool | None = None
+        stream: bool | None = logging_obj.passthrough_stream
         if (
             kwargs.get("complete_streaming_response") is not None
             or kwargs.get("async_complete_streaming_response") is not None
@@ -8886,9 +8906,10 @@ def get_standard_logging_object_payload(
                 )
             ),
             response=final_response_obj,
-            model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
-                kwargs.get("optional_params", None) or {}
-            ),
+            model_parameters={
+                **ModelParamHelper.get_standard_logging_model_parameters(kwargs.get("optional_params", None) or {}),
+                **(logging_obj.passthrough_model_parameters or {}),
+            },
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,

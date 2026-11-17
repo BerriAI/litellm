@@ -207,6 +207,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
     supports_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_openai_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_bedrock_converse_cache_point: ReadOnly[bool | None]
     supports_thinking_cache_preservation: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
@@ -4745,6 +4747,7 @@ class LlmProviders(str, Enum):
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
+    VISPARK = "vispark"
     MORPH = "morph"
     OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"

@@ -74,11 +74,14 @@ const userFields = {
 };
 const object = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape);
 const dated = <Shape extends z.ZodRawShape>(shape: Shape) =>
-  object({ start_date: z.iso.date(), end_date: z.iso.date(), ...shape }).refine((value: Record<string, unknown>) => {
-    if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
-    const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
-    return days >= 0 && days <= 366;
-  }, "Choose an ordered date range of at most 366 days.");
+  object({ start_date: z.string().regex(z.regexes.date), end_date: z.string().regex(z.regexes.date), ...shape }).refine(
+    (value: Record<string, unknown>) => {
+      if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
+      const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
+      return days >= 0 && days <= 366;
+    },
+    "Choose an ordered date range of at most 366 days.",
+  );
 
 const keysListFields = {
   page,
