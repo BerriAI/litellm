@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.catalog import public_catalog_operation
@@ -68,6 +69,7 @@ _byok_auth_codes: Final[dict[str, _PendingAuthCode]] = {}
 _AUTH_CODE_CACHE_PREFIX: Final = "mcp_byok_auth_code:"
 _AUTH_CODE_CLAIM_PREFIX: Final = "mcp_byok_auth_code_claim:"
 _AUTH_CODE_USER_WINDOW_PREFIX: Final = "mcp_byok_auth_code_window:"
+_AUTH_CODES_TARGET: Final = "mcp_byok_auth_codes"
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS: Final = 300
@@ -110,6 +112,7 @@ def _shared_code_store() -> "RedisCache | None":
     return redis_usage_cache
 
 
+@with_service_target(_AUTH_CODES_TARGET)
 async def _store_auth_code(code: str, record: _PendingAuthCode) -> bool:
     """Whether the code was stored where the token request can find it. The shared cache reports a
     swallowed write fault by returning None instead of the client's True."""
@@ -131,6 +134,7 @@ async def _store_auth_code(code: str, record: _PendingAuthCode) -> bool:
     return stored is True
 
 
+@with_service_target(_AUTH_CODES_TARGET)
 async def _load_auth_code(code: str) -> _PendingAuthCode | Literal["missing", "unavailable"]:
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
@@ -156,6 +160,7 @@ async def _load_auth_code(code: str) -> _PendingAuthCode | Literal["missing", "u
         return "missing"
 
 
+@with_service_target(_AUTH_CODES_TARGET)
 async def _discard_auth_code(code: str) -> None:
     _byok_auth_codes.pop(code, None)
     shared: Final = _shared_code_store()
@@ -167,6 +172,7 @@ async def _discard_auth_code(code: str) -> None:
         verbose_proxy_logger.warning("byok token: pending code not deleted: %s", e)
 
 
+@with_service_target(_AUTH_CODES_TARGET)
 async def _reserve_auth_code_slot(user_id: str) -> Literal["ok", "user_limit", "store_full", "unavailable"]:
     """Whether ``user_id`` may be issued another pending code. In memory the whole dict is capped;
     with the shared store each user gets an atomic per-window counter, and a store that cannot
