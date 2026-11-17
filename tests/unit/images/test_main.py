@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +15,7 @@ from pydantic import JsonValue
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_llm import CustomLLM
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 import os
 
@@ -454,3 +456,104 @@ async def test_azure_image_generation_request_body():
         call_args = mock_post.call_args
         request_json = call_args.kwargs.get("json", {})
         assert request_json == expected_body
+
+
+_CUSTOM_IMAGE: Final = litellm.ImageResponse(created=1700000000, data=[{"b64_json": "aW1hZ2U="}])
+_OPENAI_IMAGE_PARAMS: Final = {
+    "n": 2,
+    "size": "1024x1536",
+    "quality": "low",
+    "response_format": "b64_json",
+    "user": "artist-7",
+}
+
+
+class RecordingImageHandler(CustomLLM):
+    def __init__(self, received: SimpleQueue[dict[str, object]]) -> None:
+        super().__init__()
+        self.received: Final = received
+
+    def image_generation(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        self.received.put(optional_params)
+        return _CUSTOM_IMAGE
+
+    async def aimage_generation(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(optional_params)
+
+    def image_edit(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(optional_params)
+
+    async def aimage_edit(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(optional_params)
+
+
+@pytest.fixture
+def custom_image_params(monkeypatch: pytest.MonkeyPatch) -> SimpleQueue[dict[str, object]]:
+    received: Final[SimpleQueue[dict[str, object]]] = SimpleQueue()
+    handler: Final = RecordingImageHandler(received)
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "studio", "custom_handler": handler}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return received
+
+
+def _caller_params(received: dict[str, object]) -> dict[str, object]:
+    return {key: received[key] for key in (*_OPENAI_IMAGE_PARAMS, "mask", "studio_preset") if key in received}
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_handler_receives_the_callers_openai_image_generation_params(
+    custom_image_params: SimpleQueue[dict[str, object]], is_async: bool
+) -> None:
+    request: Final = {"model": "studio/flare-1", "prompt": "draw", **_OPENAI_IMAGE_PARAMS, "studio_preset": "matte"}
+
+    result: Final = await litellm.aimage_generation(**request) if is_async else litellm.image_generation(**request)
+
+    assert result.data[0].b64_json == "aW1hZ2U="
+    assert _caller_params(custom_image_params.get_nowait()) == {**_OPENAI_IMAGE_PARAMS, "studio_preset": "matte"}
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_handler_receives_the_callers_openai_image_edit_params(
+    custom_image_params: SimpleQueue[dict[str, object]], is_async: bool
+) -> None:
+    request: Final = {
+        "model": "studio/flare-1",
+        "prompt": "draw",
+        "image": b"input-image",
+        "mask": b"mask-image",
+        **_OPENAI_IMAGE_PARAMS,
+        "studio_preset": "matte",
+    }
+
+    result: Final = await litellm.aimage_edit(**request) if is_async else litellm.image_edit(**request)
+
+    assert result.data[0].b64_json == "aW1hZ2U="
+    assert _caller_params(custom_image_params.get_nowait()) == {
+        **_OPENAI_IMAGE_PARAMS,
+        "mask": b"mask-image",
+        "studio_preset": "matte",
+    }
+
+
+@pytest.mark.parametrize("operation", ["generation", "edit"])
+def test_custom_image_handler_is_not_handed_additional_drop_params(
+    custom_image_params: SimpleQueue[dict[str, object]], operation: str
+) -> None:
+    request: Final = {
+        "model": "studio/flare-1",
+        "prompt": "draw",
+        **_OPENAI_IMAGE_PARAMS,
+        "studio_preset": "matte",
+        "additional_drop_params": ["response_format", "user", "studio_preset"],
+    }
+
+    if operation == "edit":
+        litellm.image_edit(**request, image=b"input-image")
+    else:
+        litellm.image_generation(**request)
+
+    assert _caller_params(custom_image_params.get_nowait()) == {"n": 2, "size": "1024x1536", "quality": "low"}
