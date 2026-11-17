@@ -1256,13 +1256,22 @@ class TestAutoRouterBenchmarks:
 
 from datetime import datetime, timedelta, timezone
 
+from litellm.integrations.shadow_eval_logger import SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
+    get_shadow_eval_rubric_results,
     list_shadow_eval_jobs,
     start_shadow_eval,
+    start_shadow_eval_rubric,
     stop_shadow_eval_job,
 )
-from litellm.types.management_endpoints.auto_router_endpoints import SHADOW_EVAL_TURN_VALVE, StartShadowEvalRequest
+from litellm.types.management_endpoints.auto_router_endpoints import (
+    SHADOW_EVAL_RUBRIC_MAX_CHARS,
+    SHADOW_EVAL_RUBRIC_VERSION,
+    SHADOW_EVAL_TURN_VALVE,
+    StartShadowEvalRequest,
+    StartShadowEvalRubricRequest,
+)
 
 VIEWER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_key="sk-view", user_id="viewer")
 
@@ -1598,6 +1607,7 @@ def _shadow_prisma(
     key_teams=None,
     known_teams=None,
     known_users=None,
+    grade_rows=None,
 ) -> MagicMock:
     """The job-table fake honours the filters it is handed, so a read that forgets
     stopped_at sees rows the partial index would have released, one that forgets
@@ -1730,6 +1740,8 @@ def _shadow_prisma(
             return [{"judged_count": 10, "error_count": 2, "judge_spend": 0.031}]
         if "SELECT job_id AS grp" in sql:
             return by_leg_rows if by_leg_rows is not None else []
+        if "a.real_grade" in sql:
+            return grade_rows if grade_rows is not None else []
         if "COALESCE(a.router_name" in sql:
             return by_router_rows if by_router_rows is not None else []
         if 'FROM "LiteLLM_ShadowEvalFunnel"' in sql:
@@ -4137,3 +4149,228 @@ class TestPerSessionAverages:
         row: Final = TestAutoRouterBenchmarks.ROW.model_copy(update={"sessions": sessions, "turns": turns})
         totals: Final = _benchmark_totals(row)
         assert (totals.avg_turns_per_session, totals.avg_session_seconds, totals.avg_tokens_per_session) == expected
+
+
+RUBRIC: Final = "Cites the source document and answers in under 100 words."
+
+
+def _rubric_start_request(
+    api_key_ids: tuple[str, ...] = ("key-hash",), rubric: str = RUBRIC
+) -> StartShadowEvalRubricRequest:
+    return StartShadowEvalRubricRequest.model_validate(
+        {**_start_request().model_dump(exclude={"router_names"}), "api_key_ids": api_key_ids, "rubric": rubric}
+    )
+
+
+def _rubric_leg(id: str = "leg-1", target_id: str = "key-hash", router_names: tuple[str, ...] = ()) -> MagicMock:
+    return _leg_record(
+        id=id,
+        target_id=target_id,
+        router_names=router_names,
+        rubric=RUBRIC,
+        rubric_version=SHADOW_EVAL_RUBRIC_VERSION,
+    )
+
+
+def _grade_row(grp: str, real_grade: int | None, shadow_grade: int | None, turn_count: int) -> dict[str, object]:
+    return {"grp": grp, "real_grade": real_grade, "shadow_grade": shadow_grade, "turn_count": turn_count}
+
+
+class TestShadowEvalRubricStart:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", [None, "false"], ids=["unset", "false"])
+    async def test_is_refused_until_rubric_grading_is_enabled(
+        self, monkeypatch: pytest.MonkeyPatch, flag: str | None
+    ) -> None:
+        if flag is None:
+            monkeypatch.delenv(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR, raising=False)
+        else:
+            monkeypatch.setenv(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR, flag)
+        _configure_anthropic_sdk_judge(monkeypatch)
+        prisma = _shadow_prisma()
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+        with pytest.raises(HTTPException) as exc:
+            await start_shadow_eval_rubric(_rubric_start_request(), ADMIN)
+
+        assert exc.value.status_code == 400
+        assert SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR in str(exc.value.detail)
+        prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("caller", [VIEWER, NON_ADMIN], ids=["viewer", "internal-user"])
+    async def test_only_a_proxy_admin_can_start_one(self, monkeypatch: pytest.MonkeyPatch, caller) -> None:
+        monkeypatch.setenv(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR, "true")
+        _configure_anthropic_sdk_judge(monkeypatch)
+        prisma = _shadow_prisma()
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+        with pytest.raises(HTTPException) as exc:
+            await start_shadow_eval_rubric(_rubric_start_request(), caller)
+
+        assert exc.value.status_code == 403
+        prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stores_the_rubric_and_its_grading_version_on_every_leg(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR, "true")
+        _configure_anthropic_sdk_judge(monkeypatch)
+        prisma = _shadow_prisma()
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+        response = await start_shadow_eval_rubric(_rubric_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
+
+        rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+        assert [(row["target_id"], row["rubric"], row["rubric_version"]) for row in rows] == [
+            ("key-hash", RUBRIC, SHADOW_EVAL_RUBRIC_VERSION),
+            ("key-hash-2", RUBRIC, SHADOW_EVAL_RUBRIC_VERSION),
+        ]
+        assert (response.job_id, response.rubric, response.rubric_version) == (
+            rows[0]["group_id"],
+            RUBRIC,
+            SHADOW_EVAL_RUBRIC_VERSION,
+        )
+        assert response.status == "running"
+        assert [target.target_id for target in response.targets] == ["key-hash", "key-hash-2"]
+
+    @pytest.mark.asyncio
+    async def test_the_preference_start_writes_and_returns_no_rubric_fields(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR, "true")
+        _configure_anthropic_sdk_judge(monkeypatch)
+        prisma = _shadow_prisma()
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+        response = await start_shadow_eval(_start_request(), ADMIN)
+
+        (row,) = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+        assert "rubric" not in row and "rubric_version" not in row
+        assert "rubric" not in response.model_dump() and "rubric_version" not in response.model_dump()
+
+
+@pytest.mark.parametrize(
+    "rubric",
+    [None, "", "   \n\t", "x" * (SHADOW_EVAL_RUBRIC_MAX_CHARS + 1)],
+    ids=["missing", "empty", "whitespace", "too-long"],
+)
+def test_a_rubric_request_needs_bounded_criteria(rubric: str | None) -> None:
+    payload = {**_start_request().model_dump(exclude={"router_names"}), "rubric": rubric}
+    if rubric is None:
+        payload.pop("rubric")
+    with pytest.raises(ValidationError):
+        StartShadowEvalRubricRequest.model_validate(payload)
+
+
+def test_a_rubric_at_the_length_bound_is_kept_verbatim() -> None:
+    rubric = " " + "x" * (SHADOW_EVAL_RUBRIC_MAX_CHARS - 2) + "\n"
+    assert _rubric_start_request(rubric=rubric).rubric == rubric
+
+
+class TestShadowEvalRubricResults:
+    @pytest.mark.asyncio
+    async def test_reports_joint_grades_per_router_and_counts_ungraded_turns_apart(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        prisma = _shadow_prisma(
+            legs=[
+                _rubric_leg(router_names=("my-router", "alt-router", "idle-router")),
+                _rubric_leg(
+                    id="leg-2", target_id="key-hash-2", router_names=("my-router", "alt-router", "idle-router")
+                ),
+            ],
+            grade_rows=[
+                _grade_row("my-router", 5, 5, 3),
+                _grade_row("my-router", 1, 1, 2),
+                _grade_row("my-router", 5, 1, 1),
+                _grade_row("my-router", None, None, 4),
+                _grade_row("alt-router", 4, 2, 2),
+                _grade_row("alt-router", None, None, 1),
+            ],
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        response = await get_shadow_eval_rubric_results("job-1", VIEWER)
+
+        assert response.model_dump() == {
+            "job_id": "job-1",
+            "rubric": RUBRIC,
+            "rubric_version": SHADOW_EVAL_RUBRIC_VERSION,
+            "overall": {
+                "group": "all",
+                "graded_count": 8,
+                "ungraded_count": 5,
+                "grade_distribution": (
+                    {"real_grade": 1, "shadow_grade": 1, "turn_count": 2},
+                    {"real_grade": 4, "shadow_grade": 2, "turn_count": 2},
+                    {"real_grade": 5, "shadow_grade": 1, "turn_count": 1},
+                    {"real_grade": 5, "shadow_grade": 5, "turn_count": 3},
+                ),
+            },
+            "by_router": (
+                {
+                    "group": "alt-router",
+                    "graded_count": 2,
+                    "ungraded_count": 1,
+                    "grade_distribution": ({"real_grade": 4, "shadow_grade": 2, "turn_count": 2},),
+                },
+                {"group": "idle-router", "graded_count": 0, "ungraded_count": 0, "grade_distribution": ()},
+                {
+                    "group": "my-router",
+                    "graded_count": 6,
+                    "ungraded_count": 4,
+                    "grade_distribution": (
+                        {"real_grade": 1, "shadow_grade": 1, "turn_count": 2},
+                        {"real_grade": 5, "shadow_grade": 1, "turn_count": 1},
+                        {"real_grade": 5, "shadow_grade": 5, "turn_count": 3},
+                    ),
+                },
+            ),
+        }
+        grade_query = next(call.args for call in prisma.db.query_raw.await_args_list if "a.real_grade" in call.args[0])
+        assert grade_query[1] == ["leg-1", "leg-2"]
+
+    @pytest.mark.asyncio
+    async def test_a_job_started_without_a_rubric_has_no_rubric_results(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(legs=[_leg_record()]))
+
+        for job_id in ("job-1", "nope"):
+            with pytest.raises(HTTPException) as missing:
+                await get_shadow_eval_rubric_results(job_id, VIEWER)
+            assert missing.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_only_proxy_admin_roles_can_read_rubric_results(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(legs=[_rubric_leg()]))
+
+        with pytest.raises(HTTPException) as forbidden:
+            await get_shadow_eval_rubric_results("job-1", NON_ADMIN)
+        assert forbidden.value.status_code == 403
+        assert (await get_shadow_eval_rubric_results("job-1", ADMIN)).rubric == RUBRIC
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("caller", [ADMIN, VIEWER], ids=["admin", "viewer"])
+    async def test_rubric_results_without_a_database_report_it_is_not_connected(
+        self, monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth
+    ):
+        from litellm.proxy._types import CommonProxyErrors
+
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+        with pytest.raises(HTTPException) as unavailable:
+            await get_shadow_eval_rubric_results("job-1", caller)
+
+        assert (unavailable.value.status_code, unavailable.value.detail) == (
+            500,
+            CommonProxyErrors.db_not_connected_error.value,
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_regular_job_detail_of_a_rubric_job_keeps_its_legacy_shape(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(legs=[_rubric_leg()]))
+
+        detail = (await get_shadow_eval_job("job-1", VIEWER)).model_dump()
+
+        assert "rubric" not in detail and "rubric_version" not in detail

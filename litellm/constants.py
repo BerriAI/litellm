@@ -993,6 +993,22 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
     "store",
 ]
 
+OPENAI_CHAT_COMPLETION_TRANSPORT_PARAMS: Final = frozenset(
+    {
+        "api_base",
+        "api_key",
+        "api_version",
+        "deployment_id",
+        "organization",
+        "base_url",
+        "default_headers",
+        "timeout",
+        "request_timeout",
+        "max_retries",
+        "extra_headers",
+    }
+)
+
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
     "languages",
@@ -1113,6 +1129,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
+    "https://api.lab.vispark.in/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
@@ -1193,6 +1210,7 @@ openai_compatible_providers: Final[list[str]] = [
     "pinstripes",  # Pinstripes - JSON-configured provider
     "openinfer",
     "darkbloom",
+    "vispark",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
@@ -1229,6 +1247,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "poe",
     "chutes",
     "v0",
+    "vispark",
     "lambda_ai",
     "hyperbolic",
     "wandb",

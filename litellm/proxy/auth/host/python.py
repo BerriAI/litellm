@@ -250,8 +250,6 @@ class PythonAuthHost:
             load_membership=get_team_membership,
         )
 
-    # Key path
-
     async def validated_end_user_id(self, end_user_id: str) -> str | None:
         return await resolve_and_validate_end_user_id(
             raw_end_user_id=end_user_id,
@@ -470,8 +468,6 @@ class PythonAuthHost:
             proxy_logging_obj=self.proxy_logging_obj,
             litellm_proxy_admin_name=self.litellm_proxy_admin_name,
         )
-
-    # JWT path
 
     # TODO: the JWT IO is answered here until the bridge answers it natively, with `HttpClientPool` for the
     # fetches and `redis-store` for the JWT keyspaces

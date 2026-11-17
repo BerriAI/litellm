@@ -16,7 +16,7 @@ use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{body_partial_json, method, path},
 };
 
 struct LogSink(mpsc::Sender<Value>);
@@ -39,29 +39,33 @@ fn inference() -> Arc<Gateway> {
 }
 
 #[rstest]
-#[case::authorized("/v1/messages", Some("Bearer gateway-key"), Some("gateway-key"), 400)]
-#[case::missing_token("/v1/messages", None, Some("gateway-key"), 401)]
-#[case::wrong_token("/v1/messages", Some("Bearer wrong"), Some("gateway-key"), 401)]
-#[case::ocr("/ocr", None, Some("gateway-key"), 401)]
-#[case::chat("/v1/chat/completions", None, Some("gateway-key"), 401)]
+#[case::authorized("/v1/messages", &[("authorization", "Bearer gateway-key")], Some("gateway-key"), 400, None)]
+#[case::x_api_key("/v1/messages", &[("x-api-key", "gateway-key")], Some("gateway-key"), 400, None)]
+#[case::wrong_x_api_key("/v1/messages", &[("x-api-key", "wrong")], Some("gateway-key"), 401, Some("missing or invalid API key"))]
+#[case::missing_token("/v1/messages", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::wrong_token("/v1/messages", &[("authorization", "Bearer wrong")], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::ocr("/ocr", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::chat("/v1/chat/completions", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
 #[case::deployment(
     "/openai/deployments/model/chat/completions",
-    None,
+    &[],
     Some("gateway-key"),
-    401
+    401,
+    Some("missing or invalid bearer token")
 )]
-#[case::transcription("/audio/transcriptions", None, Some("gateway-key"), 401)]
-#[case::unsupported_route("/responses", None, Some("gateway-key"), 401)]
-#[case::unknown_path("/unknown", None, Some("gateway-key"), 404)]
-#[case::unknown_path_unconfigured("/unknown", None, None, 404)]
-#[case::unconfigured("/v1/messages", Some("Bearer gateway-key"), None, 500)]
+#[case::transcription("/audio/transcriptions", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::unsupported_route("/responses", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::unknown_path("/unknown", &[], Some("gateway-key"), 404, None)]
+#[case::unknown_path_unconfigured("/unknown", &[], None, 404, None)]
+#[case::unconfigured("/v1/messages", &[("authorization", "Bearer gateway-key")], None, 500, None)]
 #[tokio::test]
 async fn authenticates_before_serving_mounted_inference_routes(
     inference: Arc<Gateway>,
     #[case] path: &str,
-    #[case] authorization: Option<&str>,
+    #[case] headers: &[(&str, &str)],
     #[case] master_key: Option<&str>,
     #[case] status: u16,
+    #[case] unauthorized: Option<&str>,
 ) {
     let config = Config::from_yaml(&format!(
         "model_list: []\ngeneral_settings:\n  master_key: {}\n",
@@ -92,10 +96,9 @@ async fn authenticates_before_serving_mounted_inference_routes(
         .timeout(Duration::from_secs(5))
         .header("x-request-id", "gateway-test")
         .json(&json!({"model": "unconfigured-model"}));
-    let request = match authorization {
-        Some(value) => request.header("authorization", value),
-        None => request,
-    };
+    let request = headers.iter().fold(request, |request, (name, value)| {
+        request.header(*name, *value)
+    });
     let response = request.send().await.unwrap();
     assert_eq!(response.status().as_u16(), status);
     if status == 400 {
@@ -111,6 +114,10 @@ async fn authenticates_before_serving_mounted_inference_routes(
         let text = response.text().await.unwrap();
         assert!(!text.contains("gateway-key"));
         assert!(!text.contains("unconfigured-model"));
+        assert_eq!(unauthorized.is_some(), status == 401);
+        if let Some(message) = unauthorized {
+            assert_eq!(text, message);
+        }
     }
 
     shutdown.send(()).unwrap();
@@ -470,4 +477,147 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
     let forwarded: Value =
         serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(forwarded[param], value);
+}
+
+#[rstest]
+#[case::refused_by_default("", "", 501, 0)]
+#[case::sent_when_client_side_credentials_are_allowed(
+    "",
+    "  allow_client_side_credentials: true\n",
+    200,
+    1
+)]
+#[case::sent_when_the_deployment_opts_into_the_endpoint(
+    "      configurable_clientside_auth_params: [aws_bedrock_runtime_endpoint]\n",
+    "",
+    200,
+    1
+)]
+#[case::refused_when_the_deployment_opts_into_another_param(
+    "      configurable_clientside_auth_params: [aws_role_name]\n",
+    "",
+    501,
+    0
+)]
+#[tokio::test]
+async fn chat_sends_a_caller_supplied_bedrock_endpoint_only_under_client_side_credentials(
+    #[case] deployment_settings: &str,
+    #[case] general_settings: &str,
+    #[case] status: u16,
+    #[case] caller_host_requests: u64,
+) {
+    let upstream = MockServer::start().await;
+    let caller_host = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            json!({"inferenceConfig": {"maxTokens": 16}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+        })))
+        .expect(caller_host_requests)
+        .mount(&caller_host)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: bedrock/us-east-1/anthropic.claude-v2\n      api_base: {}\n      api_key: test-key\n{deployment_settings}general_settings:\n  master_key: gateway-key\n{general_settings}",
+        upstream.uri()
+    ))
+    .unwrap();
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "aws_bedrock_runtime_endpoint": caller_host.uri()
+    });
+    let request = Request::post("/v1/chat/completions")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = litellm_gateway::router(
+        litellm_gateway::build_inference(&config).unwrap(),
+        &config,
+        None,
+        None,
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+
+    assert_eq!(response.status().as_u16(), status);
+}
+
+#[rstest]
+#[case::dropped_under_drop_params("      drop_params: true\n", None, None)]
+#[case::sent_without_drop_params("", Some(json!(0.5)), Some(json!(0.9)))]
+#[tokio::test]
+async fn chat_drops_sampling_params_the_catalog_says_the_model_rejects(
+    #[case] deployment_settings: &str,
+    #[case] temperature: Option<Value>,
+    #[case] top_p: Option<Value>,
+) {
+    let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+    let (model, _) = catalog
+        .served()
+        .find(|(name, fields)| {
+            name.starts_with("anthropic.")
+                && fields.get("litellm_provider").and_then(Value::as_str)
+                    == Some("bedrock_converse")
+                && fields.get("supports_sampling_params") == Some(&Value::Bool(false))
+        })
+        .unwrap();
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+        })))
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: bedrock/{model}\n      api_base: {}\n      api_key: test-key\n{deployment_settings}general_settings:\n  master_key: gateway-key\n",
+        upstream.uri()
+    ))
+    .unwrap();
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "temperature": 0.5,
+        "top_p": 0.9
+    });
+    let request = Request::post("/v1/chat/completions")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = litellm_gateway::router(
+        litellm_gateway::build_inference(&config).unwrap(),
+        &config,
+        None,
+        None,
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+
+    assert_eq!(response.status().as_u16(), 200);
+    let forwarded: Value =
+        serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(
+        forwarded["inferenceConfig"].get("temperature").cloned(),
+        temperature
+    );
+    assert_eq!(forwarded["inferenceConfig"].get("topP").cloned(), top_p);
+    assert_eq!(forwarded["inferenceConfig"]["maxTokens"], json!(16));
 }

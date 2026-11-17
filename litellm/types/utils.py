@@ -1907,6 +1907,15 @@ class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_12h_input_tokens: int | None = None
 
 
+def _nested_cache_creation_token_details(nested: object) -> CacheCreationTokenDetails | None:
+    if not isinstance(nested, Mapping):
+        return None
+    try:
+        return CacheCreationTokenDetails.model_validate(nested)
+    except ValidationError:
+        return None
+
+
 class PromptTokensDetailsWrapper(
     SafeAttributeModel, PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
@@ -1991,6 +2000,8 @@ class PromptTokensDetailsWrapper(
                 )
             )
         )
+        if self.cache_creation_token_details is None and extra_fields is not None:
+            self.cache_creation_token_details = _nested_cache_creation_token_details(extra_fields.get("cache_creation"))
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -4747,6 +4758,7 @@ class LlmProviders(str, Enum):
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
+    VISPARK = "vispark"
     MORPH = "morph"
     OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"

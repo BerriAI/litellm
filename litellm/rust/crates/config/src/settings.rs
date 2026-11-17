@@ -108,6 +108,8 @@ pub struct GeneralSettings {
     pub allow_user_auth: bool,
     #[serde_as(as = "StrBool")]
     pub allow_requests_on_db_unavailable: bool,
+    #[serde_as(as = "IsTrue")]
+    pub allow_client_side_credentials: bool,
     pub public_routes: Option<RouteList>,
     pub allowed_ips: Option<Box<[String]>>,
     pub allowed_routes: Option<Box<[String]>>,
@@ -164,6 +166,7 @@ impl Default for GeneralSettings {
             enable_oauth2_proxy_auth: false,
             allow_user_auth: false,
             allow_requests_on_db_unavailable: false,
+            allow_client_side_credentials: false,
             public_routes: None,
             allowed_ips: None,
             allowed_routes: None,
