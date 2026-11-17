@@ -1881,18 +1881,8 @@ async def test_proxy_startup_refuses_fips_mode_when_the_key_it_encrypts_with_is_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "master_key, environment",
-    [
-        ("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}),
-        (_HEX_KEY, {}),
-        ("sk-short-key!", {"LITELLM_SALT_KEY": "a-salt-key-that-is-not-hex"}),
-        ("sk-a-safe-master-key", {}),
-    ],
-    ids=[
-        "hex-salt-key-and-13-byte-master-key",
-        "hex-master-key-and-no-salt-key",
-        "non-hex-salt-key-and-13-byte-master-key",
-        "non-hex-master-key-and-no-salt-key",
-    ],
+    [("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}), ("sk-a-safe-master-key", {})],
+    ids=["salt-key-and-13-byte-master-key", "20-byte-master-key-and-no-salt-key"],
 )
 async def test_proxy_startup_starts_fips_mode_when_the_key_it_encrypts_with_is_at_least_112_bits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]

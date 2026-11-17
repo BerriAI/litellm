@@ -280,15 +280,19 @@ _needs_shared_openssl: Final = pytest.mark.skipif(
 
 @_needs_shared_openssl
 @pytest.mark.usefixtures("fips_openssl")
-@pytest.mark.parametrize("salt_key", ["sk-" + bytes(range(32)).hex(), bytes(range(32)).hex().upper()])
-def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
+@pytest.mark.parametrize(
+    "salt_key",
+    ["sk-" + bytes(range(32)).hex(), "fourteen-bytes", "é" * 7],
+    ids=["openssl-rand-hex-32", "14-ascii-bytes", "14-utf8-bytes-in-7-characters"],
+)
+def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256_over_the_salt_key_bytes(
     monkeypatch: pytest.MonkeyPatch, salt_key: str
 ) -> None:
     label: Final = b"litellm-test:label:"
     context: Final = b"sk-test-master-key"
     monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     fixed_input: Final = (1).to_bytes(4, "big") + label + b"\x00" + context + (256).to_bytes(4, "big")
-    assert derive_key_from_salt_key(label, context) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()
+    assert derive_key_from_salt_key(label, context) == hmac.digest(salt_key.encode(), fixed_input, "sha256").hex()
 
 
 @_needs_shared_openssl
@@ -297,56 +301,6 @@ def test_derive_key_from_salt_key_refuses_an_openssl_without_a_fips_provider(mon
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
     with pytest.raises(ValueError, match="OpenSSL could not run KBKDF"):
         derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
-
-
-@_needs_shared_openssl
-@pytest.mark.usefixtures("fips_openssl")
-@pytest.mark.parametrize(
-    "salt_key, label, context, derived",
-    [
-        (
-            "sk-" + bytes(range(32)).hex(),
-            b"litellm-test:label:",
-            b"kat-context",
-            "54f662f9f5c2b98a54ab0a17c3e472c909e41e61f021431f70d0dc3ccb73b68d",
-        ),
-        (
-            bytes(range(48)).hex().upper(),
-            b"litellm-test:label:",
-            b"kat-context",
-            "15384b70e169ba8b73e824bd8bc3b3584d9e0e245b18165bc0f19c472f056feb",
-        ),
-        (
-            "sk-" + "5a" * 32,
-            b"litellm-plugin:session-claim:",
-            b"chat-ui",
-            "137c07f867c139b131bb4beb86dc3de5612d856c4c40a8461ca371f02743bb37",
-        ),
-    ],
-    ids=["sk-prefixed-hex", "48-bytes-of-uppercase-hex", "plugin-claim-label"],
-)
-def test_derive_key_from_salt_key_keeps_its_known_answers_for_hex_salt_keys(
-    monkeypatch: pytest.MonkeyPatch, salt_key: str, label: bytes, context: bytes, derived: str
-) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
-    assert derive_key_from_salt_key(label, context) == derived
-
-
-@_needs_shared_openssl
-@pytest.mark.usefixtures("fips_openssl")
-@pytest.mark.parametrize(
-    "salt_key",
-    ["fourteen-bytes", "é" * 7, "sk-" + bytes(range(31)).hex(), "sk-" + bytes(range(32)).hex() + "\n"],
-    ids=["14-ascii-bytes", "14-utf8-bytes-in-7-characters", "sk-and-31-bytes-of-hex", "hex-and-a-trailing-newline"],
-)
-def test_derive_key_from_salt_key_derives_from_the_utf8_bytes_of_a_salt_key_that_is_not_hex(
-    monkeypatch: pytest.MonkeyPatch, salt_key: str
-) -> None:
-    label: Final = b"litellm-test:label:"
-    context: Final = b"sk-test-master-key"
-    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
-    fixed_input: Final = (1).to_bytes(4, "big") + label + b"\x00" + context + (256).to_bytes(4, "big")
-    assert derive_key_from_salt_key(label, context) == hmac.digest(salt_key.encode(), fixed_input, "sha256").hex()
 
 
 @pytest.mark.parametrize(

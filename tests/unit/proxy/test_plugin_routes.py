@@ -351,14 +351,11 @@ def test_plugin_session_claim_opens_under_the_documented_hmac_plugin_key(monkeyp
     not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
 )
 @pytest.mark.usefixtures("fips_mode")
-@pytest.mark.parametrize(
-    "salt_key, key_derivation_key",
-    [("sk-" + bytes(range(32)).hex(), bytes(range(32))), ("a-plugin-salt-key-not-hex", b"a-plugin-salt-key-not-hex")],
-    ids=["hex", "not-hex"],
-)
 def test_fips_mode_plugin_session_claim_opens_under_the_kbkdf_key_without_os_urandom_or_hmac_new(
-    monkeypatch: pytest.MonkeyPatch, salt_key: str, key_derivation_key: bytes
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    salt_key: Final = "sk-" + bytes(range(32)).hex()
+
     def outside_the_fips_provider(*_: object) -> NoReturn:
         raise AssertionError("fips_mode must not draw on os.urandom or hmac.new")
 
@@ -369,7 +366,7 @@ def test_fips_mode_plugin_session_claim_opens_under_the_kbkdf_key_without_os_ura
     fixed_input: Final = (
         (1).to_bytes(4, "big") + b"litellm-plugin:session-claim:" + b"\x00" + b"chat-ui" + (256).to_bytes(4, "big")
     )
-    plugin_key: Final = base64.urlsafe_b64encode(hmac.digest(key_derivation_key, fixed_input, "sha256"))
+    plugin_key: Final = base64.urlsafe_b64encode(hmac.digest(salt_key.encode(), fixed_input, "sha256"))
     token: Final = issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")
 
     claim: Final[dict[str, object]] = json.loads(Fernet(plugin_key).decrypt(token))

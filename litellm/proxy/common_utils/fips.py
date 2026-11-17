@@ -1,5 +1,4 @@
 import os
-import re
 import threading
 from collections.abc import Callable, Mapping
 from typing import Final
@@ -13,7 +12,6 @@ _KEY_DERIVATION_KEY_MIN_BYTES: Final = 14
 KEY_DERIVATION_KEY_RULE: Final = (
     f"at least {_KEY_DERIVATION_KEY_MIN_BYTES * 8} bits ({_KEY_DERIVATION_KEY_MIN_BYTES} bytes)"
 )
-_SALT_KEY_HEX: Final = re.compile(r"(?:sk-)?((?:[0-9a-fA-F]{2}){32,})")
 _SETTING: Final = f"general_settings.{FIPS_MODE_SETTING}"
 _NEW_SALT_KEY: Final = f"{SALT_KEY_ENV_VAR}=sk-$(openssl rand -hex 32)"
 _FIPS_MODE_ACTIVE: Final = threading.Event()
@@ -24,11 +22,9 @@ class FipsModeError(Exception):
 
 
 def key_derivation_key(salt_key: str) -> bytes | None:
-    """The key fips_mode derives its keys from: the decoded hex when salt_key is at least 32 bytes of hex, optionally
-    prefixed with sk-, else the UTF-8 bytes of salt_key as given (bytes an environment variable could not decode are
-    kept as they were). None when that is under 112 bits (14 bytes)."""
-    hex_key: Final = _SALT_KEY_HEX.fullmatch(salt_key)
-    key: Final = bytes.fromhex(hex_key.group(1)) if hex_key else salt_key.encode("utf-8", "surrogateescape")
+    """The key fips_mode derives its keys from, the UTF-8 bytes of salt_key as given (bytes an environment variable
+    could not decode are kept as they were). None when that is under 112 bits (14 bytes)."""
+    key: Final = salt_key.encode("utf-8", "surrogateescape")
     return key if len(key) >= _KEY_DERIVATION_KEY_MIN_BYTES else None
 
 

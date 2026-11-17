@@ -172,33 +172,19 @@ _SHORT_SALT_KEY_IDS: Final = ("13-ascii-bytes", "13-utf8-bytes-in-7-characters",
 @pytest.mark.parametrize(
     "salt_key, key",
     [
-        (_HEX_SALT_KEY, bytes(range(32))),
-        (bytes(range(32)).hex(), bytes(range(32))),
-        ("sk-" + bytes(range(32)).hex().upper(), bytes(range(32))),
-        ("sk-" + bytes(range(48)).hex(), bytes(range(48))),
+        (_HEX_SALT_KEY, _HEX_SALT_KEY.encode()),
         ("fourteen-bytes", b"fourteen-bytes"),
         ("é" * 7, "é".encode() * 7),
-        ("sk-" + bytes(range(31)).hex(), ("sk-" + bytes(range(31)).hex()).encode()),
-        (_HEX_SALT_KEY + "a", (_HEX_SALT_KEY + "a").encode()),
-        (_HEX_SALT_KEY + "\n", (_HEX_SALT_KEY + "\n").encode()),
-        ("SK-" + bytes(range(32)).hex(), ("SK-" + bytes(range(32)).hex()).encode()),
         ("\udcff" * 14, b"\xff" * 14),
     ],
     ids=[
-        "sk-prefixed-hex",
-        "bare-hex",
-        "uppercase-hex-digits",
-        "48-bytes-of-hex",
+        "hex-is-not-decoded",
         "14-ascii-bytes",
         "14-utf8-bytes-in-7-characters",
-        "sk-and-31-bytes-of-hex",
-        "odd-hex-digit-count",
-        "hex-and-a-trailing-newline",
-        "uppercase-prefix",
         "environment-bytes-that-are-not-utf8",
     ],
 )
-def test_key_derivation_key_decodes_a_hex_salt_key_and_takes_any_other_as_its_bytes(salt_key: str, key: bytes) -> None:
+def test_key_derivation_key_is_the_utf8_bytes_of_the_salt_key(salt_key: str, key: bytes) -> None:
     assert key_derivation_key(salt_key) == key
 
 
@@ -212,24 +198,8 @@ def test_key_derivation_key_refuses_a_salt_key_under_112_bits(salt_key: str) -> 
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
 @pytest.mark.parametrize(
     "salt_key",
-    [
-        _HEX_SALT_KEY,
-        bytes(range(32)).hex(),
-        "fourteen-bytes",
-        "é" * 7,
-        "sk-" + bytes(range(31)).hex(),
-        _HEX_SALT_KEY + "\n",
-        "SK-" + bytes(range(32)).hex(),
-    ],
-    ids=[
-        "sk-prefixed-hex",
-        "bare-hex",
-        "14-ascii-bytes",
-        "14-utf8-bytes-in-7-characters",
-        "sk-and-31-bytes-of-hex",
-        "hex-and-a-trailing-newline",
-        "uppercase-prefix",
-    ],
+    [_HEX_SALT_KEY, "fourteen-bytes", "é" * 7],
+    ids=["openssl-rand-hex-32", "14-ascii-bytes", "14-utf8-bytes-in-7-characters"],
 )
 def test_fips_mode_starts_with_a_salt_key_of_at_least_112_bits(salt_key: str) -> None:
     enforce_fips_mode({"fips_mode": True}, lambda: salt_key)
@@ -302,8 +272,8 @@ def test_a_refused_fips_mode_boot_leaves_the_salt_key_in_no_frame_local(
 @pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}], ids=["unset", "off"])
 @pytest.mark.parametrize(
     "salt_key",
-    ["a-salt-key-that-is-not-hex", "thirteen-byte", "", None],
-    ids=["not-hex", "13-bytes", "empty", "no-key"],
+    [_HEX_SALT_KEY, "thirteen-byte", "", None],
+    ids=["openssl-rand-hex-32", "13-bytes", "empty", "no-key"],
 )
 def test_standard_mode_starts_whatever_the_salt_key_looks_like(
     general_settings: Mapping[str, object], salt_key: str | None
