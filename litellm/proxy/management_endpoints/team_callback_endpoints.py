@@ -58,6 +58,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  #
     _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     refresh_cached_team,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import OTEL_DESTINATION_VARS
@@ -228,16 +229,19 @@ async def _emit_team_callback_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                object_id=team_id,
-                action="updated",
-                updated_values=json.dumps({"metadata": redacted_after}, default=str),
-                before_value=json.dumps({"metadata": redacted_before}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=team_id,
+                    action="updated",
+                    updated_values=json.dumps({"metadata": redacted_after}, default=str),
+                    before_value=json.dumps({"metadata": redacted_before}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )

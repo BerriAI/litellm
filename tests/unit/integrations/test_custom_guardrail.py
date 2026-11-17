@@ -2086,6 +2086,59 @@ class TestGuardrailInterventionClassification:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_status"] == "guardrail_intervened"
 
+    @pytest.mark.asyncio
+    async def test_block_is_recorded_on_a_request_dict_that_starts_empty(self) -> None:
+        from fastapi.exceptions import HTTPException
+
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+
+        class BlockingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                raise HTTPException(status_code=400, detail="blocked by guardrail")
+
+        request_data: dict = {}
+
+        with pytest.raises(HTTPException):
+            await BlockingGuardrail(guardrail_name="block-rail").apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        recorded = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert [record["guardrail_status"] for record in recorded] == ["guardrail_intervened"]
+
+    def test_sync_block_is_recorded_on_a_request_dict_that_starts_empty(self) -> None:
+        from fastapi.exceptions import HTTPException
+
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+
+        class SyncBlockingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                raise HTTPException(status_code=400, detail="blocked by guardrail")
+
+        request_data: Final[dict[str, object]] = {}
+
+        with pytest.raises(HTTPException):
+            SyncBlockingGuardrail(guardrail_name="block-rail").apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert [record["guardrail_status"] for record in recorded] == ["guardrail_intervened"]
+
 
 class _ApplyStyleGuardrail(CustomGuardrail):
     """Overrides only apply_guardrail, like openai_moderation; async_pre_call_hook stays the CustomLogger no-op."""

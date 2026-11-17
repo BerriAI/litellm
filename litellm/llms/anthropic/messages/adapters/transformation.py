@@ -1513,7 +1513,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             AnthropicResponseContentBlockThinking(
                                 type="thinking",
                                 thinking=(str(thinking_value) if thinking_value is not None else ""),
-                                signature=(str(signature_value) if signature_value is not None else None),
+                                signature=(str(signature_value) if signature_value is not None else ""),
                             ).model_dump()
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
@@ -1530,7 +1530,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     AnthropicResponseContentBlockThinking(
                         type="thinking",
                         thinking=str(choice.message.reasoning_content),
-                        signature=None,
+                        signature="",
                     ).model_dump()
                 )
 

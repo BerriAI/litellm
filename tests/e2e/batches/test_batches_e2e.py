@@ -1768,8 +1768,6 @@ class BatchOutputLine(BaseModel):
 
 TERMINAL_MARKER_KEY = "litellm_e2e_suite"
 TERMINAL_MARKER_VALUE = "batches-terminal-baton"
-TERMINAL_POLL_SECONDS = 300.0
-TERMINAL_POLL_INTERVAL_SECONDS = 10.0
 TERMINAL_LIST_LIMIT = 100
 TERMINAL_BAND_MIN_AGE_SECONDS = 25 * 3600
 TERMINAL_BAND_MAX_AGE_SECONDS = 73 * 3600
@@ -1786,20 +1784,12 @@ def _marker_batches(client: BatchClient, key: str) -> list[BatchObject]:
     ]
 
 
-def _await_completed_marker(
-    client: BatchClient, key: str
-) -> tuple[BatchObject | None, list[BatchObject]]:
-    deadline = time.monotonic() + TERMINAL_POLL_SECONDS
-    while True:
-        markers = _marker_batches(client, key)
-        completed = max(
-            (b for b in markers if b.status == "completed"),
-            key=lambda b: b.created_at or 0,
-            default=None,
-        )
-        if completed is not None or time.monotonic() >= deadline:
-            return completed, markers
-        time.sleep(TERMINAL_POLL_INTERVAL_SECONDS)
+def _newest_completed_marker(markers: list[BatchObject]) -> BatchObject | None:
+    return max(
+        (b for b in markers if b.status == "completed"),
+        key=lambda b: b.created_at or 0,
+        default=None,
+    )
 
 
 def _assert_aged_markers_terminal(markers: list[BatchObject]) -> None:
@@ -1822,13 +1812,13 @@ class TestBatchTerminalState:
 
     Each run submits a 1-line marker batch (stable metadata key/value plus a
     per-run field) and never cancels or deletes it: the marker is the baton the
-    next run picks up. Polling is list-only for up to 5 minutes because a
-    retrieve of a non-terminal batch books a $0 spend row whose request_id then
-    blocks the real-cost row (skip_duplicates); the single retrieve happens only
-    once a completed marker exists. The assertion target is the newest completed
-    marker from ANY run, so on the 6h stage cadence the full assertions are
-    deterministic from run 2 onward. On a cold start (no marker has ever
-    completed within the poll budget) the test passes on the submission
+    next run picks up. The markers are read with one list call, never a retrieve,
+    because a retrieve of a non-terminal batch books a $0 spend row whose
+    request_id then blocks the real-cost row (skip_duplicates); the single
+    retrieve happens only once a completed marker exists. The assertion target
+    is the newest completed marker from ANY run, so on the 6h stage cadence the
+    full assertions are deterministic from run 2 onward. On a cold start (no
+    completed marker in the list) the test passes on the submission
     assertions alone: that is a documented vacuous pass, not a skip, and this
     run's marker becomes the next run's target. Markers aged past OpenAI's 24h
     completion window (25h-73h band, within the newest list page) must be
@@ -1883,7 +1873,8 @@ class TestBatchTerminalState:
             f"create dropped the marker metadata: {submitted.metadata!r}"
         )
 
-        completed, markers = _await_completed_marker(client, key)
+        markers = _marker_batches(client, key)
+        completed = _newest_completed_marker(markers)
         _assert_aged_markers_terminal(markers)
         if completed is None:
             return

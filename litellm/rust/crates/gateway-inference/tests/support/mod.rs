@@ -160,10 +160,9 @@ async fn test_identity(
     next: axum::middleware::Next,
 ) -> Response {
     let auth = litellm_gateway_auth::Auth::new(
-        Arc::new(litellm_gateway_auth::MasterKeyAuthenticator::new(
-            Some(SecretValue::new("test-inbound-key")),
-            Arc::new(NoSecrets),
-        )),
+        Arc::new(litellm_gateway_auth::MasterKeyAuthenticator::new(Some(
+            SecretValue::new("test-inbound-key"),
+        ))),
         Arc::new(TestPermissions(permissions, principal)),
         Arc::new(litellm_gateway_auth::NoAdditionalPolicy),
         Arc::new(litellm_gateway_auth::SystemClock),

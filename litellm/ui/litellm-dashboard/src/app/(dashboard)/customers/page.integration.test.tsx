@@ -122,6 +122,10 @@ describe("customer organization overview", () => {
     renderWithProviders(<CustomersPage />);
     await screen.findByRole("link", { name: "Customer 29" });
     expect(customerLinks()[0]).toHaveTextContent("Customer 29");
+    expect(customerLinks()[0]).toHaveAttribute(
+      "href",
+      "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15",
+    );
     const overview = screen.getByRole("region", { name: "Overall customer usage" });
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
     expect(within(overview).getByText("20")).toBeInTheDocument();

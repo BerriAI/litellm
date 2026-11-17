@@ -80,8 +80,8 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.auth import jwt as proxy_jwt
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
@@ -5272,8 +5272,8 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                     user_id="jwt-subject",
                     jwt_claims={
                         **LITELLM_JWT_CLAIMS,
-                        JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
-                        JWTHandler.LITELLM_USER_ID_CLAIM: "jwt-subject",
+                        "_litellm_jwt_issuer": "https://idp.example.com",
+                        "_litellm_user_id": "jwt-subject",
                     },
                 ),
                 id="multi-issuer-jwt-auth-normalized-claims",
@@ -9549,7 +9549,7 @@ class TestAzureSpeechProxyRoutePathTraversal:
         assert AZURE_SPEECH_FAST_ENDPOINT in str(denied.value.detail)
 
 
-def _azure_speech_real_auth_attrs() -> dict[str, object]:
+def _azure_speech_real_auth_attrs(custom_auth: object | None = None) -> dict[str, object]:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -9563,8 +9563,8 @@ def _azure_speech_real_auth_attrs() -> dict[str, object]:
         "llm_model_list": [],
         "llm_router": None,
         "open_telemetry_logger": None,
-        "user_custom_auth": None,
-        "jwt_handler": None,
+        "user_custom_auth": custom_auth,
+        "litellm_jwtauth": LiteLLM_JWTAuth(),
     }
 
 
@@ -9748,7 +9748,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         litellm.in_memory_llm_clients_cache.flush_cache()
         with (
             patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (custom auth, master_key, caches) that have no injection seam
-                "litellm.proxy.proxy_server", **{**_azure_speech_real_auth_attrs(), "user_custom_auth": custom_auth}
+                "litellm.proxy.proxy_server", **_azure_speech_real_auth_attrs(custom_auth)
             ),
             patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
                 "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
@@ -10775,6 +10775,85 @@ class TestFalAIPassthroughRoute:
             assert "no pricing entry" in response.text
             assert not route.calls
 
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model",
+            "/fal_ai/acme/unit-billed-model/requests/%2e%2e",
+            "/fal_ai/acme/unit-billed-model%3Fa=/requests/x",
+            "/fal_ai/acme/unit-billed-model%23/requests/x",
+        ),
+    )
+    def test_submit_gate_prices_the_upstream_path_not_the_spelling_of_the_request_path(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response: Final = client.post(path, json={"prompt": "a red boat"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_submit_gate_rejects_an_encoded_spelling_that_stays_encoded_upstream(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post(url__regex=r"https://queue\.fal\.run/.*").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            plain: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            encoded: Final = client.post(
+                "/fal_ai/fal-ai/trellis%2525252D2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+
+            assert plain.status_code == 200, plain.text
+            assert encoded.status_code == 400, encoded.text
+            assert [str(call.request.url) for call in route.calls] == ["https://queue.fal.run/fal-ai/trellis-2"]
+
+    @pytest.mark.parametrize(
+        ("queue_base", "sent_base"),
+        (
+            ("https://queue.example/base", "https://queue.example/base"),
+            ("https://queue.example/fal%2Dqueue", "https://queue.example/fal-queue"),
+            ("https://queue.example/fal%252Dqueue", "https://queue.example/fal%2Dqueue"),
+        ),
+    )
+    def test_submit_gate_strips_the_queue_base_path_before_pricing(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, queue_base: str, sent_base: str
+    ) -> None:
+        monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", queue_base)
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            priced_route: Final = upstream.post(f"{sent_base}/fal-ai/trellis-2").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            unit_billed_route: Final = upstream.post(f"{sent_base}/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-2"})
+            )
+            priced: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            unit_billed: Final = client.post(
+                "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model", json={"prompt": "a red boat"}
+            )
+
+            assert priced.status_code == 200, priced.text
+            assert unit_billed.status_code == 400, unit_billed.text
+            assert len(priced_route.calls) == 1
+            assert not unit_billed_route.calls
+
     def test_submit_gate_prices_the_request_body_not_an_empty_one(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -11780,7 +11859,12 @@ class TestOpenSearchProxyRoute:
     )
     @pytest.mark.parametrize("content_type", [NDJSON_TYPE, "application/json"])
     def test_an_ndjson_body_without_index_references_is_sent_byte_for_byte(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes, content_type: str
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        api: str,
+        body: bytes,
+        content_type: str,
     ) -> None:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
         with respx.mock(assert_all_called=True) as upstream:
@@ -11808,7 +11892,10 @@ class TestOpenSearchProxyRoute:
         ids=["model", "api_base", "base_url"],
     )
     def test_a_document_field_named_like_an_llm_param_is_written_for_a_model_limited_key(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        document: bytes,
     ) -> None:
         from litellm.proxy import proxy_server
 
