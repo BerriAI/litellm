@@ -74,13 +74,14 @@ def _make_mock_prisma():
         record.description = data.get("description")
         record.manifest_json = data.get("manifest_json", "{}")
         record.enabled = data.get("enabled", True)
+        record.created_by = data.get("created_by")
         record.created_at = data.get("created_at")
         record.updated_at = data.get("updated_at")
         store[data["name"]] = record
         return record
 
     async def _update(where, data):
-        record = store[where["name"]]
+        record = store[where["name"]] if "name" in where else next(r for r in store.values() if r.id == where["id"])
         for k, v in data.items():
             setattr(record, k, v)
         return record
@@ -91,7 +92,18 @@ def _make_mock_prisma():
     mock_table.update = AsyncMock(side_effect=_update)
     mock_client.db.litellm_claudecodeplugintable = mock_table
     mock_client.writer_db = mock_client.db
+    mock_client.db.query_raw = AsyncMock(return_value=[])
+    mock_client.db.tx.return_value.__aenter__.return_value = mock_client.db
+    mock_client.db.litellm_claudecodepluginversion.count = AsyncMock(return_value=0)
+    mock_client.db.litellm_claudecodepluginversion.create = AsyncMock()
+    mock_client.db.litellm_claudecodepluginupload.find_unique = AsyncMock(return_value=None)
+    mock_client.db.litellm_claudecodepluginupload.delete_many = AsyncMock(return_value=0)
+    mock_client.db.litellm_claudecodepluginupload.upsert = AsyncMock()
     return mock_client
+
+
+def _uploads() -> PluginUploadRepository:
+    return PluginUploadRepository(litellm.proxy.proxy_server.prisma_client)
 
 
 _USER = UserAPIKeyAuth(
@@ -131,7 +143,7 @@ async def test_register_plugin_git_subdir_success():
     """git-subdir with both url and path fields registers successfully."""
     request = RegisterPluginRequest(name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE)
 
-    response = await register_plugin(request=request, user_api_key_dict=_USER)
+    response = await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
 
     assert response.status == "success"
     assert response.action == "created"
@@ -149,7 +161,7 @@ async def _read_stored_manifest(name: str) -> dict:
 async def test_register_plugin_duplicate_name_conflicts():
     """A second POST with an existing name returns 409 and leaves the stored plugin untouched."""
     name = "my-monorepo-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
         user_api_key_dict=_USER,
     )
@@ -167,7 +179,7 @@ async def test_register_plugin_duplicate_name_conflicts():
         version="2.0.0",
     )
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=conflicting, user_api_key_dict=_USER)
+        await register_plugin(uploads=_uploads(), request=conflicting, user_api_key_dict=_USER)
 
     assert exc_info.value.status_code == 409
     assert "already exists" in exc_info.value.detail["error"]
@@ -182,13 +194,13 @@ async def test_register_plugin_duplicate_name_conflicts():
 async def test_update_plugin_replaces_existing_source():
     """PUT updates an existing plugin: action=updated and the stored source is replaced."""
     name = "my-monorepo-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
         user_api_key_dict=_USER,
     )
 
     new_source = {"source": "github", "repo": "org/replacement"}
-    response = await update_plugin(
+    response = await update_plugin(uploads=_uploads(),
         plugin_name=name,
         request=UpdatePluginRequest(source=new_source, version="2.0.0", description="updated"),
         user_api_key_dict=_USER,
@@ -208,13 +220,13 @@ async def test_update_plugin_replaces_existing_source():
 async def test_metadata_edits_preserve_uploaded_source_and_reject_a_changed_http_destination() -> None:
     table: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugintable
     await table.create(data={"name": _UPLOAD_NAME, "manifest_json": json.dumps({"source": _UPLOAD_SOURCE})})
-    request: Final = UpdatePluginRequest(source=_UPLOAD_SOURCE, description="Updated description")
-    response: Final = await update_plugin(plugin_name=_UPLOAD_NAME, request=request, user_api_key_dict=_USER)
-    expected: Final = {"name": _UPLOAD_NAME, "source": _UPLOAD_SOURCE, "description": "Updated description"}
+    request: Final = UpdatePluginRequest(source=_UPLOAD_SOURCE, description="Updated description", version="1.0.0")
+    response: Final = await update_plugin(uploads=_uploads(), plugin_name=_UPLOAD_NAME, request=request, user_api_key_dict=_USER)
+    expected: Final = {"name": _UPLOAD_NAME, "source": _UPLOAD_SOURCE, "description": "Updated description", "version": "1.0.0", "_litellm_published_by": _USER.user_id}
     assert response.plugin.description == "Updated description"
     assert await _read_stored_manifest(_UPLOAD_NAME) == expected
     with pytest.raises(HTTPException) as error:
-        await update_plugin(
+        await update_plugin(uploads=_uploads(),
             plugin_name=_UPLOAD_NAME, user_api_key_dict=_USER,
             request=UpdatePluginRequest(source={**_UPLOAD_SOURCE, "url": "http://other.example/skill.zip"}),
         )
@@ -227,7 +239,7 @@ async def test_metadata_edits_preserve_uploaded_source_and_reject_a_changed_http
 async def test_update_plugin_not_found():
     """PUT on a name that does not exist raises HTTP 404."""
     with pytest.raises(HTTPException) as exc_info:
-        await update_plugin(
+        await update_plugin(uploads=_uploads(),
             plugin_name="does-not-exist",
             request=UpdatePluginRequest(source=_GIT_SUBDIR_SOURCE),
             user_api_key_dict=_USER,
@@ -246,7 +258,7 @@ async def test_register_plugin_create_race_maps_unique_violation_to_409():
     table.create = AsyncMock(side_effect=UniqueViolationError({}, message="duplicate name"))
 
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(
+        await register_plugin(uploads=_uploads(),
             request=RegisterPluginRequest(name="racy-plugin", source=_GIT_SUBDIR_SOURCE),
             user_api_key_dict=_USER,
         )
@@ -262,7 +274,7 @@ async def test_update_plugin_db_error_maps_to_structured_500():
     from prisma.errors import PrismaError
 
     name = "my-monorepo-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
         user_api_key_dict=_USER,
     )
@@ -271,7 +283,7 @@ async def test_update_plugin_db_error_maps_to_structured_500():
     table.update = AsyncMock(side_effect=PrismaError("connection lost"))
 
     with pytest.raises(HTTPException) as exc_info:
-        await update_plugin(
+        await update_plugin(uploads=_uploads(),
             plugin_name=name,
             request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
             user_api_key_dict=_USER,
@@ -286,16 +298,17 @@ async def test_update_plugin_deleted_mid_update_returns_404():
     """A concurrent delete between the find_unique pre-check and the update makes prisma's
     update return None; that must surface the same 404 as a plain miss, not an AttributeError."""
     name = "my-monorepo-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
         user_api_key_dict=_USER,
     )
 
     table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
-    table.update = AsyncMock(return_value=None)
+    existing: Final = await table.find_unique(where={"name": name})
+    table.find_unique = AsyncMock(side_effect=[existing, None])
 
     with pytest.raises(HTTPException) as exc_info:
-        await update_plugin(
+        await update_plugin(uploads=_uploads(),
             plugin_name=name,
             request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
             user_api_key_dict=_USER,
@@ -307,7 +320,7 @@ async def test_update_plugin_deleted_mid_update_returns_404():
 
 @pytest.mark.asyncio
 async def test_get_marketplace_skips_plugin_with_null_manifest():
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name="good-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
         user_api_key_dict=_USER,
     )
@@ -333,7 +346,7 @@ def _granted_user(skills: list[str]) -> UserAPIKeyAuth:
 
 async def _register_public_and_private_plugins() -> None:
     for name, enabled in (("public-skill", True), ("private-skill", False)):
-        await register_plugin(
+        await register_plugin(uploads=_uploads(),
             request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
             user_api_key_dict=_USER,
         )
@@ -342,7 +355,7 @@ async def _register_public_and_private_plugins() -> None:
 
 
 async def _listed_names(user: UserAPIKeyAuth) -> set[str]:
-    response = await list_plugins(user_api_key_dict=user)
+    response = await list_plugins(uploads=_uploads(), user_api_key_dict=user)
     return {plugin.name for plugin in response.plugins}
 
 
@@ -401,7 +414,7 @@ async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(mon
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preference", ["available", "auto_install", "required"])
 async def test_get_marketplace_emits_installation_preference(preference):
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(
             name="s3-skill",
             source=_ARCHIVE_SOURCE,
@@ -434,7 +447,7 @@ def test_plugin_request_rejects_unknown_installation_preference(build_request):
 
 @pytest.mark.asyncio
 async def test_get_marketplace_omits_installation_preference_when_unset():
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name="manual-install-plugin", source=_GIT_SUBDIR_SOURCE),
         user_api_key_dict=_USER,
     )
@@ -447,12 +460,12 @@ async def test_get_marketplace_omits_installation_preference_when_unset():
 @pytest.mark.asyncio
 async def test_update_plugin_propagates_installation_preference_to_get_and_list():
     name = "updated-install-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE),
         user_api_key_dict=_USER,
     )
 
-    response = await update_plugin(
+    response = await update_plugin(uploads=_uploads(),
         plugin_name=name,
         request=UpdatePluginRequest(
             source=_ARCHIVE_SOURCE,
@@ -462,7 +475,7 @@ async def test_update_plugin_propagates_installation_preference_to_get_and_list(
     )
 
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
-    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    listed_plugin = (await list_plugins(uploads=_uploads(), user_api_key_dict=_USER)).plugins[0]
 
     assert response.plugin.installation_preference == "auto_install"
     assert plugin["installation_preference"] == "auto_install"
@@ -472,12 +485,12 @@ async def test_update_plugin_propagates_installation_preference_to_get_and_list(
 @pytest.mark.asyncio
 async def test_update_plugin_without_installation_preference_clears_it():
     name = "cleared-install-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE, installation_preference="auto_install"),
         user_api_key_dict=_USER,
     )
 
-    await update_plugin(
+    await update_plugin(uploads=_uploads(),
         plugin_name=name,
         request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
         user_api_key_dict=_USER,
@@ -502,7 +515,7 @@ async def test_stored_unknown_installation_preference_is_not_served(stored_value
     )
 
     marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
-    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    listed_plugin = (await list_plugins(uploads=_uploads(), user_api_key_dict=_USER)).plugins[0]
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
 
     assert marketplace["plugins"] == [{"name": name, "source": _ARCHIVE_SOURCE}]
@@ -518,7 +531,7 @@ async def test_register_accepts_the_camel_case_installation_preference_key():
         {"name": "s3-skill", "source": _ARCHIVE_SOURCE, "installationPreference": "auto_install"}
     )
 
-    response = await register_plugin(request=request, user_api_key_dict=_USER)
+    response = await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
     marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
 
     assert response.plugin.installation_preference == "auto_install"
@@ -536,13 +549,13 @@ _UNPINNED_ARCHIVE_SOURCE = {"source": "archive", "url": "https://artifacts.examp
 
 async def _assert_preference_refused(source, preference):
     with pytest.raises(HTTPException) as register_error:
-        await register_plugin(
+        await register_plugin(uploads=_uploads(),
             request=RegisterPluginRequest(name="no-op-plugin", source=source, installation_preference=preference),
             user_api_key_dict=_USER,
         )
-    await register_plugin(request=RegisterPluginRequest(name="no-op-plugin", source=source), user_api_key_dict=_USER)
+    await register_plugin(uploads=_uploads(), request=RegisterPluginRequest(name="no-op-plugin", source=source), user_api_key_dict=_USER)
     with pytest.raises(HTTPException) as update_error:
-        await update_plugin(
+        await update_plugin(uploads=_uploads(),
             plugin_name="no-op-plugin",
             request=UpdatePluginRequest(source=source, installation_preference=preference),
             user_api_key_dict=_USER,
@@ -568,7 +581,7 @@ async def test_self_installing_preference_needs_the_archive_sha256(preference):
 
 @pytest.mark.asyncio
 async def test_available_preference_is_accepted_on_an_unpinned_archive():
-    response = await register_plugin(
+    response = await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(
             name="listed-plugin", source=_UNPINNED_ARCHIVE_SOURCE, installation_preference="available"
         ),
@@ -626,7 +639,7 @@ async def test_register_plugin_git_subdir_missing_url():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=request, user_api_key_dict=_USER)
+        await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
 
     assert exc_info.value.status_code == 400
     assert "url" in exc_info.value.detail["error"]
@@ -641,7 +654,7 @@ async def test_register_plugin_git_subdir_empty_url():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=request, user_api_key_dict=_USER)
+        await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
 
     assert exc_info.value.status_code == 400
     assert "url" in exc_info.value.detail["error"]
@@ -656,7 +669,7 @@ async def test_register_plugin_git_subdir_missing_path():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=request, user_api_key_dict=_USER)
+        await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
 
     assert exc_info.value.status_code == 400
     assert "path" in exc_info.value.detail["error"]
@@ -675,7 +688,7 @@ async def test_register_plugin_git_subdir_empty_path():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=request, user_api_key_dict=_USER)
+        await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
 
     assert exc_info.value.status_code == 400
     assert "path" in exc_info.value.detail["error"]
@@ -703,7 +716,7 @@ async def test_register_plugin_git_subdir_path_traversal():
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await register_plugin(request=request, user_api_key_dict=_USER)
+            await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
 
         assert exc_info.value.status_code == 400
         assert "relative" in exc_info.value.detail["error"]
@@ -718,7 +731,7 @@ async def test_register_plugin_unknown_source_type():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=request, user_api_key_dict=_USER)
+        await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_USER)
 
     assert exc_info.value.status_code == 400
     assert "git-subdir" in exc_info.value.detail["error"]
@@ -727,7 +740,7 @@ async def test_register_plugin_unknown_source_type():
 
 @pytest.mark.asyncio
 async def test_archive_source_registers_and_is_served_verbatim_in_marketplace():
-    response = await register_plugin(
+    response = await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE),
         user_api_key_dict=_USER,
     )
@@ -743,7 +756,7 @@ async def test_archive_source_registers_and_is_served_verbatim_in_marketplace():
 async def test_archive_source_without_sha256_is_accepted():
     source = {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"}
 
-    response = await register_plugin(
+    response = await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name="unpinned-skill", source=source),
         user_api_key_dict=_USER,
     )
@@ -754,12 +767,12 @@ async def test_archive_source_without_sha256_is_accepted():
 @pytest.mark.asyncio
 async def test_update_plugin_to_archive_source():
     name = "my-monorepo-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE),
         user_api_key_dict=_USER,
     )
 
-    response = await update_plugin(
+    response = await update_plugin(uploads=_uploads(),
         plugin_name=name,
         request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
         user_api_key_dict=_USER,
@@ -787,7 +800,7 @@ async def test_update_plugin_to_archive_source():
 )
 async def test_register_plugin_archive_rejects_malformed_source(source, expected_fragment):
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=RegisterPluginRequest(name="bad-plugin", source=source), user_api_key_dict=_USER)
+        await register_plugin(uploads=_uploads(), request=RegisterPluginRequest(name="bad-plugin", source=source), user_api_key_dict=_USER)
 
     assert exc_info.value.status_code == 400
     assert expected_fragment in exc_info.value.detail["error"]
@@ -799,7 +812,7 @@ async def test_register_plugin_rejects_non_admin():
     request = RegisterPluginRequest(name="attacker-plugin", source=_GIT_SUBDIR_SOURCE)
 
     with pytest.raises(HTTPException) as exc_info:
-        await register_plugin(request=request, user_api_key_dict=_NON_ADMIN_USER)
+        await register_plugin(uploads=_uploads(), request=request, user_api_key_dict=_NON_ADMIN_USER)
 
     assert exc_info.value.status_code == 403
 
@@ -811,14 +824,14 @@ async def test_register_plugin_rejects_non_admin():
 async def test_update_plugin_rejects_non_admin_overwrite():
     """A non-admin key cannot overwrite an existing plugin's source."""
     name = "trusted-plugin"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
         user_api_key_dict=_USER,
     )
 
     malicious_source = {"source": "github", "repo": "attacker/malicious-repo"}
     with pytest.raises(HTTPException) as exc_info:
-        await update_plugin(
+        await update_plugin(uploads=_uploads(),
             plugin_name=name,
             request=UpdatePluginRequest(source=malicious_source),
             user_api_key_dict=_NON_ADMIN_USER,
@@ -834,7 +847,7 @@ async def test_update_plugin_rejects_non_admin_overwrite():
 async def test_enable_disable_delete_plugin_reject_non_admin():
     """Non-admin keys cannot enable, disable, or delete catalog entries."""
     name = "trusted-plugin-2"
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
         user_api_key_dict=_USER,
     )
@@ -843,6 +856,7 @@ async def test_enable_disable_delete_plugin_reject_non_admin():
         enable_plugin(plugin_name=name, user_api_key_dict=_NON_ADMIN_USER),
         disable_plugin(plugin_name=name, user_api_key_dict=_NON_ADMIN_USER),
         delete_plugin(plugin_name=name, user_api_key_dict=_NON_ADMIN_USER),
+        claude_code_marketplace.get_plugin_downloads(plugin_name=name, uploads=None, user_api_key_dict=_NON_ADMIN_USER),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await coro
@@ -869,7 +883,7 @@ async def test_register_plugin():
         user_id="test-user",
     )
 
-    response: Final = await register_plugin(
+    response: Final = await register_plugin(uploads=_uploads(),
         request=request,
         user_api_key_dict=user_api_key_dict,
     )
@@ -904,7 +918,7 @@ async def test_get_marketplace():
         user_id="test-user",
     )
 
-    await register_plugin(
+    await register_plugin(uploads=_uploads(),
         request=request,
         user_api_key_dict=user_api_key_dict,
     )
@@ -946,7 +960,7 @@ async def test_register_plugin_git_subdir():
         user_id="test-user",
     )
 
-    response: Final = await register_plugin(
+    response: Final = await register_plugin(uploads=_uploads(),
         request=request,
         user_api_key_dict=user_api_key_dict,
     )
@@ -1211,14 +1225,20 @@ _UPLOAD_SOURCE: Final = {"source": "archive", "url": f"http://test{_UPLOAD_PATH}
 async def upload_storage(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_UploadClient]:
     prisma: Final = litellm.proxy.proxy_server.prisma_client
     prisma.writer_db = MagicMock()
+    prisma.writer_db.execute_raw = AsyncMock(return_value=1)
     plugins: Final = prisma.writer_db.litellm_claudecodeplugintable
     archives: Final = prisma.writer_db.litellm_claudecodepluginupload
+    prisma.writer_db.litellm_claudecodeplugindownload.create = AsyncMock(return_value=None)
     plugins.create = AsyncMock(return_value=prisma_models.LiteLLM_ClaudeCodePluginTable(
-        id="uploaded-id", name=_UPLOAD_NAME, enabled=True,
+        id="uploaded-id", name=_UPLOAD_NAME, enabled=True, anonymous_download_count=0,
     ))
     plugins.find_unique = AsyncMock(return_value=prisma_models.LiteLLM_ClaudeCodePluginTable(
-        id="uploaded-id", name=_UPLOAD_NAME, enabled=True, manifest_json=json.dumps({"source": _UPLOAD_SOURCE}),
+        id="uploaded-id", name=_UPLOAD_NAME, enabled=True, anonymous_download_count=0, manifest_json=json.dumps({"source": _UPLOAD_SOURCE}),
     ))
+    prisma.writer_db.query_raw = AsyncMock(return_value=[])
+    prisma.writer_db.tx.return_value.__aenter__.return_value = prisma.writer_db
+    prisma.writer_db.litellm_claudecodepluginversion.create = AsyncMock()
+    archives.create = AsyncMock()
     archives.find_first = AsyncMock(return_value=prisma_models.LiteLLM_ClaudeCodePluginUpload(
         plugin_name=_UPLOAD_NAME, content=Base64.encode(b"stored archive"),
     ))
@@ -1252,7 +1272,8 @@ async def _post_skill_upload(
 async def test_skill_upload_creates_metadata_and_bytes_atomically_and_rejects_duplicates(
     upload_storage: _UploadClient,
 ) -> None:
-    client, plugins, _ = upload_storage
+    client, plugins, archives = upload_storage
+    plugins.find_unique = AsyncMock(return_value=None)
     buffer: Final = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("SKILL.md", "Read the personal instructions")
@@ -1261,18 +1282,18 @@ async def test_skill_upload_creates_metadata_and_bytes_atomically_and_rejects_du
     assert response.status_code == 200, response.text
     plugins.create.assert_awaited_once()
     stored: Final = plugins.create.await_args.kwargs["data"]
-    content: Final = stored["uploaded_archive"]["create"]["content"].decode()
+    content: Final = archives.create.await_args.kwargs["data"]["content"].decode()
     digest: Final = hashlib.sha256(content).hexdigest()
     source: Final = {
         "source": "archive",
         "url": f"http://test/claude-code/plugins/{_UPLOAD_NAME}/archive/{digest}.zip",
         "sha256": digest,
     }
-    assert json.loads(stored["manifest_json"]) == {**metadata, "source": source}
+    assert json.loads(stored["manifest_json"]) == {**metadata, "source": source, "_litellm_published_by": stored["created_by"]}
     assert stored == {
         "name": _UPLOAD_NAME, "description": "My notes", "version": "2.0.0",
         "manifest_json": stored["manifest_json"], "created_by": litellm.proxy.proxy_server.litellm_proxy_admin_name,
-        "uploaded_archive": {"create": {"content": Base64.encode(content)}},
+        "files_json": "{}", "updated_at": stored["updated_at"],
     }
     assert response.json() == {"status": "success", "action": "created", "plugin": {
         "id": "uploaded-id", "name": _UPLOAD_NAME, "version": "2.0.0", "description": "My notes",
@@ -1318,7 +1339,7 @@ async def test_archive_reads_only_authorized_current_bytes(
     client, plugins, archives = upload_storage
     manifest: Final = json.dumps({"source": source})
     plugins.find_unique.return_value = None if source is None else prisma_models.LiteLLM_ClaudeCodePluginTable(
-        id="uploaded-id", name=_UPLOAD_NAME, enabled=enabled, manifest_json=manifest,
+        id="uploaded-id", name=_UPLOAD_NAME, enabled=enabled, anonymous_download_count=0, manifest_json=manifest,
     )
     if not blob:
         archives.find_first.return_value = None
@@ -1327,9 +1348,16 @@ async def test_archive_reads_only_authorized_current_bytes(
     assert (response.content == b"stored archive") is (status == 200)
     plugins.find_unique.assert_awaited_once_with(where={"name": _UPLOAD_NAME})
     assert archives.find_first.await_args_list == ([call(where={
-        "plugin_name": _UPLOAD_NAME, "plugin": {"is": {"manifest_json": manifest, "enabled": enabled}},
+        "plugin_name": _UPLOAD_NAME, "plugin": {"is": {
+            "id": "uploaded-id", "manifest_json": manifest, "enabled": enabled,
+        }},
     })] if reads else [])
     litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable.find_unique.assert_not_awaited()
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    assert events.create.await_count == int(status == 200 and key is not None)
+    assert litellm.proxy.proxy_server.prisma_client.writer_db.execute_raw.await_count == int(
+        status == 200 and key is None
+    )
 
 
 @pytest.mark.asyncio
@@ -1359,3 +1387,59 @@ async def test_archive_requires_header_credentials_for_private_content(
     assert response.status_code == status, response.text
     assert (response.content == b"stored archive") is (status == 200)
     assert archives.find_first.await_count == int(status == 200)
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    assert events.create.await_count == int(status == 200)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key, query, exists, status", [
+    (_LIMITED_KEY, {}, True, 403),
+    (None, {}, True, 401),
+    (MASTER_KEY, {"cursor": "9223372036854775808"}, True, 422),
+    (MASTER_KEY, {"cursor": "0"}, True, 422),
+    (MASTER_KEY, {"limit": 101}, True, 422),
+    (MASTER_KEY, {}, False, 404),
+])
+async def test_download_history_rejects_unauthorized_invalid_and_unknown_requests(
+    upload_storage: _UploadClient, key: str | None, query: Mapping[str, str | int], exists: bool, status: int,
+) -> None:
+    client, plugins, _ = upload_storage
+    if not exists:
+        plugins.find_unique.return_value = None
+    response: Final = await client.get(
+        f"/claude-code/plugins/{_UPLOAD_NAME}/downloads",
+        headers={"Authorization": f"Bearer {key}"} if key else {}, params=query,
+    )
+    assert response.status_code == status, response.text
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    events.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_published_updates_auto_bump_and_reject_stale_editors() -> None:
+    from datetime import datetime, timezone
+
+    source: Final = {"source": "github", "repo": "example/skill"}
+    created: Final = await register_plugin(
+        uploads=_uploads(), request=RegisterPluginRequest(name="versioned", source=source, version=None),
+        user_api_key_dict=_USER,
+    )
+    updated: Final = await update_plugin(
+        uploads=_uploads(), plugin_name="versioned", request=UpdatePluginRequest(source=source),
+        user_api_key_dict=_USER,
+    )
+    assert (created.plugin.version, updated.plugin.version) == ("1.0.0", "1.0.1")
+    before: Final = await _read_stored_manifest("versioned")
+    with pytest.raises(HTTPException) as stale:
+        await update_plugin(
+            uploads=_uploads(), plugin_name="versioned", user_api_key_dict=_USER,
+            request=UpdatePluginRequest(source=source, expected_updated_at=datetime(2000, 1, 1, tzinfo=timezone.utc)),
+        )
+    assert stale.value.status_code == 409
+    with pytest.raises(HTTPException) as error:
+        await update_plugin(
+            uploads=_uploads(), plugin_name="versioned", user_api_key_dict=_USER,
+            request=UpdatePluginRequest(source=source, version="1.0.0", description="rejected edit"),
+        )
+    assert error.value.status_code == 400
+    assert await _read_stored_manifest("versioned") == before

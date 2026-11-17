@@ -442,7 +442,7 @@ def test_provider_errors_on_an_owned_compact_reach_the_caller(gateway: Gateway, 
         assert_compact_rows(actors.owner, frozenset({after}))
 
 
-def test_response_minted_by_a_key_without_owner_is_addressable_by_any_key(gateway: Gateway) -> None:
+def test_response_minted_by_a_key_without_user_or_team_is_addressable_only_by_that_key(gateway: Gateway) -> None:
     upstream: Final = CompactUpstream()
     with wire_server(upstream.respond) as wire, gateway.scenario() as scenario:
         actors: Final = tenants(scenario, wire)
@@ -451,7 +451,18 @@ def test_response_minted_by_a_key_without_owner_is_addressable_by_any_key(gatewa
         minted: Final = mint(gateway, ownerless, actors.model, created)
         upstreamed(wire)
         text: Final = marker("compact_ownerless")
-        assert_compacted(sdk_compact(gateway, actors.other_user, "/v1", actors.model, text, minted), actors.model, text)
+        assert_refused(
+            compact_post(
+                gateway,
+                actors.other_user,
+                "/v1",
+                compact_body(actors.model, text, {"previous_response_id": minted}),
+                text,
+            ),
+            OTHER_USER_DETAIL,
+        )
+        assert compacts(upstreamed(wire)) == ()
+        assert_compacted(sdk_compact(gateway, ownerless, "/v1", actors.model, text, minted), actors.model, text)
         assert compacts(upstreamed(wire)) == (
             upstream_compact_body(text, {"previous_response_id": minted_id(created)}),
         )
