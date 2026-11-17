@@ -528,6 +528,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     proxy_exception_from_route_error,
     refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
+    saved_router_weights,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
@@ -1004,7 +1005,7 @@ from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import per_request_router_settings, route_request
 from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
@@ -16101,21 +16102,30 @@ def _router_default_litellm_params(router: Router | None) -> Mapping[str, object
     return {key: value for key, value in defaults.items() if value is not None}
 
 
+@dataclass(frozen=True, slots=True)
+class CountRoute:
+    served: str
+    select_request: Mapping[str, object]
+    deployment: Mapping[str, object] | None
+
+
 def _count_context_management(
-    context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
+    context_management: JsonValue, route: CountRoute, request_litellm_params: Mapping[str, JsonValue]
 ) -> CountContextManagement | None:
     from litellm.llms.anthropic.messages.adapters.handler import context_management_explicitly_dropped
 
     if context_management is None or llm_router is None:
         return None
     inference_model: Final = resolve_inference_model(
-        model, general_settings_view(), user_model if isinstance(user_model, str) else None
+        route.served, general_settings_view(), user_model if isinstance(user_model, str) else None
     )
     router_defaults: Final = _router_default_litellm_params(llm_router)
     deployment_params: Final = tuple(
         deployment["litellm_params"]
         for deployment in llm_router.registry().deployments(
-            inference_model if isinstance(inference_model, str) else model, source="routable"
+            inference_model if isinstance(inference_model, str) else route.served,
+            source="routable",
+            request=route.select_request,
         )
     )
     sent_params: Final = tuple(
@@ -16237,14 +16247,18 @@ def _caller_routing_kwargs(caller: UserAPIKeyAuth | None) -> Mapping[str, object
     }
 
 
-async def _caller_served_model(model: str, caller: UserAPIKeyAuth | None) -> str:
+def _router_settings_kwargs(settings: Mapping[str, object]) -> Mapping[str, object]:
+    weights: Final = saved_router_weights(settings)
+    return {**per_request_router_settings(settings), **({"_router_weights": weights} if weights is not None else {})}
+
+
+async def _caller_router_settings(caller: UserAPIKeyAuth | None) -> Mapping[str, object]:
     if caller is None:
-        return model
+        return {}
     settings: Final = await proxy_config.get_hierarchical_router_settings(
         user_api_key_dict=caller, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
     )
-    group_alias: Final = None if settings is None else settings.get("model_group_alias")
-    return request_served_model(model, caller, group_alias, llm_router)
+    return settings or {}
 
 
 def _inference_params(
@@ -16445,10 +16459,10 @@ async def count_request_tokens(
             call_id,
             request.model,
         )
-    routed: Final = await _routed_count_deployment(request.model, responses_request, caller)
+    count_route: Final = await route_count(request.model, responses_request, caller)
     count: Final = _count_request_tokens(
         request=request,
-        routed=routed,
+        count_route=count_route,
         call_endpoint=call_endpoint,
         messages_format=messages_format,
         output_format=output_format,
@@ -16462,7 +16476,7 @@ async def count_request_tokens(
         _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
         litellm_call_id=call_id,
         request_model=request.model,
-        model_id=deployment_model_id(routed),
+        model_id=deployment_model_id(count_route.deployment),
     )
 
 
@@ -16473,22 +16487,37 @@ async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -
         raise ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400) from e
 
 
-async def _routed_count_deployment(
-    model: str, responses_request: Mapping[str, object] | None, caller: UserAPIKeyAuth | None
-) -> Mapping[str, object] | None:
+async def _routed_count_deployment(served: str, select_request: Mapping[str, object]) -> Mapping[str, object] | None:
     if llm_router is None:
         return None
     try:
-        served: Final = await _caller_served_model(model, caller)
-        routed: Final = await llm_router.select(
-            served, {"model": served, **_responses_routing_kwargs(responses_request), **_caller_routing_kwargs(caller)}
-        )
+        routed: Final = await llm_router.select(served, dict(select_request))
     except Exception:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
         )
         return None
     return routed if isinstance(routed, Mapping) else None
+
+
+async def route_count(
+    model: str, responses_request: Mapping[str, object] | None, caller: UserAPIKeyAuth | None
+) -> CountRoute:
+    settings: Final = await _caller_router_settings(caller)
+    served: Final = (
+        model if caller is None else request_served_model(model, caller, settings.get("model_group_alias"), llm_router)
+    )
+    select_request: Final = {
+        "model": served,
+        **_responses_routing_kwargs(responses_request),
+        **_router_settings_kwargs(settings),
+        **_caller_routing_kwargs(caller),
+    }
+    return CountRoute(
+        served=served,
+        select_request=select_request,
+        deployment=await _routed_count_deployment(served, select_request),
+    )
 
 
 def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -16499,7 +16528,7 @@ def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, obj
 
 async def _count_request_tokens(
     request: TokenCountRequest,
-    routed: Mapping[str, object] | None,
+    count_route: CountRoute,
     call_endpoint: bool,
     messages_format: TokenCountMessagesFormat,
     output_format: JsonValue,
@@ -16514,6 +16543,7 @@ async def _count_request_tokens(
     contents: Final = request.contents
     tools: Final = request.tools
     system: Final = request.system
+    routed: Final = count_route.deployment
 
     deployment: dict[str, object] | None = None if routed is None else dict(routed)
     litellm_model_name = None
@@ -16584,7 +16614,7 @@ async def _count_request_tokens(
         if local_count_error is None
         else ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
     )
-    context_edits: Final = _count_context_management(context_management, request.model, request_litellm_params)
+    context_edits: Final = _count_context_management(context_management, count_route, request_litellm_params)
     route: Final = (
         _messages_route(deployment_view, request.model)
         if request_messages is not None and messages_format == "anthropic"

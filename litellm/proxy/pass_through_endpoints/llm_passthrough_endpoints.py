@@ -1638,7 +1638,7 @@ async def _bedrock_count_tokens(
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import route_count
 
     try:
         # Initialize the handler
@@ -1653,22 +1653,15 @@ async def _bedrock_count_tokens(
                 None,
             )
 
-        # Get model parameters from router
-        litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
-        resolved_model = model  # Default fallback
-
-        deployments: Final = llm_router.registry().deployments(model) if llm_router else None
-        deployment: Final = deployments[0] if deployments else None
-        if deployment is not None:
-            model_litellm_params: Final = deployment.get("litellm_params", {})
-
-            if "model" in model_litellm_params:
-                resolved_model = model_litellm_params["model"]
-
-            # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
-            for key, value in model_litellm_params.items():
-                if key != "user_api_key_dict":
-                    litellm_params[key] = value
+        deployment: Final = (await route_count(model, None, user_api_key_dict)).deployment
+        model_litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
+        deployment_model: Final = None if model_litellm_params is None else model_litellm_params.get("model")
+        resolved_model: Final = deployment_model if isinstance(deployment_model, str) else model
+        # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
+        litellm_params: Final = {
+            **{key: value for key, value in (model_litellm_params or {}).items() if key != "user_api_key_dict"},
+            "user_api_key_dict": user_api_key_dict,
+        }
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
         verbose_proxy_logger.debug("Resolved model: %s", resolved_model)

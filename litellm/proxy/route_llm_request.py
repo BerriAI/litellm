@@ -793,6 +793,10 @@ def _with_team_deployment_attribution(
     }
 
 
+def per_request_router_settings(router_settings: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: router_settings[key] for key in _PER_REQUEST_ROUTER_SETTINGS if router_settings.get(key) is not None}
+
+
 def _merge_router_settings_override(
     data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
 ) -> frozenset[str]:
@@ -817,14 +821,10 @@ def _merge_router_settings_override(
     user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))
     router_settings_from_override: Final = MappingProxyType(
         {
-            key: router_settings_override[key]
-            for key in _PER_REQUEST_ROUTER_SETTINGS
-            if router_settings_override.get(key) is not None
-            and key not in data
-            and (user_config is None or key not in user_config)
+            key: value
+            for key, value in per_request_router_settings(router_settings_override or {}).items()
+            if key not in data and (user_config is None or key not in user_config)
         }
-        if router_settings_override is not None
-        else {}
     )
     data.update(router_settings_from_override)
     return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)

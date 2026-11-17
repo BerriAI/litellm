@@ -288,6 +288,66 @@ async def test_count_runs_on_the_deployment_the_callers_inherited_tags_route_to(
     assert response.model_used == expected_model_used
 
 
+def _router_settings_scoped_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "scoped-model",
+                "litellm_params": {
+                    "model": "groq/default-backend",
+                    "api_key": "sk-test",
+                    "tags": ["default"],
+                    "order": 1,
+                    "weight": 100,
+                },
+                "model_info": {"id": "default-deployment"},
+            },
+            {
+                "model_name": "scoped-model",
+                "litellm_params": {
+                    "model": "groq/team-x-backend",
+                    "api_key": "sk-test",
+                    "tags": ["team-x"],
+                    "order": 1,
+                    "weight": 0,
+                },
+                "model_info": {"id": "team-x-deployment"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_model_used"),
+    [
+        (UserAPIKeyAuth(metadata={"tags": ["team-x"]}), "default-backend"),
+        (
+            UserAPIKeyAuth(metadata={"tags": ["team-x"]}, router_settings={"enable_tag_filtering": True}),
+            "team-x-backend",
+        ),
+        (
+            UserAPIKeyAuth(
+                router_settings={"weights": {"scoped-model": {"default-deployment": 0, "team-x-deployment": 100}}}
+            ),
+            "team-x-backend",
+        ),
+    ],
+    ids=("no-settings", "key-enables-tag-filtering", "key-weights"),
+)
+async def test_count_routes_with_the_callers_router_settings(
+    monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth, expected_model_used: str
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _router_settings_scoped_router())
+
+    response = await count_request_tokens(
+        request=TokenCountRequest(model="scoped-model", messages=[{"role": "user", "content": "hello"}]),
+        caller=caller,
+    )
+
+    assert response.model_used == expected_model_used
+
+
 async def _count_on_utils_route(caller: UserAPIKeyAuth) -> object:
     return await token_counter(
         request=TokenCountRequest(model="shared-model", messages=[{"role": "user", "content": "hello"}]),
@@ -4051,7 +4111,7 @@ def _gemini_deployment(model_name: str, litellm_params: Mapping[str, JsonValue])
 
 
 async def _count_through_the_messages_endpoint(
-    router: Router, request_options: Mapping[str, JsonValue]
+    router: Router, request_options: Mapping[str, JsonValue], caller: UserAPIKeyAuth | None = None
 ) -> tuple[object, tuple[bytes, ...]]:
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
@@ -4076,7 +4136,7 @@ async def _count_through_the_messages_endpoint(
             return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
         ),
     ):
-        response: Final = await anthropic_count_tokens(mock_request, Response(), MagicMock())
+        response: Final = await anthropic_count_tokens(mock_request, Response(), caller or MagicMock())
     return response, peer.request_bodies
 
 
@@ -4199,6 +4259,48 @@ async def test_gemini_messages_count_tokens_keeps_tool_results_when_a_routable_d
 
     assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
     assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == 3
+
+
+def _team_and_global_gemini_router(team_drops_context_management: bool) -> Router:
+    drops: Final[dict[str, JsonValue]] = {"additional_drop_params": ["context_management"]}
+    return Router(
+        model_list=[
+            _gemini_deployment("gemini-agent", {} if team_drops_context_management else drops),
+            {
+                **_gemini_deployment("model_name_team-a_1", drops if team_drops_context_management else {}),
+                "model_info": {"id": "team-a-gemini", "team_id": "team-a", "team_public_model_name": "gemini-agent"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_drops_context_management", "team_id", "expected_tool_outputs_sent"),
+    (
+        (True, "team-a", 3),
+        (True, "team-b", 1),
+        (False, "team-a", 1),
+        (False, "team-b", 3),
+    ),
+    ids=(
+        "team-deployment-drops-for-its-team",
+        "team-deployment-drop-skips-other-teams",
+        "global-drop-skips-the-team-with-its-own-deployment",
+        "global-drop-applies-to-teams-on-the-global-deployment",
+    ),
+)
+async def test_gemini_messages_count_tokens_reads_the_context_management_opt_out_from_the_callers_deployments(
+    team_drops_context_management: bool, team_id: str, expected_tool_outputs_sent: int
+) -> None:
+    response, sent_bodies = await _count_through_the_messages_endpoint(
+        _team_and_global_gemini_router(team_drops_context_management),
+        {"model": "gemini-agent"},
+        UserAPIKeyAuth(team_id=team_id),
+    )
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == expected_tool_outputs_sent
 
 
 @pytest.mark.asyncio
