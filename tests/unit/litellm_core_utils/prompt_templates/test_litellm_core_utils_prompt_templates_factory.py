@@ -5772,6 +5772,81 @@ def test_anthropic_messages_pt_pairs_every_split_concatenated_tool_call_with_one
     assert "call_read" in str(results_by_id[reads[1]["id"]])
 
 
+def _each_tool_use_answered_once(turns: Sequence[Message]) -> bool:
+    return all(
+        sorted(block["id"] for block in _blocks(assistant, "tool_use"))
+        == [block["tool_use_id"] for block in _blocks(answer, "tool_result")]
+        == sorted({block["tool_use_id"] for block in _blocks(answer, "tool_result")})
+        for assistant, answer in zip(turns, turns[1:])
+        if assistant["role"] == "assistant"
+    )
+
+
+READ_A: Final = _function_tool_call("call_x", "read", '{"path":"/a"}')
+READ_B_AND_C: Final = _function_tool_call("call_x", "read", _concatenated_json({"path": "/b"}, {"path": "/c"}))
+
+
+@pytest.mark.parametrize(
+    ("first_call", "second_call", "tool_use_counts"),
+    [(READ_A, READ_B_AND_C, (1, 2)), (READ_B_AND_C, READ_A, (2, 1))],
+    ids=["valid-first", "split-first"],
+)
+def test_anthropic_messages_pt_scopes_split_ids_to_the_turn_that_reuses_a_tool_call_id(
+    first_call: Mapping[str, object], second_call: Mapping[str, object], tool_use_counts: tuple[int, ...]
+):
+    result: Final = _replay_on_anthropic(
+        _assistant_tool_calls(first_call),
+        {"role": "tool", "tool_call_id": "call_x", "content": "first result"},
+        _assistant_tool_calls(second_call),
+        {"role": "tool", "tool_call_id": "call_x", "content": "second result"},
+        {"role": "user", "content": "Thanks."},
+    )
+
+    tool_results: Final = [_blocks(turn, "tool_result") for turn in result]
+    real_results: Final = [block["content"] for block in sum(tool_results, ()) if block["tool_use_id"] == "call_x"]
+    assert _each_tool_use_answered_once(result)
+    assert real_results == ["first result", "second result"]
+    assert tuple(len(_blocks(turn, "tool_use")) for turn in result if turn["role"] == "assistant") == tool_use_counts
+
+
+@pytest.mark.parametrize(
+    "tool_calls", [(READ_A, READ_B_AND_C), (READ_B_AND_C, READ_A)], ids=["valid-first", "split-first"]
+)
+def test_anthropic_messages_pt_does_not_split_an_id_used_twice_in_one_turn(
+    tool_calls: tuple[Mapping[str, object], ...],
+):
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        _replay_on_anthropic(_assistant_tool_calls(*tool_calls))
+
+
+def test_anthropic_messages_pt_never_splits_a_server_tool_call_marked_by_provider_fields():
+    server_call: Final = {
+        **_function_tool_call("ws_1", "web_search", _concatenated_json({"query": "a"}, {"query": "b"})),
+        "type": "function",
+    }
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        _replay_on_anthropic(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [server_call],
+                "provider_specific_fields": {"server_tool_calls": [server_call]},
+            }
+        )
+
+
+def test_anthropic_messages_pt_skips_a_split_id_already_used_by_a_tool_result():
+    result: Final = _replay_on_anthropic(
+        {"role": "tool", "tool_call_id": "call_read__concat_1", "content": "earlier result"},
+        _assistant_tool_calls(READ_BOTH),
+        {"role": "tool", "tool_call_id": "call_read", "content": "contents of /a"},
+    )
+
+    assert [block["id"] for block in _blocks(result[-2], "tool_use")] == ["call_read", "call_read__concat_2"]
+    assert _blocks(result[-1], "tool_result")[-1]["tool_use_id"] == "call_read__concat_2"
+
+
 def test_anthropic_messages_pt_sends_every_split_tool_call_when_the_turn_is_still_pending():
     result: Final = _replay_on_anthropic(_assistant_tool_calls(READ_BOTH))
 
