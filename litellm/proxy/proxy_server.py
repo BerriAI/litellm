@@ -445,6 +445,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     log_llm_api_exception,
     open_sse_before_first_byte,
     proxy_exception_from_route_error,
+    refuse_s3_media_the_key_may_not_read,
     request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
@@ -17679,6 +17680,9 @@ async def async_queue_request(
     try:
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {

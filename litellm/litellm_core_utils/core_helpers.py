@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 import httpx
-from pydantic import InstanceOf, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -57,14 +57,27 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
-_OBJECT_LIST: Final = TypeAdapter(InstanceOf[list[object]])
-
-
 def as_object_list(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
     try:
-        return _OBJECT_LIST.validate_python(value)
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
     except ValidationError:
-        return None
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
 
 
 @runtime_checkable

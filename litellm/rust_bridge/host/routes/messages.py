@@ -50,6 +50,7 @@ class MessagesSettings:
     reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
     request_timeout: float | None
+    base_model: str | None
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -102,5 +103,6 @@ def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
             reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
             additional_drop_params=_additional_drop_params(kwargs),
             request_timeout=get_configured_request_timeout(),
+            base_model=optional_str(kwargs.get("base_model")),
         )
     )

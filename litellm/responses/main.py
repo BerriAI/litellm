@@ -34,7 +34,11 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    drops_unsupported_params,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -84,7 +88,7 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-from .streaming_iterator import BaseResponsesAPIStreamingIterator
+from .streaming_iterator import BaseResponsesAPIStreamingIterator, ResponsesWsFrameCheck
 
 __all__ = (
     "acancel_responses",
@@ -481,7 +485,7 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
-            *(allowed_openai_params or ()),
+            *allowed_openai_param_names(allowed_openai_params),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
 
@@ -2555,6 +2559,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
+    responses_ws_frame_check: ResponsesWsFrameCheck | None = None,
     **kwargs,
 ) -> Exception | None:
     """
@@ -2647,5 +2652,6 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        frame_check=responses_ws_frame_check,
         **remaining_kwargs,
     )
