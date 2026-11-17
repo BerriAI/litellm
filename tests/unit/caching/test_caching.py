@@ -1759,10 +1759,14 @@ def test_cache_key_for_large_image_payloads_does_not_copy_the_whole_request() ->
         tracemalloc.start()
     tracemalloc.reset_peak()
     try:
+        traced_before, _ = tracemalloc.get_traced_memory()
         cache.get_cache_key(model="m", messages=image_messages, stream=True)
-        _, peak = tracemalloc.get_traced_memory()
+        _, traced_peak = tracemalloc.get_traced_memory()
     finally:
         if not already_tracing:
             tracemalloc.stop()
 
-    assert peak < payload_bytes / 4, f"peak {peak / 2**20:.1f} MiB for a {payload_bytes / 2**20:.0f} MiB payload"
+    added_peak: Final = traced_peak - traced_before
+    assert added_peak < payload_bytes / 4, (
+        f"peak {added_peak / 2**20:.1f} MiB for a {payload_bytes / 2**20:.0f} MiB payload"
+    )

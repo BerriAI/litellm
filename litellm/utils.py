@@ -2311,7 +2311,6 @@ def client(original_function):
             print_verbose(
                 f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
             )
-            # if caching is false, don't run this
             if (
                 (
                     (kwargs.get("caching", None) is None and litellm.cache is not None)
