@@ -120,8 +120,6 @@ always_block_keywords:
   # Sarcastic insults
   - keyword: "thanks for nothing"
     severity: "high"
-  - keyword: "git"
-    severity: "high"
 
 # Identifier words — insult-adjacent terms that only block when combined
 # with a block word (target) in the same sentence.
@@ -263,6 +261,10 @@ phrase_patterns:
   - '\bhave\s+you\s+removed\b'
   # "deletes this pathetic/useless bot"
   - '\bdeletes?\s+this\s+(?:pathetic|useless|worthless|stupid)\b'
+  # "git" as a British insult — only blocks when used as a directed noun,
+  # so source-control usage like "git status" or "a git repo" still passes
+  - "\\byou'?(?:re|\\s+are|\\s+act(?:ing)?\\s+like)?\\s*(?:(?:a|an|real|such\\s+a|big|old|silly|stupid|dumb|lazy|miserable|ugly|smug|daft|grumpy|stingy|cheeky|smarmy|cantankerous)\\s+)*git\\b(?!\\s+\\w)"
+  - '\b(?:a|an|the|this|that|old|silly|daft|lazy|stupid|dumb|miserable|grumpy|smug|ugly|cheeky|smarmy|cantankerous|stingy|moody|whinging|moaning|little|poor|damn|damned|pathetic|worthless)\s+git\b(?!\s+\w)'
 
 # Keywords — empty because we use conditional matching
 keywords: []

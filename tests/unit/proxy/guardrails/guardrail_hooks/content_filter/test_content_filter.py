@@ -2160,6 +2160,60 @@ class TestContentFilterGuardrail:
             ), f"Legitimate text was incorrectly blocked: '{test_input}'"
 
     @pytest.mark.asyncio
+    async def test_denied_insults_git_source_control_not_blocked(self):
+        """
+        Regression test: 'git' used as a source-control command must not be
+        blocked by the Insults & Personal Attacks category, while directed
+        insults using the same word are still blocked.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-git-not-insult",
+            categories=[
+                {
+                    "category": "denied_insults",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        legitimate_test_cases = [
+            "run git status on the repo",
+            "how do I revert a git commit?",
+            "explain git rebase to me",
+            "what is git and how do I use it",
+            "check the git history for that file",
+            "how do you git pull from origin",
+            "use a git repo for this project",
+        ]
+        for test_input in legitimate_test_cases:
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": [test_input]},
+                request_data={},
+                input_type="request",
+            )
+            processed_texts = result.get("texts", [])
+            assert processed_texts == [
+                test_input
+            ], f"Source-control text was incorrectly blocked: '{test_input}'"
+
+        insult_test_cases = [
+            "stop acting like a git",
+            "you're a git",
+            "you are such a git",
+            "that silly git",
+        ]
+        for test_input in insult_test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+            assert exc_info.value.status_code == 400, f"Failed to block insult: '{test_input}'"
+
+    @pytest.mark.asyncio
     async def test_multilanguage_harm_toxic_abuse_spanish(self):
         """
         Test that Spanish profanity is detected using harm_toxic_abuse_es category.
