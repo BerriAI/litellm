@@ -200,9 +200,7 @@ def _beside_tools_on_rejecting_model(optional_params: Mapping[str, object], mode
 def _subschemas(schema: Mapping[str, object]) -> Iterator[object]:
     yield from (as_str_mapping(schema.get("properties")) or _NOTHING).values()
     yield from as_object_list(schema.get("anyOf")) or ()
-    yield from as_object_list(schema.get("prefixItems")) or ()
     yield schema.get("items")
-    yield schema.get("additionalProperties")
 
 
 def _pattern_cohere_rejects(pattern: object) -> bool:
@@ -226,6 +224,8 @@ def _schema_rejection(schema: object, depth: int = 0) -> str | None:
         return f"Cohere's response_format schema does not support '{keyword}'."
     if _pattern_cohere_rejects(fields.get("pattern")):
         return "Cohere's response_format schema does not support a pattern with ^, $, or a lookaround."
+    if as_object_list(fields.get("items")) is not None:
+        return "Cohere's response_format schema takes a single schema object in 'items', not a list."
     nested: Final = (_schema_rejection(subschema, depth + 1) for subschema in _subschemas(fields))
     return next((reason for reason in nested if reason is not None), None)
 
