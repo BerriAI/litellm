@@ -5061,10 +5061,10 @@ class TestMCPRegistryEndpoint:
     @pytest.mark.parametrize(
         ("server_name", "mcp_info", "expected_title", "expected_description"),
         [
-            ("figma_mcp", {"description": "Figma MCP server"}, "figma_mcp", "Figma MCP server"),
-            ("figma_mcp", {"description": ""}, "figma_mcp", "fim"),
-            ("figma_mcp", None, "figma_mcp", "fim"),
-            (None, {"description": "Figma MCP server"}, "fim", "Figma MCP server"),
+            ("docs_mcp", {"description": "Docs MCP server"}, "docs_mcp", "Docs MCP server"),
+            ("docs_mcp", {"description": ""}, "docs_mcp", "docs"),
+            ("docs_mcp", None, "docs_mcp", "docs"),
+            (None, {"description": "Docs MCP server"}, "docs", "Docs MCP server"),
         ],
     )
     def test_registry_entry_uses_saved_description_and_server_name(
@@ -5078,11 +5078,11 @@ class TestMCPRegistryEndpoint:
 
         client: Final = create_mcp_router_test_client()
         server: Final = MCPServer(
-            server_id="server-fim",
-            name="fim",
-            alias="fim",
+            server_id="server-docs",
+            name="docs",
+            alias="docs",
             server_name=server_name,
-            url="https://figma.example.com/mcp",
+            url="https://mcp.example.com/mcp",
             transport=MCPTransport.http,
             available_on_public_internet=True,
             mcp_info=mcp_info,
@@ -5100,8 +5100,8 @@ class TestMCPRegistryEndpoint:
         entry: Final = response.json()["servers"][1]["server"]
         assert entry["description"] == expected_description
         assert entry["title"] == expected_title
-        assert entry["name"] == "fim"
-        assert entry["remotes"][0]["url"].endswith("/fim/mcp")
+        assert entry["name"] == "docs"
+        assert entry["remotes"][0]["url"].endswith("/docs/mcp")
 
     @pytest.mark.asyncio
     async def test_health_check_specific_servers(self):
