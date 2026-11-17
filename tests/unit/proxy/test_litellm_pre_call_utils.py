@@ -8204,7 +8204,7 @@ def test_a_raw_oauth_looking_header_is_forwarded_as_before_and_keeps_the_pin(
 
     assert (forwarded, client_credential) == (
         {authorization_header_name: "sk-ant-oat01-caller", "anthropic-user-profile-id": "uprof_pinned"},
-        False,
+        True,
     )
 
 

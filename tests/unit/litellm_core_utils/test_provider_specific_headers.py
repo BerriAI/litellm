@@ -205,3 +205,30 @@ def test_a_yielding_entry_never_replaces_a_configured_header(
         )
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    "headers,overrides,expected",
+    [
+        (
+            {"Anthropic-User-Profile-Id": "uprof_caller", "x-tenant": "a"},
+            {"anthropic-user-profile-id": "uprof_pinned"},
+            {"x-tenant": "a", "anthropic-user-profile-id": "uprof_pinned"},
+        ),
+        (
+            {"Authorization": "Bearer deployment", "X-Custom": "deployment"},
+            {"authorization": "Bearer client", "x-custom": "client"},
+            {
+                "Authorization": "Bearer deployment",
+                "X-Custom": "deployment",
+                "authorization": "Bearer client",
+                "x-custom": "client",
+            },
+        ),
+    ],
+    ids=["profile_id_in_any_case", "other_headers_keep_exact_case_merge"],
+)
+def test_only_the_profile_id_overrides_a_header_spelled_in_another_case(
+    headers: dict[str, str], overrides: dict[str, str], expected: dict[str, str]
+) -> None:
+    assert override_headers(headers, overrides) == expected

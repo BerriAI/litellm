@@ -2,16 +2,17 @@ from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final, TypeVar
 
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.utils import ProviderSpecificHeader
 
 _HeaderValue: Final = TypeVar("_HeaderValue")
-_REPEATABLE_HEADERS: Final = frozenset({"anthropic-beta"})
+_CASE_INSENSITIVE_OVERRIDES: Final = frozenset({ANTHROPIC_USER_PROFILE_ID_HEADER})
 
 
 def override_headers(
     headers: Mapping[str, _HeaderValue], overrides: Mapping[str, _HeaderValue]
 ) -> dict[str, _HeaderValue]:  # mutable-ok: legacy callers pass the merged headers on as a dict
-    overridden: Final = frozenset(name.lower() for name in overrides) - _REPEATABLE_HEADERS
+    overridden: Final = frozenset(name.lower() for name in overrides) & _CASE_INSENSITIVE_OVERRIDES
     return {**{name: value for name, value in headers.items() if name.lower() not in overridden}, **overrides}
 
 
