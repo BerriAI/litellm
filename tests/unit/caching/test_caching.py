@@ -6,6 +6,7 @@ import re
 import traceback
 import uuid
 from datetime import timedelta
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -14,7 +15,7 @@ import pytest
 import respx
 
 import litellm
-from litellm import acompletion, aembedding, completion, embedding
+from litellm import CustomLLM, acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import Cache, CacheMode, response_cache_phase
@@ -354,36 +355,186 @@ def test_exact_cache_key_includes_the_reasoning_summary_alias(summary_ask: dict[
     )
 
 
-@pytest.mark.asyncio
-async def test_embedding_cache_skips_write_when_one_input_yields_many_embeddings(monkeypatch):
-    """A cross-encoder behind /embeddings returns one score per document for a single
-    input string; caching data[0] per input would make the second call return 1 score."""
-    import litellm
-    from litellm import CustomLLM
+def test_embedding_response_cache_keys_distinguish_reused_request_metadata() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "multi-row-embedder/m", "input": ["1,2"], "litellm_params": {}}
 
-    class ScoreEveryDocument(CustomLLM):
-        provider_calls: int = 0
+    first: Final = cache.get_embedding_response_cache_key(request)
+    different_input: Final = cache.get_embedding_response_cache_key({**request, "input": ["3,4"]})
+    different_dimensions: Final = cache.get_embedding_response_cache_key({**request, "dimensions": 2})
 
-        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
-            self.provider_calls += 1
-            return EmbeddingResponse(
-                model=model,
-                data=[Embedding(embedding=[float(i)], index=i, object="embedding") for i in range(5)],
-            )
+    assert len({first, different_input, different_dimensions}) == 3
 
-    scorer = ScoreEveryDocument()
-    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "score-every-doc", "custom_handler": scorer}])
-    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "score-every-doc"])
-    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "score-every-doc"])
+
+class _MultiRowEmbedder(CustomLLM):
+    provider_inputs: tuple[tuple[str, ...], ...] = ()
+
+    async def aembedding(
+        self, model: str, input: str | list[str], model_response: EmbeddingResponse, **kwargs: object
+    ) -> EmbeddingResponse:
+        texts: Final = (input,) if isinstance(input, str) else tuple(input)
+        self.provider_inputs = (*self.provider_inputs, texts)
+        values: Final = tuple(chain.from_iterable(text.split(",") if text else () for text in texts))
+        return EmbeddingResponse(
+            model=model,
+            data=[
+                Embedding(embedding=[float(value)], index=idx, object="embedding") for idx, value in enumerate(values)
+            ],
+            usage=Usage(
+                prompt_tokens=len(values),
+                total_tokens=len(values),
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 0},
+                provider_token_count=len(values),
+            ),
+        )
+
+
+@pytest.fixture
+def multi_row_embedder(monkeypatch: pytest.MonkeyPatch) -> _MultiRowEmbedder:
+    embedder: Final = _MultiRowEmbedder()
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "multi-row-embedder", "custom_handler": embedder}]
+    )
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "multi-row-embedder"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "multi-row-embedder"])
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    return embedder
 
-    batch = '{"query": "q", "documents": ["a", "b", "c", "d", "e"]}'
-    first = await litellm.aembedding(model="score-every-doc/m", input=[batch])
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch", ["1,2,3,4,5", ["1,2,3,4,5"], ["1,2,3", "4,5"]])
+async def test_embedding_cache_replays_every_row_from_the_full_request(
+    multi_row_embedder: _MultiRowEmbedder, batch: str | list[str]
+) -> None:
+    first: Final = await litellm.aembedding(model="multi-row-embedder/m", input=batch)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
-    second = await litellm.aembedding(model="score-every-doc/m", input=[batch])
+    second: Final = await litellm.aembedding(model="multi-row-embedder/m", input=batch)
 
-    assert scorer.provider_calls == 2
-    assert [len(first.data), len(second.data)] == [5, 5]
+    assert len(multi_row_embedder.provider_inputs) == 1
+    assert [item["embedding"] for item in second.data] == [[1.0], [2.0], [3.0], [4.0], [5.0]]
+    assert second.model_dump() == first.model_dump()
+    assert second.hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch", [[""], ["1", ""]])
+async def test_embedding_cache_does_not_store_empty_or_short_responses(
+    multi_row_embedder: _MultiRowEmbedder, batch: list[str]
+) -> None:
+    first: Final = await litellm.aembedding(model="multi-row-embedder/m", input=batch)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeat: Final = await litellm.aembedding(model="multi-row-embedder/m", input=batch)
+
+    assert multi_row_embedder.provider_inputs == (tuple(batch), tuple(batch))
+    assert len(repeat.data) < len(batch)
+    assert repeat.model_dump() == first.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_multi_row_embedding_cache_isolates_batches_order_and_models(
+    multi_row_embedder: _MultiRowEmbedder,
+) -> None:
+    first: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2", "3"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    overlap: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2", "4"])
+    reordered: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["3", "1,2"])
+    other_model: Final = await litellm.aembedding(model="multi-row-embedder/other", input=["1,2", "3"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeat: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2", "3"])
+
+    assert multi_row_embedder.provider_inputs == (("1,2", "3"), ("1,2", "4"), ("3", "1,2"), ("1,2", "3"))
+    assert [item["embedding"] for item in overlap.data] == [[1.0], [2.0], [4.0]]
+    assert [item["embedding"] for item in reordered.data] == [[3.0], [1.0], [2.0]]
+    assert other_model.model != first.model
+    assert repeat.model_dump() == first.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_multi_row_embedding_cache_honors_no_cache_and_no_store(multi_row_embedder: _MultiRowEmbedder) -> None:
+    first: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache={"no-store": True})
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    refill: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    bypass: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache={"no-cache": True})
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeat: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"])
+
+    assert multi_row_embedder.provider_inputs == (("1,2",), ("1,2",), ("1,2",))
+    assert refill.model_dump() == bypass.model_dump() == repeat.model_dump() == first.model_dump()
+    assert repeat.hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_multi_row_embedding_cache_isolates_namespaces(multi_row_embedder: _MultiRowEmbedder) -> None:
+    first: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache={"namespace": "first"})
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    other: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache={"namespace": "other"})
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeat: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache={"namespace": "first"})
+
+    assert multi_row_embedder.provider_inputs == (("1,2",), ("1,2",))
+    assert repeat.model_dump() == other.model_dump() == first.model_dump()
+    assert repeat.hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cached_data", ["invalid", []])
+async def test_multi_row_embedding_cache_refetches_invalid_full_responses(
+    multi_row_embedder: _MultiRowEmbedder, cached_data: str | list[object]
+) -> None:
+    cache: Final = litellm.cache
+    assert cache is not None
+    request: Final = {"model": "multi-row-embedder/m", "input": ["1,2"]}
+    await cache.async_add_cache(
+        {"data": cached_data}, cache_key=cache.get_embedding_response_cache_key(request), **request
+    )
+
+    response: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"])
+
+    assert multi_row_embedder.provider_inputs == (("1,2",),)
+    assert [item["embedding"] for item in response.data] == [[1.0], [2.0]]
+
+
+@pytest.mark.asyncio
+async def test_multi_row_embedding_cache_requires_opt_in_when_default_off(
+    multi_row_embedder: _MultiRowEmbedder,
+) -> None:
+    cache: Final = litellm.cache
+    assert cache is not None
+    cache.mode = CacheMode.default_off
+    first: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"])
+    opted_in: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache={"use-cache": True})
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    opted_out: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"])
+    repeat: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache={"use-cache": True})
+
+    assert multi_row_embedder.provider_inputs == (("1,2",), ("1,2",), ("1,2",))
+    assert first.model_dump() == opted_in.model_dump() == opted_out.model_dump() == repeat.model_dump()
+    assert repeat.hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_ttl", [None, 10])
+async def test_multi_row_embedding_cache_honors_request_ttl(
+    multi_row_embedder: _MultiRowEmbedder, monkeypatch: pytest.MonkeyPatch, request_ttl: int | None
+) -> None:
+    clock: Final = MagicMock(return_value=1000.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, ttl=20)
+    cache.cache = InMemoryCache(clock=clock)
+    monkeypatch.setattr(litellm, "cache", cache)
+    cache_control: Final = {} if request_ttl is None else {"ttl": request_ttl}
+    expected_ttl: Final = 20 if request_ttl is None else request_ttl
+    first: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"], cache=cache_control)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    clock.return_value = 1000.0 + expected_ttl - 1
+    cached: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"])
+    clock.return_value = 1000.0 + expected_ttl + 1
+    expired: Final = await litellm.aembedding(model="multi-row-embedder/m", input=["1,2"])
+
+    assert multi_row_embedder.provider_inputs == (("1,2",), ("1,2",))
+    assert cached.hidden_params["cache_hit"] is True
+    assert expired.model_dump() == cached.model_dump() == first.model_dump()
 
 
 @pytest.mark.asyncio

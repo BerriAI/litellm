@@ -25,7 +25,7 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
@@ -470,6 +470,13 @@ class Cache:
         kwargs_for_preset: Final = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
         self._set_preset_cache_key_in_kwargs(preset_cache_key=hashed_cache_key, **kwargs_for_preset)
         return hashed_cache_key
+
+    def get_embedding_response_cache_key(self, request_kwargs: Mapping[str, object]) -> str:
+        litellm_params: Final = as_str_mapping(request_kwargs.get("litellm_params"))
+        cache_kwargs: Final = (
+            {**request_kwargs, "litellm_params": dict(litellm_params)} if litellm_params is not None else request_kwargs
+        )
+        return f"{self.get_cache_key(**cache_kwargs)}:embedding-response:v1"
 
     def _get_param_value(
         self,
@@ -985,11 +992,12 @@ class Cache:
             with response_cache_phase("set"):
                 input_count: Final = len(kwargs["input"]) if isinstance(kwargs["input"], list) else 1
                 if len(result.data) != input_count:
-                    verbose_logger.debug(
-                        "LiteLLM Cache: skipping embedding cache write, %d inputs but %d embeddings in the response",
-                        input_count,
-                        len(result.data),
-                    )
+                    if len(result.data) > input_count:
+                        await self.async_add_cache(
+                            result,
+                            dynamic_cache_object=dynamic_cache_object,
+                            **{**kwargs, "cache_key": self.get_embedding_response_cache_key(kwargs)},
+                        )
                     return
 
                 # set default ttl if not set
