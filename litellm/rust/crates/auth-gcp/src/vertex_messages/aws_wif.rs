@@ -6,8 +6,8 @@ use std::time::SystemTime;
 
 use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 use litellm_auth_aws::{AwsAuthConfig, AwsAuthService, SigningScope, sign_headers};
+use litellm_python_compat::urllib::quote;
 use litellm_secret_value::SecretValue;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -78,12 +78,6 @@ const CALLER_IDENTITY_URL: &str =
 const TARGET_RESOURCE_HEADER: &str = "x-goog-cloud-target-resource";
 /// `aws._IMDSV2_SESSION_TOKEN_TTL_SECONDS`.
 const IMDSV2_SESSION_TOKEN_TTL_SECONDS: &str = "300";
-const PYTHON_QUOTE_SAFE: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'-')
-    .remove(b'~')
-    .remove(b'/');
 
 /// Python's `_credentials_from_json` routes an `external_account` whose `environment_id` names
 /// AWS and that carries any of LiteLLM's `aws_*` keys, even a null one, to
@@ -444,7 +438,7 @@ fn caller_identity_subject_token(
     .flatten()
     .collect();
     let request = json!({"headers": headers, "method": "POST", "url": url}).to_string();
-    Ok(utf8_percent_encode(&request, PYTHON_QUOTE_SAFE).to_string())
+    Ok(quote(&request, "/"))
 }
 
 #[cfg(test)]

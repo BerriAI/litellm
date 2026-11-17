@@ -1,5 +1,6 @@
 use litellm_auth_gcp::vertex_messages::{GoogleLoginFailure, PythonException};
 use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION};
+use litellm_python_compat::urllib::urlsplit;
 
 use crate::Error;
 
@@ -38,73 +39,10 @@ pub fn get_vertex_base_url(location: &str) -> Result<String, Error> {
     Ok(format!("https://{location}-aiplatform.googleapis.com"))
 }
 
-/// A base URL split into the parts the Vertex URL builder works on: everything up to the path
-/// (scheme and authority), the path, and the query and fragment.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BaseUrl<'a> {
-    /// `scheme:` and `//authority`, as written.
-    pub(crate) origin: &'a str,
-    pub(crate) scheme: &'a str,
-    pub(crate) netloc: &'a str,
-    pub(crate) path: &'a str,
-    pub(crate) query: &'a str,
-    pub(crate) fragment: &'a str,
-}
-
-fn is_scheme(text: &str) -> bool {
-    text.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
-}
-
-impl<'a> BaseUrl<'a> {
-    pub(crate) fn split(url: &'a str) -> Self {
-        let (before_fragment, fragment) = url.split_once('#').unwrap_or((url, ""));
-        let (before_query, query) = before_fragment
-            .split_once('?')
-            .unwrap_or((before_fragment, ""));
-        let (scheme, after_scheme) = match before_query.split_once(':') {
-            Some((scheme, rest)) if is_scheme(scheme) => (scheme, rest),
-            _ => ("", before_query),
-        };
-        let (netloc, path) = match after_scheme.strip_prefix("//") {
-            Some(rest) => rest.split_at(rest.find('/').unwrap_or(rest.len())),
-            None => ("", after_scheme),
-        };
-        let origin = &before_query[..before_query.len() - path.len()];
-        Self {
-            origin,
-            scheme,
-            netloc,
-            path,
-            query,
-            fragment,
-        }
-    }
-
-    /// The URL with `path` and `query` in place of its own, its scheme lowercased and an empty
-    /// query or fragment dropped.
-    pub(crate) fn with(&self, path: &str, query: &str) -> String {
-        let mut url = format!(
-            "{}{}{path}",
-            self.scheme.to_ascii_lowercase(),
-            &self.origin[self.scheme.len()..]
-        );
-        if !query.is_empty() {
-            url = format!("{url}?{query}");
-        }
-        if !self.fragment.is_empty() {
-            url = format!("{url}#{}", self.fragment);
-        }
-        url
-    }
-}
-
 /// Python's `_strip_trailing_slashes_keeping_the_scheme`.
 fn strip_trailing_slashes_keeping_the_scheme(api_base: &str) -> String {
     let stripped = api_base.trim_end_matches('/');
-    let parts = BaseUrl::split(stripped);
+    let parts = urlsplit(stripped);
     if !parts.scheme.is_empty()
         && parts.netloc.is_empty()
         && parts.path.is_empty()
@@ -133,8 +71,8 @@ pub(crate) fn join_api_base(api_base: &str, route: &str) -> String {
 /// appended to the `api_base` path. An `api_base` that is itself a version keeps it, so
 /// `https://h/v1` becomes `https://h/v1/v1/projects/...` as it does in Python.
 pub(crate) fn graft_default_vertex_path(api_base: &str, default_url: &str) -> String {
-    let parsed = BaseUrl::split(api_base);
-    let default_path = BaseUrl::split(default_url).path;
+    let parsed = urlsplit(api_base);
+    let default_path = urlsplit(default_url).path;
     let segments: Vec<&str> = default_path.trim_start_matches('/').split('/').collect();
     let grafted = match segments.split_first() {
         Some((first, rest)) if matches!(*first, "v1" | "v1beta1") => rest,

@@ -2,19 +2,19 @@
 //! `litellm.vertex_request_label_fields` is set, the proxy owns the `X-Vertex-AI-Labels` header
 //! that Cloud Billing reads, so a caller can neither evict nor forge the identity labels in it.
 
-use base64::{
-    Engine,
-    alphabet::STANDARD,
-    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig, general_purpose},
+use base64::{Engine, engine::general_purpose};
+use litellm_python_compat::{
+    Value as PyValue,
+    base64::b64decode_validate,
+    json as python_json,
+    unicode::{category, isspace},
 };
-use litellm_python_compat::{Value as PyValue, json as python_json, unicode::isspace};
 use litellm_router_types::ExtraParams;
 use serde::{
     Deserialize, Deserializer,
     de::{IgnoredAny, MapAccess, Visitor},
 };
 use serde_json::Value;
-use unicode_general_category::{GeneralCategory, get_general_category};
 
 use crate::base_llm::auth::Headers;
 
@@ -27,13 +27,10 @@ const REQUEST_LABEL_MAX_CHARS: usize = 63;
 const IDENTITY_PREFIX: &str = "user_api_key_";
 const CLIENT_FIELD: &str = "spend_logs_metadata";
 
-/// Python's `base64.b64decode(text, validate=True)`: canonical padding, and any trailing bits.
-const STRICT_BASE64: GeneralPurpose = GeneralPurpose::new(
-    &STANDARD,
-    GeneralPurposeConfig::new()
-        .with_decode_padding_mode(DecodePaddingMode::RequireCanonical)
-        .with_decode_allow_trailing_bits(true),
-);
+/// The `unicodedata` categories a label may hold besides `_` and `-`.
+const LABEL_CHARACTER_CATEGORIES: [&str; 5] = ["Ll", "Lo", "Nd", "Nl", "No"];
+/// The `unicodedata` categories a label key may start with.
+const KEY_START_CATEGORIES: [&str; 2] = ["Ll", "Lo"];
 
 type Label = (String, String);
 
@@ -155,15 +152,7 @@ impl VertexLabelParams {
 }
 
 fn is_label_character(character: char) -> bool {
-    matches!(character, '_' | '-')
-        || matches!(
-            get_general_category(character),
-            GeneralCategory::LowercaseLetter
-                | GeneralCategory::OtherLetter
-                | GeneralCategory::DecimalNumber
-                | GeneralCategory::LetterNumber
-                | GeneralCategory::OtherNumber
-        )
+    matches!(character, '_' | '-') || LABEL_CHARACTER_CATEGORIES.contains(&category(character))
 }
 
 fn normalized(text: &str) -> String {
@@ -179,12 +168,10 @@ fn normalized(text: &str) -> String {
 
 fn normalized_label(key: &str, value: &str) -> Option<Label> {
     let key = normalized(key);
-    let starts_with_a_letter = key.chars().next().is_some_and(|first| {
-        matches!(
-            get_general_category(first),
-            GeneralCategory::LowercaseLetter | GeneralCategory::OtherLetter
-        )
-    });
+    let starts_with_a_letter = key
+        .chars()
+        .next()
+        .is_some_and(|first| KEY_START_CATEGORIES.contains(&category(first)));
     starts_with_a_letter.then(|| (key, normalized(value)))
 }
 
@@ -217,10 +204,8 @@ fn spend_logs_labels(metadata: Option<&LabelMetadata>) -> Vec<Label> {
 /// The caller's header counts only when it is strict base64 of a JSON object, and only its string
 /// pairs are kept. JSON that standard parsers refuse (`NaN`, `Infinity`) drops the header.
 fn caller_header_labels(encoded: &str) -> Vec<Label> {
-    let Some(Value::Object(pairs)) = STRICT_BASE64
-        .decode(encoded)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    let Some(Value::Object(pairs)) =
+        b64decode_validate(encoded).and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
     else {
         return Vec::new();
     };
@@ -452,15 +437,6 @@ mod tests {
             normalized_label("user_api_key_alias", value),
             Some(("user_api_key_alias".to_string(), expected.to_string()))
         );
-    }
-
-    #[rstest]
-    #[case::canonical("YQ==", true)]
-    #[case::trailing_bits("YR==", true)]
-    #[case::missing_padding("YQ", false)]
-    #[case::whitespace(" YQ==", false)]
-    fn the_header_decodes_as_strictly_as_python(#[case] encoded: &str, #[case] decodes: bool) {
-        assert_eq!(STRICT_BASE64.decode(encoded).is_ok(), decodes);
     }
 
     #[rstest]

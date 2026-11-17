@@ -8,6 +8,7 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use std::collections::BTreeMap;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_python_compat::urllib::quote;
 use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
@@ -228,11 +229,7 @@ impl ExternalAccount {
             .filter(|project| !project.is_empty() && self.settings.client_id.is_none())
             .map(|project| {
                 let options = serde_json::json!({ "userProject": project }).to_string();
-                percent_encoding::utf8_percent_encode(
-                    &options.replace("\":\"", "\": \""),
-                    PYTHON_QUOTE_SAFE,
-                )
-                .to_string()
+                quote(&options.replace("\":\"", "\": \""), "/")
             });
         let fields = [
             ("grant_type", Some(STS_GRANT_TYPE.to_owned())),
@@ -383,14 +380,6 @@ struct ImpersonationReply {
     #[serde(rename = "expireTime", default, deserialize_with = "present")]
     expire_time: Option<Option<String>>,
 }
-
-/// `urllib.parse.quote`'s safe characters.
-const PYTHON_QUOTE_SAFE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'-')
-    .remove(b'~')
-    .remove(b'/');
 
 /// `service_account_email`: the text between the last `/` and `:generateAccessToken`.
 fn target_principal(url: &str) -> Option<&str> {
