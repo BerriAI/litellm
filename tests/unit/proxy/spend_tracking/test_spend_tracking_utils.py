@@ -17,6 +17,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 import litellm.constants as litellm_constants
 import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.constants import (
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -87,6 +88,23 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingVectorStoreRequest,
 )
+
+
+@pytest.mark.parametrize("downgraded", (False, True))
+def test_flex_downgrade_marker_survives_spend_log_metadata_filter(downgraded: bool) -> None:
+    request: Final[Mapping[str, object]] = (
+        {"litellm_metadata": {"service_tier_fallback": {"from": "flex", "to": "default"}}} if downgraded else {}
+    )
+    metadata: Final = as_str_mapping(request.get("litellm_metadata"))
+    standard: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    stored: Final = _get_spend_logs_metadata(dict(standard))
+    assert stored.get("service_tier_fallback") == ({"from": "flex", "to": "default"} if downgraded else None)
+
+
+@pytest.mark.parametrize("marker", (None, False, 1, "flex"))
+def test_invalid_flex_downgrade_marker_is_ignored_in_spend_logs(marker: object) -> None:
+    stored: Final = _get_spend_logs_metadata({"service_tier_fallback": marker})
+    assert stored.get("service_tier_fallback") is None
 
 
 @pytest.mark.parametrize("bucket", ("metadata", "litellm_metadata"))

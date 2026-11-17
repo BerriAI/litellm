@@ -420,6 +420,7 @@ def test_settings_as_dict_lists_the_runtime_updatable_settings(make_core: MakeCo
     settings = core.settings().as_dict()
 
     assert set(settings) == {
+        "service_tier_fallbacks",
         "routing_strategy_args",
         "routing_strategy",
         "allowed_fails",

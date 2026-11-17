@@ -295,6 +295,7 @@ pub enum LogLevel {
 /// One attempt against one deployment.
 #[derive(Clone, Debug)]
 pub struct Attempt {
+    pub service_tier_downgraded: bool,
     pub op: Op,
     pub request: Arc<RouterRequest>,
     pub deployment: Arc<Deployment>,
@@ -323,6 +324,89 @@ pub struct Attempt {
     pub max_retries: u32,
     /// How many deployments `get_model_list` lists for the level's group (`model_group_size`).
     pub model_group_size: usize,
+}
+
+impl Attempt {
+    pub fn removed_params(&self) -> &'static [&'static str] {
+        if self.service_tier_downgraded {
+            &[
+                "service_tier",
+                "litellm_logging_obj",
+                "timeout_by_service_tier.flex",
+            ]
+        } else {
+            &[]
+        }
+    }
+
+    pub(crate) fn downgraded(&self) -> Self {
+        let mut request = (*self.request).clone();
+        if let Some(body) = request.body.as_object_mut() {
+            default_tier_params(body);
+        }
+        let mut deployment = (*self.deployment).clone();
+        default_tier_params(&mut deployment.raw_params);
+        deployment.params = serde_json::from_value(Value::Object(deployment.raw_params.clone()))
+            .expect("removing optional parameters preserves a validated deployment");
+        let mut params = self.params.as_deref().cloned().unwrap_or_default();
+        if !params.contains_key("timeout_by_service_tier")
+            && let Some(timeouts) = request.body.get("timeout_by_service_tier")
+        {
+            params.insert("timeout_by_service_tier".to_owned(), timeouts.clone());
+        }
+        default_tier_params(&mut params);
+        let metadata = params
+            .entry("litellm_metadata")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !metadata.is_object() {
+            *metadata = Value::Object(Map::new());
+        }
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata.insert(
+                "service_tier_fallback".to_owned(),
+                serde_json::json!({"from": "flex", "to": "default"}),
+            );
+        }
+        Self {
+            service_tier_downgraded: true,
+            request: Arc::new(request),
+            deployment: Arc::new(deployment),
+            params: Some(Arc::new(params)),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn can_downgrade(&self, failure: &AttemptError) -> bool {
+        let tier = self
+            .params
+            .as_ref()
+            .and_then(|params| params.get("service_tier"))
+            .or_else(|| self.request.body.get("service_tier"))
+            .or_else(|| self.deployment.raw_params.get("service_tier"));
+        matches!(
+            self.op.as_str(),
+            "acompletion" | "completion" | "aresponses"
+        ) && tier.and_then(Value::as_str) == Some("flex")
+            && (matches!(
+                failure.kind,
+                crate::FailureKind::RateLimit | crate::FailureKind::Timeout
+            ) || (failure.is_a("UnsupportedParamsError")
+                && failure
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("service_tier"))))
+    }
+}
+
+fn default_tier_params(params: &mut Map<String, Value>) {
+    params.remove("service_tier");
+    params.remove("litellm_logging_obj");
+    if let Some(timeouts) = params
+        .get_mut("timeout_by_service_tier")
+        .and_then(Value::as_object_mut)
+    {
+        timeouts.remove("flex");
+    }
 }
 
 /// What a successful attempt returns.
@@ -432,6 +516,9 @@ pub enum RouterEvent {
         pick: Duration,
     },
     Succeeded {
+        deployment_id: String,
+    },
+    ServiceTierDowngraded {
         deployment_id: String,
     },
     AttemptFailed {

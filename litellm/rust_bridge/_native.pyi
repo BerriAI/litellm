@@ -4,7 +4,7 @@ from typing import ClassVar, Final, Generic, Literal, Never, NotRequired, Protoc
 
 import httpx
 from pydantic import JsonValue
-from typing_extensions import disjoint_base
+from typing_extensions import ReadOnly, disjoint_base
 
 from litellm.integrations.custom_logger_v2.rust import RustHandle
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
@@ -2204,6 +2204,8 @@ class AttemptShape:
 
 class _AttemptStep(_Step):
     kind: Literal["attempt"]
+    service_tier_downgraded: ReadOnly[bool]
+    removed_params: ReadOnly[list[str]]
     deployment_id: str
     # The deployment as a `model_list` entry, with its id in `model_info`.
     deployment: dict[str, JsonValue]
@@ -2528,6 +2530,10 @@ _Document = Mapping[str, object] | str
 
 @final
 class RouterCoreHandle:
+    @staticmethod
+    def attempt_deployment(deployment: Mapping[str, object], step: Mapping[str, object]) -> Mapping[str, object]: ...
+    @staticmethod
+    def attempt_kwargs(request: Mapping[str, object], step: Mapping[str, object]) -> Mapping[str, object]: ...
     def __new__(cls, config: _Document, dynamic: _Document) -> RouterCoreHandle: ...
     def start(self, op: str, request: _Document) -> RouterCall[_CallSteps]: ...
     # Driven like `start`; its `done` step is a `_SelectedStep`.

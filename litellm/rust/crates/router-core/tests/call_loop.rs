@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 #[derive(Default)]
 struct ScriptedHost {
+    attempts: Mutex<Vec<Attempt>>,
+    invokes: Mutex<Vec<(String, bool)>>,
     /// Failures handed out in order, keyed by model group; a group with none left succeeds.
     script: Mutex<Vec<(String, VecDeque<AttemptError>)>>,
     events: Mutex<Vec<RouterEvent>>,
@@ -78,6 +80,11 @@ impl ScriptedHost {
 #[async_trait]
 impl Host for ScriptedHost {
     async fn invoke(&self, attempt: &Attempt) -> Result<Output, AttemptError> {
+        self.attempts.lock().push(attempt.clone());
+        self.invokes.lock().push((
+            attempt.deployment.id.clone(),
+            attempt.service_tier_downgraded,
+        ));
         if let Some(failure) = self.first_failure.lock().take() {
             return Err(failure);
         }
@@ -210,6 +217,166 @@ fn context_window() -> AttemptError {
 
 fn server_error() -> AttemptError {
     failure(FailureKind::InternalServer, 500)
+}
+
+fn unsupported_parameter(param: &str) -> AttemptError {
+    AttemptError {
+        classes: vec!["UnsupportedParamsError".into()],
+        detail: Some(format!("{param} unsupported").into()),
+        ..failure(FailureKind::Other, 400)
+    }
+}
+
+#[rstest]
+#[case::rate_limit(failure(FailureKind::RateLimit, 429), None, Some("flex"), true)]
+#[case::timeout(failure(FailureKind::Timeout, 408), None, Some("flex"), true)]
+#[case::unsupported_tier(unsupported_parameter("service_tier"), None, Some("flex"), true)]
+#[case::unsupported_other(unsupported_parameter("temperature"), None, Some("flex"), false)]
+#[case::non_flex(failure(FailureKind::RateLimit, 429), None, Some("default"), false)]
+#[case::no_tier(failure(FailureKind::RateLimit, 429), None, None, false)]
+#[case::disabled(failure(FailureKind::RateLimit, 429), Some(false), Some("flex"), false)]
+#[case::bad_request(failure(FailureKind::BadRequest, 400), None, Some("flex"), false)]
+#[case::unauthorized(failure(FailureKind::Authentication, 401), None, Some("flex"), false)]
+#[tokio::test]
+async fn flex_downgrade_stays_inside_the_attempt(
+    config: RouterConfig,
+    #[case] failure: AttemptError,
+    #[case] enabled: Option<bool>,
+    #[case] tier: Option<&str>,
+    #[case] downgraded: bool,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![failure]));
+    let mut config = RouterConfig {
+        service_tier_fallbacks: enabled,
+        ..config
+    };
+    config.model_list[0]
+        .litellm_params
+        .insert("service_tier".to_owned(), json!("flex"));
+    config.model_list[0].litellm_params.insert(
+        "timeout_by_service_tier".to_owned(),
+        json!({"flex": 0.01, "default": 120}),
+    );
+    let router = router(
+        config,
+        json!({"num_retries": 0, "allowed_fails": 0}),
+        host.clone(),
+    );
+    let result = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                body: json!({"service_tier": tier, "messages": [{"role": "user", "content": "hello"}], "timeout_by_service_tier": {"flex": 0.01, "default": 120}}),
+                ..request()
+            },
+        )
+        .await;
+    let invokes = host.invokes.lock().clone();
+    assert_eq!(
+        invokes.iter().map(|(_, flag)| *flag).collect::<Vec<_>>(),
+        if downgraded {
+            vec![false, true]
+        } else {
+            vec![false]
+        }
+    );
+    if !downgraded {
+        assert!(result.is_err());
+        return;
+    }
+    let response = result.unwrap();
+    let default_attempt = host.attempts.lock()[1].clone();
+    assert_eq!(
+        default_attempt.request.body,
+        json!({"messages": [{"role": "user", "content": "hello"}], "timeout_by_service_tier": {"default": 120}})
+    );
+    assert_eq!(
+        default_attempt.params.as_ref().unwrap().get("service_tier"),
+        None
+    );
+    assert_eq!(
+        default_attempt
+            .params
+            .as_ref()
+            .unwrap()
+            .get("litellm_metadata"),
+        Some(&json!({"service_tier_fallback": {"from": "flex", "to": "default"}}))
+    );
+    assert_eq!(
+        default_attempt.deployment.raw_params.get("service_tier"),
+        None
+    );
+    assert_eq!(invokes[0].0, invokes[1].0);
+    assert_eq!(response.attempted_retries, 0);
+    assert_eq!(
+        default_attempt.deployment.params.extra.get("service_tier"),
+        None
+    );
+    assert_eq!(
+        default_attempt
+            .deployment
+            .raw_params
+            .get("timeout_by_service_tier"),
+        Some(&json!({"default": 120}))
+    );
+    let outcomes = host.cache.outcomes(&response.deployment_id).await.unwrap();
+    assert_eq!((outcomes.fails, outcomes.successes), (0, 1));
+    let cooled = router
+        .health()
+        .active_cooldowns(std::slice::from_ref(&response.deployment_id))
+        .await
+        .unwrap();
+    assert!(cooled.is_empty());
+    assert!(
+        host.events
+            .lock()
+            .iter()
+            .any(|event| matches!(event, RouterEvent::ServiceTierDowngraded { .. }))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn failed_default_tier_records_one_failure_and_falls_back(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429), server_error()],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                body: json!({"service_tier": "flex"}),
+                ..request()
+            },
+        )
+        .await
+        .unwrap();
+    let invokes = host.invokes.lock().clone();
+    assert_eq!(
+        invokes.iter().map(|(_, flag)| *flag).collect::<Vec<_>>(),
+        vec![false, true, false]
+    );
+    assert_eq!(invokes[0].0, invokes[1].0);
+    assert_eq!(response.deployment_id, "b1");
+    assert_eq!(response.attempted_fallbacks, 1);
+    let outcomes = host.cache.outcomes(&invokes[0].0).await.unwrap();
+    assert_eq!(outcomes.fails, 1);
+    let failures = host
+        .events
+        .lock()
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::AttemptFailed { kind, .. } => Some(*kind),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failures, vec![FailureKind::InternalServer]);
 }
 
 fn agentic_followup() -> AttemptError {
