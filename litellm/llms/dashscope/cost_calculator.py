@@ -10,18 +10,22 @@ See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     TokenRates,
     apply_off_peak_pricing,
+    calculate_cache_writing_cost,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
     resolve_explicit_cache_read_cost_rate,
 )
-from litellm.types.utils import ModelInfo, Usage
+from litellm.types.utils import CacheCreationTokenDetails, ModelInfo, Usage
 from litellm.utils import get_model_info
+
+_ONE_HOUR_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost_above_1hr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +33,7 @@ class TokenBreakdown:
     text_tokens: int
     cached_tokens: int
     cache_creation_tokens: int
+    cache_creation_token_details: CacheCreationTokenDetails | None
     completion_tokens: int
     reasoning_tokens: int
 
@@ -50,6 +55,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
         text_tokens=text_tokens,
         cached_tokens=cached_tokens,
         cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=prompt_details["cache_creation_token_details"],
         completion_tokens=completion_tokens,
         reasoning_tokens=reasoning_tokens,
     )
@@ -98,11 +104,22 @@ def _tier_rates(model_info: ModelInfo, tier: Mapping[str, object]) -> TokenRates
     )
 
 
+def _one_hour_cache_write_rate(source: Mapping[str, object], fallback_rate: float) -> float:
+    if source.get(_ONE_HOUR_CACHE_WRITE_RATE_KEY) is None:
+        return fallback_rate
+    return tier_rate(source, _ONE_HOUR_CACHE_WRITE_RATE_KEY)
+
+
 def _bill(breakdown: TokenBreakdown, rates: TokenRates) -> tuple[float, float]:
     prompt_cost: Final = (
         (breakdown.text_tokens * rates.input_rate)
         + (breakdown.cached_tokens * rates.cache_read_rate)
-        + (breakdown.cache_creation_tokens * rates.cache_creation_rate)
+        + calculate_cache_writing_cost(
+            cache_creation_tokens=breakdown.cache_creation_tokens,
+            cache_creation_token_details=breakdown.cache_creation_token_details,
+            cache_creation_cost=rates.cache_creation_rate,
+            cache_creation_cost_by_ttl=rates.cache_creation_rates_by_ttl,
+        )
     )
     completion_cost: Final = (breakdown.completion_tokens * rates.output_rate) + (
         breakdown.reasoning_tokens * rates.billed_reasoning_rate
@@ -142,13 +159,22 @@ def cost_per_token(
     )
     standard_rates: Final = _flat_rates(model_info) if tier is None else _tier_rates(model_info, tier)
     rates: Final = apply_off_peak_pricing(model_info, current_time, standard_rates)
+    declared_source: Final = tier if tier is not None else model_info
+    ttl_billed_rates: Final = replace(
+        rates,
+        cache_creation_rates_by_ttl=MappingProxyType(
+            {"1hr": _one_hour_cache_write_rate(declared_source, rates.cache_creation_rate)}
+        ),
+    )
     explicit_cache_read_rate: Final = resolve_explicit_cache_read_cost_rate(
         model_info=model_info,
         usage=usage,
         current_time=current_time,
     )
     billed_rates: Final = (
-        rates if explicit_cache_read_rate is None else replace(rates, cache_read_rate=explicit_cache_read_rate)
+        ttl_billed_rates
+        if explicit_cache_read_rate is None
+        else replace(ttl_billed_rates, cache_read_rate=explicit_cache_read_rate)
     )
 
     return _bill(breakdown, billed_rates)

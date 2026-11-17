@@ -1989,6 +1989,18 @@ class PromptTokensDetailsWrapper(
                 )
             )
         )
+        if self.cache_creation_token_details is None:
+            nested_cache_creation: Final = extra_fields.get("cache_creation") if extra_fields is not None else None
+            if isinstance(nested_cache_creation, Mapping):
+                five_minute_tokens: Final = nested_cache_creation.get("ephemeral_5m_input_tokens")
+                one_hour_tokens: Final = nested_cache_creation.get("ephemeral_1h_input_tokens")
+                five_minute_count: Final = five_minute_tokens if isinstance(five_minute_tokens, int) else None
+                one_hour_count: Final = one_hour_tokens if isinstance(one_hour_tokens, int) else None
+                if five_minute_count is not None or one_hour_count is not None:
+                    self.cache_creation_token_details = CacheCreationTokenDetails(
+                        ephemeral_5m_input_tokens=five_minute_count,
+                        ephemeral_1h_input_tokens=one_hour_count,
+                    )
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:

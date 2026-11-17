@@ -777,6 +777,111 @@ class TestDashscopeCostCalculator:
             prompt_cost, (2048 * 5e-07) + (11 * 4e-07), rel_tol=1e-10
         )
 
+    def test_dashscope_one_hour_cache_creation_bills_at_above_one_hour_rate(self):
+        """
+        Regression (#52261): DashScope 1h cache writes must bill at
+        cache_creation_input_token_cost_above_1hr, not the 5m write rate.
+        The nested cache_creation split in prompt_tokens_details carries the
+        5m/1h breakdown.
+        """
+        litellm.model_cost["dashscope/qwen-one-hour-cache-write-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 1.5e-06,
+            "output_cost_per_token": 4.5e-06,
+            "cache_read_input_token_cost": 7.5e-08,
+            "cache_creation_input_token_cost": 1.875e-06,
+            "cache_creation_input_token_cost_above_1hr": 3e-06,
+        }
+
+        usage = Usage(
+            prompt_tokens=7893,
+            completion_tokens=2,
+            total_tokens=7895,
+            prompt_tokens_details={
+                "cached_tokens": 0,
+                "cache_type": "ephemeral",
+                "cache_creation_input_tokens": 7877,
+                "cache_write_tokens": 7877,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 7877},
+                "text_tokens": 7893,
+            },
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-one-hour-cache-write-test", usage=usage)
+
+        assert math.isclose(prompt_cost, (16 * 1.5e-06) + (7877 * 3e-06), rel_tol=1e-10)
+        assert math.isclose(completion_cost, 2 * 4.5e-06, rel_tol=1e-10)
+
+    def test_dashscope_tiered_one_hour_cache_creation_uses_tier_above_one_hour_rate(self):
+        """
+        Regression (#52261): a tier declaring cache_creation_input_token_cost_above_1hr
+        bills its 1h cache writes at that rate, and its 5m writes at the tier write rate.
+        """
+        self._register_tiered_model(
+            "dashscope/qwen-tiered-one-hour-cache-write-test",
+            [
+                {
+                    "range": [0, 128000],
+                    "input_cost_per_token": 4e-07,
+                    "output_cost_per_token": 1.6e-06,
+                    "cache_read_input_token_cost": 1.6e-07,
+                    "cache_creation_input_token_cost": 5e-07,
+                    "cache_creation_input_token_cost_above_1hr": 8e-07,
+                }
+            ],
+        )
+
+        usage = Usage(
+            prompt_tokens=10000,
+            completion_tokens=100,
+            prompt_tokens_details={
+                "cached_tokens": 1000,
+                "cache_creation_input_tokens": 1000,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 900},
+                "text_tokens": 8000,
+            },
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-tiered-one-hour-cache-write-test", usage=usage)
+
+        expected_prompt_cost = (8000 * 4e-07) + (1000 * 1.6e-07) + (100 * 5e-07) + (900 * 8e-07)
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+
+    def test_dashscope_one_hour_cache_creation_without_one_hour_rate_bills_write_rate(self):
+        """
+        Regression (#52261): without a published 1h price, 1h cache writes bill at the
+        ordinary cache-creation rate, never for free.
+        """
+        self._register_tiered_model(
+            "dashscope/qwen-tiered-one-hour-fallback-test",
+            [
+                {
+                    "range": [0, 128000],
+                    "input_cost_per_token": 4e-07,
+                    "output_cost_per_token": 1.6e-06,
+                    "cache_read_input_token_cost": 1.6e-07,
+                    "cache_creation_input_token_cost": 5e-07,
+                }
+            ],
+        )
+
+        usage = Usage(
+            prompt_tokens=10000,
+            completion_tokens=100,
+            prompt_tokens_details={
+                "cached_tokens": 1000,
+                "cache_creation_input_tokens": 1000,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 900},
+                "text_tokens": 8000,
+            },
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-tiered-one-hour-fallback-test", usage=usage)
+
+        expected_prompt_cost = (8000 * 4e-07) + (1000 * 1.6e-07) + (1000 * 5e-07)
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+
     def test_dashscope_tiered_cache_creation_falls_back_to_tier_input_rate(self):
         """
         Tiers without a cache_creation_input_token_cost bill cache-creation tokens at
