@@ -89,7 +89,7 @@ pub(super) fn string_headers(
             value => Err(Error::invalid_request(ErrorDetail::invalid(
                 "extra_headers",
                 NonStringHeader {
-                    actual: python_type_name(&value),
+                    actual: litellm_python_compat::json::type_name(&value),
                     name,
                 },
             ))),
@@ -116,18 +116,6 @@ impl std::fmt::Display for NonStringHeader {
 }
 
 impl std::error::Error for NonStringHeader {}
-
-fn python_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
-}
 
 #[cfg(test)]
 mod tests {

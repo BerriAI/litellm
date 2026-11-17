@@ -4,6 +4,7 @@ import {
   openAutoRouterAdvanced,
   selectAutoRouterOption,
   selectAutoRouterApproach,
+  withSettledRouterAvailability,
 } from "../../../tests/autoRouterSetup";
 import {
   renderWithProviders,
@@ -1378,6 +1379,41 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(modelCreateCall).mock.calls.at(-1)?.[1].litellm_params.complexity_router_config).toMatchObject(
       expectedConfig,
     );
+  });
+
+  it("ignores a hidden conversation limit after customizing tiers and validates it again on restore", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderAdvanced(<Harness />);
+    await waitForAutomaticTiers();
+    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
+    await selectAutoRouterOption("Judge model", ALL_FAMILY_MODELS[0].model_group);
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("Local checks before the judge", "Heuristic first");
+    fireEvent.change(screen.getByRole("textbox", { name: "Max conversation tokens before judge" }), {
+      target: { value: "invalid" },
+    });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Edit tiers" }));
+    await withSettledRouterAvailability(() => {
+      fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
+    });
+    expect(screen.queryByRole("textbox", { name: "Max conversation tokens before judge" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    expect(screen.getByRole("textbox", { name: "Max conversation tokens before judge" })).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await withSettledRouterAvailability(() => {
+      fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
+    });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    const config = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
+    expect(config?.classifier_type).toBe("llm");
+    expect(config).not.toHaveProperty("heuristic_first_max_context_tokens");
   });
 
   it("preserves classifier tuning when choosing models automatically", async () => {

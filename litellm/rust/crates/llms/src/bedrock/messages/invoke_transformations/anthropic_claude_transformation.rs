@@ -40,7 +40,7 @@ use crate::bedrock::{
         GUARDRAIL_CONFIG_PARAM, bedrock_invoke_guardrail_headers,
     },
     common_utils::{
-        strip_bedrock_routing_prefix,
+        split_bedrock_region_path,
         structured_output::{
             NATIVE_OUTPUT_UNSUPPORTED, bedrock_native_output_format,
             bedrock_native_output_retry_requested, is_bedrock_native_output_rejection,
@@ -100,7 +100,7 @@ fn get_bedrock_model_id(model: &str, model_id: Option<&str>) -> String {
     if let Some(model_id) = model_id {
         return encode_model_id(model_id).replacen(INVOKE_MODEL_PREFIX, "", 1);
     }
-    let stripped = strip_bedrock_routing_prefix(model);
+    let (_, stripped) = split_bedrock_region_path(model);
     if stripped.starts_with("arn:") {
         return encode_model_id(stripped);
     }
@@ -146,6 +146,11 @@ fn get_aws_region_from_model_arn(model: &str) -> Option<String> {
 }
 
 /// Port of Python's `AmazonInvokeConfig.get_complete_url`.
+fn region_from_model(model: &str) -> Option<String> {
+    get_aws_region_from_model_arn(model)
+        .or_else(|| split_bedrock_region_path(model).0.map(str::to_string))
+}
+
 fn invoke_url(
     api_base: Option<&str>,
     model: &str,
@@ -161,11 +166,7 @@ fn invoke_url(
             .get(MODEL_ID_PARAM)
             .and_then(Value::as_str),
     );
-    let region = resolve_bedrock_region(
-        get_aws_region_from_model_arn(model).as_deref(),
-        aws,
-        env_lookup,
-    );
+    let region = resolve_bedrock_region(region_from_model(model).as_deref(), aws, env_lookup);
     let path = if stream {
         INVOKE_STREAM_PATH
     } else {
@@ -350,7 +351,7 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
             headers,
             auth: AuthScheme::AwsSigV4 {
                 region: resolve_bedrock_region(
-                    get_aws_region_from_model_arn(model).as_deref(),
+                    region_from_model(model).as_deref(),
                     params,
                     env_lookup,
                 ),
@@ -624,28 +625,34 @@ mod tests {
     }
 
     #[rstest]
-    #[case::region_segment_stays_in_the_path(
+    #[case::region_segment_leaves_the_path(
         "bedrock/invoke/us-west-2/anthropic.claude-3-5-sonnet-20240620-v1:0",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us-west-2/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
         "us-west-2"
     )]
-    #[case::region_segment_does_not_pick_the_region(
+    #[case::region_segment_picks_the_region(
         "invoke/eu-central-1/anthropic.claude-3-5-sonnet-20240620-v1:0",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/eu-central-1/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
-        "us-west-2"
+        "https://bedrock-runtime.eu-central-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+        "eu-central-1"
     )]
-    #[case::params_region_hosts_a_region_segment(
+    #[case::gov_cloud_region_segment_without_a_route(
+        "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        None,
+        "https://bedrock-runtime.us-gov-west-1.amazonaws.com/model/anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+        "us-gov-west-1"
+    )]
+    #[case::params_region_beats_a_region_segment(
         "invoke/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         Some("us-east-1"),
-        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
         "us-east-1"
     )]
     #[case::arn_after_a_region_segment_picks_the_region(
         "invoke/us-west-2/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         None,
-        "https://bedrock-runtime.eu-west-1.amazonaws.com/model/us-west-2/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+        "https://bedrock-runtime.eu-west-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aeu-west-1%3A123456789012%3Ainference-profile%2Fus.anthropic.claude-sonnet-4-5-20250929-v1%3A0/invoke",
         "eu-west-1"
     )]
     #[case::arn_after_any_segment_picks_the_region(
@@ -675,13 +682,13 @@ mod tests {
     #[case::nova_spec_is_removed_and_the_id_encoded(
         "invoke/us-west-2/nova/anthropic.claude-3",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us-west-2%2Fanthropic.claude-3/invoke",
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke",
         "us-west-2"
     )]
     #[case::one_inner_invoke_segment_is_removed(
         "invoke/us-west-2/invoke/anthropic.claude-3",
         None,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us-west-2/anthropic.claude-3/invoke",
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke",
         "us-west-2"
     )]
     fn url_and_signing_region_match_python_for_every_model_shape(

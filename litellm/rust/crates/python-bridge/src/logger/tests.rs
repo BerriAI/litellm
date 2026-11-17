@@ -179,10 +179,19 @@ fn call_levels_ask_python_once_per_level(#[case] level: u8, #[values(true, false
         queries.set(queries.get() + 1);
         enabled
     };
-    assert_eq!(levels.enabled(level, query), enabled);
-    assert_eq!(levels.enabled(level, query), enabled);
-    assert_eq!(levels.enabled(level, query), enabled);
+    assert_eq!(levels.enabled(level, false, query), enabled);
+    assert_eq!(levels.enabled(level, false, query), enabled);
+    assert_eq!(levels.enabled(level, false, query), enabled);
     assert_eq!(queries.get(), 1);
+}
+
+#[rstest::rstest]
+fn the_proxy_logger_keeps_its_own_cached_levels() {
+    let levels = super::Levels::default();
+    assert!(levels.enabled(20, false, || true));
+    assert!(!levels.enabled(20, true, || false));
+    assert!(levels.enabled(20, false, || false));
+    assert!(!levels.enabled(20, true, || true));
 }
 
 #[rstest::rstest]
@@ -353,9 +362,9 @@ try:
     import litellm.rust_bridge.host.logger as host_logger
     original_enabled = host_logger.enabled
     queries = []
-    def counting_enabled(level):
+    def counting_enabled(level, target=''):
         queries.append(level)
-        return original_enabled(level)
+        return original_enabled(level, target)
     host_logger.enabled = counting_enabled
     async def chunks(raise_level):
         await machine_chunks(raise_level)
@@ -374,7 +383,7 @@ try:
             ('stream chunk', logging.DEBUG, {'index': 1}),
             ('stream chunk', logging.DEBUG, {'index': 2}),
         ]
-        assert queries == [logging.DEBUG] * 4
+        assert queries == [logging.DEBUG]
 
         queries.clear()
         verbose_logger.setLevel(logging.WARNING)

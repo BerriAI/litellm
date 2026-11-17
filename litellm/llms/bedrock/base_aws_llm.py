@@ -618,11 +618,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             # a malformed URL and cause botocore's EventStreamBuffer to receive
             # a JSON error body instead of a binary event-stream — surfaced as a
             # misleading ChecksumMismatch (0x223a7b22 == ':{"').
-            # Use strip_bedrock_routing_prefix (no break) so compound prefixes
+            # Use split_bedrock_region_path (no break) so compound prefixes
             # like "bedrock/invoke/arn:..." are fully stripped in one call.
-            from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+            from litellm.llms.bedrock.common_utils import split_bedrock_region_path
 
-            model_id = strip_bedrock_routing_prefix(model_id)
+            model_id = split_bedrock_region_path(model_id)[1]
             # URL-encode ARNs so colons and slashes are safe in the URL path.
             if model_id.startswith("arn:"):
                 model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
@@ -715,6 +715,14 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         return None
 
+    @staticmethod
+    def _get_aws_region_from_model_path(model: str | None) -> str | None:
+        if model is None:
+            return None
+        from litellm.llms.bedrock.common_utils import split_bedrock_region_path
+
+        return split_bedrock_region_path(model)[0]
+
     def _get_aws_region_name(
         self,
         optional_params: dict,
@@ -740,7 +748,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             if model_id is not None:
                 aws_region_name = self._get_aws_region_from_model_arn(model_id)
             else:
-                aws_region_name = self._get_aws_region_from_model_arn(model)
+                aws_region_name = self._get_aws_region_from_model_arn(model) or self._get_aws_region_from_model_path(
+                    model
+                )
             # check env #
             litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
 
