@@ -205,6 +205,14 @@ pub enum ErrorDetail {
         "Missing Azure API Base - Please set `api_base` or `AZURE_API_BASE` environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
     )]
     MissingAzureApiBase,
+    /// Python's `BaseAWSLLM.validate_aws_region_name` refusal of a Mantle region.
+    #[error(
+        "Invalid AWS region format: '{region}'. Region names must contain only lowercase letters, digits, and hyphens."
+    )]
+    InvalidMantleRegion {
+        region: String,
+        check: MantleRegionCheck,
+    },
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]
@@ -229,6 +237,14 @@ pub enum ErrorDetail {
         operation: &'static str,
         detail: serde_json::Value,
     },
+}
+
+/// Where Python validates a Mantle region: `get_llm_provider` wraps a refusal while resolving the
+/// `bedrock_mantle/` provider into its `BadRequestError`, later checks raise the bare `ValueError`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MantleRegionCheck {
+    ProviderResolution,
+    Request,
 }
 
 impl ErrorDetail {

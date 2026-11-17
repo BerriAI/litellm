@@ -3223,13 +3223,12 @@ def test_a_bedrock_web_search_rejection_raises_the_bad_request_the_invoke_config
 
 _BEDROCK_MANTLE: Final = "bedrock_mantle/anthropic.claude-sonnet-5-5"
 _MANTLE_ROUTE: Final = "bedrock/mantle/anthropic.claude-sonnet-5-5"
-_MANTLE_AUTH_FAILED: Final = "Bedrock Mantle auth failed: no Bearer token and no usable AWS credentials."
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize("kind", ("no_credentials", "replay"))
 def test_a_bedrock_mantle_credential_failure_raises_the_mantle_value_error(kind: str) -> None:
-    from botocore.exceptions import NoCredentialsError
+    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
 
     mapped: Final = messages_host.map_failure(
         _credential_failure(kind),
@@ -3238,8 +3237,21 @@ def test_a_bedrock_mantle_credential_failure_raises_the_mantle_value_error(kind:
     )
 
     assert type(mapped) is ValueError
-    assert str(mapped).startswith(_MANTLE_AUTH_FAILED)
-    assert type(mapped.__cause__) is NoCredentialsError
+    assert str(mapped) == MANTLE_AUTH_FAILED
+    assert mapped.__traceback__ is not None
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(("kind", "status"), (("web_identity_reference", 400), ("missing_web_identity_token", 401)))
+def test_a_bedrock_mantle_web_identity_failure_keeps_the_aws_auth_error(kind: str, status: int) -> None:
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure(kind), {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle"
+    )
+
+    assert type(mapped) is AwsAuthError
+    assert mapped.status_code == status
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
@@ -3255,73 +3267,26 @@ def test_a_bedrock_mantle_route_credential_failure_raises_botocores_error_unwrap
     assert type(mapped) is NoCredentialsError
 
 
-def _refused(text: str) -> ValueError:
+def _refused(text: str, **markers: object) -> ValueError:
     native: Final = ValueError(text)
     native.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    for name, value in markers.items():
+        setattr(native, name, value)
     return native
 
 
-_INVALID_REGION: Final = (
-    "Invalid AWS region format: '{}'. Region names must contain only lowercase letters, digits, and hyphens."
-)
-
-
-@pytest.mark.usefixtures("no_aws_credentials")
-@pytest.mark.parametrize(
-    ("request_fields", "provider", "error_class", "text", "llm_provider"),
-    [
-        (
-            {"model": _BEDROCK_MANTLE, "api_key": "k", "aws_region_name": "US_WEST_2"},
-            "bedrock_mantle",
-            litellm.BadRequestError,
-            "litellm.BadRequestError: GetLLMProvider Exception - "
-            + _INVALID_REGION.format("US_WEST_2")
-            + f"\n\noriginal model: {_BEDROCK_MANTLE}",
-            "",
-        ),
-        (
-            {"model": _MANTLE_ROUTE, "api_key": "k", "aws_region_name": "US_WEST_2"},
-            "bedrock",
-            ValueError,
-            _INVALID_REGION.format("US_WEST_2"),
-            None,
-        ),
-        (
-            {
-                "model": _BEDROCK_MANTLE,
-                "api_base": "HTTPS://BEDROCK-MANTLE.US-EAST-2.API.AWS",
-                "aws_access_key_id": "test-access-key",
-                "aws_secret_access_key": "test-secret-key",
-            },
-            "bedrock_mantle",
-            ValueError,
-            _INVALID_REGION.format("US-EAST-2"),
-            None,
-        ),
-        (
-            {"model": _BEDROCK_INVOKE, "aws_region_name": "US_WEST_2"},
-            "bedrock",
-            litellm.BadRequestError,
-            "litellm.BadRequestError: native region text",
-            "bedrock",
-        ),
-    ],
-    ids=("bedrock-mantle-region", "mantle-route-region", "upper-case-mantle-host", "invoke-keeps-native-rejection"),
-)
-def test_a_request_mantle_refuses_raises_what_python_raises_building_it(
-    request_fields: Mapping[str, object],
-    provider: str,
-    error_class: type[Exception],
-    text: str,
-    llm_provider: str | None,
-) -> None:
+def test_a_region_refused_while_resolving_bedrock_mantle_raises_get_llm_providers_bad_request() -> None:
     mapped: Final = messages_host.map_failure(
-        _refused("native region text"), {**request_fields, "messages": []}, provider
+        _refused("bad region", messages_provider_resolution=True),
+        {"model": _BEDROCK_MANTLE, "messages": []},
+        "bedrock_mantle",
     )
 
-    assert type(mapped) is error_class
-    assert str(mapped) == text
-    assert getattr(mapped, "llm_provider", None) == llm_provider
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+    assert mapped.llm_provider == ""  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == _BEDROCK_MANTLE  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert "bad region" in str(mapped)
 
 
 def test_a_bedrock_mantle_web_search_rejection_raises_the_invoke_transforms_bad_request() -> None:
@@ -3359,41 +3324,17 @@ def test_body_params_shape_mantle_caller_tools_and_drop_a_body_anthropic_beta(mo
     ]
 
 
-_MANTLE_NON_CLAUDE: Final = "bedrock_mantle/openai.gpt-oss-120b"
-
-
-@pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize(
     "request_fields",
     (
-        pytest.param({"model": _MANTLE_NON_CLAUDE}, id="no-mantle-messages-config"),
-        pytest.param({"model": _BEDROCK_MANTLE, "api_key": "bearer-key"}, id="python-would-send-a-bearer"),
-    ),
-)
-def test_a_bedrock_mantle_credential_failure_python_would_not_sign_raises_botocores_error(
-    request_fields: Mapping[str, object],
-) -> None:
-    from botocore.exceptions import NoCredentialsError
-
-    mapped: Final = messages_host.map_failure(
-        _credential_failure("no_credentials"),
-        {**request_fields, "messages": [], "api_base": "https://mantle.test"},
-        "bedrock_mantle",
-    )
-
-    assert type(mapped) is NoCredentialsError
-
-
-@pytest.mark.parametrize(
-    "request_fields",
-    (
-        pytest.param({"model": _MANTLE_NON_CLAUDE}, id="no-mantle-messages-config"),
         pytest.param(
             {"model": _BEDROCK_MANTLE, "api_key": "bearer-key", "aws_region_name": "us-west-2"},
             id="python-builds-and-signs-it",
         ),
+        pytest.param({"model": _BEDROCK_MANTLE, "aws_region_name": "US_WEST_2"}, id="no-credentials-bad-region"),
     ),
 )
+@pytest.mark.usefixtures("no_aws_credentials")
 def test_a_mantle_refusal_python_would_send_keeps_the_native_bad_request(
     request_fields: Mapping[str, object],
 ) -> None:

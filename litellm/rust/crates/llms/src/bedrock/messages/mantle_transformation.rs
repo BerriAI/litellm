@@ -17,7 +17,7 @@ use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
 
 use crate::{
-    Error, ErrorDetail,
+    Error, ErrorDetail, MantleRegionCheck,
     anthropic::{
         common_utils::ensure_api_route,
         messages::{
@@ -32,7 +32,7 @@ use crate::{
             transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
         },
     },
-    bedrock::common_utils::validated_region,
+    bedrock::common_utils::is_valid_region,
 };
 
 use super::invoke_transformations::{
@@ -296,6 +296,19 @@ fn bedrock_region(
     )
 }
 
+pub(crate) fn validated_mantle_region(
+    region: String,
+    check: MantleRegionCheck,
+) -> Result<String, Error> {
+    match is_valid_region(&region) {
+        true => Ok(region),
+        false => Err(Error::InvalidRequest(ErrorDetail::InvalidMantleRegion {
+            region,
+            check,
+        })),
+    }
+}
+
 pub(crate) fn mantle_secret_names(names: &'static [&'static str]) -> Box<[&'static str]> {
     names
         .iter()
@@ -344,7 +357,10 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
         _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        let region = validated_region(bedrock_region(model, litellm_params, env_lookup))?;
+        let region = validated_mantle_region(
+            bedrock_region(model, litellm_params, env_lookup),
+            MantleRegionCheck::Request,
+        )?;
         Ok(build_mantle_messages_url(
             api_base.or(litellm_params.api_base.as_deref()),
             litellm_params.aws.aws_bedrock_runtime_endpoint.as_deref(),

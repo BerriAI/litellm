@@ -1002,3 +1002,96 @@ async def test_bedrock_mantle_route_answers_the_usage_python_answers(
     assert _public(rust_response) == _public(python_response)
     rust_usage: Final = _OBJECT.validate_python(_OBJECT.validate_python(rust_response)["usage"])
     assert {name: rust_usage.get(name) for name in usage} == usage
+
+
+_SIGV4_ONLY: Final = {
+    "api_key": None,
+    "aws_access_key_id": "test-access-key",
+    "aws_secret_access_key": "test-secret-key",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "raised"),
+    (
+        pytest.param({"aws_region_name": "US_WEST_2"}, litellm.BadRequestError, id="bedrock-mantle-region"),
+        pytest.param(
+            {"model": "bedrock/mantle/anthropic.claude-opus-4-8", **_SIGV4_ONLY, "aws_region_name": "US_WEST_2"},
+            ValueError,
+            id="mantle-route-region",
+        ),
+        pytest.param(
+            {"api_base": "HTTPS://BEDROCK-MANTLE.US-EAST-2.API.AWS", **_SIGV4_ONLY},
+            ValueError,
+            id="upper-case-mantle-host-on-sigv4",
+        ),
+    ),
+)
+async def test_bedrock_mantle_invalid_region_raises_what_python_raises(
+    server: RecordingServer, route: Mapping[str, object], raised: type[Exception]
+) -> None:
+    with pytest.raises(raised) as python_raised:
+        await _mantle(_PYTHON_ENTRY, server, **route)
+    with pytest.raises(raised) as rust_raised:
+        await _mantle(_RUST_ENTRY, server, **route)
+
+    assert type(rust_raised.value) is type(python_raised.value)
+    assert getattr(rust_raised.value, "status_code", None) == getattr(python_raised.value, "status_code", None)
+    assert getattr(rust_raised.value, "llm_provider", None) == getattr(python_raised.value, "llm_provider", None)
+    assert "US" in str(rust_raised.value)
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    ("route", "raised"),
+    (
+        pytest.param({}, ValueError, id="bedrock-mantle"),
+        pytest.param(
+            {"aws_web_identity_token": "os.environ/AWS_WEB_IDENTITY_TOKEN"},
+            AwsAuthError,
+            id="bedrock-mantle-web-identity",
+        ),
+        pytest.param({"model": "bedrock/mantle/anthropic.claude-opus-4-8"}, NoCredentialsError, id="mantle-route"),
+    ),
+)
+async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, route: Mapping[str, object], raised: type[Exception]
+) -> None:
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    identity: Final = (
+        {"aws_role_name": "arn:aws:iam::123456789012:role/bedrock", "aws_session_name": "litellm-session"}
+        if "aws_web_identity_token" in route
+        else {}
+    )
+    unsigned: Final = {"api_key": None, "aws_region_name": "us-east-1", **route, **identity}
+
+    with pytest.raises(raised) as python_raised:
+        await _mantle(_PYTHON_ENTRY, server, **unsigned)
+    with pytest.raises(raised) as rust_raised:
+        await _mantle(_RUST_ENTRY, server, **unsigned)
+
+    assert type(rust_raised.value) is type(python_raised.value)
+    assert str(rust_raised.value) == str(python_raised.value)
+    assert getattr(rust_raised.value, "status_code", None) == getattr(python_raised.value, "status_code", None)
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_aws_credentials")
+async def test_bedrock_mantle_refusal_without_credentials_raises_the_transforms_bad_request(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    refused: Final = {"api_key": None, "tools": [{"type": "web_search_20250305", "name": "web_search"}]}
+
+    with pytest.raises(litellm.BadRequestError) as python_raised:
+        await _mantle(_PYTHON_ENTRY, server, **refused)
+    with pytest.raises(litellm.BadRequestError) as rust_raised:
+        await _mantle(_RUST_ENTRY, server, **refused)
+
+    assert rust_raised.value.status_code == python_raised.value.status_code
+    assert rust_raised.value.llm_provider == python_raised.value.llm_provider  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert server.requests == []
