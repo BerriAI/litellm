@@ -965,7 +965,7 @@ async fn send(
     litellm_inference::outbound::send_in_phases(request, http, phases, connect_retry)
         .await
         .map(super::encoding::decoded)
-        .map_err(|error| Error::from(error.with_sent_origin(url)))
+        .map_err(Error::from)
 }
 
 async fn read_body(

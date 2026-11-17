@@ -59,12 +59,12 @@ pub(crate) enum Repr {
     #[error("request signing failed")]
     Signature(#[source] litellm_error::Source),
 
-    #[error("could not reach the provider")]
+    #[error("could not reach the provider{}", at_host(.host.as_deref()))]
     Connect {
         #[source]
         source: reqwest::Error,
-        /// The scheme, host and port the request was sent to, when the sender named them.
-        origin: Option<String>,
+        /// The host (and any explicit port) the request was sent to; never the rest of its URL.
+        host: Option<String>,
     },
     #[error("upstream network error")]
     Network(#[source] reqwest::Error),
@@ -388,34 +388,6 @@ impl Error {
         }
     }
 
-    /// Names the scheme, host and port of `url` on a failure to connect, which the error
-    /// otherwise leaves out with the rest of the URL.
-    pub fn with_sent_origin(self, url: &str) -> Self {
-        let Some(origin) = url::Url::parse(url)
-            .ok()
-            .map(|url| url.origin().ascii_serialization())
-        else {
-            return self;
-        };
-        match Arc::try_unwrap(self.0) {
-            Ok(Repr::Connect { source, .. }) => Repr::Connect {
-                source,
-                origin: Some(origin),
-            }
-            .into(),
-            Ok(repr) => repr.into(),
-            Err(shared) => Self(shared),
-        }
-    }
-
-    /// The scheme, host and port a request that could not connect was sent to.
-    pub fn sent_origin(&self) -> Option<&str> {
-        match &*self.0 {
-            Repr::Connect { origin, .. } => origin.as_deref(),
-            _ => None,
-        }
-    }
-
     pub fn is_connect(&self) -> bool {
         match &*self.0 {
             Repr::Connect { .. } => true,
@@ -650,15 +622,26 @@ impl From<Repr> for Error {
     }
 }
 
+fn at_host(host: Option<&str>) -> String {
+    host.map(|host| format!(" at {host}")).unwrap_or_default()
+}
+
 impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
+        let host = error.url().and_then(|url| {
+            let host = url.host_str()?;
+            Some(match url.port() {
+                Some(port) => format!("{host}:{port}"),
+                None => host.to_owned(),
+            })
+        });
         let error = error.without_url();
         if error.is_timeout() {
             Repr::Timeout(error).into()
         } else if error.is_connect() || error.is_builder() {
             Repr::Connect {
                 source: error,
-                origin: None,
+                host,
             }
             .into()
         } else {
@@ -835,16 +818,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_connect_failure_names_only_the_origin_it_was_sent_to() {
+    async fn a_connect_failure_names_only_the_host_it_was_sent_to() {
         let refused = reqwest::Client::new()
             .get("http://127.0.0.1:9/v1?key=secret")
             .send()
             .await
             .unwrap_err();
-        let error =
-            super::Error::from(refused).with_sent_origin("http://127.0.0.1:9/v1?key=secret");
-        assert_eq!(error.sent_origin(), Some("http://127.0.0.1:9"));
+        let error = super::Error::from(refused);
         assert!(error.is_connect());
-        assert_eq!(error.to_string(), "could not reach the provider");
+        assert_eq!(
+            error.to_string(),
+            "could not reach the provider at 127.0.0.1:9"
+        );
+        let report = Report::new(&error).to_string();
+        assert!(!report.contains("secret"), "{report}");
+        assert!(!report.contains("/v1"), "{report}");
     }
 }
