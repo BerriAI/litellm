@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final
 
 import httpx
@@ -57,7 +58,8 @@ def _streamed_text(gateway: Gateway, fields: dict[str, JsonValue]) -> str:
         frames: Final = tuple(line.removeprefix("data: ") for line in response.iter_lines() if line.startswith("data:"))
     assert frames[-1] == "[DONE]", frames
     chunks: Final = tuple(json.loads(frame) for frame in frames[:-1])
-    return "".join(choice["delta"].get("content") or "" for chunk in chunks for choice in chunk["choices"])
+    choices: Final = tuple(chain.from_iterable(chunk["choices"] for chunk in chunks))
+    return "".join(choice["delta"].get("content") or "" for choice in choices)
 
 
 @pytest.fixture

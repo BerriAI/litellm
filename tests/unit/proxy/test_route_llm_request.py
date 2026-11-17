@@ -1984,8 +1984,8 @@ _COMMA_MODELS_BODY: Final = {"model": "model-a,model-b", "messages": [{"role": "
 
 
 @pytest.mark.asyncio
-async def test_route_request_rejects_streaming_comma_separated_models_before_any_upstream_call():
-    llm_router = route_entry_points_to_stubs(MagicMock())
+async def test_route_request_rejects_streaming_comma_separated_models_before_any_upstream_call() -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
 
     with pytest.raises(ProxyCommaSeparatedModelsStreamError) as exc_info:
         await route_request({**_COMMA_MODELS_BODY, "stream": True}, llm_router, None, "acompletion")
@@ -2000,11 +2000,11 @@ async def test_route_request_rejects_streaming_comma_separated_models_before_any
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, "true", None])
-async def test_route_request_batches_comma_separated_models_unless_stream_is_true(stream):
-    llm_router = route_entry_points_to_stubs(MagicMock())
+async def test_route_request_batches_comma_separated_models_unless_stream_is_true(stream: bool | str | None) -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
     llm_router.abatch_completion.return_value = "batched"
 
-    response = await route_request({**_COMMA_MODELS_BODY, "stream": stream}, llm_router, None, "acompletion")
+    response: Final = await route_request({**_COMMA_MODELS_BODY, "stream": stream}, llm_router, None, "acompletion")
 
     assert response == "batched"
     llm_router.abatch_completion.assert_called_once_with(
@@ -2013,12 +2013,12 @@ async def test_route_request_batches_comma_separated_models_unless_stream_is_tru
 
 
 @pytest.mark.asyncio
-async def test_route_request_streams_comma_separated_models_with_fastest_response():
-    llm_router = route_entry_points_to_stubs(MagicMock())
+async def test_route_request_streams_comma_separated_models_with_fastest_response() -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
     llm_router.abatch_completion_fastest_response.return_value = "fastest stream"
     data: Final = {**_COMMA_MODELS_BODY, "stream": True, "fastest_response": True}
 
-    response = await route_request(dict(data), llm_router, None, "acompletion")
+    response: Final = await route_request(dict(data), llm_router, None, "acompletion")
 
     assert response == "fastest stream"
     llm_router.abatch_completion_fastest_response.assert_called_once_with(**data)
