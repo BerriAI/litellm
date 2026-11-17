@@ -14,7 +14,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     PREFIX_BLOCK_HASHES_BLOCK_SIZE,
     PREFIX_BLOCK_HASHES_MAX_CHARS,
-    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
 )
 from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
 from litellm.litellm_core_utils.litellm_logging import (
@@ -194,11 +193,11 @@ async def test_busy_hash_workers_skip_without_queuing_and_cancellation_keeps_lim
         release.wait()
         return (1,)
 
-    callback: Final = PrefixBlockHashes(tokenizer=tokenizer)
+    callback: Final = PrefixBlockHashes(tokenizer=tokenizer, hash_jobs=threading.BoundedSemaphore(2))
     data: Final = {"messages": [{"role": "user", "content": "hello"}]}
     jobs: Final = tuple(
         asyncio.create_task(callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion"))
-        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+        for _ in range(2)
     )
     try:
         for _ in jobs:

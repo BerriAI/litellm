@@ -80,10 +80,12 @@ class PrefixBlockHashes(CustomLogger):
         self,
         tokenizer: Callable[[str, str], tuple[int, ...]] = _encode_prompt,
         secret: Callable[[], str | None] = _secret,
+        hash_jobs: BoundedSemaphore = _HASH_JOBS,
     ) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]  # legacy base accepts untyped optional kwargs
         self._tokenizer: Final = tokenizer
         self._secret: Final = secret
+        self._hash_jobs: Final = hash_jobs
 
     async def async_pre_call_hook(
         self,
@@ -115,7 +117,7 @@ class PrefixBlockHashes(CustomLogger):
                 verbose_logger.debug("Prefix block hashing skipped because the prompt exceeds its size budget")
                 return data if isinstance(data, dict) else dict(data)
             model: Final = data.get("model")
-            if not _HASH_JOBS.acquire(blocking=False):
+            if not self._hash_jobs.acquire(blocking=False):
                 verbose_logger.debug("Prefix block hashing skipped because hash workers are busy")
                 return data if isinstance(data, dict) else dict(data)
             job: Final = asyncio.create_task(
@@ -123,7 +125,7 @@ class PrefixBlockHashes(CustomLogger):
                     _encode_and_hash, self._tokenizer, model if isinstance(model, str) else "", prompt, key
                 )
             )
-            job.add_done_callback(lambda completed: _HASH_JOBS.release())
+            job.add_done_callback(lambda completed: self._hash_jobs.release())
             hash_ids: Final = await asyncio.shield(job)
             bucket: Final = get_metadata_variable_name_from_kwargs(data)
             metadata: Final[Mapping[str, object]] = as_str_mapping(data.get(bucket)) or {}
