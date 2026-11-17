@@ -107,6 +107,7 @@ from litellm.proxy._types import (
     LiteLLMRoutes,
     PassThroughEndpointResponse,
     PassThroughGenericEndpoint,
+    ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
@@ -160,6 +161,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     resolve_customer_request_usage,
     strip_client_guardrail_information,
 )
+from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
     builtin_pass_through_routes_first,
@@ -1409,6 +1411,13 @@ def _prepare_passthrough_client_body(
     strip_client_guardrail_information(client_body)
     if not _key_or_team_allows_client_pricing_override(auth):
         _strip_client_pricing_overrides(client_body)
+    if client_body.pop(PRICING_CURRENCY_FIELD, None) is not None:
+        raise ProxyException(
+            message=f"{PRICING_CURRENCY_FIELD} is only supported on /v1/chat/completions",
+            type=ProxyErrorTypes.bad_request_error,
+            param=PRICING_CURRENCY_FIELD,
+            code=400,
+        )
     eu_jev_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
     scoped_body: Final = {**client_body, **_eu_jev_scoped_model_override(eu_jev_body)}
     if custom_llm_provider in ("laya", "bespoke"):

@@ -15,6 +15,7 @@
   - Never `serde_pickle::Value`: its `BTreeMap` dicts reorder keys
   - Accepted limits: ints beyond i64, `tuple`/`set`/`frozenset` decode as lists, class references (`GLOBAL`/`REDUCE`) fail. Writes protocol 3
 - Every behavior is pinned by CPython output, not by reasoning. Everything under `generated/` is script output, never hand-edited
+  - Regenerate `generated/flags.json` (LiteLLM's own `str_to_bool`, `_redis._str_to_bool`, `_redis._coerces_to_true`, `core_helpers.lax_bool`) with `scripts/generate_flag_fixtures.py`, which compiles those helpers from the checked-out sources
   - Regenerate `generated/values.json` with `scripts/generate_fixtures.py`. Add a corpus row before changing behavior
   - Regenerate `generated/stdlib.json` (`urllib.parse.quote`, UTC `datetime` fields) with `scripts/generate_stdlib_fixtures.py`, and `generated/pydantic.json` (lax `bool`/`int`) with `scripts/generate_pydantic_fixtures.py` at the pydantic version in `uv.lock`
   - Divergences go in `KNOWN` in `tests/fixtures.rs` with a reason. An entry that starts matching fails until deleted

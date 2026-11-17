@@ -1125,6 +1125,18 @@ class ChunkProcessor:
         return getattr(chunk, "choices", ())
 
     @staticmethod
+    def choice_indices_with_observed_finish_reason(chunks: Iterable[object]) -> frozenset[int]:
+        choices: Final = tuple(chain.from_iterable(object_items(_field_of(chunk, "choices")) for chunk in chunks))
+        finished: Final = frozenset(
+            _stream_choice_index(choice)
+            for choice in choices
+            if ChunkProcessor._finish_reason_of_choice(choice) is not None
+        )
+        if len(frozenset(map(_stream_choice_index, choices))) > 1:
+            return finished
+        return frozenset({0}) if finished else frozenset()
+
+    @staticmethod
     def _saw_finish_reason(chunks: Sequence["_UsageBearingChunk | ModelResponse"]) -> bool:
         return any(
             ChunkProcessor._finish_reason_of_choice(choice) is not None

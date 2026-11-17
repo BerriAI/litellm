@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{
     Error, ErrorDetail,
-    anthropic::beta_headers::BetaPolicy,
+    anthropic::beta_headers::{BetaPolicy, on_loaded_config},
     base_llm::{auth::Headers, messages::context::MessagesModelCapabilities},
 };
 
@@ -41,10 +41,13 @@ const COMPUTER_TOOL_BETAS: [(&str, &str); 3] = [
 const OPUS_4_5_EFFORT_PATTERNS: [&str; 2] = ["opus-4-5", "opus_4_5"];
 
 fn on_bedrock(beta: &str) -> Option<String> {
-    beta.parse::<AnthropicBeta>()
-        .unwrap_or_else(|never| match never {})
-        .on(BetaProvider::Bedrock)
-        .map(|beta| beta.as_str().to_string())
+    on_loaded_config(
+        &beta
+            .parse::<AnthropicBeta>()
+            .unwrap_or_else(|never| match never {}),
+        BetaProvider::Bedrock,
+    )
+    .map(|beta| beta.as_str().to_string())
 }
 
 /// Port of Python's `model_specific_anthropic_betas`.

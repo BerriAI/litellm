@@ -23,6 +23,7 @@ from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
 from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
     VertexAIImagenImageEditConfig,
 )
+from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -181,6 +182,39 @@ class TestVertexAIGeminiImageEditTransformation:
 
         assert mapped["aspectRatio"] == "16:9"
 
+    @pytest.mark.parametrize(
+        ("requested", "request_count"),
+        [
+            (ImageEditOptionalRequestParams(size="1792x1024"), 1),
+            (ImageEditOptionalRequestParams(size="1792x1024", n=1), 1),
+            (ImageEditOptionalRequestParams(size="1792x1024", n=3), 3),
+        ],
+    )
+    def test_n_is_accepted_and_served_by_single_image_requests(
+        self, requested: ImageEditOptionalRequestParams, request_count: int
+    ) -> None:
+        assert "n" in self.config.get_supported_openai_params(self.model)
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=requested,
+            model=self.model,
+            drop_params=False,
+        )
+
+        request_body, _ = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=[BytesIO(b"fake_image_data")],
+            image_edit_optional_request_params=mapped,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert self.config.get_request_count(self.model, mapped) == request_count
+        assert json.loads(request_body)["generationConfig"] == {
+            "response_modalities": ["IMAGE"],
+            "image_config": {"aspect_ratio": "16:9"},
+        }
+
     def test_get_complete_url(self) -> None:
         """Test URL generation for Vertex AI Gemini"""
         with patch.dict(
@@ -244,9 +278,7 @@ class TestVertexAIGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode(
-                                        "utf-8"
-                                    ),
+                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
                                 }
                             }
                         ]
@@ -268,9 +300,7 @@ class TestVertexAIGeminiImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 1
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises BadRequestError with 400 status code"""
@@ -483,25 +513,18 @@ class TestVertexAIImagenImageEditTransformation:
         # Second should be MASK reference
         assert reference_images[1]["referenceType"] == "REFERENCE_TYPE_MASK"
         assert "maskImageConfig" in reference_images[1]
-        assert (
-            reference_images[1]["maskImageConfig"]["maskMode"]
-            == "MASK_MODE_USER_PROVIDED"
-        )
+        assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
             "predictions": [
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode("utf-8"),
                     "mimeType": "image/png",
                 },
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode("utf-8"),
                     "mimeType": "image/png",
                 },
             ]
@@ -520,12 +543,8 @@ class TestVertexAIImagenImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 2
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
-        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
+        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises ValueError"""
@@ -551,10 +570,7 @@ class TestVertexAIImagenImageEditTransformation:
         assert self.config._read_all_bytes(bio) == b"test_bytesio"
 
         # Test with bytearray
-        assert (
-            self.config._read_all_bytes(bytearray(b"test_bytearray"))
-            == b"test_bytearray"
-        )
+        assert self.config._read_all_bytes(bytearray(b"test_bytearray")) == b"test_bytearray"
 
     @pytest.mark.parametrize(
         ("image", "expected"),
@@ -776,7 +792,8 @@ def _sent_gemini_edit(extra_headers: Mapping[str, str] | None = None) -> httpx.R
     def reply(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         return httpx.Response(
-            200, json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]}
+            200,
+            json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]},
         )
 
     litellm.image_edit(
