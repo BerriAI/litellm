@@ -15,7 +15,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
-from pydantic_core import to_json
+from pydantic_core import PydanticSerializationError, to_json
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM, VLLM_PROMPT_DERIVED_FIELDS
@@ -450,14 +450,20 @@ def _without_prompt_derived_fields(response: object) -> object:
     return logged_copy
 
 
-def logged_content_fingerprint(model_call_details: Mapping[str, object], result: object) -> bytes:
-    return to_json((model_call_details.get("messages"), result), fallback=repr)
+def logged_content_fingerprint(model_call_details: Mapping[str, object], result: object) -> bytes | None:
+    try:
+        return to_json((model_call_details.get("messages"), result), fallback=repr)
+    except PydanticSerializationError:
+        return None
 
 
 def logs_without_prompt_fields_once_masked(
-    content_before_hook: bytes, model_call_details: _CallDetails, result: object
+    content_before_hook: bytes | None, model_call_details: _CallDetails, result: object
 ) -> tuple[_CallDetails | dict[str, object], object]:  # mutable-ok: logging hooks hand every logger a plain dict
-    if logged_content_fingerprint(model_call_details, result) == content_before_hook:
+    if (
+        content_before_hook is not None
+        and logged_content_fingerprint(model_call_details, result) == content_before_hook
+    ):
         return model_call_details, result
     return _logs_without_prompt_derived_fields(model_call_details, result)
 

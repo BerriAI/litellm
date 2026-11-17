@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import functools
 import importlib.abc
 import json
 import logging
@@ -3763,23 +3764,23 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
     assert "snapshot-only" not in json.dumps(logging_obj.model_call_details, default=str)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("is_async", [False, True])
-@pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("masks", [True, False])
-async def test_a_logging_only_guardrail_drops_vllm_prompt_fields_from_the_logs_only_when_it_masks(
-    is_async: bool, stream: bool, masks: bool
-) -> None:
+_VLLM_PHONE: Final = "555-123-4567"
+_VLLM_MASKED_MESSAGES: Final = ({"role": "user", "content": "My phone is [PHONE]"},)
+_VLLM_PROMPT_FIELDS: Final = MappingProxyType(
+    {
+        "prompt_token_ids": [151644, 872],
+        "prompt_text": f"<|im_start|>user\nMy phone is {_VLLM_PHONE}",
+        "prompt_logprobs": [None, {"872": {"logprob": -1.5, "rank": 1, "decoded_token": _VLLM_PHONE}}],
+    }
+)
+
+
+async def _log_vllm_response_through_a_logging_only_guardrail(
+    is_async: bool, stream: bool, masks: bool, user_message: Mapping[str, object]
+) -> tuple[Mapping[str, object], object, ModelResponse]:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
 
-    phone: Final = "555-123-4567"
-    masked_messages: Final = [{"role": "user", "content": "My phone is [PHONE]"}]
-    prompt_fields: Final = {
-        "prompt_token_ids": [151644, 872],
-        "prompt_text": f"<|im_start|>user\nMy phone is {phone}",
-        "prompt_logprobs": [None, {"872": {"logprob": -1.5, "rank": 1, "decoded_token": phone}}],
-    }
     logged: Final[list[tuple[Mapping[str, object], object]]] = []
 
     class RecordingLogger(CustomLogger):
@@ -3793,7 +3794,7 @@ async def test_a_logging_only_guardrail_drops_vllm_prompt_fields_from_the_logs_o
 
     class LoggingOnlyGuardrail(CustomGuardrail):
         def logging_hook(self, kwargs: dict[str, object], result: object, call_type: str) -> tuple[dict, object]:
-            return ({**kwargs, "messages": masked_messages} if masks else {**kwargs, "scanned": True}), result
+            return ({**kwargs, "messages": list(_VLLM_MASKED_MESSAGES)} if masks else {**kwargs, "scanned": True}), result
 
         async def async_logging_hook(
             self, kwargs: dict[str, object], result: object, call_type: str
@@ -3806,11 +3807,11 @@ async def test_a_logging_only_guardrail_drops_vllm_prompt_fields_from_the_logs_o
     ]
     client_response: Final = ModelResponse(
         choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
-        **prompt_fields,
+        **_VLLM_PROMPT_FIELDS,
     )
     logging_obj: Final = LitellmLogging(
         model="hosted_vllm/Qwen/Qwen3-0.6B",
-        messages=[{"role": "user", "content": f"My phone is {phone}"}],
+        messages=[dict(user_message)],
         stream=stream,
         call_type="acompletion" if is_async else "completion",
         start_time=datetime.datetime.now(),
@@ -3827,11 +3828,44 @@ async def test_a_logging_only_guardrail_drops_vllm_prompt_fields_from_the_logs_o
         logging_obj.success_handler(result=client_response, cache_hit=False)
 
     assert len(logged) == 1
-    logged_kwargs, logged_response = logged[0]
-    assert (logged_kwargs["messages"] == masked_messages) is masks
-    assert (phone in json.dumps(logged_response, default=str)) is not masks
-    assert (phone in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)) is not masks
-    assert client_response.model_dump(include=set(prompt_fields)) == prompt_fields
+    return logged[0][0], logged[0][1], client_response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("masks", [True, False])
+async def test_a_logging_only_guardrail_drops_vllm_prompt_fields_from_the_logs_only_when_it_masks(
+    is_async: bool, stream: bool, masks: bool
+) -> None:
+    logged_kwargs, logged_response, client_response = await _log_vllm_response_through_a_logging_only_guardrail(
+        is_async, stream, masks, {"role": "user", "content": f"My phone is {_VLLM_PHONE}"}
+    )
+
+    assert (logged_kwargs["messages"] == list(_VLLM_MASKED_MESSAGES)) is masks
+    assert (_VLLM_PHONE in json.dumps(logged_response, default=str)) is not masks
+    assert (_VLLM_PHONE in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)) is not masks
+    assert client_response.model_dump(include=set(_VLLM_PROMPT_FIELDS)) == dict(_VLLM_PROMPT_FIELDS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_a_logging_only_guardrail_still_masks_and_drops_vllm_prompt_fields_when_the_logged_messages_cannot_be_serialized(
+    is_async: bool,
+) -> None:
+    too_deep_to_serialize: Final = functools.reduce(lambda inner, _: {"nested": inner}, range(300), {})
+
+    logged_kwargs, logged_response, client_response = await _log_vllm_response_through_a_logging_only_guardrail(
+        is_async,
+        False,
+        True,
+        {"role": "user", "content": f"My phone is {_VLLM_PHONE}", "metadata": too_deep_to_serialize},
+    )
+
+    assert logged_kwargs["messages"] == list(_VLLM_MASKED_MESSAGES)
+    assert _VLLM_PHONE not in json.dumps(logged_response, default=str)
+    assert _VLLM_PHONE not in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)
+    assert client_response.model_dump(include=set(_VLLM_PROMPT_FIELDS)) == dict(_VLLM_PROMPT_FIELDS)
 
 
 def test_get_user_agent_tags():

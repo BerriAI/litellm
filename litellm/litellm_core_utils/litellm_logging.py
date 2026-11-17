@@ -4304,7 +4304,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 call_type=self.call_type,
             )
             prepared.details, prepared.result = logs_without_prompt_fields_once_masked(
-                content_before_hook, hooked_details, hooked_result  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
+                content_before_hook,
+                hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
+                hooked_result,
             )
         elif isinstance(callback, CustomLogger):
             prepared.details, prepared.result = callback.logging_hook(  # pyright: ignore[reportUnknownMemberType]  # logging_hook is typed with a bare dict
@@ -4959,13 +4961,15 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 self.shadow_eval_request_snapshot = None
                 content_before_hook: Final = logged_content_fingerprint(self.model_call_details, prepared.result)
-                hooked_details, hooked_result = await callback.async_logging_hook(
+                hooked_details, hooked_result = await callback.async_logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # async_logging_hook is typed with a bare dict
                     kwargs=self.model_call_details,
                     result=prepared.result,
                     call_type=self.call_type,
                 )
                 self.model_call_details, prepared.result = logs_without_prompt_fields_once_masked(
-                    content_before_hook, hooked_details, hooked_result
+                    content_before_hook,
+                    hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # async_logging_hook is typed with a bare dict
+                    hooked_result,
                 )
             else:
                 prepared.result = redact_message_input_output_from_custom_logger(
