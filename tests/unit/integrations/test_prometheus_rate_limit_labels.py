@@ -217,6 +217,25 @@ def test_should_preserve_exception_class_name_for_unrelated_exceptions():
     )
 
 
+@pytest.mark.parametrize(
+    ("error", "label"),
+    [
+        (litellm.ConflictError(message="409", llm_provider="openai", model="m"), "Openai.APIError"),
+        (
+            litellm.UnprocessableEntityBadRequestError(message="422", llm_provider="openai", model="m"),
+            "Openai.BadRequestError",
+        ),
+        (litellm.GatewayTimeoutError(message="504", llm_provider="openai", model="m"), "Openai.Timeout"),
+        (
+            litellm.UpstreamConnectionError(message="refused", llm_provider="openai", model="m"),
+            "Openai.InternalServerError",
+        ),
+    ],
+)
+def test_should_label_openai_sdk_parity_errors_with_the_class_they_replaced(error: Exception, label: str) -> None:
+    assert PrometheusLogger._get_exception_class_name(error) == label
+
+
 # ---------------------------------------------------------------------------
 # End-to-end wiring through async_post_call_failure_hook
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError, router_class_names
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
@@ -234,7 +234,7 @@ def _should_cooldown_based_on_deployment_policy(
         allowed_fails_from_policy if allowed_fails_from_policy is not None else dep_allowed_fails
     )
     cache_key_suffix: Final[str | None] = (
-        type(original_exception).__name__
+        router_class_names(original_exception)[0]
         if allowed_fails_from_policy is not None
         else ("generic" if dep_allowed_fails is not None else None)
     )
