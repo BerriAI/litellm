@@ -180,3 +180,38 @@ def test_a_provider_and_target_rule_admits_only_bedrock_invoke(context: RouteCon
     )
 
     assert catalog.decision(context, rules) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "target", "expected"),
+    (
+        ("vertex_ai/claude-sonnet-5-5@default", Target.MESSAGES, Decision.RUST_REQUIRED),
+        ("vertex_ai/claude-opus-5-5", Target.MESSAGES, Decision.RUST_REQUIRED),
+        ("vertex_ai/gemini-2.5-pro", Target.CHAT_COMPLETIONS, Decision.PYTHON),
+        ("vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas", Target.CHAT_COMPLETIONS, Decision.PYTHON),
+        ("vertex_ai/mistral-large-2411", Target.CHAT_COMPLETIONS, Decision.PYTHON),
+    ),
+)
+def test_only_claude_on_vertex_ai_messages_is_served_by_rust(model: str, target: Target, expected: Decision) -> None:
+    from litellm.messages.dispatch import messages_target
+
+    resolved_target: Final = messages_target(model, None, None, None)
+    context: Final = RouteContext(Route.MESSAGES, provider="vertex_ai", model=model, target=resolved_target)
+
+    assert resolved_target is target
+    assert catalog.decision(context) is expected
+
+
+def test_vertex_ai_messages_passthrough_stays_on_python() -> None:
+    context: Final = RouteContext(Route.MESSAGES, provider="vertex_ai", target=Target.MESSAGES_PASSTHROUGH)
+
+    assert catalog.decision(context) is Decision.PYTHON
+
+
+def test_vertex_ai_claude_messages_has_no_python_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(False)
+    context: Final = RouteContext(Route.MESSAGES, provider="vertex_ai", target=Target.MESSAGES)
+
+    assert catalog.rollout(context) is Rollout.RUST_REQUIRED
+    assert catalog.decision(context) is Decision.RUST_REQUIRED
