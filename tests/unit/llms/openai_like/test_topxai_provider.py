@@ -8,6 +8,7 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._internal_context import pinned_billing_time
@@ -93,6 +94,47 @@ class TestTopxAIProviderConfig:
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == TOPXAI_BASE_URL
         assert api_key == "sk-test"
+
+    @pytest.mark.parametrize("text_completion", (False, True))
+    def test_missing_key_fails_before_dispatch(self, monkeypatch: pytest.MonkeyPatch, text_completion: bool) -> None:
+        monkeypatch.delenv("TOPXAI_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "unrelated-test-key")
+
+        with respx.mock() as upstream:
+            with pytest.raises(litellm.AuthenticationError, match="TOPXAI_API_KEY"):
+                if text_completion:
+                    litellm.text_completion(model="topxai/gpt-6.2-sol", prompt="Hello")
+                else:
+                    litellm.completion(model="topxai/gpt-6.2-sol", messages=[{"role": "user", "content": "Hello"}])
+            assert not upstream.calls
+
+    @pytest.mark.parametrize("explicit_key", (None, "explicit-topxai-test-key"))
+    def test_completion_uses_topxai_credentials(
+        self, monkeypatch: pytest.MonkeyPatch, explicit_key: str | None
+    ) -> None:
+        monkeypatch.setenv("TOPXAI_API_KEY", "configured-topxai-test-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "unrelated-test-key")
+        with respx.mock() as upstream:
+            route: Final = upstream.post(f"{TOPXAI_BASE_URL}/chat/completions").respond(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-6.2-sol",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                },
+            )
+            result: Final = litellm.completion(
+                model="topxai/gpt-6.2-sol", messages=[{"role": "user", "content": "Hello"}], api_key=explicit_key
+            )
+        assert result.choices[0].message.content == "OK"
+        assert (
+            route.calls.last.request.headers["Authorization"]
+            == f"Bearer {explicit_key or 'configured-topxai-test-key'}"
+        )
 
     def test_topxai_complete_url_appends_endpoint(self):
         from litellm.llms.openai_like.dynamic_config import create_config_class
