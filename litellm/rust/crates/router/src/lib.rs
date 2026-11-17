@@ -23,9 +23,9 @@ fn is_on(flag: Option<&Spelled<bool>>) -> bool {
     }
 }
 
-fn additional_drop_params(extra: &ExtraParams) -> Vec<String> {
+fn string_list(extra: &ExtraParams, key: &str) -> Vec<String> {
     extra
-        .get("additional_drop_params")
+        .get(key)
         .and_then(Value::as_array)
         .map(|names| {
             names
@@ -62,8 +62,9 @@ impl Router {
                             settings: MessagesSettings {
                                 drop_params,
                                 drops_unsupported_params: drop_params,
-                                additional_drop_params: additional_drop_params(
+                                additional_drop_params: string_list(
                                     &litellm_params.extra,
+                                    "additional_drop_params",
                                 ),
                                 base_model: litellm_params
                                     .extra
@@ -88,6 +89,11 @@ impl Router {
                                 },
                             ),
                         },
+                        configurable_clientside_auth_params: string_list(
+                            &litellm_params.extra,
+                            "configurable_clientside_auth_params",
+                        )
+                        .into_boxed_slice(),
                         litellm_params,
                         ..Deployment::default()
                     },

@@ -1576,6 +1576,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/shadow_eval/rubric/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Shadow Eval Rubric
+         * @description Start a shadow eval whose judge, besides picking the better response, grades each
+         *     response from 1 (fails the rubric's criteria) to 5 (fully meets them). Everything
+         *     else matches /auto_router/shadow_eval/start, and the job's preference results stay
+         *     on the regular job endpoints. Read grades from
+         *     /auto_router/shadow_eval/{job_id}/rubric_results.
+         *
+         *     Disabled unless LITELLM_SHADOW_EVAL_RUBRIC_ENABLED=true. Each worker process reads
+         *     its own environment, so a change applies only once every worker is redeployed or
+         *     restarted with it. A worker without rubric support ignores the setting and samples a
+         *     rubric job as a preference-only job, so enable it only after every API and sampling
+         *     worker sharing the database runs a version with this route. Workers with the setting
+         *     off neither start nor sample rubric jobs.
+         *
+         *     Rolling back to a version without rubric support is not zero-downtime for rubric
+         *     jobs. Before any older worker starts: apply the setting off to every upgraded worker,
+         *     stop every running rubric job with /auto_router/shadow_eval/{job_id}/stop, and wait
+         *     until every upgraded worker's in-flight evaluations have finished, for example by
+         *     draining or stopping those workers. The roughly 10 second job cache expiry alone does
+         *     not guarantee that drain.
+         */
+        post: operations["start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval/start": {
         parameters: {
             query?: never;
@@ -1633,6 +1671,28 @@ export interface paths {
          * @description One job with derived counts, judge spend, latest error, and stratified results.
          */
         get: operations["get_shadow_eval_job_auto_router_shadow_eval__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}/rubric_results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shadow Eval Rubric Results
+         * @description A rubric job's grades: graded and ungraded turn counts and the joint distribution
+         *     of (real_grade, shadow_grade), overall and per router arm. A job started without a
+         *     rubric is a 404 here.
+         */
+        get: operations["get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4148,6 +4208,26 @@ export interface paths {
          * @description Begin a GitHub device flow for the calling user's connection to a per-user credential.
          */
         post: operations["start_user_connection_credentials__credential_name__user_connection_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor-cli/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cursor Cli Passthrough
+         * @description Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header "x-litellm-api-key: Bearer YOUR_KEY"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Keys bound to LiteLLM agents are unsupported. Model restrictions, token limits, spend budgets and content guardrails are unsupported. Configured moderation, content guardrails or policy-engine rules disable this relay, even when not selected by this request. Request limits count RPCs, not agent sessions. Allow overlapping stream and append calls. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.
+         */
+        post: operations["cursor_cli_passthrough_cursor_cli__endpoint__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16324,7 +16404,7 @@ export interface paths {
         put?: never;
         /**
          * Import Skill
-         * @description Import a public skills.sh or GitHub skill as a portable snapshot.
+         * @description Register a source reference, or import a public skills.sh/GitHub URL as a portable snapshot.
          */
         post: operations["import_skill_skill_hub_skills_import_post"];
         delete?: never;
@@ -16367,7 +16447,7 @@ export interface paths {
         get: operations["get_skill_skill_hub_skills__name__get"];
         /**
          * Replace Skill Metadata
-         * @description Replace registry metadata, preserving files. Members submit an immutable proposal for admin review.
+         * @description Update supplied registry fields. Omitted metadata is retained, null clears it, and version defaults to a bump.
          */
         put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
         post?: never;
@@ -16471,7 +16551,7 @@ export interface paths {
         get?: never;
         /**
          * Replace Skill Archive
-         * @description Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp.
+         * @description Replace files and refresh their inherited description, retaining registry overrides and other metadata.
          */
         put: operations["replace_skill_archive_skill_hub_skills__name__upload_put"];
         post?: never;
@@ -16530,7 +16610,7 @@ export interface paths {
         };
         /**
          * Download Skill Version
-         * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
+         * @description Download a retained skill ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
         put?: never;
@@ -16618,7 +16698,7 @@ export interface paths {
         get: operations["get_submission_skill_hub_submissions__submission_id__get"];
         /**
          * Edit Submission
-         * @description Replace a pending proposal's metadata, preserving files. Only its original submitting user may edit.
+         * @description Update supplied proposal metadata. Omit/null version uses automatic versioning on approval.
          */
         put: operations["edit_submission_skill_hub_submissions__submission_id__put"];
         post?: never;
@@ -16657,7 +16737,7 @@ export interface paths {
         };
         /**
          * Download Submission
-         * @description Download an owned proposal as a private portable ZIP. Legacy nonportable archives return 404.
+         * @description Download an owned proposal as a private ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_submission_skill_hub_submissions__submission_id__archive_get"];
         put?: never;
@@ -28086,6 +28166,11 @@ export interface components {
             /** Guardrail Name */
             guardrail_name: string;
             /**
+             * Images
+             * @description One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.
+             */
+            images?: string[] | null;
+            /**
              * Input Type
              * @default request
              */
@@ -28102,7 +28187,10 @@ export interface components {
             } | null;
             /** @default standard */
             response_format: components["schemas"]["GuardrailResponseFormat"];
-            /** Text */
+            /**
+             * Text
+             * @default
+             */
             text: string;
         };
         /** ApplyGuardrailResponse */
@@ -29433,10 +29521,13 @@ export interface components {
             expected_revision: number;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
-            /** Version */
+            /**
+             * Version
+             * @description Explicit SemVer, or omit/send empty for automatic versioning on approval
+             */
             version?: string | null;
         };
         /** Body_image_edit_api_images_edits_post */
@@ -29483,7 +29574,7 @@ export interface components {
             expected_updated_at?: string | null;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
             /** Version */
@@ -29601,6 +29692,11 @@ export interface components {
              * @description Agent Skills ZIP with SKILL.md and optional supporting files
              */
             file: string;
+            /**
+             * Metadata
+             * @description Optional JSON registry metadata
+             */
+            metadata?: string | null;
             /** Version */
             version?: string | null;
         };
@@ -36068,6 +36164,8 @@ export interface components {
         };
         /** ImportSkillRequest */
         ImportSkillRequest: {
+            /** @description Optional registry name and metadata overrides */
+            metadata?: components["schemas"]["SkillHubUpload"] | null;
             /**
              * Path
              * @description Repository-relative skill directory
@@ -45797,6 +45895,11 @@ export interface components {
              */
             context_window_escalation_buffer: number;
             /**
+             * Conversation Header
+             * @description Request header whose value names the application conversation for session_affinity, deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. A request without a usable value (header missing, empty, or a redacted credential header, and any SDK call without proxy request headers) gets no conversation-based reuse from this router and never falls back to its session_id. A separately enabled Router-level session_affinity pre-call check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. Unset keeps the session_id behavior
+             */
+            conversation_header?: string | null;
+            /**
              * Custom Dimensions
              * @description Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
              * @default []
@@ -48567,6 +48670,24 @@ export interface components {
             message: string;
         };
         /**
+         * ShadowEvalGradePair
+         * @description How many judged turns gave the real and shadow responses this pair of grades.
+         */
+        ShadowEvalGradePair: {
+            /**
+             * Real Grade
+             * @description Grade of the response the caller actually received, 1 to 5
+             */
+            real_grade: number;
+            /**
+             * Shadow Grade
+             * @description Grade of the duplicated response nobody was served, 1 to 5
+             */
+            shadow_grade: number;
+            /** Turn Count */
+            turn_count: number;
+        };
+        /**
          * ShadowEvalJobResponse
          * @description A shadow-eval job over one or more targets, each with its own budget and stop state;
          *     status is derived from stopped_by, the targets' stop and budget state, and ends_at,
@@ -48635,8 +48756,19 @@ export interface components {
              * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
              */
             router_names: string[];
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
             /** Shadow Percentage */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Status
              * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
@@ -48766,6 +48898,158 @@ export interface components {
              * @description Sampled requests the pipeline declined to spend on: no database to record into, an over-budget key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job crosses max_budget lands here rather than vanishing from coverage)
              */
             withheld_count?: number | null;
+        };
+        /**
+         * ShadowEvalRubricJobResponse
+         * @description A rubric shadow eval job: the regular job view plus the rubric it grades against.
+         */
+        ShadowEvalRubricJobResponse: {
+            /** Baseline Model */
+            baseline_model?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /**
+             * Error Count
+             * @description Sampled attempts that errored; detail endpoint only
+             */
+            error_count?: number | null;
+            /** Job Id */
+            job_id: string;
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Judge Spend
+             * @description Judge cost so far; detail endpoint only
+             */
+            judge_spend?: number | null;
+            /**
+             * Judged Count
+             * @description Verdicts recorded; detail endpoint only
+             */
+            judged_count?: number | null;
+            /**
+             * Last Error
+             * @description Most recent attempt error; detail endpoint only
+             */
+            last_error?: string | null;
+            /**
+             * Models
+             * @description Model groups the sampled traffic is narrowed to; empty means every model the targets use
+             * @default []
+             */
+            models: string[];
+            /** @description Stratified verdicts; detail endpoint only */
+            results?: components["schemas"]["ShadowEvalResult"] | null;
+            /**
+             * Router Name
+             * @description The first router, kept for callers that predate router_names; derived so the
+             *     two fields can never disagree.
+             */
+            readonly router_name: string;
+            /**
+             * Router Names
+             * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria both responses are graded against, as stored at start
+             */
+            rubric: string;
+            /**
+             * Rubric Version
+             * @description The grading contract (prompt, anchors, 1-5 scale) the job runs under
+             */
+            rubric_version: number;
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
+            /** Shadow Percentage */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Status
+             * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
+             *     backfills it for every job that displayed stopped when the column arrived, so the
+             *     pre-column population is closed), completion is the window passing or every target
+             *     spending its budget, and anything else is running. The all-targets-stamped fallback
+             *     covers only stops written by pre-column pods during a rolling deploy.
+             * @enum {string}
+             */
+            readonly status: "running" | "completed" | "stopped";
+            /**
+             * Stopped By
+             * @description The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled by migration for jobs that displayed stopped when the column arrived; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
+             */
+            stopped_by?: string | null;
+            /**
+             * Targets
+             * @description The targets whose traffic this job evaluates, and only theirs, each with its own budget
+             */
+            targets: components["schemas"]["ShadowEvalJobTargetResponse"][];
+        };
+        /**
+         * ShadowEvalRubricResultResponse
+         * @description A rubric job's grades so far. Error attempts are excluded, like the job's preference results.
+         */
+        ShadowEvalRubricResultResponse: {
+            /**
+             * By Router
+             * @description One slice per router arm, ordered by router name, each graded against the same real responses
+             */
+            by_router: components["schemas"]["ShadowEvalRubricSlice"][];
+            /** Job Id */
+            job_id: string;
+            /** @description Every arm together. A judged turn is one (request, router arm) pair, so a multi-router job counts each real response once per arm; compare routers with by_router */
+            overall: components["schemas"]["ShadowEvalRubricSlice"];
+            /** Rubric */
+            rubric: string;
+            /** Rubric Version */
+            rubric_version: number;
+        };
+        /**
+         * ShadowEvalRubricSlice
+         * @description Rubric grades for one router arm, or for every arm together.
+         */
+        ShadowEvalRubricSlice: {
+            /**
+             * Grade Distribution
+             * @description Joint counts of (real_grade, shadow_grade) over graded turns, ordered by real then shadow grade, so turns where both responses were good or both were bad stay distinguishable
+             */
+            grade_distribution: components["schemas"]["ShadowEvalGradePair"][];
+            /**
+             * Graded Count
+             * @description Judged turns that carry both grades
+             */
+            graded_count: number;
+            /** Group */
+            group: string;
+            /**
+             * Ungraded Count
+             * @description Judged turns with a preference but no grades, such as turns a worker without rubric support judged. They are excluded from grade_distribution, never counted as low grades
+             */
+            ungraded_count: number;
         };
         /**
          * ShadowEvalSlice
@@ -48929,27 +49213,6 @@ export interface components {
              */
             tags: string[];
         };
-        /** SkillHubMetadata */
-        SkillHubMetadata: {
-            /** Description */
-            description?: string | null;
-            /** Domain */
-            domain?: string | null;
-            /**
-             * Expected Updated At
-             * @description Published updated_at read by the editor. A stale value returns 409
-             */
-            expected_updated_at?: string | null;
-            /** Keywords */
-            keywords?: string[] | null;
-            /** Namespace */
-            namespace?: string | null;
-            /**
-             * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
-             */
-            version?: string | null;
-        };
         /** SkillHubPendingSkill */
         SkillHubPendingSkill: {
             /**
@@ -48971,10 +49234,15 @@ export interface components {
         /** SkillHubProposal */
         SkillHubProposal: {
             agent_skill?: components["schemas"]["SkillHubAgentSkill"] | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -48990,6 +49258,40 @@ export interface components {
         };
         /** SkillHubPublication */
         SkillHubPublication: Record<string, never>;
+        /** SkillHubRegistration */
+        SkillHubRegistration: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Repository or HTTPS archive source reference
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
+        };
         /** SkillHubRejection */
         SkillHubRejection: {
             /** Expected Revision */
@@ -49035,6 +49337,9 @@ export interface components {
         SkillHubSkill: {
             /** Approved By */
             approved_by?: string | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Content Url */
             content_url?: string | null;
             /** Created At */
@@ -49052,6 +49357,8 @@ export interface components {
             download_count?: number | null;
             /** Download Url */
             download_url?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Id */
             id: string;
             /** Keywords */
@@ -49137,9 +49444,22 @@ export interface components {
         };
         /** SkillHubSubmissionEdit */
         SkillHubSubmissionEdit: {
-            /** Description */
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
             description?: string | null;
-            /** Domain */
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
             domain?: string | null;
             /**
              * Expected Revision
@@ -49151,13 +49471,24 @@ export interface components {
              * @description Published updated_at read by the editor. A stale value returns 409
              */
             expected_updated_at?: string | null;
-            /** Keywords */
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
             keywords?: string[] | null;
-            /** Namespace */
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
             namespace?: string | null;
             /**
              * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             * @description Explicit SemVer, or omit/null for automatic versioning on approval
              */
             version?: string | null;
         };
@@ -49177,6 +49508,85 @@ export interface components {
              * @description Revision read from the submission detail
              */
             expected_revision: number;
+        };
+        /** SkillHubUpdate */
+        SkillHubUpdate: {
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
+            domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
+            keywords?: string[] | null;
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Explicit replacement source reference. Omit/null to preserve the stored source and archive
+             */
+            source?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
+        };
+        /** SkillHubUpload */
+        SkillHubUpload: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
         };
         /** SkillHubVersion */
         SkillHubVersion: {
@@ -49776,6 +50186,99 @@ export interface components {
              * @description Percentage of each target's requests to duplicate through the router
              */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Team Ids
+             * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
+             * @default []
+             */
+            team_ids: string[];
+            /**
+             * User Ids
+             * @description Users whose traffic will be shadowed, matched on the user every authenticated request resolves to across all their teams: JWT requests carrying their subject claim and virtual keys they own
+             * @default []
+             */
+            user_ids: string[];
+        };
+        /**
+         * StartShadowEvalRubricRequest
+         * @description A shadow eval whose judge also grades each response from 1 to 5 against an operator rubric.
+         */
+        StartShadowEvalRubricRequest: {
+            /**
+             * Api Key Ids
+             * @description Hashed virtual keys whose traffic will be shadowed. Combined with team_ids and user_ids the job needs at least one target and at most 100, which also bounds every read the job's endpoints make. Each target carries its own max_budget spend budget, so one exhausting its budget leaves the others sampling.
+             * @default []
+             */
+            api_key_ids: string[];
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Duration Days
+             * @description How many days the job samples traffic before completing on its own
+             * @default 7
+             */
+            duration_days: number;
+            /**
+             * Judge Model
+             * @description Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes.
+             * @default anthropic/claude-sonnet-5
+             */
+            judge_model: string;
+            /**
+             * Max Budget
+             * @description Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window. Every router arm draws from the same per-target budget, so a multi-router job reaches it proportionally sooner
+             * @default 10
+             */
+            max_budget: number;
+            /**
+             * Models
+             * @description Model groups to narrow the sampled traffic to, matched on the group the caller requested and resolved through model_group_alias, so an alias and its target are one name. Empty samples every model the targets use. This ANDs with the targets: a job over a user and one model samples that user's requests on that model across every key they own, and none of their other traffic. Forward jobs only: a reverse job samples exactly the traffic its own router served, which no other model group can name
+             * @default []
+             */
+            models: string[];
+            /**
+             * Router Name
+             * @description The auto-router under evaluation, in either direction: the single-router spelling of router_names. Provide exactly one of the two fields
+             */
+            router_name?: string | null;
+            /**
+             * Router Names
+             * @description The auto-routers under evaluation, at most 4. Every sampled request runs through every router listed and each arm is judged independently against the same real response, so routers compare head-to-head on identical traffic. More than one router requires direction 'forward'. After validation this field always carries the full deduplicated set, whichever spelling the caller used
+             * @default []
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria the judge grades both responses against, in plain language, at most 4000 characters. Each response gets an integer grade on a fixed scale where 1 fails the criteria and 5 fully meets them. Stored unchanged with the job and never edited
+             */
+            rubric: string;
+            /**
+             * Shadow Percentage
+             * @description Percentage of each target's requests to duplicate through the router
+             */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Team Ids
              * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
@@ -57652,6 +58155,39 @@ export interface operations {
             };
         };
     };
+    start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartShadowEvalRubricRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_shadow_eval_auto_router_shadow_eval_start_post: {
         parameters: {
             query?: never;
@@ -57703,6 +58239,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricResultResponse"];
                 };
             };
             /** @description Validation Error */
@@ -61733,6 +62300,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserConnectionStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cursor_cli_passthrough_cursor_cli__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "agent.v1.AgentService/RunSSE" | "aiserver.v1.BidiService/BidiAppend";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/connect+proto": string;
+                "application/proto": string;
+            };
+        };
+        responses: {
+            /** @description Unchanged native Cursor response bytes, including streamed agent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/proto": string;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -78176,6 +78781,7 @@ export interface operations {
                 security_scan_passed?: boolean | null;
                 sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
                 sort_order?: "asc" | "desc";
+                enabled_only?: boolean;
             };
             header?: never;
             path?: never;
@@ -78212,7 +78818,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ImportSkillRequest"];
+                "application/json": components["schemas"]["SkillHubRegistration"] | components["schemas"]["ImportSkillRequest"];
             };
         };
         responses: {
@@ -78311,7 +78917,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SkillHubMetadata"];
+                "application/json": components["schemas"]["SkillHubUpdate"];
             };
         };
         responses: {

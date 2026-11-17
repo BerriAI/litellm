@@ -8,6 +8,7 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 )
 
 IGNORE_FUNCTIONS = [
+    "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_compact_actor_value",
     "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
@@ -106,6 +107,7 @@ IGNORE_FUNCTIONS = [
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
     "_cause_chain",  # openai common_utils: max depth set (_LONGEST_CAUSE_CHAIN links of __cause__ / __context__).
     "_context_chain",  # router_rust core: max depth set (_LONGEST_CONTEXT_CHAIN links of __context__).
+    "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
 ]
 
 
