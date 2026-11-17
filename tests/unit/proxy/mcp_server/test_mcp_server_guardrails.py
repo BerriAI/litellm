@@ -41,7 +41,9 @@ def _server(guardrails: tuple[str, ...] | None) -> MCPServer:
     )
 
 
-@pytest.mark.parametrize("hook", [GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call])
+@pytest.mark.parametrize(
+    "hook", [GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.during_mcp_call, GuardrailEventHooks.post_mcp_call]
+)
 def test_listed_guardrail_runs_for_its_server_without_default_on(hook: GuardrailEventHooks) -> None:
     assert _guardrail(hook).should_run_guardrail({MCP_SERVER_GUARDRAILS_KEY: [SCOPED]}, hook) is True
 
@@ -161,8 +163,8 @@ async def test_pre_call_tool_check_passes_server_guardrails(
 
 
 class _CallRecordingGuardrail(CustomGuardrail):
-    def __init__(self, *, default_on: bool) -> None:
-        super().__init__(guardrail_name=SCOPED, event_hook=GuardrailEventHooks.pre_mcp_call, default_on=default_on)
+    def __init__(self, *, default_on: bool, event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_mcp_call) -> None:
+        super().__init__(guardrail_name=SCOPED, event_hook=event_hook, default_on=default_on)
         self.scanned_arguments: tuple[object, ...] = ()
 
     async def apply_guardrail(
@@ -224,6 +226,72 @@ async def test_server_listed_guardrail_runs_on_the_call_without_an_extra_tool_li
 
     assert manager._fetch_tools_with_timeout.await_count == upstream_listings
     assert guardrail.scanned_arguments.count({"ticket": "T-1"}) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("listed", "expected_scans"), [((SCOPED,), 1), (None, 0)], ids=["listed", "unlisted"])
+async def test_server_listed_during_call_guardrail_runs_on_the_call(
+    monkeypatch: pytest.MonkeyPatch, listed: tuple[str, ...] | None, expected_scans: int
+) -> None:
+    server: Final = MCPServer(
+        server_id="tickets-id",
+        name="tickets",
+        server_name="tickets",
+        url="http://upstream",
+        transport=MCPTransport.http,
+        guardrails=listed,
+    )
+    manager: Final = MCPServerManager()
+    manager.registry = {server.server_id: server}
+    manager.tool_name_to_mcp_server_name_mapping = {"tickets-get_ticket": "tickets"}
+    client: Final = AsyncMock()
+    client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+    client.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")])
+    manager.create_mcp_client = AsyncMock(return_value=client)
+    guardrail: Final = _CallRecordingGuardrail(default_on=False, event_hook=GuardrailEventHooks.during_mcp_call)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    try:
+        await manager.call_tool(
+            server_name="tickets",
+            name="get_ticket",
+            arguments={"ticket": "T-1"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            listed_tool=None,
+        )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert len(guardrail.scanned_arguments) == expected_scans
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guardrail_auth_differs", [False, True], ids=["same-auth", "inherited-grant-auth"])
+async def test_post_call_leaves_the_server_list_on_the_logger(guardrail_auth_differs: bool) -> None:
+    result: Final = CallToolResult(content=[TextContent(type="text", text="ok")])
+    logging_obj: Final = MagicMock(spec=Logging)
+    logging_obj.model_call_details = {MCP_SERVER_GUARDRAILS_KEY: ["forged"]}
+    original_auth: Final = UserAPIKeyAuth(api_key="sk-personal", user_id="user-1")
+    guardrail_auth: Final = (
+        UserAPIKeyAuth(api_key="sk-personal", user_id="user-1", team_id="team-1") if guardrail_auth_differs else None
+    )
+    proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    proxy_logging.post_mcp_call_hook = AsyncMock(return_value=result)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+        await operations._run_post_mcp_call_guardrails(  # pyright: ignore[reportPrivateUsage]
+            result=result,
+            litellm_logging_obj=logging_obj,
+            original_auth=original_auth,
+            guardrail_auth=guardrail_auth,
+            request_data={},
+            server_guardrails=(SCOPED,),
+        )
+
+    assert logging_obj.model_call_details[MCP_SERVER_GUARDRAILS_KEY] == [SCOPED]
+    assert proxy_logging.post_mcp_call_hook.await_args.kwargs["request_data"][MCP_SERVER_GUARDRAILS_KEY] == [SCOPED]
 
 
 @pytest.mark.asyncio

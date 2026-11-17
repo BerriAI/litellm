@@ -70,7 +70,9 @@ GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 
 MCP_SERVER_GUARDRAILS_KEY: Final = "mcp_server_guardrails"
 
-_MCP_SERVER_SCOPED_HOOKS: Final = frozenset({GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call})
+_MCP_SERVER_SCOPED_HOOKS: Final = frozenset(
+    {GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.during_mcp_call, GuardrailEventHooks.post_mcp_call}
+)
 
 # Per-process secret tagging each recorded marker. The deployment hook only
 # honors markers carrying this token, so a caller cannot forge the metadata

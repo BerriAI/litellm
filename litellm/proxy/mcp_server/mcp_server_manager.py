@@ -6613,6 +6613,7 @@ class MCPServerManager:
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
+        server_guardrails: tuple[str, ...] = (),
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -6642,6 +6643,7 @@ class MCPServerManager:
         # Seeded for the same reason as in ``pre_call_tool_check``.
         synthetic_llm_data: Final = proxy_logging_obj.convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
         synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
+        synthetic_llm_data[MCP_SERVER_GUARDRAILS_KEY] = list(server_guardrails)
 
         # Wrapped so the bridge runs inside the task: the caller only holds the task and
         # gathers it later, so there is no other point that still sees a block here.
@@ -7416,6 +7418,7 @@ class MCPServerManager:
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
                 guardrail_context=guardrail_context,
+                server_guardrails=tuple(mcp_server.guardrails or ()),
             )
             tasks.append(during_hook_task)
 

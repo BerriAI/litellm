@@ -2677,6 +2677,10 @@ async def _run_post_mcp_call_guardrails(
     """
     from litellm.proxy.proxy_server import proxy_logging_obj
 
+    if litellm_logging_obj is not None:
+        litellm_logging_obj.model_call_details[MCP_SERVER_GUARDRAILS_KEY] = list(  # rebind-ok: native hooks read it
+            server_guardrails
+        )
     if proxy_logging_obj is None:
         return result
     post_auth: Final = guardrail_auth if guardrail_auth is not None else original_auth
