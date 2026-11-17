@@ -10,7 +10,7 @@ With batching on (the default) a flush writes `<YYYY-MM-DD>/batch-<id>.ndjson` h
 `<YYYY-MM-DD>/failure-<hex>`, and `metadata.gcs_log_id` names `<YYYY-MM-DD>/custom-<hex>-<id>`. A bucket name with a
 folder suffix moves the folder into the object name.
 
-SQS: the `sqs` callback signs a form encoded `Action=SendMessage&Version=2012-11-05&MessageBody=<json>` POST to the
+SQS: the `aws_sqs` callback signs a form encoded `Action=SendMessage&Version=2012-11-05&MessageBody=<json>` POST to the
 configured queue URL with SigV4 for service `sqs` (litellm/integrations/sqs.py), one message per payload, so the
 queue URL can point straight at a scripted peer. With application level encryption the body is
 `{"__encrypted__": true, "payload": ...}` and no prompt text leaves the proxy.
@@ -262,7 +262,7 @@ def sqs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SinkRig]:
     with sinks_rig(
         tmp_path_factory.mktemp("dec1-sinks-sqs"),
         {
-            "callbacks": ["sqs"],
+            "callbacks": ["aws_sqs"],
             "aws_sqs_callback_params": {
                 "sqs_queue_url": "os.environ/SQS_QUEUE_URL",
                 "sqs_region_name": "us-east-1",
@@ -278,7 +278,7 @@ def sqs_encrypted(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SinkRig]
     with sinks_rig(
         tmp_path_factory.mktemp("dec1-sinks-sqs-encrypted"),
         {
-            "callbacks": ["sqs"],
+            "callbacks": ["aws_sqs"],
             "aws_sqs_callback_params": {
                 "sqs_queue_url": "os.environ/SQS_QUEUE_URL",
                 "sqs_region_name": "us-east-1",

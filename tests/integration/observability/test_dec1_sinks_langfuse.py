@@ -83,12 +83,14 @@ def test_generation_post_uses_basic_auth_protobuf_and_ingestion_version_4(rig: S
     """One successful chat must reach the Langfuse peer only as POSTs to /api/public/otel/v1/traces with
     content-type application/x-protobuf, header x-langfuse-ingestion-version 4, and Basic auth of
     LANGFUSE_PUBLIC_KEY:LANGFUSE_SECRET_KEY. A rewrite that posts to the legacy /api/public/ingestion batch API
-    would be silently dropped by a v4 only Langfuse."""
+    would be silently dropped by a v4 only Langfuse. The peer keeps every request of the module, including posts
+    signed with key and team credentials by other tests, so the auth check reads only the posts carrying this call."""
     call_id: Final = new_call_id()
     assert chat(rig, call_id, marker()).status_code == 200
     rig.generation(call_id)
-    posts: Final = rig.peer("langfuse").posts()
-    assert {request.target.split("?")[0] for request in posts} == {LANGFUSE_TRACES_PATH}
+    assert {request.target.split("?")[0] for request in rig.peer("langfuse").posts()} == {LANGFUSE_TRACES_PATH}
+    posts: Final = tuple(request for request in rig.peer("langfuse").posts() if call_id.encode() in request.body)
+    assert posts, call_id
     for request in posts:
         assert request.headers["authorization"] == _basic(LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY)
         assert request.headers["content-type"] == "application/x-protobuf"

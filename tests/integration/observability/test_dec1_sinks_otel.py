@@ -26,6 +26,7 @@ import pytest
 from integration._support.client import eventually
 from integration._support.otlp_sink import Span
 from integration.observability.dec1_callbacks_support import (
+    CHAT,
     CHAT_REJECTED,
     PROVIDER_KEY,
     PROVIDER_REJECTION,
@@ -127,14 +128,16 @@ def test_litellm_request_carries_the_gen_ai_request_and_usage_attributes(rig: Si
 
 
 def test_litellm_request_names_the_requested_and_response_model(rig: SinkRig) -> None:
-    """gen_ai.request.model must be the deployment model the provider was asked for and gen_ai.response.model the
-    model the provider answered with, both "gpt-4o-mini" here. UNVERIFIED: whether gen_ai.request.model keeps the
-    "openai/" prefix on the proxy (kwargs["model"] in set_attributes)."""
+    """gen_ai.request.model must be the deployment model the provider was asked for ("gpt-4o-mini"), while
+    gen_ai.response.model is the client's model group alias "dec1-chat": the proxy restamps the response `model` to
+    the name the client asked for (litellm/proxy/common_request_processing.py:4282-4288) and the span reads that
+    field (litellm/integrations/opentelemetry.py:2650-2664), the same contract
+    spend/test_stream_alias_billing.py pins for the non-streamed and streamed paths."""
     call_id: Final = new_call_id()
     assert chat(rig, call_id, marker()).status_code == 200
     span: Final = _primary(rig, call_id)
     assert attribute(span, "gen_ai.request.model") == "gpt-4o-mini"
-    assert attribute(span, "gen_ai.response.model") == "gpt-4o-mini"
+    assert attribute(span, "gen_ai.response.model") == CHAT
 
 
 def test_litellm_request_ids_match_the_response_and_the_call_id_header(rig: SinkRig) -> None:

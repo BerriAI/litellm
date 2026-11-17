@@ -2,8 +2,8 @@
 
 The contract (`MCPRequestHandler.get_allowed_mcp_servers` and `_single_credential_tools` in
 `litellm/proxy/mcp_server/auth/user_api_key_auth_mcp.py`): a key that grants no servers of its own
-inherits its team's `object_permission.mcp_servers`; a key and a team that both grant servers intersect;
-a team with no grant does not restrict. An organization list is a ceiling: with no lower restriction it
+inherits its team's `object_permission.mcp_servers`; a team key may not be created with servers outside its
+team's grant (a team with no grant allows only allow_all_keys servers), so /key/generate refuses it with 403. An organization list is a ceiling: with no lower restriction it
 becomes the allowed set, otherwise it intersects. Tool lists in `mcp_tool_permissions` follow the same
 inheritance, may be keyed by server id or by server name, and an explicit empty list denies every tool on
 that server. A config-declared `allowed_params` map refuses arguments outside the list with HTTP 403.
@@ -56,54 +56,52 @@ def test_a_team_key_without_its_own_grant_inherits_the_team_servers(gateway: Gat
         assert caller.call(f"{alias}-add", {"a": 2, "b": 3}).text == "5"
 
 
-def test_a_key_grant_outside_the_team_grant_is_cut_by_the_intersection(gateway: Gateway) -> None:
-    """The team grants A; its key grants A and B. Both restrict, so the key reaches only A: the listing has
-    `<A>-add` and no `<B>-` tool, and a REST call to B is HTTP 403 with
-    `{"error": "access_denied", "message": "The key is not allowed to access server <B id>"}` while the peer
-    of B sees no `tools/call`."""
+def _refused_team_key(gateway: Gateway, team: str, servers: list[str]) -> str:
+    """POST /key/generate for a key of `team` granting `servers`, which must be refused; returns the message."""
+    response: Final = gateway.request(
+        "POST", "/key/generate", {"team_id": team, "object_permission": {"mcp_servers": servers}}
+    )
+    assert response.status_code == 403, response.text
+    return str(response.json()["error"]["message"])
+
+
+def test_a_key_grant_outside_the_team_grant_is_refused_at_key_generation(gateway: Gateway) -> None:
+    """The team grants A; the admin asks /key/generate for a team key granting A and B. Key creation checks the
+    key's servers against the team's (plus allow_all_keys servers) and refuses with 403 naming the team, the
+    disallowed server B and "Team allows: ['<A>']" (litellm/proxy/management_helpers/object_permission_utils.py:
+    755-776), so a key wider than its team never exists and the runtime intersection is not reachable this way."""
     with mcp_peer() as peer_a, mcp_peer() as peer_b, gateway.scenario() as scenario:
-        alias_a, a = _server(scenario, peer_a, "dec1ia")
-        alias_b, b = _server(scenario, peer_b, "dec1ib")
+        _, a = _server(scenario, peer_a, "dec1ia")
+        _, b = _server(scenario, peer_b, "dec1ib")
         team: Final = scenario.team(object_permission={"mcp_servers": [a]})
-        key: Final = scenario.key(team_id=team, object_permission={"mcp_servers": [a, b]})
-        tools: Final = McpCaller(gateway, key, "mcp").list_tools().tools
-        assert f"{alias_a}-add" in tools, tools
-        assert not any(name.startswith(f"{alias_b}-") for name in tools), tools
-        peer_b.drain()
-        denied: Final = _rest_call(gateway, key, b, f"{alias_b}-add", {"a": 1, "b": 1})
-        assert denied.status_code == 403, denied.text
-        assert denied.json()["detail"] == {
-            "error": "access_denied",
-            "message": f"The key is not allowed to access server {b}",
-        }
-        assert tool_calls(peer_b.drain()) == ()
+        message: Final = _refused_team_key(gateway, team, [a, b])
+        assert f"Key requests MCP servers not allowed by team '{team}': ['{b}']." in message, message
+        assert f"Team allows: ['{a}']." in message, message
 
 
-def test_a_team_without_any_mcp_grant_does_not_restrict_its_key(gateway: Gateway) -> None:
-    """The team has no `object_permission`; its key grants server B. An empty team set means "no team
-    restriction" (`base = key_set`), so `<B>-add` must be listed and return `5`."""
+def test_a_team_without_any_mcp_grant_only_lets_its_keys_take_allow_all_keys_servers(gateway: Gateway) -> None:
+    """The team has no `object_permission`; the admin asks for a team key granting server B. A team with no MCP
+    config lets its keys take only allow_all_keys servers, so /key/generate answers 403 "Key requests MCP servers
+    not allowed by team" with "Team allows: []" (object_permission_utils.py:705-706 and 755-776)."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
-        alias, identity = _server(scenario, peer, "dec1open")
+        _, identity = _server(scenario, peer, "dec1open")
         team: Final = scenario.team()
-        key: Final = scenario.key(team_id=team, object_permission={"mcp_servers": [identity]})
-        assert McpCaller(gateway, key, "mcp").call(f"{alias}-add", {"a": 2, "b": 3}).text == "5"
+        message: Final = _refused_team_key(gateway, team, [identity])
+        assert f"Key requests MCP servers not allowed by team '{team}': ['{identity}']." in message, message
+        assert "Team allows: []." in message, message
 
 
-def test_a_key_and_team_with_disjoint_grants_reach_no_server(gateway: Gateway) -> None:
-    """The team grants A and its key grants only B. The intersection is empty, so the aggregate listing has
-    no `<A>-` or `<B>-` tool and a call to either is refused before any peer sees `tools/call`."""
+def test_a_key_grant_disjoint_from_the_team_grant_is_refused_at_key_generation(gateway: Gateway) -> None:
+    """The team grants A and the admin asks for a team key granting only B. /key/generate answers 403 naming B as
+    not allowed and A as the team's grant (object_permission_utils.py:755-776), so no key with an empty
+    intersection is ever created."""
     with mcp_peer() as peer_a, mcp_peer() as peer_b, gateway.scenario() as scenario:
-        alias_a, a = _server(scenario, peer_a, "dec1da")
-        alias_b, b = _server(scenario, peer_b, "dec1db")
+        _, a = _server(scenario, peer_a, "dec1da")
+        _, b = _server(scenario, peer_b, "dec1db")
         team: Final = scenario.team(object_permission={"mcp_servers": [a]})
-        key: Final = scenario.key(team_id=team, object_permission={"mcp_servers": [b]})
-        listed: Final = McpCaller(gateway, key, "mcp").list_tools()
-        assert not any(name.startswith((f"{alias_a}-", f"{alias_b}-")) for name in listed.tools), listed.raw
-        peer_a.drain()
-        peer_b.drain()
-        for alias in (alias_a, alias_b):
-            assert McpCaller(gateway, key, "mcp").call(f"{alias}-add", {"a": 1, "b": 1}).error is not None
-        assert tool_calls(peer_a.drain()) == () and tool_calls(peer_b.drain()) == ()
+        message: Final = _refused_team_key(gateway, team, [b])
+        assert f"Key requests MCP servers not allowed by team '{team}': ['{b}']." in message, message
+        assert f"Team allows: ['{a}']." in message, message
 
 
 def test_team_tool_permissions_cap_a_wider_key_tool_list(gateway: Gateway) -> None:
@@ -299,10 +297,12 @@ def test_a_rest_listing_with_no_grant_at_all_answers_200_with_an_unexpected_erro
     assert "The key is not allowed to access any MCP servers." in str(body["message"]), body
 
 
-def test_a_rest_listing_of_an_unknown_server_id_is_404_with_server_not_found(gateway: Gateway) -> None:
-    """A granted key asks `GET /mcp-rest/tools/list?server_id=<random uuid>`. The single-server branch relays
-    the truthful status: HTTP 404 with `detail == {"error": "server_not_found", "message": "MCP server
-    '<uuid>' was not found"}`."""
+def test_a_rest_listing_of_an_unknown_server_id_is_403_access_denied(gateway: Gateway) -> None:
+    """A granted key asks `GET /mcp-rest/tools/list?server_id=<random uuid>`. The single-server listing refuses
+    any id outside the key's allowed set the same way, known or not, so an unknown id is HTTP 403 with
+    `detail == {"error": "access_denied", "message": "The key is not allowed to access server <uuid>"}` and does
+    not reveal whether the server exists (litellm/proxy/mcp_server/rest_endpoints.py:902-929; the 404
+    `server_not_found` at :716-722 belongs to a different helper)."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
         _, identity = _server(scenario, peer, "dec1known")
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
@@ -310,8 +310,11 @@ def test_a_rest_listing_of_an_unknown_server_id_is_404_with_server_not_found(gat
         response: Final = gateway.client.get(
             "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": missing}
         )
-    assert response.status_code == 404, response.text
-    assert response.json()["detail"] == {"error": "server_not_found", "message": f"MCP server '{missing}' was not found"}
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == {
+        "error": "access_denied",
+        "message": f"The key is not allowed to access server {missing}",
+    }
 
 
 @pytest.mark.parametrize(
@@ -369,5 +372,10 @@ def test_rest_aggregate_listing_keeps_healthy_servers_when_one_is_down(gateway: 
         assert body["error"] is None, body
         assert any(tool["mcp_info"]["server_id"] == ok for tool in body["tools"]), body
         assert body["server_outcomes"][alias_ok]["status"] == "ok", body
-        assert body["server_outcomes"][alias_dead]["status"] in ("unreachable", "timeout", "upstream_error", "internal"), body
+        assert body["server_outcomes"][alias_dead]["status"] in (
+            "unreachable",
+            "timeout",
+            "upstream_error",
+            "internal",
+        ), body
         assert listed_tools(gateway, key, ok), body

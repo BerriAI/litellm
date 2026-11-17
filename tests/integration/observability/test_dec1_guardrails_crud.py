@@ -109,21 +109,25 @@ def test_a_created_guardrail_can_be_attached_to_a_key_and_runs_for_it(rig: Rig) 
     assert rails_called(rig.policy_calls()) == ((name, "request"),)
 
 
-def test_create_by_a_non_admin_key_is_refused_with_403(rig: Rig) -> None:
-    """A plain virtual key (no proxy admin role) POSTs a guardrail. It gets 403 with detail "Admin access required
-    to manage guardrails" and no row is written."""
+def test_create_by_a_non_admin_key_is_refused_with_401(rig: Rig) -> None:
+    """A plain virtual key (no user, so no proxy admin role) POSTs a guardrail. The route check refuses it before the
+    handler runs (litellm/proxy/auth/route_checks.py:436, raised at :315-323): 401 whose message says "Only proxy
+    admin can be used to generate, delete, update info" and names Route=/guardrails, and no row is written. The
+    handler's own 403 "Admin access required to manage guardrails" is never reached for such a key."""
     name: Final = _name()
     key: Final = rig.scenario.key()
     response: Final = rig.gateway.request("POST", "/guardrails", {"guardrail": _definition(rig, name)}, key=key)
-    assert response.status_code == 403, response.text
-    assert "Admin access required to manage guardrails" in response.text
+    assert response.status_code == 401, response.text
+    assert "Only proxy admin can be used to generate, delete, update info" in error_message(response)
+    assert "Route=/guardrails." in error_message(response)
     assert _rows(rig, name) == []
 
 
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
-def test_writes_by_a_non_admin_key_are_refused_with_403(rig: Rig, method: str) -> None:
-    """A plain virtual key tries to PUT, PATCH or DELETE an existing guardrail. Each answers 403 with "Admin access
-    required to manage guardrails" and the row is unchanged."""
+def test_writes_by_a_non_admin_key_are_refused_with_401(rig: Rig, method: str) -> None:
+    """A plain virtual key (no user) tries to PUT, PATCH or DELETE an existing guardrail. The route check answers
+    each with 401 "Only proxy admin can be used to generate, delete, update info" naming the guardrail's route
+    (litellm/proxy/auth/route_checks.py:436), and the row is unchanged."""
     name: Final = _name()
     identity: Final = _create(rig, name)
     key: Final = rig.scenario.key()
@@ -135,8 +139,9 @@ def test_writes_by_a_non_admin_key_are_refused_with_403(rig: Rig, method: str) -
         else None
     )
     response: Final = rig.gateway.request(method, f"/guardrails/{identity}", body, key=key)
-    assert response.status_code == 403, response.text
-    assert "Admin access required to manage guardrails" in response.text
+    assert response.status_code == 401, response.text
+    assert "Only proxy admin can be used to generate, delete, update info" in error_message(response)
+    assert f"Route=/guardrails/{identity}." in error_message(response)
     assert len(_rows(rig, name)) == 1
 
 

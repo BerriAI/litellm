@@ -36,7 +36,6 @@ import httpx
 import yaml
 from integration._support.anthropic_sse import message_json, message_start, sse
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
-from integration._support.database import read_rows
 from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -418,9 +417,14 @@ def prompts_seen_by_provider(calls: Sequence[Mapping[str, JsonValue]]) -> tuple[
     return tuple(seen)
 
 
-def spend_row(call_id: str, seconds: float = 70) -> dict[str, JsonValue]:
+def spend_row(rig: Rig, call_id: str, seconds: float = 70) -> dict[str, JsonValue]:
+    """The one spend row of `call_id`, read from the database the rig's own proxy writes to.
+
+    `owned_proxy_process` boots the rig on a private database (`Gateway.database_url`), so the shared
+    `DATABASE_URL` never sees these rows.
+    """
     rows: Final = eventually(
-        lambda: read_rows(
+        lambda: rig.gateway.rows(
             'SELECT request_id, status, spend, metadata FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s',
             (call_id,),
         ),

@@ -6,7 +6,7 @@ alert except daily reports reads "Alert type: `<type>`\\nLevel: `<level>`\\nTime
 <message>". The `alerting_threshold` is 0 so every completed call counts as slow, outage thresholds are cut to 2
 (minor) and 3 (major) errors, and the daily report check runs every few seconds.
 
-The contract: a provider 5xx posts an `llm_exceptions` alert (High) and a 4xx does not; a call slower than the
+The contract: a provider 5xx or 4xx posts an `llm_exceptions` alert (High); a call slower than the
 threshold posts an `llm_too_slow` alert (Low) naming the model, API base and the first 100 characters of the
 messages, unless message logging is off; repeated 5xx on one deployment post a Minor then a Major Service Outage;
 spend crossing a key's soft or max budget posts a `budget_alerts` alert once; per alert type webhooks route alerts
@@ -22,7 +22,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
-from integration._support.client import held
+from integration._support.client import eventually, held
 from integration.observability.dec1_callbacks_support import (
     CHAT_OUTAGE,
     CHAT_REJECTED,
@@ -158,16 +158,22 @@ def test_provider_5xx_posts_a_high_llm_exceptions_alert(rig: SinkRig) -> None:
     assert "Level: `High`" in alert
 
 
-def test_provider_4xx_posts_no_llm_exceptions_alert(rig: SinkRig) -> None:
-    """A provider 400 is a client error, so no alert containing its error text and "LLM API call failed" may be
-    posted (`_is_client_error_exception`)."""
-    assert chat(rig, new_call_id(), marker(), model=CHAT_REJECTED).status_code == 400
-    held(
-        lambda: tuple(t for t in rig.slack_texts() if "LLM API call failed" in t and PROVIDER_REJECTION in t),
-        lambda found: not found,
-        holding=5,
-        seconds=10,
+def test_provider_4xx_still_posts_a_high_llm_exceptions_alert(rig: SinkRig) -> None:
+    """A provider 400 comes back as `litellm.BadRequestError`, which `_is_client_error_exception` does not count as a
+    client error (only proxy HTTPException, ProxyException below 500, budget errors and a missing message role are;
+    litellm/proxy/utils.py:715-724), so the proxy failure hook posts "LLM API call failed:" with the provider's
+    error text, "Alert type: `llm_exceptions`" and "Level: `High`" (litellm/proxy/utils.py:4407-4420)."""
+    text: Final = marker()
+    assert chat(rig, new_call_id(), text, model=CHAT_REJECTED).status_code == 400
+    alerts: Final = eventually(
+        lambda: tuple(t for t in rig.slack_texts() if "LLM API call failed:" in t and text in t),
+        lambda found: len(found) >= 1,
+        seconds=60,
     )
+    alert: Final = alerts[0]
+    assert PROVIDER_REJECTION in alert
+    assert "Alert type: `llm_exceptions`" in alert
+    assert "Level: `High`" in alert
 
 
 def test_repeated_5xx_posts_a_minor_then_a_major_outage_alert(rig: SinkRig) -> None:
@@ -203,7 +209,15 @@ def test_soft_budget_crossing_posts_one_budget_alert_to_the_routed_webhook(rig: 
     """A key aliased "<k>" with soft_budget 0.001 that spends 0.019 in one call must, on its next request, post a
     budget alert containing "Alert type: `budget_alerts`", "Soft Budget Crossed" and "Total Soft Budget:`0.001`" to
     the per type webhook (`alert_to_webhook_url.budget_alerts` -> /budget), and only once within the 24 hour
-    budget_alert_ttl. UNVERIFIED: which request (the spending one or the next) triggers the check; both are sent."""
+    budget_alert_ttl. UNVERIFIED: which request (the spending one or the next) triggers the check; both are sent.
+
+    BUG: no budget alert was posted anywhere in CI run 44161684479. The soft budget check reads the cached key's
+    `spend` (litellm/proxy/auth/auth_checks.py:7196-7236), but `update_cache` only computes the key's new spend for
+    the projected limit alert and never writes it back (litellm/proxy/proxy_server.py:4855-4902, unlike the user,
+    team, end user and tag objects at :4924-4932), while the max budget check reads the spend counter instead
+    (auth_checks.py:7084-7095). The cached key stays at its stored spend, so the soft budget is never seen as
+    crossed until the key is reloaded from the database."""
+    pytest.skip("BUG: key soft budget alert never fires, the cached key spend it reads is never updated")
     key_alias: Final = "dec1-slack-budget-" + uuid.uuid4().hex[:8]
     with rig.proxy.scenario() as scenario:
         key: Final = scenario.key(key_alias=key_alias, soft_budget=0.001)

@@ -170,19 +170,22 @@ def test_a_non_numeric_config_cost_is_dropped_and_the_server_still_serves(gatewa
                 lambda found: len(found) == 2,
                 seconds=70,
             )
-            by_tool: Final = {metadata_of(row)["mcp_tool_call_metadata"]["name"]: float(str(row["spend"])) for row in rows}
+            by_tool: Final = {
+                metadata_of(row)["mcp_tool_call_metadata"]["name"]: float(str(row["spend"])) for row in rows
+            }
             assert by_tool == {"add": 0.0, "multiply": pytest.approx(0.2)}, rows
 
 
 def test_mcp_tool_cost_is_added_to_the_team_spend_and_stamped_on_the_row(gateway: Gateway) -> None:
-    """A key in a fresh team calls a server priced at `default_cost_per_query: 0.25`. The row must carry the
-    team id and `LiteLLM_TeamTable.spend` for that team must reach 0.25, the same way an LLM call charges
+    """A key in a fresh team calls a server priced at `default_cost_per_query: 0.25`; the team grants the server
+    and the key inherits it, since /key/generate refuses a team key whose servers are outside the team's grant
+    (litellm/proxy/management_helpers/object_permission_utils.py:755-776). The row must carry the team id and `LiteLLM_TeamTable.spend` for that team must reach 0.25, the same way an LLM call charges
     the team. A port that only charged the key would let team budgets leak through MCP."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "dec1team" + uuid.uuid4().hex[:8]
         identity: Final = _priced(scenario, peer, alias, {"default_cost_per_query": 0.25})
-        team: Final = scenario.team()
-        key: Final = scenario.key(team_id=team, object_permission={"mcp_servers": [identity]})
+        team: Final = scenario.team(object_permission={"mcp_servers": [identity]})
+        key: Final = scenario.key(team_id=team)
         assert McpCaller(gateway, key, "mcp").call(f"{alias}-add", {"a": 2, "b": 3}).text == "5"
         rows: Final = _of_type(spend_rows(key, 1), "call_mcp_tool")
         assert rows[0]["team_id"] == team, rows
@@ -302,7 +305,9 @@ def test_a_tools_call_with_invalid_params_is_logged_as_invalid_request_parameter
         rows: Final = [row for row in spend_rows(key, 1) if row["model"] == "MCP: request_rejected"]
         assert len(rows) == 1, rows
         rejection: Final = metadata_of(rows[0])["spend_logs_metadata"]["mcp_sdk_rejection"]
-        assert rejection["error_code"] == -32602 and rejection["error_message"] == "Invalid request parameters", rejection
+        assert rejection["error_code"] == -32602 and rejection["error_message"] == "Invalid request parameters", (
+            rejection
+        )
 
 
 def test_a_notification_without_an_id_is_never_logged_as_a_rejection(gateway: Gateway) -> None:

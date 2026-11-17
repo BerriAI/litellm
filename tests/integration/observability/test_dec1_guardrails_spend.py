@@ -142,7 +142,7 @@ def test_a_passing_pre_call_guardrail_is_recorded_as_success_allow(rig: Rig) -> 
     guardrail_response "allow" (read from code: custom_guardrail.py _summarize_guardrail_response)."""
     response: Final = chat(rig, f"pass {marker()}", extra=_with(PRE))
     assert response.status_code == 200, response.text
-    entry: Final = _only(spend_row(response.headers[CALL_ID_HEADER]), PRE)
+    entry: Final = _only(spend_row(rig, response.headers[CALL_ID_HEADER]), PRE)
     assert (entry["guardrail_mode"], entry["guardrail_status"], entry["guardrail_response"]) == (
         "pre_call",
         "success",
@@ -155,14 +155,14 @@ def test_a_masking_pre_call_guardrail_is_recorded_as_success_mask(rig: Rig) -> N
     so dashboards can count masking runs without seeing the prompt."""
     response: Final = chat(rig, f"SECRET-1234 {marker()}", extra=_with(PRE))
     assert response.status_code == 200, response.text
-    entry: Final = _only(spend_row(response.headers[CALL_ID_HEADER]), PRE)
+    entry: Final = _only(spend_row(rig, response.headers[CALL_ID_HEADER]), PRE)
     assert (entry["guardrail_status"], entry["guardrail_response"]) == ("success", "mask"), entry
 
 
 def test_a_guardrail_run_records_its_timings(rig: Rig) -> None:
     """The success entry carries numeric start_time, end_time and a non-negative duration in seconds."""
     response: Final = chat(rig, f"timings {marker()}", extra=_with(PRE))
-    entry: Final = _only(spend_row(response.headers[CALL_ID_HEADER]), PRE)
+    entry: Final = _only(spend_row(rig, response.headers[CALL_ID_HEADER]), PRE)
     assert isinstance(entry["start_time"], float) and isinstance(entry["end_time"], float), entry
     assert isinstance(entry["duration"], float) and entry["duration"] >= 0, entry
 
@@ -172,7 +172,7 @@ def test_the_spend_row_lists_the_applied_guardrails(rig: Rig) -> None:
     contains both names, the same set the x-litellm-applied-guardrails header carried."""
     response: Final = chat(rig, f"applied {marker()}", extra=_with(PRE, POST))
     assert response.status_code == 200, response.text
-    applied: Final = object_value(spend_row(response.headers[CALL_ID_HEADER])["metadata"])["applied_guardrails"]
+    applied: Final = object_value(spend_row(rig, response.headers[CALL_ID_HEADER])["metadata"])["applied_guardrails"]
     assert isinstance(applied, list) and {PRE, POST} <= set(applied), applied
     assert set(response.headers["x-litellm-applied-guardrails"].split(",")) == set(applied)
 
@@ -180,7 +180,7 @@ def test_the_spend_row_lists_the_applied_guardrails(rig: Rig) -> None:
 def test_a_post_call_guardrail_entry_is_recorded_with_its_mode(rig: Rig) -> None:
     """A served chat named the post_call guardrail. Its entry has guardrail_mode "post_call" and status "success"."""
     response: Final = chat(rig, f"post {marker()}", extra=_with(POST))
-    entry: Final = _only(spend_row(response.headers[CALL_ID_HEADER]), POST)
+    entry: Final = _only(spend_row(rig, response.headers[CALL_ID_HEADER]), POST)
     assert (entry["guardrail_mode"], entry["guardrail_status"]) == ("post_call", "success"), entry
 
 
@@ -189,7 +189,7 @@ def test_a_blocked_request_writes_a_failure_row_with_an_intervened_entry_and_no_
     guardrail's entry has guardrail_status "guardrail_intervened" with the refusal text as guardrail_response."""
     response: Final = chat(rig, f"BLOCK-IN {marker()}", extra=_with(PRE))
     assert response.status_code == 400, response.text
-    row: Final = spend_row(response.headers[CALL_ID_HEADER])
+    row: Final = spend_row(rig, response.headers[CALL_ID_HEADER])
     assert row["status"] == "failure", row
     assert float(str(row["spend"])) == 0.0, row
     entry: Final = _only(row, PRE)
@@ -203,7 +203,7 @@ def test_a_post_call_block_writes_a_failure_row_with_an_intervened_post_call_ent
     are billed on this failure row; only the status fields are pinned."""
     response: Final = chat(rig, f"REPLY-BLOCK-OUT {marker()}", extra=_with(POST))
     assert response.status_code == 400, response.text
-    row: Final = spend_row(response.headers[CALL_ID_HEADER])
+    row: Final = spend_row(rig, response.headers[CALL_ID_HEADER])
     assert row["status"] == "failure", row
     entry: Final = _only(row, POST)
     assert (entry["guardrail_mode"], entry["guardrail_status"]) == ("post_call", "guardrail_intervened"), entry
@@ -214,7 +214,7 @@ def test_an_unreachable_fail_closed_guardrail_is_recorded_as_failed_to_respond(r
     has guardrail_status "guardrail_failed_to_respond", which tells an outage apart from a policy block."""
     response: Final = chat(rig, f"down {marker()}", extra=_with(FAIL_CLOSED))
     assert response.status_code == 500, response.text
-    row: Final = spend_row(response.headers[CALL_ID_HEADER])
+    row: Final = spend_row(rig, response.headers[CALL_ID_HEADER])
     assert row["status"] == "failure", row
     assert _only(row, FAIL_CLOSED)["guardrail_status"] == "guardrail_failed_to_respond"
 
@@ -225,7 +225,7 @@ def test_an_unreachable_fail_open_guardrail_is_recorded_as_a_plain_success(rig: 
     log line (read from code: generic_guardrail_api.py _fail_open_passthrough returns the inputs unchanged)."""
     response: Final = chat(rig, f"open {marker()}", extra=_with(FAIL_OPEN))
     assert chat_text(response) == PLAIN_ANSWER
-    entry: Final = _only(spend_row(response.headers[CALL_ID_HEADER]), FAIL_OPEN)
+    entry: Final = _only(spend_row(rig, response.headers[CALL_ID_HEADER]), FAIL_OPEN)
     assert (entry["guardrail_status"], entry["guardrail_response"]) == ("success", "allow"), entry
 
 
@@ -235,7 +235,7 @@ def test_a_flagging_guardrail_is_recorded_as_flagged_and_the_request_is_served(r
     "input_type": "request", "metadata": {"score": 1}} (read from code: custom_code_guardrail.py _process_result)."""
     response: Final = chat(rig, f"flag me {marker()}", extra=_with(FLAGGER))
     assert chat_text(response) == PLAIN_ANSWER
-    entries: Final = guardrail_entries(spend_row(response.headers[CALL_ID_HEADER]), FLAGGER)
+    entries: Final = guardrail_entries(spend_row(rig, response.headers[CALL_ID_HEADER]), FLAGGER)
     flagged: Final = [entry for entry in entries if entry["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 1, entries
     assert flagged[0]["guardrail_response"] == {
@@ -252,7 +252,7 @@ def test_a_priced_guardrail_adds_its_cost_to_the_spend(rig: Rig) -> None:
     guardrail_information_cost, guardrail_cost.py cost_breakdown_with_guardrail)."""
     response: Final = chat(rig, f"billed {marker()}", extra=_with(BILLED))
     assert chat_text(response) == PLAIN_ANSWER
-    row: Final = spend_row(response.headers[CALL_ID_HEADER])
+    row: Final = spend_row(rig, response.headers[CALL_ID_HEADER])
     assert float(str(row["spend"])) == pytest.approx(CHAT_COST + GUARDRAIL_PRICE), row
     breakdown: Final = object_value(object_value(row["metadata"])["cost_breakdown"])
     assert breakdown["guardrail_cost"] == pytest.approx(GUARDRAIL_PRICE), breakdown
@@ -264,7 +264,7 @@ def test_a_report_only_guardrail_cost_is_recorded_but_not_billed(rig: Rig) -> No
     breakdown carries no guardrail_cost, and the entry still records guardrail_cost 0.25 for reporting."""
     response: Final = chat(rig, f"report only {marker()}", extra=_with(REPORT_ONLY))
     assert chat_text(response) == PLAIN_ANSWER
-    row: Final = spend_row(response.headers[CALL_ID_HEADER])
+    row: Final = spend_row(rig, response.headers[CALL_ID_HEADER])
     assert float(str(row["spend"])) == pytest.approx(CHAT_COST), row
     breakdown: Final = object_value(row["metadata"]).get("cost_breakdown")
     assert not isinstance(breakdown, dict) or "guardrail_cost" not in breakdown, breakdown
@@ -310,7 +310,7 @@ def test_a_logging_only_block_never_changes_the_answer_and_is_recorded(rig: Rig)
     scan (custom_guardrail.py async_logging_hook swallows the exception after the decorator recorded it)."""
     response: Final = chat(rig, f"BLOCK-IN {marker()}")
     assert chat_text(response) == PLAIN_ANSWER
-    entries: Final = guardrail_entries(spend_row(response.headers[CALL_ID_HEADER]), OBSERVER)
+    entries: Final = guardrail_entries(spend_row(rig, response.headers[CALL_ID_HEADER]), OBSERVER)
     assert entries, entries
     assert {entry["guardrail_mode"] for entry in entries} == {"logging_only"}, entries
     assert "guardrail_intervened" in {entry["guardrail_status"] for entry in entries}, entries
@@ -326,7 +326,7 @@ def test_messages_and_responses_rows_record_the_pre_call_entry_too(rig: Rig, sur
         else responses(rig, f"responses {marker()}", extra=_with(PRE))
     )
     assert response.status_code == 200, response.text
-    entry: Final = _only(spend_row(response.headers[CALL_ID_HEADER]), PRE)
+    entry: Final = _only(spend_row(rig, response.headers[CALL_ID_HEADER]), PRE)
     assert entry["guardrail_status"] == "success", entry
 
 
@@ -335,6 +335,6 @@ def test_a_blocked_messages_request_writes_a_failure_row_with_the_intervened_ent
     "failure" and the guardrail entry has guardrail_status "guardrail_intervened"."""
     response: Final = messages(rig, f"BLOCK-IN {marker()}", extra=_with(PRE))
     assert response.status_code == 400, response.text
-    row: Final = spend_row(response.headers[CALL_ID_HEADER])
+    row: Final = spend_row(rig, response.headers[CALL_ID_HEADER])
     assert row["status"] == "failure", row
     assert _only(row, PRE)["guardrail_status"] == "guardrail_intervened"

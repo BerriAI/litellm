@@ -78,7 +78,6 @@ def assert_untouched(rig: Targets) -> None:
         "base_url",
         "user_config",
         "aws_sts_endpoint",
-        "vertex_project",
         "azure_ad_token",
         "s3_endpoint_url",
         "langfuse_host",
@@ -95,6 +94,22 @@ def test_a_retargeting_param_at_the_top_level_is_refused(gateway: Gateway, param
         refused: Final = gateway.request("POST", CHAT, chat_body(rig.model, **{param: value}), key=key)
         assert_rejected(refused.status_code, assert_auth_error(refused, 401), param)
         assert_untouched(rig)
+
+
+def test_a_vertex_target_param_on_a_model_group_that_never_reads_it_is_served(gateway: Gateway) -> None:
+    """A virtual key sends a chat call to the OpenAI style deployment with `vertex_project` set to the attacker
+    URL. The Vertex target params are only checked against model groups whose deployments read them
+    (`VERTEX_TARGET_PARAMS`, `_model_group_reads_vertex_target`, litellm/proxy/auth/auth_utils.py:277-282, 717 and
+    834-845), and an OpenAI deployment never does, so the call is served with 200 by the configured provider and
+    the attacker peer receives nothing."""
+    with targets(gateway) as rig:
+        key: Final = rig.scenario.key(models=[rig.model])
+        served: Final = gateway.request(
+            "POST", CHAT, chat_body(rig.model, vertex_project=f"{rig.attacker.url}/v1"), key=key
+        )
+        assert served.status_code == 200, served.text
+        assert len(posts(rig.provider)) == 1
+        assert posts(rig.attacker) == ()
 
 
 def test_the_master_key_cannot_send_its_own_api_base_either(gateway: Gateway) -> None:

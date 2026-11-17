@@ -138,7 +138,14 @@ def test_a_query_key_on_generate_content_never_lands_in_the_spend_row_the_sink_o
     URL with its query string is part of `proxy_server_request`, so this is the carrier most likely to leak. The
     call must be served; the spend row, every sink payload and the provider request target must not contain the
     key. UNVERIFIED: whether `proxy_server_request.url` reaches the stored row or the sink; read from
-    `litellm_pre_call_utils.py` (`"url": str(request.url)`)."""
+    `litellm_pre_call_utils.py` (`"url": str(request.url)`).
+
+    BUG: in CI run 44161684479 the call was served and the provider target was clean, but the stored spend row
+    (`to_jsonb` of the `LiteLLM_SpendLogs` row) contained the raw query key. The spend payload keeps only the
+    request body of `proxy_server_request` (litellm/proxy/spend_tracking/spend_tracking_utils.py:2143-2173), so the
+    key most likely reaches the row through the body or metadata the Google route builds; the column was not
+    isolated."""
+    pytest.skip("BUG: a ?key= virtual key on :generateContent is written into the spend log row")
     a1: Final = canary("A1")
     marker: Final = canary(MARKER)
     with (

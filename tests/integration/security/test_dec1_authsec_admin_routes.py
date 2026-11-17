@@ -39,6 +39,7 @@ ADMIN_ONLY_WRITES: Final = (
     ("/config/update", {"general_settings": {"dec1_authsec_probe": True}}),
 )
 MASTER_KEY_ONLY_ROUTES: Final = ("/global/spend/reset",)
+ORGANIZATION_ONLY_MESSAGE: Final = "Only proxy admins can create new organizations. You are internal_user"
 
 
 def _masked(user_id: str) -> str:
@@ -48,7 +49,9 @@ def _masked(user_id: str) -> str:
 @pytest.mark.parametrize(("route", "body"), ADMIN_ONLY_WRITES, ids=[route for route, _ in ADMIN_ONLY_WRITES])
 def test_an_internal_users_key_is_refused_on_admin_only_writes(gateway: Gateway, route: str, body: dict) -> None:
     """An internal user's virtual key calls an admin only write route. The proxy must answer 401 `auth_error`
-    whose message starts with the admin only prefix and names `Route=<route>. Your role=internal_user`. The key
+    whose message starts with the admin only prefix and names `Route=<route>. Your role=internal_user`, except
+    `/organization/new`, which the organization check refuses first with "Only proxy admins can create new
+    organizations. You are internal_user" (litellm/proxy/auth/auth_checks_organization.py:33-40). The key
     must not appear in the body. The object named in the body must not have been created (checked for the user
     and team routes through their tables)."""
     with gateway.scenario() as scenario:
@@ -56,7 +59,12 @@ def test_an_internal_users_key_is_refused_on_admin_only_writes(gateway: Gateway,
         key: Final = scenario.key(user_id=user_id)
         refused: Final = gateway.request("POST", route, body, key=key)
         message: Final = assert_auth_error(refused, 401)
-        assert message.startswith(f"{ADMIN_ONLY_PREFIX}Route={route}. Your role=internal_user."), message
+        expected: Final = (
+            ORGANIZATION_ONLY_MESSAGE
+            if route == "/organization/new"
+            else f"{ADMIN_ONLY_PREFIX}Route={route}. Your role=internal_user."
+        )
+        assert message.startswith(expected), message
         assert_not_echoed(refused, key)
     assert (
         gateway.rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id=%s', ("dec1-authsec-never-created",)) == []
@@ -77,12 +85,13 @@ def test_the_admin_only_refusal_masks_the_callers_user_id(gateway: Gateway) -> N
 
 def test_a_key_without_a_user_is_refused_on_admin_routes_as_unknown(gateway: Gateway) -> None:
     """A key generated with no `user_id` calls `POST /user/new`. The message must end with
-    `Route=/user/new. Your role=unknown. Your user_id=***`: no user row is loaded, so nothing about the key's
-    owner can leak. UNVERIFIED: that `/key/generate` without `user_id` leaves the key with no user row."""
+    `Route=/user/new. Your role=unknown. Your user_id=*******`: no user row is loaded, so the id is the
+    placeholder "unknown", which `_mask_user_id` masks like any 7 character id (all seven characters starred,
+    litellm/proxy/auth/route_checks.py:273-291 and :309-314), and nothing about the key's owner can leak."""
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
         message: Final = assert_auth_error(gateway.request("POST", "/user/new", {}, key=key), 401)
-        assert message == f"{ADMIN_ONLY_PREFIX}Route=/user/new. Your role=unknown. Your user_id=***", message
+        assert message == f"{ADMIN_ONLY_PREFIX}Route=/user/new. Your role=unknown. Your user_id=*******", message
 
 
 def test_a_proxy_admin_users_key_can_call_admin_only_writes(gateway: Gateway) -> None:

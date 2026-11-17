@@ -53,10 +53,11 @@ def test_an_alias_with_spaces_is_published_with_underscores_and_routes_by_that_s
     """A server is registered with alias `dec1 space <hex>`. `validate_and_normalize_mcp_server_payload`
     replaces spaces with underscores, so `tools/list` on `/mcp` must name its tool `dec1_space_<hex>-add`
     and a `tools/call` by that name must return `5` for `{a: 2, b: 3}`. A host that kept the space or
-    used another replacement would publish names some model APIs reject."""
+    used another replacement would publish names some model APIs reject. The `server_name` is a separate valid
+    `dec1space<hex>`, since a `server_name` with spaces is itself refused (see the no-alias test below)."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
         suffix: Final = uuid.uuid4().hex[:8]
-        identity: Final = register_mcp(scenario, peer, f"dec1 space {suffix}")
+        identity: Final = register_mcp(scenario, peer, f"dec1 space {suffix}", server_name=f"dec1space{suffix}")
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         listed: Final = McpCaller(gateway, key, "mcp").list_tools()
         assert f"dec1_space_{suffix}-add" in listed.tools, listed.raw
@@ -124,22 +125,21 @@ def test_reserved_special_server_ids_are_refused_at_registration(gateway: Gatewa
     assert response.json()["detail"] == {"error": f"MCP Server with id {reserved} is special and cannot be used."}
 
 
-def test_a_server_registered_without_an_alias_is_prefixed_by_its_normalized_server_name(gateway: Gateway) -> None:
-    """A server is created with only `server_name: dec1 noalias <hex>` (no alias). The alias defaults to
-    the normalized server name, so the detail endpoint must return `alias == dec1_noalias_<hex>` and the
-    REST listing for the key must name the tool `dec1_noalias_<hex>-add`."""
+def test_a_server_name_with_spaces_is_refused_even_without_an_alias(gateway: Gateway) -> None:
+    """A server is created with only `server_name: dec1 noalias <hex>` (no alias). The alias would default to
+    the normalized `dec1_noalias_<hex>`, but the raw `server_name` is then checked as a tool prefix
+    (litellm/proxy/management_endpoints/mcp_management_endpoints.py:286-311, run after the base normalization
+    at :330-331), so the answer is HTTP 400 with `detail.error` starting "Invalid MCP tool prefix 'dec1 noalias
+    <hex>' provided via server_name" and naming the space, and no row is written."""
     suffix: Final = uuid.uuid4().hex[:8]
-    with mcp_peer() as peer, gateway.scenario() as scenario:
-        response: Final = gateway.request(
-            "POST", "/v1/mcp/server", {"server_name": f"dec1 noalias {suffix}", **peer.registration()}
-        )
-        assert response.status_code == 201, response.text
-        identity: Final = str(response.json()["server_id"])
-        scenario.cleanups.callback(gateway.request, "DELETE", f"/v1/mcp/server/{identity}")
-        assert response.json()["alias"] == f"dec1_noalias_{suffix}", response.text
-        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-        listed: Final = McpCaller(gateway, key, "mcp").list_tools()
-        assert f"dec1_noalias_{suffix}-add" in listed.tools, listed.raw
+    name: Final = f"dec1 noalias {suffix}"
+    with mcp_peer() as peer:
+        response: Final = gateway.request("POST", "/v1/mcp/server", {"server_name": name, **peer.registration()})
+    assert response.status_code == 400, response.text
+    error: Final = str(response.json()["detail"]["error"])
+    assert error.startswith(f"Invalid MCP tool prefix '{name}' provided via server_name\n"), error
+    assert "Tool name contains spaces, which may cause parsing issues" in error, error
+    assert gateway.rows('SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_name = %s', (name,)) == []
 
 
 def test_two_servers_whose_aliases_differ_only_by_a_space_and_underscore_collide(gateway: Gateway) -> None:
@@ -150,7 +150,7 @@ def test_two_servers_whose_aliases_differ_only_by_a_space_and_underscore_collide
     covers only identical spellings."""
     suffix: Final = uuid.uuid4().hex[:8]
     with mcp_peer() as first, mcp_peer() as second, gateway.scenario() as scenario:
-        register_mcp(scenario, first, f"dec1 col {suffix}")
+        register_mcp(scenario, first, f"dec1 col {suffix}", server_name=f"dec1col1{suffix}")
         clash: Final = gateway.request(
             "POST",
             "/v1/mcp/server",
@@ -262,7 +262,9 @@ def test_prefixed_call_to_a_tool_the_server_does_not_have_never_reaches_another_
         second.drain()
         response: Final = rpc(gateway, "/mcp", "tools/call", {"name": f"{alias_a}-nosuch", "arguments": {}}, key=key)
         body_text: Final = response.text
-        assert response.status_code != 200 or '"error"' in body_text or '"isError":true' in body_text.replace(" ", ""), body_text
+        assert (
+            response.status_code != 200 or '"error"' in body_text or '"isError":true' in body_text.replace(" ", "")
+        ), body_text
         assert [call for call in tool_calls(first.drain()) if call["body"]["params"]["name"] != "nosuch"] == []
         assert tool_calls(second.drain()) == ()
 

@@ -34,6 +34,7 @@ from integration.security.dec1_authsec_support import (
     INVALID_VIRTUAL_KEY_PREFIX,
     NO_KEY_MESSAGE,
     UNKNOWN_KEY_MESSAGE,
+    UNKNOWN_KEY_TYPE,
     assert_auth_error,
     assert_not_echoed,
     assert_served,
@@ -124,14 +125,14 @@ def test_two_authorization_headers_use_the_first_value(gateway: Gateway) -> None
 
 def test_a_valid_second_authorization_header_never_rescues_an_unknown_first_one(gateway: Gateway) -> None:
     """The caller sends two `Authorization` headers, an unknown `sk-` key first and a valid virtual key second.
-    The call must be refused with 401 `Authentication Error, Invalid API key provided.` and the provider must not
-    be called. Whatever rule the Rust port picks for duplicates, it must never authenticate on a later copy of
+    The call must be refused with 401 `Authentication Error, Invalid API key provided.` (error type
+    "token_not_found_in_db", litellm/proxy/auth/resolvers/exceptions.py:33-39) and the provider must not be called. Whatever rule the Rust port picks for duplicates, it must never authenticate on a later copy of
     the header when an earlier one is wrong."""
     with recorded(gateway) as rig:
         key: Final = rig.scenario.key(models=[rig.model])
         headers: Final = [("Authorization", f"Bearer sk-{marker()}"), ("Authorization", f"Bearer {key}")]
         refused: Final = raw_post(gateway, CHAT, chat_body(rig.model), headers)
-        assert_auth_error(refused, 401, UNKNOWN_KEY_MESSAGE)
+        assert_auth_error(refused, 401, UNKNOWN_KEY_MESSAGE, error_type=UNKNOWN_KEY_TYPE)
         assert posts(rig.upstream) == ()
 
 
@@ -161,12 +162,12 @@ def test_a_non_ascii_bearer_value_is_a_401_and_is_not_echoed(gateway: Gateway) -
 
 def test_a_four_kilobyte_unknown_key_is_refused_without_echoing_it(gateway: Gateway) -> None:
     """The caller presents an unknown `sk-` key of 4096 characters. The proxy must answer 401 with exactly
-    `Authentication Error, Invalid API key provided.`, and neither the key nor its SHA-256 may appear in the
+    `Authentication Error, Invalid API key provided.` and error type "token_not_found_in_db", and neither the key nor its SHA-256 may appear in the
     body or the response headers."""
     secret: Final = "sk-" + ("a" * 4000) + marker("x")[:93]
     with recorded(gateway) as rig:
         refused: Final = raw_post(gateway, CHAT, chat_body(rig.model), {"Authorization": f"Bearer {secret}"})
-        assert_auth_error(refused, 401, UNKNOWN_KEY_MESSAGE)
+        assert_auth_error(refused, 401, UNKNOWN_KEY_MESSAGE, error_type=UNKNOWN_KEY_TYPE)
         assert_not_echoed(refused, secret)
 
 

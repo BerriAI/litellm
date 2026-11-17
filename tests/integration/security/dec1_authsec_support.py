@@ -48,6 +48,7 @@ GEMINI_MODEL: Final = "dec1-authsec-gemini"
 
 NO_KEY_MESSAGE: Final = "Authentication Error, No api key passed in."
 UNKNOWN_KEY_MESSAGE: Final = "Authentication Error, Invalid API key provided."
+UNKNOWN_KEY_TYPE: Final = "token_not_found_in_db"
 INVALID_VIRTUAL_KEY_PREFIX: Final = "LiteLLM Virtual Key expected. Received="
 DB_UNAVAILABLE_USER: Final = "__db_unavailable_fallback__"
 ADMIN_ONLY_PREFIX: Final = (
@@ -109,11 +110,17 @@ def assert_served(response: httpx.Response) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(response.content)
 
 
-def assert_auth_error(response: httpx.Response, status: int, message: str | None = None) -> str:
-    """The OpenAI shaped auth refusal `{"error": {"message", "type": "auth_error", "param", "code"}}`."""
+def assert_auth_error(
+    response: httpx.Response, status: int, message: str | None = None, *, error_type: str = "auth_error"
+) -> str:
+    """The OpenAI shaped auth refusal `{"error": {"message", "type", "param", "code"}}`.
+
+    `type` is "auth_error" for most refusals; an unknown virtual key is "token_not_found_in_db" with param "key"
+    (litellm/proxy/auth/resolvers/exceptions.py:33-39, litellm/proxy/auth/auth_checks.py:4526-4531).
+    """
     assert response.status_code == status, f"{response.status_code} {response.text}"
     error: Final = error_of(response)
-    assert error["type"] == "auth_error", response.text
+    assert error["type"] == error_type, response.text
     assert error["code"] == str(status), response.text
     text: Final = string_value(error["message"])
     if message is not None:

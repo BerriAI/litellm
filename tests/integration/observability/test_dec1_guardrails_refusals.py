@@ -358,12 +358,13 @@ def test_content_filter_keyword_match_is_case_insensitive(rig: Rig) -> None:
 
 def test_content_filter_pattern_mask_rewrites_the_prompt_with_the_pattern_tag(rig: Rig) -> None:
     """A content filter regex pattern named dec1_account with action MASK. A prompt carrying ACCT-123456 reaches the
-    provider with "[dec1_account_REDACTED]" in its place and the caller gets 200 (read from code: content_filter.py
-    PATTERN_REDACTION_FORMAT)."""
+    provider with "[DEC1_ACCOUNT_REDACTED]" in its place, since the pattern name is upper-cased into
+    PATTERN_REDACTION_FORMAT (litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/content_filter.py:285),
+    and the caller gets 200."""
     tag: Final = marker()
     response: Final = chat(rig, f"pay ACCT-123456 now {tag}", extra=_with(PATTERN_MASK))
     assert chat_text(response) == PLAIN_ANSWER
-    assert prompts_seen_by_provider(rig.provider_calls()) == (f"pay [dec1_account_REDACTED] now {tag}",)
+    assert prompts_seen_by_provider(rig.provider_calls()) == (f"pay [DEC1_ACCOUNT_REDACTED] now {tag}",)
 
 
 def test_content_filter_post_call_keyword_mask_rewrites_the_answer(rig: Rig) -> None:
