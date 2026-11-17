@@ -5,6 +5,7 @@ mod handler;
 mod host_answer;
 mod pre_request;
 mod reads;
+mod relay;
 pub mod route;
 mod safeguards;
 mod transport;
@@ -42,6 +43,7 @@ pub struct MessagesRoute {
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
     workload_identity: Option<Arc<dyn WorkloadIdentity>>,
+    azure_ad_token_hosts: litellm_llms::base_llm::auth::AzureAdTokenHosts,
     transport: Option<Arc<dyn Transport>>,
     pre_request_hooks: Option<Arc<dyn PreRequestHooks>>,
     safeguards: Option<Arc<dyn Safeguards>>,
@@ -60,6 +62,7 @@ impl MessagesRoute {
             secrets,
             cache: None,
             workload_identity: None,
+            azure_ad_token_hosts: Default::default(),
             transport: None,
             pre_request_hooks: None,
             safeguards: None,
@@ -71,6 +74,17 @@ impl MessagesRoute {
     pub fn with_workload_identity(self, workload_identity: Arc<dyn WorkloadIdentity>) -> Self {
         Self {
             workload_identity: Some(workload_identity),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_azure_ad_token_hosts(
+        self,
+        hosts: litellm_llms::base_llm::auth::AzureAdTokenHosts,
+    ) -> Self {
+        Self {
+            azure_ad_token_hosts: hosts,
             ..self
         }
     }

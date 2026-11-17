@@ -1,7 +1,7 @@
 use sqlx::{Postgres, Transaction};
 
 use super::lock_team;
-use crate::Error;
+use crate::{Error, Statements};
 
 #[macro_rules_attribute::apply(crate::db_input)]
 pub struct TeamMemberSpend {
@@ -13,6 +13,7 @@ pub struct TeamMemberSpend {
 pub async fn add_team_member_spend(
     transaction: &mut Transaction<'_, Postgres>,
     members: &[TeamMemberSpend],
+    named: bool,
 ) -> Result<(), Error> {
     if members.is_empty() {
         return Ok(());
@@ -27,7 +28,7 @@ pub async fn add_team_member_spend(
         .collect();
     teams.dedup();
     for team in teams {
-        lock_team(transaction, team).await?;
+        lock_team(transaction, team, named).await?;
     }
     let rows = serde_json::Value::Array(
         members
@@ -42,14 +43,14 @@ pub async fn add_team_member_spend(
             .collect(),
     );
     sqlx::query_file!("queries/spend/upsert_team_member_spend.sql", rows)
-        .execute(&mut **transaction)
+        .execute(Statements::new(&mut **transaction, named))
         .await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error as StdError;
+    use std::{error::Error as StdError, num::NonZeroU32};
 
     use super::super::begin;
     use super::{TeamMemberSpend, add_team_member_spend};
@@ -90,7 +91,12 @@ mod tests {
         #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
     ) -> Result<(), Box<dyn StdError>> {
         let pool = database_pool?;
-        let mut tx = begin(&pool).await?;
+        let mut tx = begin(
+            &pool,
+            NonZeroU32::new(5000).ok_or("5000 is not zero")?,
+            true,
+        )
+        .await?;
         #[expect(
             clippy::disallowed_methods,
             reason = "Fixture writes are outside the compile-checked query set"
@@ -113,10 +119,10 @@ mod tests {
         )
         .execute(&mut *tx)
         .await?;
-        add_team_member_spend(&mut tx, &[]).await?;
-        add_team_member_spend(&mut tx, &members(0.0)).await?;
-        add_team_member_spend(&mut tx, &members(cost)).await?;
-        add_team_member_spend(&mut tx, &members(cost)).await?;
+        add_team_member_spend(&mut tx, &[], true).await?;
+        add_team_member_spend(&mut tx, &members(0.0), true).await?;
+        add_team_member_spend(&mut tx, &members(cost), true).await?;
+        add_team_member_spend(&mut tx, &members(cost), true).await?;
         #[expect(
             clippy::disallowed_methods,
             reason = "Test assertions are outside the compile-checked query set"

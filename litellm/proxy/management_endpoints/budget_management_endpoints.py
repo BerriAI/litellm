@@ -278,7 +278,12 @@ async def update_budget(
     return response
 
 
-@router.post("/budget/new", tags=["budget management"], description=new_budget.__doc__)
+@router.post(
+    "/budget/new",
+    tags=["budget management"],
+    description=new_budget.__doc__,
+    operation_id="new_budget_budget_new_post",
+)
 async def new_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -286,7 +291,12 @@ async def new_budget_endpoint(
     return await new_budget(budget_obj, user_api_key_dict)
 
 
-@router.post("/budget/update", tags=["budget management"], description=update_budget.__doc__)
+@router.post(
+    "/budget/update",
+    tags=["budget management"],
+    description=update_budget.__doc__,
+    operation_id="update_budget_budget_update_post",
+)
 async def update_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],

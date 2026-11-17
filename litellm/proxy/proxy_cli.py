@@ -10,9 +10,10 @@ import subprocess
 import sys
 import urllib.parse as urlparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
 import click
 import httpx
@@ -37,6 +38,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from litellm.proxy.control_plane.main import Tls
     from litellm.proxy.rust_forward.peer import ASGIApp
     from litellm.proxy.rust_forward.server import PythonServer
 else:
@@ -79,7 +81,7 @@ def _build_db_connection_url_params(
     socket_timeout: float | None = None,
     disable_prepared_statements: bool = False,
     extra_params: dict | None = None,
-) -> dict:
+) -> dict[str, str | int | float]:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
     `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
@@ -91,7 +93,7 @@ def _build_db_connection_url_params(
     `extra_params` is an untyped passthrough — keys it provides win over the
     named arguments above, so it can be used to override any default we set here.
     """
-    params: Final[dict] = {
+    params: Final[dict[str, str | int | float]] = {
         "connection_limit": connection_limit,
     }
     if pool_timeout is not None:
@@ -597,8 +599,8 @@ class ProxyInitializationHelpers:
         app: FastAPI,
         host: str,
         port: int,
-        ssl_certfile_path: str,
-        ssl_keyfile_path: str,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
         ciphers: str | None = None,
     ):
         """
@@ -685,8 +687,8 @@ class ProxyInitializationHelpers:
         port: int,
         app: "ASGIApp",
         num_workers: int,
-        ssl_certfile_path: str,
-        ssl_keyfile_path: str,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
         max_requests_before_restart: int | None = None,
         max_requests_before_restart_jitter: int | None = None,
         max_request_header_size: int | None = None,
@@ -956,6 +958,57 @@ class ProxyInitializationHelpers:
         return multiproc_dir
 
     _maybe_setup_prometheus_multiproc_dir = maybe_setup_prometheus_multiproc_dir
+
+
+def control_plane_requested(control_plane: bool, skip_server_startup: bool, utility_command: bool = False) -> bool:
+    return control_plane and not utility_command
+
+
+class _ControlPlaneLicense(Protocol):
+    def is_premium(self) -> bool: ...
+
+
+def _decrypt_env_var() -> Mapping[str, str]:
+    from litellm.secret_managers.aws_secret_manager import decrypt_env_var
+
+    return decrypt_env_var()
+
+
+def _control_plane_license_check() -> _ControlPlaneLicense:
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    return LicenseCheck()
+
+
+def _migrate_control_plane() -> None:
+    from litellm.proxy.control_plane.store.migrate import migrate_from_environment
+
+    migrate_from_environment()
+
+
+@dataclass(frozen=True, slots=True)
+class CliDependencies:
+    decrypt_env: Callable[[], Mapping[str, str]] = _decrypt_env_var
+    license_check: Callable[[], _ControlPlaneLicense] = _control_plane_license_check
+    migrate_control_plane: Callable[[], None] = _migrate_control_plane
+
+
+def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str]]) -> None:
+    if os.getenv("USE_AWS_KMS") != "True":
+        return
+
+    for key, value in decrypt_env().items():
+        os.environ[key] = value
+
+
+def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | None) -> "Tls | None":
+    from litellm.proxy.control_plane.main import Tls
+
+    if ssl_keyfile_path is None and ssl_certfile_path is None:
+        return None
+    if ssl_keyfile_path is None or ssl_certfile_path is None:
+        raise click.UsageError("--control-plane needs both --ssl_keyfile_path and --ssl_certfile_path for TLS")
+    return Tls(keyfile=ssl_keyfile_path, certfile=ssl_certfile_path)
 
 
 @click.command()
@@ -1266,6 +1319,17 @@ class ProxyInitializationHelpers:
     envvar="USE_V2_MIGRATION_RESOLVER",
 )
 @click.option(
+    "--control-plane",
+    "control_plane",
+    is_flag=True,
+    default=False,
+    envvar="LITELLM_CONTROL_PLANE",
+    help=(
+        "Serve the global control plane API instead of the proxy, on the same image. Enterprise only, "
+        "refuses to start without LITELLM_LICENSE. Configure with CONTROL_PLANE_* env vars."
+    ),
+)
+@click.option(
     "--use_legacy_migration_resolver",
     is_flag=True,
     default=False,
@@ -1295,7 +1359,9 @@ class ProxyInitializationHelpers:
     ),
     envvar="PROMETHEUS_METRICS_PORT",
 )
+@click.pass_context
 def run_server(
+    ctx: click.Context,
     cli_args,
     host: str,
     port: int,
@@ -1315,7 +1381,7 @@ def run_server(
     add_function_to_prompt,
     config,
     max_budget,
-    test,
+    test: str | bool | None,
     local,
     num_workers: int,
     granian_threads,
@@ -1324,18 +1390,18 @@ def run_server(
     azure_postgresql_auth: bool,
     num_requests,
     use_queue,
-    health,
+    health: bool,
     setup,
-    version,
+    version: bool,
     run_gunicorn,
     run_hypercorn,
     run_granian,
-    ssl_keyfile_path,
-    ssl_certfile_path,
+    ssl_keyfile_path: str | None,
+    ssl_certfile_path: str | None,
     ciphers,
-    log_config,
+    log_config: str | None,
     use_prisma_db_push: bool,
-    skip_server_startup,
+    skip_server_startup: bool,
     validate_config: bool,
     check_migrations_against_existing_data: bool,
     keepalive_timeout: int | None,
@@ -1349,7 +1415,9 @@ def run_server(
     use_legacy_migration_resolver: bool,
     reload: bool,
     prometheus_metrics_port: int | None,
+    control_plane: bool,
 ):
+    dependencies: Final = ctx.obj if isinstance(ctx.obj, CliDependencies) else CliDependencies()
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator
@@ -1366,6 +1434,34 @@ def run_server(
         from litellm.setup_wizard import run_setup_wizard
 
         run_setup_wizard()
+        return
+    utility_command: Final = bool(
+        version or validate_config or health or test or check_migrations_against_existing_data
+    )
+    if control_plane_requested(control_plane, skip_server_startup, utility_command):
+        if skip_server_startup:
+            _decrypt_kms_env_vars(dependencies.decrypt_env)
+            dependencies.migrate_control_plane()
+            return
+        if num_workers > 1:
+            raise click.UsageError("scale the control plane with replicas.")
+        from litellm.proxy.control_plane.main import serve
+
+        if any((run_gunicorn, run_hypercorn, run_granian, reload)):
+            raise click.UsageError(
+                "--control-plane serves with plain uvicorn, drop --run_gunicorn, --run_hypercorn, --run_granian and --reload"
+            )
+        _decrypt_kms_env_vars(dependencies.decrypt_env)
+        serve(
+            host=host,
+            port=port,
+            tls=control_plane_tls(ssl_keyfile_path, ssl_certfile_path),
+            license_check=dependencies.license_check,
+            limit_concurrency=limit_concurrency,
+            log_config=log_config,
+            keepalive_timeout=keepalive_timeout,
+            max_request_header_size=max_request_header_size,
+        )
         return
 
     from pydantic import ValidationError
@@ -1513,17 +1609,7 @@ def run_server(
         if wants_rds_iam or wants_azure_entra:
             DatabaseURLSettings.from_env().apply_writer_url_to_env()
 
-        ### DECRYPT ENV VAR ###
-
-        from litellm.secret_managers.aws_secret_manager import decrypt_env_var
-
-        if os.getenv("USE_AWS_KMS", None) is not None and os.getenv("USE_AWS_KMS") == "True":
-            ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
-            new_env_var: Final = decrypt_env_var()
-
-            for k, v in new_env_var.items():
-                os.environ[k] = v
-
+        _decrypt_kms_env_vars(dependencies.decrypt_env)
         litellm_settings = None
         env_config_file: Final = os.environ.get("CONFIG_FILE_PATH")
         if (
@@ -1637,11 +1723,13 @@ def run_server(
             db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
+            from litellm.proxy.db.connection_budget import ConnectionBudget
             from litellm.proxy.db.db_url_settings import (
                 DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
                 postgres_connection_budget_message,
+                prisma_default_params,
                 reader_shareable_params,
                 translate_libpq_ssl_params,
                 unsupported_db_scheme,
@@ -1676,7 +1764,13 @@ def run_server(
                 disable_prepared_statements=disable_prepared_statements,
                 extra_params=db_extra_connection_params,
             )
+            writer_budget: Final = ConnectionBudget.of(connection_url_params["connection_limit"])
+            rust_writer_connections: Final = 0 if writer_budget is None else writer_budget.rust
+            prisma_url_params: Final = (
+                connection_url_params if writer_budget is None else writer_budget.prisma_params(connection_url_params)
+            )
             lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
+            prisma_defaults: Final = prisma_default_params(lifetime_params, rust_writer_connections)
             if os.getenv("DATABASE_URL", None) is not None:
                 database_url = get_secret("DATABASE_URL", default_value=None)
                 resolved_url: Final[str | None] = str(database_url) if database_url else None
@@ -1693,10 +1787,10 @@ def run_server(
                 )
                 modified_url = append_query_params(
                     writer_url,
-                    connection_url_params,
+                    dict(prisma_url_params),
                 )
                 os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
-                    add_missing_query_params(modified_url, lifetime_params)
+                    add_missing_query_params(modified_url, prisma_defaults)
                 )
             if os.getenv("DIRECT_URL", None) is not None:
                 database_url = os.getenv("DIRECT_URL")
@@ -1710,6 +1804,14 @@ def run_server(
             # on the writer. Anything pinned on the replica URL wins, unlike the
             # writer where the config is applied on top.
             read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+            reader_budget: Final = (
+                ConnectionBudget.of(
+                    _url_query_value(read_replica_url, "connection_limit") or connection_url_params["connection_limit"]
+                )
+                if read_replica_url
+                else None
+            )
+            reader_prisma_limit: Final = None if reader_budget is None else reader_budget.prisma_limit
             if read_replica_url:
                 reader_options: Final[str] = _pg_options_with_timeouts(
                     _url_query_value(read_replica_url, "options"),
@@ -1717,27 +1819,34 @@ def run_server(
                     db_lock_timeout,
                     db_idle_in_transaction_timeout,
                 )
+                reader_url: Final = (
+                    _with_query_value(read_replica_url, "options", reader_options)
+                    if reader_options
+                    else read_replica_url
+                )
                 os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
                     add_missing_query_params(
                         add_missing_query_params(
-                            _with_query_value(read_replica_url, "options", reader_options)
-                            if reader_options
-                            else read_replica_url,
-                            reader_shareable_params(connection_url_params),
+                            reader_url
+                            if reader_prisma_limit is None
+                            else _with_query_value(reader_url, "connection_limit", str(reader_prisma_limit)),
+                            reader_shareable_params(prisma_url_params),
                         ),
-                        lifetime_params,
+                        prisma_defaults,
                     )
                 )
             print_startup_message(
                 postgres_connection_budget_message(
                     writer_limit=_url_query_value(os.getenv("DATABASE_URL"), "connection_limit")
                     or f"{db_connection_pool_limit}",
+                    rust_writer_limit=rust_writer_connections,
                     reader_limit=(
                         _url_query_value(os.getenv("DATABASE_URL_READ_REPLICA"), "connection_limit")
                         or f"{db_connection_pool_limit}"
                     )
                     if read_replica_url
                     else None,
+                    rust_reader_limit=0 if reader_budget is None else reader_budget.rust,
                     num_workers=f"{1 if run_hypercorn else num_workers}",
                 )
             )
