@@ -556,3 +556,79 @@ def test_litellm_params_no_store_enforced_when_response_cache_true():
     caching = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs)
     assert caching is True
     assert kwargs["cache"]["no-store"] is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_group_route_enforces_cache_policy():
+    """When rendered model names a router group, core.drive receives the prompt deployment's cache policy."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.router_rust.invoke.prompt_management import prompt_management_acompletion
+
+    core = MagicMock()
+    core.group_deployments.return_value = [{"model_name": "target-group"}]
+    core.shaping.cache_responses = True
+    core.shaping.default_litellm_params = {}
+    core.drive = AsyncMock(return_value={"id": "resp-1", "choices": [{"message": {"content": "ok"}}]})
+
+    deployment = {
+        "model_name": "langfuse/prompt",
+        "litellm_params": {"model": "langfuse/prompt"},
+        "model_info": {"response_cache": False},
+    }
+    core.select = AsyncMock(return_value=deployment)
+    core.handle.deployments.return_value = (deployment,)
+
+    mock_logging = MagicMock()
+    mock_logging.get_chat_completion_prompt.return_value = (
+        "target-group",
+        [{"role": "user", "content": "rendered"}],
+        {},
+    )
+
+    with patch(
+        "litellm.router_rust.invoke.prompt_management._logging_and_kwargs",
+        return_value=(mock_logging, {"prompt_id": "pid", "original_function": core.router.acompletion}),
+    ):
+        await prompt_management_acompletion(core, "langfuse/prompt", [{"role": "user", "content": "hi"}], {})
+
+        assert core.drive.call_count == 1
+        call_plan, call_kwargs = core.drive.call_args[0][:2]
+        assert call_kwargs["caching"] is False
+        assert call_kwargs["cache"]["no-cache"] is True
+        assert call_kwargs["cache"]["no-store"] is True
+
+
+def test_boolean_cache_true_under_litellm_params_replaced_with_mapping():
+    """litellm_params.cache: True must be replaced with a mapping and not forwarded as a boolean."""
+    deployment = {
+        "model_name": "bool-cache-model",
+        "litellm_params": {"model": "openai/gpt-4o", "cache": True},
+        "model_info": {},
+    }
+    kwargs: dict[str, object] = {}
+    caching = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs)
+    assert caching is True
+    assert isinstance(kwargs.get("cache"), dict)
+    # Downstream .get("no-cache") must not raise AttributeError
+    assert kwargs["cache"].get("no-cache") is not True
+
+
+def test_client_boolean_cache_replaced_with_mapping():
+    """Client-supplied cache=True or cache=False must be converted to a mapping, not stay a boolean."""
+    deployment = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "openai/gpt-4o"},
+        "model_info": {},
+    }
+    kwargs_true: dict[str, object] = {"cache": True}
+    caching_true = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs_true)
+    assert caching_true is True
+    assert isinstance(kwargs_true["cache"], dict)
+    assert kwargs_true["cache"].get("no-cache") is not True
+
+    kwargs_false: dict[str, object] = {"cache": False}
+    caching_false = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs_false)
+    assert caching_false is False
+    assert isinstance(kwargs_false["cache"], dict)
+    assert kwargs_false["cache"].get("no-cache") is True

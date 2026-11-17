@@ -868,7 +868,10 @@ def _deployment_params(
     plan: Plan, deployment: Mapping[str, object]
 ) -> dict[str, object]:  # mutable-ok: the attempt's own copy of the deployment params
     params: Final = as_dict(deployment.get("litellm_params"))
-    return as_dict(store_search_params(params)) if plan.host_op in _VECTOR_STORE_SEARCH_OPS else params
+    data = as_dict(store_search_params(params)) if plan.host_op in _VECTOR_STORE_SEARCH_OPS else params
+    if isinstance(data.get("cache"), bool):
+        data.pop("cache", None)
+    return data
 
 
 def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], request: Mapping[str, object]) -> None:
@@ -917,6 +920,9 @@ def _resolve_deployment_cache_policy(
     model_info: Final = as_dict(deployment.get("model_info"))
     litellm_params: Final = as_dict(deployment.get("litellm_params"))
 
+    if kwargs.get("cache") is False:
+        kwargs["caching"] = False
+
     # Seed kwargs["cache"] by merging default_litellm_params, deployment-level cache
     # (namespace, etc.), and request cache options so namespaces are preserved when adding TTL
     merged_cache: dict[str, object] = {}
@@ -937,8 +943,16 @@ def _resolve_deployment_cache_policy(
     if existing_request_cache:
         merged_cache.update(existing_request_cache)
 
-    if merged_cache:
+    if (
+        merged_cache
+        or isinstance(litellm_params.get("cache"), bool)
+        or isinstance(model_info.get("cache"), bool)
+        or isinstance(kwargs.get("cache"), bool)
+    ):
         kwargs["cache"] = merged_cache
+
+    if kwargs.get("cache") is False:
+        kwargs["caching"] = False
 
     raw_response_cache: object = model_info.get("response_cache")
     if raw_response_cache is None:
@@ -988,6 +1002,12 @@ def _resolve_deployment_cache_policy(
         else:
             caching = True
             kwargs["caching"] = True
+    elif kwargs.get("caching") is False:
+        caching = False
+        cache_dict_opt = as_dict(kwargs.get("cache"))
+        cache_dict_opt["no-cache"] = True
+        cache_dict_opt["no-store"] = True
+        kwargs["cache"] = cache_dict_opt
 
     # Enforce deployment-level fine-grained restrictions regardless of whether
     # response_cache was explicitly supplied.  cache_cfg is only populated when
@@ -1014,6 +1034,9 @@ def _resolve_deployment_cache_policy(
         if "ttl" not in cache_dict_ttl:
             cache_dict_ttl["ttl"] = cache_ttl
         kwargs["cache"] = cache_dict_ttl
+
+    if isinstance(kwargs.get("cache"), bool):
+        kwargs["cache"] = {}
 
     return caching
 

@@ -114,16 +114,16 @@ async def prompt_management_acompletion(
     final["prompt_id"] = prompt_id
     final["prompt_variables"] = prompt_variables
     final["prompt_label"] = prompt_label
+    _ = final.pop("original_function", None)
+    caching: Final = _resolve_deployment_cache_policy(
+        deployment,
+        core.shaping.cache_responses,
+        final,
+        default_litellm_params=core.shaping.default_litellm_params,
+    )
+    final["caching"] = caching
     target_list: Final = core.group_deployments(model_name=str(rendered_model))  # pyright: ignore[reportUnknownArgumentType]  # the core's host registry
     if target_list is None or len(target_list) == 0:  # a direct call to the rendered model
-        _ = final.pop("original_function", None)
-        caching: Final = _resolve_deployment_cache_policy(
-            deployment,
-            core.shaping.cache_responses,
-            final,
-            default_litellm_params=core.shaping.default_litellm_params,
-        )
-        final["caching"] = caching
         return await core.host.invoke("acompletion")(**final)  # pyright: ignore[reportUnknownMemberType]  # the core's host
     timeouts: Final = {
         key: value
