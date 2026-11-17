@@ -183,3 +183,28 @@ def test_a_member_repair_rereads_the_roster_and_teams_under_the_team_lock(
 
         assert response.status_code == 200, response.text
         assert read_rows(TEAM_ENTRIES_SQL, (team, user)) == [{"entries": expected_entries}]
+
+
+def _patch_replace_groups(candidate: Gateway, user: str, team: str) -> httpx.Response:
+    return candidate.request(
+        "PATCH",
+        f"/scim/v2/Users/{user}",
+        {"schemas": [PATCH_OP_SCHEMA], "Operations": [{"op": "replace", "path": "groups", "value": [{"value": team}]}]},
+    )
+
+
+@pytest.mark.parametrize("write", [_put_with_group, _patch_replace_groups], ids=["put", "patch"])
+def test_a_scim_user_write_that_leaves_out_a_deleted_team_drops_it_from_the_users_teams(
+    gateway: Gateway, write: Callable[[Gateway, str, str], httpx.Response]
+) -> None:
+    with gateway.scenario() as scenario:
+        (user,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(gateway, (user,)))
+        deleted_team: Final = f"integration-deleted-team-{uuid.uuid4().hex}"
+        write_rows(APPEND_TEAM_SQL, (deleted_team, user))
+
+        response: Final = write(gateway, user, team)
+
+        assert response.status_code == 200, response.text
+        assert users_referencing(deleted_team) == frozenset()
+        assert users_referencing(team) == frozenset({user})

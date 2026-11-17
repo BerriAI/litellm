@@ -75,7 +75,11 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
-from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL, USER_ROWS_LOCK_SQL
+from litellm.proxy.management_helpers.access_group_team_sync import (
+    DETACH_TEAM_FROM_USERS_SQL,
+    TEAM_ADVISORY_LOCK_SQL,
+    USER_ROWS_LOCK_SQL,
+)
 from litellm.proxy.management_helpers.bulk_user_creation import (
     BULK_NEW_USER_CONCURRENCY,
     _bounded,  # pyright: ignore[reportPrivateUsage]  # the bounded gather /user/bulk_new runs its row writes through
@@ -1185,7 +1189,7 @@ async def _sync_requested_teams(
     record_teams: Sequence[str],
     requested_teams: Sequence[str],
 ) -> tuple[str, ...]:
-    """Write the roster change and return the teams to persist, leaving out groups that have no team row.
+    """Write the roster change, drop deleted teams from the user's teams, and return the requested teams that exist.
 
     A group the IdP pushed before LiteLLM has a team for it must not hold back the rest of the
     request, since that same request may be the one that deactivates the user.
@@ -1204,6 +1208,9 @@ async def _sync_requested_teams(
             sanitize_for_log(user_id),
             sanitize_for_log(sorted(teamless)),
         )
+
+    for deleted_team in sorted(teamless.intersection(record_teams)):
+        await prisma_client.writer_db.execute_raw(DETACH_TEAM_FROM_USERS_SQL, deleted_team, [user_id])
 
     teams_to_keep: Final = tuple(team for team in requested_teams if team not in teamless)
     await _handle_team_membership_changes(
