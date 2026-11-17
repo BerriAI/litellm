@@ -734,7 +734,8 @@ def _fetch_configured(
         return _NO_CONFIGURED
     named: Final = _configured_names(deployments, lambda info: info.display_name)
     tiered: Final = _configured_names(deployments, lambda info: info.service_tiers)
-    if not named | tiered:
+    undeployed: Final = frozenset(m.id for m in models) - frozenset(_public_name(d) for d in deployments)
+    if not named | tiered | undeployed:
         return _NO_CONFIGURED
     if client_version is None:
         warn("litellm: Codex keeps its own display names and service tiers: `codex --version` printed no version")
@@ -744,7 +745,6 @@ def _fetch_configured(
     if served is None:
         warn(f"litellm: Codex keeps its own display names and service tiers: {url} served no Codex catalog")
         return _NO_CONFIGURED
-    undeployed: Final = frozenset(m.id for m in models) - frozenset(_public_name(d) for d in deployments)
     return MappingProxyType({m.slug: _served_info(m, named | undeployed, tiered | undeployed) for m in served.models})
 
 
@@ -1045,8 +1045,8 @@ def codex_model_sync_args(
     `/v1/models?client_version=...`, so the proxy's own team, alias and tier rules
     decide it, and a tier the proxy could only name generically takes the installed
     Codex's name for it. A listed name with no deployment (a key's or team's alias)
-    takes both fields from that catalog too once any name is configured, since only
-    the proxy can resolve its target. It then
+    takes both fields from that catalog too, since only the proxy can resolve its
+    target, even one the key cannot see on /v1/model/info. It then
     reads the file back once before it is handed over. The key never lands in
     the file. A failed fetch, read, listing, write or read-back is reported
     rather than raised: Codex still launches with its built-in catalog and takes

@@ -796,6 +796,7 @@ class TestCodexModelSync:
             "http://localhost:4000/v1/models",
             "http://localhost:4000/v1/model/info",
             "http://localhost:4000/model_group/info",
+            "http://localhost:4000/v1/models?client_version=0.165.0",
         ]
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
         path = self._catalog_path(result)
@@ -1114,13 +1115,11 @@ class TestCodexModelSync:
         assert (entry["display_name"], entry["service_tiers"]) == expected
 
     @pytest.mark.parametrize(
-        ("configured", "expected"),
-        [({"display_name": "Configured"}, ("My Fast", [_STOCK_FAST_TIER])), ({}, ("my-fast", []))],
-        ids=["another_name_is_configured", "nothing_is_configured"],
+        "configured",
+        [{"display_name": "Configured"}, {}],
+        ids=["another_name_is_configured", "no_name_the_key_sees_is_configured"],
     )
-    def test_a_name_with_no_deployment_row_takes_what_the_proxy_serves_once_a_name_is_configured(
-        self, tmp_path, configured, expected
-    ):
+    def test_a_name_with_no_deployment_row_takes_what_the_proxy_serves(self, tmp_path, configured):
         self._sync(
             self._listing(self._row("gpt-5.5"), self._row("gpt-5.6-terra"), self._row("my-fast")),
             tmp_path,
@@ -1136,7 +1135,10 @@ class TestCodexModelSync:
         )
 
         entries = self._entries(tmp_path)
-        assert (entries["my-fast"]["display_name"], entries["my-fast"]["service_tiers"]) == expected
+        assert (entries["my-fast"]["display_name"], entries["my-fast"]["service_tiers"]) == (
+            "My Fast",
+            [_STOCK_FAST_TIER],
+        )
         assert (entries["gpt-5.5"]["display_name"], entries["gpt-5.5"]["service_tiers"]) == (
             "GPT-5.5",
             [_STOCK_FAST_TIER],
