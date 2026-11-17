@@ -233,6 +233,19 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         default_factory: Final[Callable[[], ClientSession]] = client if callable(client) else ClientSession
         self._client_factory: Callable[[], ClientSession] = session_factory or default_factory
+        self._session_finalizer: weakref.finalize[[ClientSession], None] | None = None
+        if owns_session and isinstance(client, ClientSession):
+            self._dispose_with_transport(client)
+
+    def _dispose_with_transport(self, session: ClientSession) -> None:
+        """Dispose ``session`` once this transport is freed, even when a reference cycle frees it.
+
+        The finalizer registry holds the session strongly, keeping it out of the transport's cyclic garbage,
+        where aiohttp's own finalizers would report it and its connector as unclosed.
+        """
+        if self._session_finalizer is not None:
+            self._session_finalizer.detach()
+        self._session_finalizer = weakref.finalize(self, _dispose_owned_session, session)
 
     def _rebuild_session(self) -> ClientSession:
         """
@@ -244,6 +257,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         """
         session: Final = self._client_factory()
         self._owns_session = True
+        self._dispose_with_transport(session)
         return session
 
     @classmethod
@@ -283,7 +297,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         except (RuntimeError, AttributeError, OSError) as e:
             verbose_logger.debug("Best-effort connector close failed: %s", e)
 
-    def _close_recycled_session(self, session: ClientSession) -> None:
+    @classmethod
+    def _close_recycled_session(cls, session: ClientSession) -> None:
         """Deterministically dispose a ClientSession this transport is replacing.
 
         Covers the three lifecycles a recycled session can be in:
@@ -312,32 +327,24 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     future: Final = asyncio.run_coroutine_threadsafe(session.close(), session_loop)
                 except RuntimeError as e:  # loop shut down between the checks
                     verbose_logger.debug("Threadsafe session close failed: %s", e)
-                    self._mark_connector_closed(session)
+                    cls._mark_connector_closed(session)
                 else:
-                    future.add_done_callback(self._on_threadsafe_close_done)
+                    future.add_done_callback(cls._on_threadsafe_close_done)
                 return
 
             # Foreign loop that is stopped or closed: an async close can no
             # longer run there, and running it on the current loop would touch
             # another loop's internals. Dispose synchronously instead.
-            self._mark_connector_closed(session)
+            cls._mark_connector_closed(session)
             return
 
         if current_loop is None:
-            self._mark_connector_closed(session)
+            cls._mark_connector_closed(session)
             return
 
         task: Final = current_loop.create_task(session.close())
-        cls: Final = type(self)
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
-
-    def __del__(self) -> None:
-        session: Final = getattr(self, "client", None)
-        if not getattr(self, "_owns_session", False) or not isinstance(session, ClientSession):
-            return
-        with contextlib.suppress(Exception):
-            self._close_recycled_session(session)
 
     def get_valid_client_session(self) -> ClientSession:
         """
@@ -552,3 +559,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         self.proxy_cache[proxy_cache_key] = proxy_url
 
         return proxy_url
+
+
+def _dispose_owned_session(session: ClientSession) -> None:
+    with contextlib.suppress(Exception):
+        LiteLLMAiohttpTransport._close_recycled_session(session)
