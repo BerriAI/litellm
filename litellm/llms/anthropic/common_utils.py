@@ -1771,6 +1771,7 @@ def _without_unsignable_thinking(
 def strip_unsignable_thinking_blocks_for_claude(
     messages: list[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     model: str,
+    base_model: str | None = None,
 ) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking blocks Claude cannot verify (no signature, or another provider's
@@ -1778,7 +1779,7 @@ def strip_unsignable_thinking_blocks_for_claude(
     since Claude answers 400 to them, a pending tool turn included. Other targets
     (DeepSeek, MiniMax, GLM) need their unsigned reasoning replayed.
     """
-    if "claude" not in model.lower():
+    if not any("claude" in name.lower() for name in (model, base_model or "")):
         return messages
     return [m for m in map(_without_unsignable_thinking, messages) if m is not None]
 

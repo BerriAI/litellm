@@ -1424,6 +1424,9 @@ async def test_unsigned_thinking_blocks_close_with_an_empty_signature_delta(is_a
         is_async,
     )
 
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="The user wants 2+2.", signature=""),
+    )
     assert [_event_before_stop(events, index) for index in _thinking_starts(events)] == [
         {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": ""}}
         for index in _thinking_starts(events)

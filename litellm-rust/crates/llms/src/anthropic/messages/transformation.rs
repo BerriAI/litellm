@@ -18,7 +18,7 @@ use crate::{
         ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
         has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
         optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        strip_encrypted_reasoning_blocks, strip_unsigned_thinking_blocks,
     },
     base_llm::{
         auth::AuthScheme,
@@ -135,8 +135,14 @@ pub(crate) fn transform_messages_request(
     } else {
         strip_advisor_blocks(request.messages)
     };
+    let messages = strip_encrypted_reasoning_blocks(messages);
+    let messages = if is_claude_model(&request.model) {
+        strip_unsigned_thinking_blocks(messages)
+    } else {
+        messages
+    };
     Ok(MessagesRequest {
-        messages: strip_encrypted_reasoning_blocks(messages),
+        messages,
         params: MessagesOptionalParams {
             context_management,
             extra: without_null_safeguards(request.params.extra),
@@ -144,6 +150,10 @@ pub(crate) fn transform_messages_request(
         },
         ..request
     })
+}
+
+fn is_claude_model(model: &str) -> bool {
+    model.to_lowercase().contains("claude")
 }
 
 fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
@@ -462,6 +472,55 @@ mod tests {
     #[fixture]
     fn unmapped() -> MessagesModelCapabilities {
         MessagesModelCapabilities::default()
+    }
+
+    fn tool_turn(opening: Value) -> Value {
+        json!([
+            {"role": "user", "content": "List the files."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Draft."}
+            ]},
+            {"role": "user", "content": "Now list them."},
+            {"role": "assistant", "content": [
+                opening,
+                {"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}
+            ]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]}
+        ])
+    }
+
+    #[rstest]
+    #[case::empty(json!({"type": "thinking", "thinking": "open model plan", "signature": ""}))]
+    #[case::null(json!({"type": "thinking", "thinking": "open model plan", "signature": null}))]
+    #[case::missing(json!({"type": "thinking", "thinking": "open model plan"}))]
+    fn unsigned_thinking_never_reaches_claude_even_on_the_pending_tool_turn(
+        #[case] unsigned: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let mut expected = tool_turn(Value::Null);
+        expected[3]["content"] =
+            json!([{"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}]);
+        assert_eq!(
+            transform(json!({"messages": tool_turn(unsigned)}), unmapped, false),
+            Ok(body(json!({"messages": expected})))
+        );
+    }
+
+    #[rstest]
+    fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
+        let messages =
+            tool_turn(json!({"type": "thinking", "thinking": "open model plan", "signature": ""}));
+        assert_eq!(
+            transform(
+                json!({"model": "deepseek-v4-pro", "messages": messages.clone()}),
+                unmapped,
+                false
+            ),
+            Ok(body(
+                json!({"model": "deepseek-v4-pro", "messages": messages})
+            ))
+        );
     }
 
     #[fixture]

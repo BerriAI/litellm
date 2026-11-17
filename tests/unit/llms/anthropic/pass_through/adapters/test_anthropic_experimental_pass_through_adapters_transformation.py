@@ -21,6 +21,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
 )
+from litellm.llms.anthropic.pass_through.adapters.handler import (
+    LiteLLMMessagesToCompletionTransformationHandler,
+)
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
@@ -291,7 +294,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     assert block_type == "thinking"
     assert content_block_start == {
         "type": "thinking",
-        "thinking": "I need to summar",
+        "thinking": "",
         "signature": "",
     }
 
@@ -6023,3 +6026,71 @@ async def test_streamed_reasoning_summaries_stay_with_their_own_encrypted_item(
         ("thinking", "Check the forecast.", encrypted_reasoning_signature("gAAA_second")),
         ("text", "", None),
     ]
+
+
+_TOOL_LOOP_FROM_AN_OPEN_MODEL: Final = [
+    {"role": "user", "content": "Solve it."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "open model plan", "signature": ""},
+            {"type": "text", "text": "Draft."},
+        ],
+    },
+    {"role": "user", "content": "List the files."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "call ls", "signature": ""},
+            {"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}},
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]},
+]
+
+
+def _sent_assistant_turns(model: str, deployment: Mapping[str, object]) -> list[dict[str, object]]:
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=_TOOL_LOOP_FROM_AN_OPEN_MODEL,
+        model=model,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        extra_kwargs=deployment,
+    )
+    return [m for m in completion_kwargs["messages"] if m["role"] == "assistant"]
+
+
+@pytest.mark.parametrize(
+    "model, deployment",
+    [
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            {"custom_llm_provider": "bedrock"},
+            id="bedrock-converse",
+        ),
+        pytest.param(
+            "github_copilot/claude-sonnet-4.5",
+            {"custom_llm_provider": "github_copilot"},
+            id="github-copilot",
+        ),
+        pytest.param(
+            "bedrock/converse/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+            {"custom_llm_provider": "bedrock", "base_model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"},
+            id="application-inference-profile-with-base-model",
+        ),
+    ],
+)
+def test_unsigned_thinking_never_reaches_claude_through_the_chat_adapter(
+    model: str, deployment: Mapping[str, object]
+) -> None:
+    turns: Final = _sent_assistant_turns(model, deployment)
+
+    assert [turn.get("thinking_blocks") for turn in turns] == [None, None]
+    assert [turn.get("reasoning_content") for turn in turns] == [None, None]
+    assert turns[1]["tool_calls"][0]["id"] == "toolu_1"
+
+
+def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_adapter() -> None:
+    turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
+
+    assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]

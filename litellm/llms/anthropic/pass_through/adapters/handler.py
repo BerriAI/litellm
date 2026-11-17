@@ -723,6 +723,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         provider_kwargs: Final = extra_kwargs or {}
+        base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
         strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
@@ -740,7 +741,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         request_data: Final[dict[str, object]] = {
             "model": model,
-            "messages": strip_unsignable_thinking_blocks_for_claude(messages, model),
+            "messages": strip_unsignable_thinking_blocks_for_claude(
+                messages, model, base_model if isinstance(base_model, str) else None
+            ),
             "max_tokens": max_tokens,
         }
 
