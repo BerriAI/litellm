@@ -1,6 +1,6 @@
 # Windows tests
 
-The `windows-sdk` job in `.github/workflows/test-merge-smoke.yml` is the only place these run, on a Windows runner with no proxy dependencies installed. They prove the SDK works on Windows without them, so a test here must not import uvicorn, fastapi, psutil or anything else outside the `dev` group, and must not need the `litellm-gateway.exe` binary
+The `windows-sdk` job in `.github/workflows/test-merge-smoke.yml` is the only place these run, on pushes to main and manual runs but not on pull requests, on a Windows runner with no proxy dependencies installed. They prove the SDK works on Windows without them, so a test here must not import uvicorn, fastapi, psutil or anything else outside the `dev` group, and must not need the `litellm-gateway.exe` binary
 
 A test that cannot run off Windows carries a `skipif` on `sys.platform`, so collecting this folder on another OS never fails
 

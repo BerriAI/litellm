@@ -5,7 +5,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 """
 
 import copy
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
@@ -18,7 +18,7 @@ from typing import (
     cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
 )
 
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+_COUNT_OPTION: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _COUNTED_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 _TRANSFORMED_REQUEST: Final = TypeAdapter(dict[str, object])
 _DROPPED_PATHS: Final = TypeAdapter(tuple[object, ...])
@@ -417,19 +418,26 @@ def _max_output_tokens(model: str, custom_llm_provider: str | None) -> int:
     )
 
 
+def _json_options(options: Mapping[str, object]) -> Iterator[tuple[str, JsonValue]]:
+    for name, value in options.items():
+        try:
+            yield name, _COUNT_OPTION.validate_python(value)
+        except ValidationError:
+            continue
+
+
 def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_params: object) -> Mapping[str, JsonValue]:
-    return _COUNT_REQUEST.validate_python(
-        delete_nested_values(
-            options,
-            (
-                path
-                for path in _DROPPED_PATHS.validate_python(
-                    additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
-                )
-                if isinstance(path, str)
-            ),
-        )
+    kept: Final = delete_nested_values(
+        options,
+        (
+            path
+            for path in _DROPPED_PATHS.validate_python(
+                additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
+            )
+            if isinstance(path, str)
+        ),
     )
+    return dict(_json_options(kept))
 
 
 def messages_count_options(

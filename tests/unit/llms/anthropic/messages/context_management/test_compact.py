@@ -2814,10 +2814,10 @@ def test_build_summary_messages_keeps_midturn_system_correction_in_place():
 
 
 async def test_threshold_check_counts_tokens_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -2828,7 +2828,7 @@ async def test_threshold_check_counts_tokens_off_the_event_loop(monkeypatch):
 
     monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "claude-haiku-4-5")
     warm_tokenizer(MODEL)
-    messages = [{"role": "user", "content": text * 100}, *_simple_messages()]
+    messages = [{"role": "user", "content": uncounted_text()}, *_simple_messages()]
     result, took, lags = await timed_with_loop_lags(
         lambda: apply_compact_20260112(
             model=MODEL,

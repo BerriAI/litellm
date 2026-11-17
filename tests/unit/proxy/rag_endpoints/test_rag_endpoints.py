@@ -7,6 +7,7 @@ import io
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import count
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +16,7 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
 import litellm
 from litellm import Router
@@ -2231,9 +2233,21 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
     import litellm as litellm_module
 
     monkeypatch.setattr(litellm_module, "sse_keepalive_ping_interval_seconds", 0.05)
+    retrieval_released: Final = asyncio.Event()
+    ping_count: Final = count(1)
+
+    async def observe_pings(scope: Scope, receive: Receive, send: Send) -> None:
+        async def observe_send(message: Message) -> None:
+            await send(message)
+            if message["type"] == "http.response.body":
+                for _ in range(message.get("body", b"").count(b": ping\n\n")):
+                    if next(ping_count) == 3:
+                        retrieval_released.set()
+
+        await client_internal_user.app(scope, receive, observe_send)
 
     async def slow_aquery(**kwargs):
-        await asyncio.sleep(0.3)
+        await asyncio.wait_for(retrieval_released.wait(), timeout=10)
         return await litellm_module.acompletion(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "What is the codename?"}],
@@ -2252,7 +2266,7 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
             "litellm.proxy.proxy_server.prisma_client", None
         ),  # test-quality-ok: proxy module global, no injection seam
     ):
-        response = client_internal_user.post(
+        response = TestClient(observe_pings).post(
             "/v1/rag/query",
             json={
                 "model": "gpt-4o-mini",
