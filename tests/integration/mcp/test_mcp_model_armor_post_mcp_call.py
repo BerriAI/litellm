@@ -34,6 +34,7 @@ TOKEN_PATH: Final = "/token"
 STRICT: Final = "model-armor-mcp-strict"
 FAIL_OPEN: Final = "model-armor-mcp-fail-open"
 BLOCK_MARK: Final = "SYNTHETIC-ARMOR-INSPECT-MATCH"
+SKIP_MARK: Final = "SYNTHETIC-ARMOR-FILTER-SKIPPED"
 OUTAGE_MARK: Final = "SYNTHETIC-ARMOR-OUTAGE"
 SENSITIVE: Final = "synthetic-ssn-078-05-1120"
 REDACTED: Final = "[SYNTHETIC_REDACTED]"
@@ -44,10 +45,10 @@ def _sanitize_target(template: str) -> str:
     return f"/v1/projects/synthetic-project/locations/us/templates/{template}:sanitizeModelResponse"
 
 
-def _sdp(result: dict[str, object]) -> Reply:
-    return Reply(
-        body=json.dumps({"sanitizationResult": {"filterResults": {"sdp": {"sdpFilterResult": result}}}}).encode()
-    )
+def _sdp(result: dict[str, object], skipped: bool = False) -> Reply:
+    filters: Final[dict[str, object]] = {"sdp": {"sdpFilterResult": result}}
+    rai: Final = {"rai": {"raiFilterResult": {"executionState": "EXECUTION_SKIPPED"}}} if skipped else {}
+    return Reply(body=json.dumps({"sanitizationResult": {"filterResults": {**filters, **rai}}}).encode())
 
 
 def _model_armor(request: Request) -> Reply:
@@ -58,15 +59,19 @@ def _model_armor(request: Request) -> Reply:
             ).encode()
         )
     text: Final[str] = next(iter(json.loads(request.body).values()))["text"]
+    if not text.strip():
+        return Reply(status=400, body=json.dumps({"error": {"code": 400, "message": "text is empty"}}).encode())
+    skipped: Final = SKIP_MARK in text
     if OUTAGE_MARK in text:
         return Reply(status=500, body=json.dumps({"error": "synthetic Model Armor outage"}).encode())
     if BLOCK_MARK in text:
-        return _sdp({"inspectResult": {"matchState": "MATCH_FOUND"}})
+        return _sdp({"inspectResult": {"matchState": "MATCH_FOUND"}}, skipped)
     if SENSITIVE in text:
         return _sdp(
-            {"deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": text.replace(SENSITIVE, REDACTED)}}}
+            {"deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": text.replace(SENSITIVE, REDACTED)}}},
+            skipped,
         )
-    return _sdp({"inspectResult": {"matchState": "NO_MATCH_FOUND"}})
+    return _sdp({"inspectResult": {"matchState": "NO_MATCH_FOUND"}}, skipped)
 
 
 def _guardrail(name: str, armor_url: str, private_key: str, *, fail_on_error: bool) -> dict[str, object]:
@@ -118,6 +123,16 @@ def _note_tool() -> ScriptedTool:
         lambda params: {
             "content": [{"type": "text", "text": params["arguments"]["note"]}],
             "structuredContent": {"note": params["arguments"]["note"]},
+            "isError": False,
+        },
+    )
+
+
+def _blocks_tool() -> ScriptedTool:
+    return ScriptedTool(
+        "blocks",
+        lambda params: {
+            "content": [{"type": "text", "text": text} for text in params["arguments"]["texts"]],
             "isError": False,
         },
     )
@@ -202,6 +217,14 @@ class Rig:
             f"{self.alias}-note", {"note": note}, server_id=self.server_id
         )
 
+    def call_blocks(self, entry: EntryPoint, texts: tuple[str, ...], guardrails: tuple[str, ...]) -> Outcome:
+        key: Final = self.scenario.key(
+            object_permission={"mcp_servers": [self.server_id]}, metadata={"guardrails": list(guardrails)}
+        )
+        return McpCaller(self.proxy, key, entry, self.alias).call(
+            f"{self.alias}-blocks", {"texts": list(texts)}, server_id=self.server_id
+        )
+
     def respond_with_lookup(
         self, record: str, marker: str, guardrails: tuple[str, ...], requested: tuple[str, ...] = ()
     ) -> tuple[str, str]:
@@ -256,7 +279,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with (
         gateway_from_environment() as gateway,
         wire_server(_model_armor) as armor,
-        scripted_peer(_note_tool(), _lookup_tool()) as peer,
+        scripted_peer(_note_tool(), _blocks_tool(), _lookup_tool()) as peer,
         owned_proxy_process(gateway, root, {}, config=_config(armor.url, root)) as owned,
         owned.gateway.scenario() as scenario,
     ):
@@ -302,10 +325,7 @@ def test_a_deidentify_match_returns_the_sanitized_text_and_structured_content(ri
         {"note": masked},
     ), outcome.raw
     assert SENSITIVE not in outcome.raw, outcome.raw
-    assert rig.scans(marker) == [
-        (_sanitize_target(STRICT), f"{note}\nnote"),
-        (_sanitize_target(STRICT), note),
-    ]
+    assert rig.scans(marker) == [(_sanitize_target(STRICT), f"{note}\nnote")]
 
 
 @pytest.mark.parametrize("entry", ENTRIES)
@@ -380,3 +400,60 @@ def test_a_default_off_guardrail_is_not_called_on_the_responses_api_for_a_key_th
 
     assert tool_output == f"{BLOCK_MARK} {marker}"
     assert rig.scans(marker) == []
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_blank_block_is_left_out_of_the_scan_and_the_other_block_is_masked(rig: Rig, entry: EntryPoint) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+    sensitive: Final = f"account {SENSITIVE} {marker}"
+
+    outcome: Final = rig.call_blocks(entry, (" ", sensitive), (STRICT,))
+
+    assert outcome.error is None, outcome.raw
+    assert [block["text"] for block in _tool_result(outcome)["content"]] == [" ", f"account {REDACTED} {marker}"]
+    assert rig.scans(marker) == [(_sanitize_target(STRICT), sensitive)]
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_tool_result_model_armor_only_partly_scanned_is_withheld_when_fail_on_error_is_true(
+    rig: Rig, entry: EntryPoint
+) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+
+    outcome: Final = rig.call_blocks(entry, (f"{SKIP_MARK} {marker}",), (STRICT,))
+
+    assert outcome.error is not None and marker not in outcome.raw, outcome.raw
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_match_found_while_a_filter_was_skipped_is_masked_when_failing_open(rig: Rig, entry: EntryPoint) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+
+    outcome: Final = rig.call_blocks(entry, (f"{SKIP_MARK} {SENSITIVE} {marker}",), (FAIL_OPEN,))
+
+    assert outcome.error is None, outcome.raw
+    assert [block["text"] for block in _tool_result(outcome)["content"]] == [f"{SKIP_MARK} {REDACTED} {marker}"]
+
+
+def test_the_apply_guardrail_endpoint_masks_a_response_and_fails_closed_on_an_outage(rig: Rig) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+
+    masked: Final = rig.proxy.request(
+        "POST",
+        "/guardrails/apply_guardrail",
+        {"guardrail_name": STRICT, "text": f"account {SENSITIVE} {marker}", "input_type": "response"},
+    )
+    closed: Final = rig.proxy.request(
+        "POST",
+        "/guardrails/apply_guardrail",
+        {"guardrail_name": STRICT, "text": f"{OUTAGE_MARK} {marker}", "input_type": "response"},
+    )
+    opened: Final = rig.proxy.request(
+        "POST",
+        "/guardrails/apply_guardrail",
+        {"guardrail_name": FAIL_OPEN, "text": f"{OUTAGE_MARK} {marker}", "input_type": "response"},
+    )
+
+    assert (masked.status_code, masked.json()["response_text"]) == (200, f"account {REDACTED} {marker}"), masked.text
+    assert closed.status_code == 500 and marker not in closed.text, closed.text
+    assert (opened.status_code, opened.json()["response_text"]) == (200, f"{OUTAGE_MARK} {marker}"), opened.text
