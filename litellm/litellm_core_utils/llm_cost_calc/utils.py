@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     tier_rate,
 )
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -53,6 +54,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_IMAGE_USAGE_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -2138,14 +2140,32 @@ def calculate_image_response_cost_from_usage(
     input_tokens_details: Final[object] = getattr(usage, "input_tokens_details", None)
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     if input_tokens_details is not None:
-        # input_tokens_details may be a dict (e.g. OpenAI image edit responses)
-        # or an object; read it tolerantly like the output side below, so image
-        # input tokens are priced at input_cost_per_image_token instead of
-        # silently falling back to the text rate.
+        cached_tokens: Final = _get_token_detail_value(input_tokens_details, "cached_tokens") or 0
+        text_input_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
+        image_input_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
+        cached_details: Final[object] = (
+            _IMAGE_USAGE_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
+            if isinstance(input_tokens_details, Mapping)
+            else getattr(input_tokens_details, "cached_tokens_details", None)
+        )
+        modality_cache: Final = (
+            CachedTokensDetails.model_validate(cached_details, from_attributes=True)
+            if cached_details is not None
+            else (
+                CachedTokensDetails(text_tokens=text_input_tokens, image_tokens=image_input_tokens)
+                if cached_tokens == prompt_tokens
+                else None
+            )
+        )
+        has_complete_cache_split: Final = (
+            modality_cache is not None
+            and (modality_cache.text_tokens or 0) + (modality_cache.image_tokens or 0) == cached_tokens
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
-            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
-            cached_tokens=0,
+            text_tokens=text_input_tokens,
+            image_tokens=image_input_tokens,
+            cached_tokens=cached_tokens if has_complete_cache_split else 0,
+            cached_tokens_details=modality_cache if has_complete_cache_split else None,
         )
 
     completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)

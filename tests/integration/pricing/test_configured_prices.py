@@ -17,7 +17,7 @@ from tests.integration._support.client import Gateway, eventually, object_value,
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.upstream import delete_scenario, register_scenario
-from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
+from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RealtimeResponse
 from tests.integration.pricing.test_realtime_cached_audio_pricing import one_realtime_turn
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -27,6 +27,91 @@ REALTIME_INPUT_TEXT_TOKENS: Final = 10
 REALTIME_INPUT_AUDIO_TOKENS: Final = 20
 REALTIME_OUTPUT_TEXT_TOKENS: Final = 5
 REALTIME_OUTPUT_AUDIO_TOKENS: Final = 7
+
+
+@pytest.mark.parametrize(
+    ("cached_tokens", "cached_details", "expected_input_cost"),
+    (
+        (0, None, 4 * 0.000005 + 6 * 0.000008),
+        (10, None, 4 * 0.00000125 + 6 * 0.000002),
+        (5, {"text_tokens": 2, "image_tokens": 3}, 2 * 0.000005 + 3 * 0.000008 + 2 * 0.00000125 + 3 * 0.000002),
+        (5, None, 4 * 0.000005 + 6 * 0.000008),
+        (5, {}, 4 * 0.000005 + 6 * 0.000008),
+        (5, {"text_tokens": 2}, 4 * 0.000005 + 6 * 0.000008),
+    ),
+    ids=(
+        "uncached",
+        "fully_cached",
+        "partial_modality_cache",
+        "partial_cache_without_split",
+        "partial_cache_empty_split",
+        "partial_cache_incomplete_split",
+    ),
+)
+def test_image_usage_cache_discounts_are_reported_and_persisted(
+    gateway: Gateway,
+    cached_tokens: int,
+    cached_details: dict[str, int] | None,
+    expected_input_cost: float,
+) -> None:
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"image-cache-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(
+            scenario_id,
+            JsonResponse(
+                content_type="application/json",
+                body={
+                    "created": 1700000000,
+                    "data": [{"b64_json": "AA=="}],
+                    "usage": {
+                        "total_tokens": 20,
+                        "input_tokens": 10,
+                        "output_tokens": 10,
+                        "input_tokens_details": {
+                            "text_tokens": 4,
+                            "image_tokens": 6,
+                            "cached_tokens": cached_tokens,
+                            **({"cached_tokens_details": dict(cached_details)} if cached_details is not None else {}),
+                        },
+                        "output_tokens_details": {"image_tokens": 10, "text_tokens": 0},
+                    },
+                },
+            ),
+        )
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key()
+        model: Final = scenario.model(
+            model="openai/gpt-image-2.6-sunburst",
+            api_base=handle.api_base(),
+            model_info={
+                "mode": "image_generation",
+                "input_cost_per_token": 0.000005,
+                "input_cost_per_image_token": 0.000008,
+                "cache_read_input_token_cost": 0.00000125,
+                "cache_read_input_image_token_cost": 0.000002,
+                "output_cost_per_token": 0.000030,
+                "output_cost_per_image_token": 0.000030,
+            },
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/images/generations", {"model": model, "prompt": scenario_id}, key=key
+        )
+        assert response.status_code == 200, response.text
+        usage: Final = object_value(object_value(response.json())["usage"])
+        assert object_value(usage["input_tokens_details"])["cached_tokens"] == cached_tokens
+        expected_cost: Final = expected_input_cost + 10 * 0.000030
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key = %s',
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert rows[0]["prompt_tokens"] == 10
+        assert rows[0]["completion_tokens"] == 10
+        assert float(str(rows[0]["spend"])) == pytest.approx(expected_cost)
 
 
 def _realtime_response_done() -> RealtimeResponse:
