@@ -1062,7 +1062,11 @@ fn decode_response(
                 )));
             };
             body.entry("stop_sequence").or_insert(Value::Null);
-            return Ok(MessagesBody::Unchecked(body));
+            return config
+                .transform_unchecked_response(body)
+                .map(MessagesBody::Unchecked)
+                .map_err(Error::from)
+                .map_err(Error::after_send);
         }
     };
     let message = config
@@ -2318,5 +2322,27 @@ mod tests {
     async fn a_string_stream_flag_sends_no_stream_key_to_mantle(#[case] model: &str) {
         let call = mantle_call(model, json!({"stream": "true"}), Some("key")).await;
         assert_eq!(call.wire.body.get("stream"), None);
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(litellm_core_utils::get_llm_provider_logic::LlmProviders::BedrockMantle, "anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::bedrock_mantle_route(litellm_core_utils::get_llm_provider_logic::LlmProviders::Bedrock, "mantle/anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::anthropic(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::Anthropic,
+        "claude-sonnet-5-5",
+        None
+    )]
+    fn an_error_envelope_bills_zero_usage_only_on_mantle(
+        #[case] provider: litellm_core_utils::get_llm_provider_logic::LlmProviders,
+        #[case] model: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let config = messages_provider(provider, model).unwrap().config();
+        let envelope =
+            r#"{"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}"#;
+        let Ok(MessagesBody::Unchecked(body)) = decode_response(config, model, envelope) else {
+            panic!("an error envelope decodes unchecked");
+        };
+        assert_eq!(body.get("usage").cloned(), expected);
     }
 }
