@@ -151,6 +151,10 @@ def _int(value: object, default: int) -> int:
     return value if isinstance(value, int) else default
 
 
+def _text(value: object) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
 def column_type_lookup(connection: "psycopg.Connection[tuple[object, ...]]", schema: str) -> ColumnTypeLookup:
     def lookup(table: str, column: str) -> ColumnType | None:
         row: Final = connection.execute(
@@ -345,7 +349,7 @@ def find_blockers(
     previous_timeout: Final = connection.execute("SHOW statement_timeout").fetchone()
     previous_read_only: Final = connection.execute("SHOW default_transaction_read_only").fetchone()
     block_size: Final = connection.execute("SHOW block_size").fetchone()
-    limit_bytes: Final = btree_max_entry_bytes(int(str(block_size[0])) if block_size else DEFAULT_BLOCK_SIZE)
+    limit_bytes: Final = btree_max_entry_bytes(int(_text(block_size[0])) if block_size else DEFAULT_BLOCK_SIZE)
     connection.execute("SET default_transaction_read_only = on")
     connection.execute(sql.SQL("SET statement_timeout = {}").format(sql.Literal(int(timeout_seconds * 1000))))
     column_type: Final = column_type_lookup(connection, schema)
@@ -359,11 +363,13 @@ def find_blockers(
         _run_check(connection, schema, check, types, limit_bytes, timeout_seconds) for check, types in applicable
     )
     connection.execute(
-        sql.SQL("SET statement_timeout = {}").format(sql.Literal(str(previous_timeout[0]) if previous_timeout else "0"))
+        sql.SQL("SET statement_timeout = {}").format(
+            sql.Literal(_text(previous_timeout[0]) if previous_timeout else "0")
+        )
     )
     connection.execute(
         sql.SQL("SET default_transaction_read_only = {}").format(
-            sql.Literal(str(previous_read_only[0]) if previous_read_only else "off")
+            sql.Literal(_text(previous_read_only[0]) if previous_read_only else "off")
         )
     )
     return tuple(result for result in results if result is not None)
