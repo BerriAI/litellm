@@ -15,6 +15,7 @@ from typing import Final, cast
 import httpx
 import openai
 import pytest
+import respx
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
@@ -196,6 +197,24 @@ async def test_caller_client_default_header_overrides_attribution(
         litellm.completion(model=model, messages=messages, api_base=_API_BASE, api_key="k", client=client)
 
     assert transport.last(header) == ["my-client"]
+
+
+@pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
+def test_sdk_client_headers_ignored_when_http_handler_drops_the_client(
+    transport: _HeaderCapturingTransport, monkeypatch: pytest.MonkeyPatch, model: str, header: str
+) -> None:
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    sdk_client: Final = openai.OpenAI(api_key="k", base_url=_API_BASE, default_headers={header: "my-client"})
+
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(f"{_API_BASE}/chat/completions").mock(
+            return_value=httpx.Response(200, content=_COMPLETION_BODY, headers={"content-type": "application/json"})
+        )
+        litellm.completion(
+            model=model, messages=[{"role": "user", "content": "hi"}], api_base=_API_BASE, api_key="k", client=sdk_client
+        )
+
+    assert route.calls.last.request.headers.get_list(header) == ["litellm"]
 
 
 def test_provider_without_attribution_sends_none(transport: _HeaderCapturingTransport, handler_path: str) -> None:

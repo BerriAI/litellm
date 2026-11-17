@@ -75,10 +75,11 @@ _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 def _client_header_names(client: object) -> frozenset[str]:
     if not isinstance(client, (openai.OpenAI, openai.AsyncOpenAI)):
         return frozenset()
+    sdk_user_agent: Final = f"{type(client).__name__}/Python {openai.__version__}"
     return frozenset(
         name.lower()
         for name, value in client.default_headers.items()
-        if name != "User-Agent" or value != client.user_agent
+        if name != "User-Agent" or value != sdk_user_agent
     )
 
 

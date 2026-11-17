@@ -52,9 +52,11 @@ class SimpleProviderConfig:
     def get_attribution_headers(self) -> Mapping[str, str]:
         if not self.user_agent:
             return {}
+        user_agent_override: Final = os.environ.get("LITELLM_USER_AGENT")
+        if user_agent_override is not None:
+            return {"User-Agent": user_agent_override}
         return {
-            "User-Agent": os.environ.get("LITELLM_USER_AGENT")
-            or self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
+            "User-Agent": self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
                 _PYTHON_PLACEHOLDER, platform.python_version()
             )
         }

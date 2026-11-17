@@ -47,10 +47,11 @@ def test_sarvam_attribution_headers_report_running_versions(monkeypatch: pytest.
     assert dict(_sarvam_config().get_attribution_headers()) == {"User-Agent": SARVAM_USER_AGENT}
 
 
-def test_litellm_user_agent_env_replaces_the_template(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_USER_AGENT", "my-gateway/2.0")
+@pytest.mark.parametrize("override", ["my-gateway/2.0", ""])
+def test_litellm_user_agent_env_replaces_the_template(monkeypatch: pytest.MonkeyPatch, override: str) -> None:
+    monkeypatch.setenv("LITELLM_USER_AGENT", override)
 
-    assert dict(_sarvam_config().get_attribution_headers()) == {"User-Agent": "my-gateway/2.0"}
+    assert dict(_sarvam_config().get_attribution_headers()) == {"User-Agent": override}
 
 
 def test_generated_config_class_forwards_attribution_headers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,22 +98,37 @@ def test_sarvam_caller_user_agent_wins(respx_mock: respx.MockRouter) -> None:
     assert route.calls.last.request.headers["User-Agent"] == "caller-app/1.0"
 
 
+class _BrandedClient(openai.OpenAI):
+    @property
+    def user_agent(self) -> str:
+        return "branded-app/3.0"
+
+
+class _UnbrandedSubclass(openai.OpenAI):
+    pass
+
+
 @pytest.mark.parametrize(
-    ("client_default_headers", "expected_user_agent"),
+    ("client_class", "client_default_headers", "expected_user_agent"),
     [
-        pytest.param({"User-Agent": "client-default/1.0"}, "client-default/1.0", id="client_user_agent_wins"),
-        pytest.param({}, SARVAM_USER_AGENT, id="sdk_default_user_agent_replaced"),
+        pytest.param(
+            openai.OpenAI, {"User-Agent": "client-default/1.0"}, "client-default/1.0", id="client_user_agent_wins"
+        ),
+        pytest.param(_BrandedClient, {}, "branded-app/3.0", id="subclass_user_agent_wins"),
+        pytest.param(openai.OpenAI, {}, SARVAM_USER_AGENT, id="sdk_default_user_agent_replaced"),
+        pytest.param(_UnbrandedSubclass, {}, SARVAM_USER_AGENT, id="subclass_sdk_default_user_agent_replaced"),
     ],
 )
 def test_sarvam_user_agent_with_a_caller_client(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    client_class: type[openai.OpenAI],
     client_default_headers: dict[str, str],
     expected_user_agent: str,
 ) -> None:
     monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
     route: Final = respx_mock.post(_sarvam_chat_url()).mock(return_value=httpx.Response(200, json=_chat_response()))
-    client: Final = openai.OpenAI(
+    client: Final = client_class(
         api_key="test-key", base_url=_sarvam_config().base_url, default_headers=client_default_headers
     )
 
