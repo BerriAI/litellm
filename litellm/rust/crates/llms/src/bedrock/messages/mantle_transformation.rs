@@ -42,7 +42,7 @@ use crate::{
 
 use super::invoke_transformations::{
     anthropic_claude_transformation::{
-        bearer_token, get_aws_region_from_model_arn, invoke_headers,
+        bearer_token, invoke_headers, region_from_model,
         native_output_fallback_litellm_params,
         should_retry_anthropic_messages_without_native_output,
     },
@@ -389,13 +389,15 @@ fn build_mantle_messages_url(
     }
 }
 
+/// The Bedrock region for the host and the SigV4 scope, in Python's `_get_aws_region_name` order:
+/// `aws_region_name`, the model's ARN or `<region>/` path segment, then the environment.
 fn bedrock_region(
     model: &str,
     litellm_params: &LitellmParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
     resolve_bedrock_region(
-        get_aws_region_from_model_arn(model).as_deref(),
+        region_from_model(model).as_deref(),
         &litellm_params.aws,
         env_lookup,
     )
@@ -710,30 +712,65 @@ mod tests {
     #[rstest]
     #[case::mantle_region_env_ignored(
         "mantle/anthropic.claude-test",
+        None,
         &[("BEDROCK_MANTLE_REGION", "eu-west-1"), ("AWS_REGION", "ap-south-1")],
         "ap-south-1"
     )]
     #[case::aws_default_region(
         "mantle/anthropic.claude-test",
+        None,
         &[("AWS_DEFAULT_REGION", "eu-west-1")],
         "eu-west-1"
     )]
-    #[case::region_prefix_ignored(
+    #[case::region_path_beats_the_env(
         "mantle/eu-west-1/anthropic.claude-test",
+        None,
+        &[("AWS_REGION", "us-east-2")],
+        "eu-west-1"
+    )]
+    #[case::region_path_after_the_bedrock_prefix(
+        "bedrock/mantle/eu-west-1/anthropic.claude-test",
+        None,
+        &[("AWS_REGION", "us-east-2")],
+        "eu-west-1"
+    )]
+    #[case::gov_cloud_region_path(
+        "bedrock/mantle/us-gov-west-1/anthropic.claude-test",
+        None,
+        &[("AWS_REGION", "us-east-2")],
+        "us-gov-west-1"
+    )]
+    #[case::aws_region_name_beats_the_region_path(
+        "mantle/eu-west-1/anthropic.claude-test",
+        Some("ap-south-1"),
+        &[("AWS_REGION", "us-east-2")],
+        "ap-south-1"
+    )]
+    #[case::arn_region_beats_the_region_path(
+        "mantle/eu-west-1/arn:aws:bedrock:eu-central-1:123456789012:inference-profile/anthropic.claude-test",
+        None,
+        &[("AWS_REGION", "us-east-2")],
+        "eu-central-1"
+    )]
+    #[case::non_region_segment_falls_through_to_the_env(
+        "mantle/anthropic/claude-test",
+        None,
         &[("AWS_REGION", "us-east-2")],
         "us-east-2"
     )]
     #[case::arn_region(
         "mantle/arn:aws:bedrock:eu-central-1:123456789012:inference-profile/anthropic.claude-test",
+        None,
         &[("AWS_REGION", "us-east-2")],
         "eu-central-1"
     )]
     fn host_and_signing_region_follow_the_invoke_order(
         #[case] model: &str,
+        #[case] aws_region_name: Option<&str>,
         #[case] env_pairs: &'static [(&'static str, &'static str)],
         #[case] expected: &str,
     ) {
-        let litellm_params = params(None, None);
+        let litellm_params = params(aws_region_name, None);
         assert_eq!(
             url(None, model, &litellm_params, env_pairs),
             format!("https://bedrock-mantle.{expected}.api.aws/anthropic/v1/messages")
@@ -742,6 +779,14 @@ mod tests {
             environment(&[], None, model, &litellm_params, env_pairs).auth,
             AuthScheme::AwsSigV4 { region, .. } if region == expected
         ));
+    }
+
+    #[rstest]
+    fn the_region_path_stays_in_the_body_model() {
+        assert_eq!(
+            amazon_mantle_model_id("mantle/eu-west-1/anthropic.claude-test"),
+            "eu-west-1/anthropic.claude-test"
+        );
     }
 
     #[rstest]

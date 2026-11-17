@@ -145,12 +145,14 @@ pub(crate) fn get_aws_region_from_model_arn(model: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Port of Python's `AmazonInvokeConfig.get_complete_url`.
-fn region_from_model(model: &str) -> Option<String> {
+/// The region a Bedrock model names: an ARN's region, else a `<region>/` path segment after the
+/// routing prefixes, as Python's `BaseAWSLLM._get_aws_region_name` reads it before the environment.
+pub(crate) fn region_from_model(model: &str) -> Option<String> {
     get_aws_region_from_model_arn(model)
         .or_else(|| split_bedrock_region_path(model).0.map(str::to_string))
 }
 
+/// Port of Python's `AmazonInvokeConfig.get_complete_url`.
 fn invoke_url(
     api_base: Option<&str>,
     model: &str,
