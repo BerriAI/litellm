@@ -25,6 +25,7 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
+from litellm.proxy.common_utils.sse_keepalive import SSE_STREAM_START_TAIL, advance_sse_tail, ends_sse_frame
 from litellm.types.integrations.custom_logger import AgenticLoopLimitError, AgenticLoopSafetyError
 
 if TYPE_CHECKING:
@@ -224,7 +225,8 @@ class AgenticAnthropicStreamingIterator:
         self._follow_up_iterator: AsyncIterator | None = None
         self._drain_task: asyncio.Task | None = None
         self._hook_task: asyncio.Task | None = None
-        self._follow_up_chunk_task: asyncio.Task | None = None
+        self._follow_up_chunk_task: asyncio.Task[bytes | None] | None = None
+        self._follow_up_tail = SSE_STREAM_START_TAIL
         self._replay_index = 0
         self._error_emitted = False
         self._loop_limit_reached = False
@@ -314,12 +316,14 @@ class AgenticAnthropicStreamingIterator:
     async def _next_follow_up_chunk(self, follow_up_iterator: AsyncIterator) -> bytes:
         if self._follow_up_chunk_task is None:
             self._follow_up_chunk_task = asyncio.create_task(_anext_or_none(follow_up_iterator))
-        if not await self._completed_within_ping_interval(self._follow_up_chunk_task):
-            return STREAM_SSE_KEEPALIVE_PING_BYTES
+        while not await self._completed_within_ping_interval(self._follow_up_chunk_task):
+            if ends_sse_frame(self._follow_up_tail):
+                return STREAM_SSE_KEEPALIVE_PING_BYTES
         chunk: Final = self._follow_up_chunk_task.result()
         self._follow_up_chunk_task = None
         if chunk is None:
             raise StopAsyncIteration
+        self._follow_up_tail = advance_sse_tail(self._follow_up_tail, chunk)
         return chunk
 
     def _buffer_holds_server_fulfilled_tool_use(self) -> bool:

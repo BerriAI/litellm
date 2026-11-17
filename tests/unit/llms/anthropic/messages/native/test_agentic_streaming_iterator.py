@@ -1028,7 +1028,10 @@ class TestAgenticStreamingIteratorHoldBack:
     async def test_should_emit_pings_while_the_follow_up_stream_is_slow(self):
         """The corrected answer can be slow to generate, so the follow-up stream gets keepalives too."""
         chunks = _build_tool_use_stream()
-        phase2_chunks = [b"follow-up-chunk-1", b"follow-up-chunk-2"]
+        phase2_chunks = [
+            _sse_event("message_start", {"type": "message_start"}),
+            _sse_event("message_stop", {"type": "message_stop"}),
+        ]
 
         mock_handler = MagicMock()
         mock_handler._call_agentic_completion_hooks = AsyncMock(
@@ -1047,6 +1050,29 @@ class TestAgenticStreamingIteratorHoldBack:
 
         first_follow_up_index = collected.index(phase2_chunks[0])
         assert collected[first_follow_up_index + 1] == STREAM_SSE_KEEPALIVE_PING_BYTES
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
+
+    @pytest.mark.asyncio
+    async def test_a_follow_up_ping_waits_for_a_half_written_frame_to_finish(self):
+        torn_frame = _sse_event("content_block_delta", {"type": "content_block_delta", "index": 0})
+        phase2_chunks = [torn_frame[:30], torn_frame[30:], _sse_event("message_stop", {"type": "message_stop"})]
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockSlowAsyncStream(phase2_chunks, delay_seconds=0.06)
+        )
+
+        iterator = _build_hold_back_iterator(
+            MockAsyncStream(_build_tool_use_stream()),
+            mock_handler,
+            ping_interval_seconds=0.02,
+        )
+
+        collected = [chunk async for chunk in iterator]
+
+        first_follow_up_index = collected.index(phase2_chunks[0])
+        assert collected[first_follow_up_index : first_follow_up_index + 2] == phase2_chunks[:2]
+        assert collected[first_follow_up_index + 2] == STREAM_SSE_KEEPALIVE_PING_BYTES
         assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
 
     @pytest.mark.asyncio
