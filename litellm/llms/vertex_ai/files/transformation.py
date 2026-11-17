@@ -61,6 +61,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
+    requests_audio_mime_type,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     transform_openai_input_gemini_embed_content,
@@ -1763,6 +1764,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 model=model,
                 logging_obj=logging_obj,
                 raw_response=mock_httpx_response,
+                keeps_requested_audio_format=requests_audio_mime_type(vertex_output.get("request", {})),
             )
 
             # Convert ModelResponse to dict

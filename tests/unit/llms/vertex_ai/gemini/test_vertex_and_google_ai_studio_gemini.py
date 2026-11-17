@@ -5,7 +5,7 @@ import json
 import struct
 import wave
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -1849,7 +1849,10 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
 )
 @pytest.mark.parametrize("sends_data_uri", [False, True], ids=["inline-data", "data-uri"])
 def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
-    respx_mock: respx.MockRouter, audio_format: dict[str, str | int], extra_body_key: str | None, sends_data_uri: bool
+    respx_mock: respx.MockRouter,
+    audio_format: Mapping[str, str | int],
+    extra_body_key: str | None,
+    sends_data_uri: bool,
 ) -> None:
     wav_base64: Final = _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
     route: Final = _mock_gemini_part(
@@ -1884,11 +1887,11 @@ def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
     "audio_format",
-    [{}, {"mimeType": None}, {"mime_type": None}],
-    ids=["no-mime-type", "null-mime-type", "null-snake-case-mime-type"],
+    [{}, {"mimeType": None}, {"mime_type": None}, {"mimeType": 0}],
+    ids=["no-mime-type", "null-mime-type", "null-snake-case-mime-type", "unspecified-enum-number"],
 )
 def test_gemini_tts_chat_audio_is_raw_pcm16_when_the_caller_names_no_audio_mime_type(
-    respx_mock: respx.MockRouter, audio_format: dict[str, None]
+    respx_mock: respx.MockRouter, audio_format: Mapping[str, int | None]
 ) -> None:
     _mock_gemini_audio(respx_mock, "audio/wav", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)))
 
@@ -1927,9 +1930,9 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_when_the_caller_names_no_audio_mime_
 )
 def test_gemini_tts_chat_audio_follows_the_response_format_gemini_receives(
     respx_mock: respx.MockRouter,
-    extra_generation_config: dict[str, object],
-    drops: list[str],
-    sent_response_format: dict[str, object],
+    extra_generation_config: Mapping[str, object],
+    drops: Sequence[str],
+    sent_response_format: Mapping[str, object],
     audio_data: str,
 ) -> None:
     route: Final = _mock_gemini_audio(
@@ -1950,6 +1953,30 @@ def test_gemini_tts_chat_audio_follows_the_response_format_gemini_receives(
 
     assert json.loads(route.calls.last.request.content)["generationConfig"]["responseFormat"] == sent_response_format
     assert response.choices[0].message.audio.data == audio_data
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_tts_chat_audio_keeps_the_container_asked_for_in_a_snake_case_generation_config(
+    respx_mock: respx.MockRouter,
+) -> None:
+    wav_base64: Final = _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
+    route: Final = _mock_gemini_audio(respx_mock, "audio/wav", wav_base64)
+
+    response: Final = completion(
+        model="gemini/gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        extra_body={
+            "generation_config": {
+                "response_modalities": ["AUDIO"],
+                "response_format": {"audio": {"mime_type": "AUDIO_WAV"}},
+            }
+        },
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert "generationConfig" not in json.loads(route.calls.last.request.content)
+    assert response.choices[0].message.audio.data == wav_base64
 
 
 @pytest.mark.respx(assert_all_called=True)
