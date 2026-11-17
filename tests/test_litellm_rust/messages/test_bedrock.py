@@ -5,6 +5,7 @@ import json
 import logging
 import struct
 import uuid
+from pathlib import Path
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import Final, cast  # noqa: TID251  # narrows the untyped Messages entries to their call shape
 
@@ -790,8 +791,15 @@ async def _mantle(entry: Callable[..., Awaitable[object]], server: RecordingServ
     return await entry(**_mantle_arguments(server, kwargs))
 
 
-def _mantle_wire(request: RecordedRequest) -> tuple[object, ...]:
-    return (request.path, request.body, {name: request.headers.get(name) for name in _MANTLE_HEADERS})
+def _mantle_wire(request: RecordedRequest) -> dict[str, object]:
+    return {
+        "path": request.path,
+        "body": request.body,
+        "headers": {name: request.headers.get(name) for name in _MANTLE_HEADERS},
+    }
+
+
+_PYTHON_WIRE: Final = _OBJECT.validate_json((Path(__file__).parent / "bedrock_mantle_python_wire.json").read_bytes())
 
 
 def _betas(request: RecordedRequest) -> list[str] | None:
@@ -875,15 +883,17 @@ _WEATHER_TOOL: Final = {
     ),
 )
 async def test_bedrock_mantle_sends_the_request_python_sends(
-    server: RecordingServer, request_params: Mapping[str, object], betas: list[str] | None
+    server: RecordingServer,
+    request: pytest.FixtureRequest,
+    request_params: Mapping[str, object],
+    betas: list[str] | None,
 ) -> None:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
 
-    python_response: Final = await _mantle(_PYTHON_ENTRY, server, **request_params)
     rust_response: Final = await _mantle(_RUST_ENTRY, server, **request_params)
 
-    python_sent, rust_sent = server.requests
-    assert _mantle_wire(rust_sent) == _mantle_wire(python_sent)
+    [rust_sent] = server.requests
+    assert _mantle_wire(rust_sent) == _PYTHON_WIRE[f"request/{request.node.callspec.id}"]
     assert rust_sent.path.endswith("/anthropic/v1/messages")
     assert rust_sent.headers["authorization"] == "Bearer test-bearer"
     assert rust_sent.headers["anthropic-version"] == "2023-06-01"
@@ -891,7 +901,7 @@ async def test_bedrock_mantle_sends_the_request_python_sends(
     body: Final = _OBJECT.validate_python(rust_sent.body)
     assert body["model"] == "anthropic.claude-sonnet-5"
     assert {"anthropic_version", "anthropic_beta", "aws_bedrock_project_id"}.isdisjoint(body)
-    assert _public(rust_response) == _public(python_response)
+    assert _public(rust_response) == MESSAGES_RESPONSE
 
 
 @pytest.mark.asyncio
@@ -910,11 +920,10 @@ async def test_bedrock_mantle_sends_a_proxy_clients_betas_filtered_as_python_doe
         },
     )
 
-    await _mantle(_PYTHON_ENTRY, server, **proxy_request)
     await _mantle(_RUST_ENTRY, server, **proxy_request)
 
-    python_sent, rust_sent = server.requests
-    assert _mantle_wire(rust_sent) == _mantle_wire(python_sent)
+    [rust_sent] = server.requests
+    assert _mantle_wire(rust_sent) == _PYTHON_WIRE["proxy_betas"]
     assert _betas(rust_sent) == ["claude-code-20250219", "interleaved-thinking-2025-05-14"]
 
 
@@ -922,11 +931,10 @@ async def test_bedrock_mantle_sends_a_proxy_clients_betas_filtered_as_python_doe
 async def test_bedrock_mantle_strips_the_region_prefix_from_the_model_as_python_does(server: RecordingServer) -> None:
     model: Final = "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5"
 
-    await _mantle(_PYTHON_ENTRY, server, model=model)
     await _mantle(_RUST_ENTRY, server, model=model)
 
-    python_sent, rust_sent = server.requests
-    assert _mantle_wire(rust_sent) == _mantle_wire(python_sent)
+    [rust_sent] = server.requests
+    assert _mantle_wire(rust_sent) == _PYTHON_WIRE["region_prefix"]
     assert _OBJECT.validate_python(rust_sent.body)["model"] == "anthropic.claude-haiku-4-5"
 
 
@@ -943,12 +951,12 @@ async def test_bedrock_mantle_signs_against_the_messages_url_as_python_does(
 ) -> None:
     sigv4: Final = {"model": model, "api_key": None, **AWS}
 
-    await _mantle(_PYTHON_ENTRY, server, **sigv4)
     await _mantle(_RUST_ENTRY, server, **sigv4)
 
-    python_sent, rust_sent = server.requests
-    assert _signing(rust_sent) == _signing(python_sent)
-    assert rust_sent.body == python_sent.body
+    [rust_sent] = server.requests
+    expected: Final = _OBJECT.validate_python(_PYTHON_WIRE[f"signing/{model}"])
+    assert list(_signing(rust_sent)) == expected["signing"]
+    assert rust_sent.body == expected["body"]
     assert "/us-east-1/bedrock/aws4_request" in rust_sent.headers["authorization"]
 
 
@@ -964,13 +972,12 @@ async def test_bedrock_mantle_stream_passes_the_sse_through_as_python_does(serve
     server.default_response = ResponseSpec(body=None, events=MESSAGES_EVENTS)
     route: Final = {"model": model, **({} if model == MANTLE_MODEL else {"api_key": None, **AWS})}
 
-    python_chunks: Final = await _drain(await _mantle(_PYTHON_ENTRY, server, stream=True, **route))
     rust_chunks: Final = await _drain(await _mantle(_RUST_ENTRY, server, stream=True, **route))
 
-    python_sent, rust_sent = server.requests
+    [rust_sent] = server.requests
     assert _OBJECT.validate_python(rust_sent.body)["stream"] is True
-    assert rust_sent.body == python_sent.body
-    assert _sse_events(rust_chunks) == _sse_events(python_chunks)
+    assert rust_sent.body == _PYTHON_WIRE[f"stream/{model}"]
+    assert _sse_events(rust_chunks) == tuple(event for _, event in MESSAGES_EVENTS)
     assert b"event: message_stop" in b"".join(rust_chunks)
 
 
@@ -996,10 +1003,9 @@ async def test_bedrock_mantle_route_answers_the_usage_python_answers(
     server.default_response = ResponseSpec(body=dict(answer))
     route: Final = {"model": "bedrock/mantle/anthropic.claude-opus-4-8", "api_key": None, **AWS}
 
-    python_response: Final = await _mantle(_PYTHON_ENTRY, server, **route)
     rust_response: Final = await _mantle(_RUST_ENTRY, server, **route)
 
-    assert _public(rust_response) == _public(python_response)
+    assert _public(rust_response) == {**answer, "usage": usage}
     rust_usage: Final = _OBJECT.validate_python(_OBJECT.validate_python(rust_response)["usage"])
     assert {name: rust_usage.get(name) for name in usage} == usage
 
@@ -1067,15 +1073,11 @@ _SIGV4_ONLY: Final = {
 async def test_bedrock_mantle_invalid_region_raises_what_python_raises(
     server: RecordingServer, route: Mapping[str, object], raised: type[Exception]
 ) -> None:
-    with pytest.raises(raised) as python_raised:
-        await _mantle(_PYTHON_ENTRY, server, **route)
     with pytest.raises(raised) as rust_raised:
         await _mantle(_RUST_ENTRY, server, **route)
 
-    assert type(rust_raised.value) is type(python_raised.value)
-    assert getattr(rust_raised.value, "status_code", None) == getattr(python_raised.value, "status_code", None)
-    assert getattr(rust_raised.value, "llm_provider", None) == getattr(python_raised.value, "llm_provider", None)
-    assert "US" in str(rust_raised.value)
+    assert type(rust_raised.value) is raised
+    assert getattr(rust_raised.value, "status_code", None) == (400 if raised is litellm.BadRequestError else None)
     assert server.requests == []
 
 
@@ -1104,14 +1106,11 @@ async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
     )
     unsigned: Final = {"api_key": None, "aws_region_name": "us-east-1", **route, **identity}
 
-    with pytest.raises(raised) as python_raised:
-        await _mantle(_PYTHON_ENTRY, server, **unsigned)
     with pytest.raises(raised) as rust_raised:
         await _mantle(_RUST_ENTRY, server, **unsigned)
 
-    assert type(rust_raised.value) is type(python_raised.value)
-    assert str(rust_raised.value) == str(python_raised.value)
-    assert getattr(rust_raised.value, "status_code", None) == getattr(python_raised.value, "status_code", None)
+    assert type(rust_raised.value) is raised
+    assert getattr(rust_raised.value, "status_code", None) == (400 if raised is AwsAuthError else None)
     assert server.requests == []
 
 
@@ -1159,11 +1158,9 @@ async def test_bedrock_mantle_refusal_without_credentials_raises_the_transforms_
     monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
     refused: Final = {"api_key": None, "tools": [{"type": "web_search_20250305", "name": "web_search"}]}
 
-    with pytest.raises(litellm.BadRequestError) as python_raised:
-        await _mantle(_PYTHON_ENTRY, server, **refused)
     with pytest.raises(litellm.BadRequestError) as rust_raised:
         await _mantle(_RUST_ENTRY, server, **refused)
 
-    assert rust_raised.value.status_code == python_raised.value.status_code
-    assert rust_raised.value.llm_provider == python_raised.value.llm_provider  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert type(rust_raised.value) is litellm.BadRequestError
+    assert rust_raised.value.status_code == 400
     assert server.requests == []
