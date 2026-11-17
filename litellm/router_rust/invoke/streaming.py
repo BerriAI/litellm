@@ -114,6 +114,8 @@ class StreamAttempt:
     routed: str | None = None
     # The deployment's max_parallel_requests slot the attempt holds; an open chat stream takes it.
     slot: contextlib.ExitStack | None = None
+    # A fallback hop's: the message its stream's failure before any content reads as, from the walk that served it.
+    explain_failure: "Callable[[BaseException], str | None] | None" = None
     # Set by the wrapper that reports the stream's outcome when it ends; the attempt's answer is then
     # deferred and counts only the request and the tokens read so far (``counted_tokens``).
     reports_outcome: bool = False
@@ -194,7 +196,7 @@ class StreamAttempt:
         }
 
     def _failure_logged(self, error: BaseException) -> dict[str, object]:  # mutable-ok: litellm's logging kwargs
-        return {**logged_call(self.op, self.kwargs), **self.logged(), "exception": _provider_error(error)}
+        return {**logged_call(self.op, self.kwargs), **self.logged(), "exception": provider_error(error)}
 
     def _callbacks(self, *, sync: bool) -> Mapping[str, bool]:
         """The outcome callbacks that run for this attempt when its stream ends."""
@@ -261,7 +263,7 @@ class StreamAttempt:
 _RECORDINGS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: tasks leave it when they finish
 
 
-def _provider_error(error: BaseException) -> BaseException:
+def provider_error(error: BaseException) -> BaseException:
     """The provider's own error, which the failure rules classify, rather than the router's envelope."""
     if isinstance(error, MidStreamFallbackError) and error.original_exception is not None:
         return error.original_exception
@@ -511,6 +513,20 @@ def _raise_fallback_failure(error: Exception) -> NoReturn:
     if isinstance(error, MidStreamFallbackError) and error.original_exception is not None:
         raise error.original_exception from error
     raise error
+
+
+def _raise_stream_failure(attempt: StreamAttempt, error: Exception, before_content: bool) -> NoReturn:
+    """``_raise_fallback_failure``, where a fallback hop's failure before any content also carries the
+    primary's error and the fallback outcome, as the walk's own failure would."""
+    surfaced: Final = provider_error(error)
+    explained: Final = (
+        attempt.explain_failure(surfaced) if before_content and attempt.explain_failure is not None else None
+    )
+    if explained is not None and hasattr(surfaced, "message"):
+        surfaced.message = explained  # pyright: ignore[reportAttributeAccessIssue]  # checked above
+    if surfaced is error:
+        raise error
+    raise surfaced from error
 
 
 def _stream_pre_content_error(error: Exception, model: str, llm_provider: str = "anthropic") -> MidStreamFallbackError:
@@ -1279,6 +1295,42 @@ def _anthropic_recoverable_frame_error(
     return None
 
 
+def _error_line_with_message(line: bytes, message: str) -> bytes:
+    from pydantic import TypeAdapter, ValidationError
+
+    if not line.startswith(b"data:"):
+        return line
+    try:
+        payload: Final = TypeAdapter(dict[str, object]).validate_json(line.removeprefix(b"data:"))
+    except ValidationError:
+        return line
+    error: Final = as_str_mapping(payload.get("error"))
+    if payload.get("type") != "error" or error is None:
+        return line
+    return b"data: " + json.dumps({**payload, "error": {**error, "message": message}}).encode()
+
+
+def _hop_error_frame(
+    attempt: StreamAttempt,
+    chunk: bytes,
+    error_event: tuple[str, str, int],
+    model: str,
+    bridged_failure: Exception | None,
+) -> bytes:
+    """A fallback hop's ``event: error`` frame before content, with the message the walk's own failure reads as."""
+    from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
+
+    if attempt.explain_failure is None or not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
+        return chunk
+    hop_error: Final = (
+        bridged_failure if bridged_failure is not None else anthropic_error_frame_exception(*error_event, model)
+    )
+    message: Final = attempt.explain_failure(provider_error(hop_error))
+    if message is None:
+        return chunk
+    return b"\n".join(_error_line_with_message(line, message) for line in bytes(chunk).split(b"\n"))
+
+
 def wrap_anthropic_stream(
     attempt: StreamAttempt, response: AsyncIterator[bytes]
 ) -> FallbackAwareAnthropicMessagesStream:
@@ -1289,6 +1341,7 @@ def wrap_anthropic_stream(
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         aclose_if_supported,
         aclose_superseded_attempt,
+        is_anthropic_content_delta_chunk,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
     )
@@ -1314,11 +1367,13 @@ def wrap_anthropic_stream(
             policy.get("can_retry") is True or policy.get("can_fall_back") is True
         )
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+        content_seen = False  # rebind-ok: set at the first content delta
         try:
             async for chunk in _areported(attempt, source_iterator, usage.total_tokens, usage.observe):
                 if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                     yield chunk
                     continue
+                content_seen = content_seen or is_anthropic_content_delta_chunk(chunk)
                 if _stream_commits_now(chunk, has_generated_content, len(buffered)):
                     has_generated_content = True
                 # A transport can split one SSE data line across byte chunks, so pre-content detection
@@ -1367,12 +1422,23 @@ def wrap_anthropic_stream(
                 for buffered_chunk in buffered:
                     yield buffered_chunk
                 buffered = ()
-                yield chunk
+                yield (
+                    _hop_error_frame(attempt, chunk, error_event, model, bridged_failure)
+                    if error_event is not None and not content_seen
+                    else chunk
+                )
             for buffered_chunk in buffered:
                 yield buffered_chunk
         except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
             async for item in _anthropic_recover_stream_error(
-                attempt, stream_error, has_generated_content, buffered, model, wrapper, close_superseded
+                attempt,
+                stream_error,
+                has_generated_content,
+                content_seen,
+                buffered,
+                model,
+                wrapper,
+                close_superseded,
             ):
                 yield item
         finally:
@@ -1386,6 +1452,7 @@ async def _anthropic_recover_stream_error(
     attempt: StreamAttempt,
     stream_error: Exception,
     has_generated_content: bool,
+    content_seen: bool,
     buffered: tuple[bytes, ...],
     model: str,
     wrapper: FallbackAwareAnthropicMessagesStream,
@@ -1397,16 +1464,14 @@ async def _anthropic_recover_stream_error(
     ):
         for buffered_chunk in buffered:
             yield buffered_chunk
-        if stream_error.original_exception is not None:
-            raise stream_error.original_exception from stream_error
-        raise stream_error
+        _raise_stream_failure(attempt, stream_error, not content_seen)
     fallback_error: Final = (
         stream_error
         if isinstance(stream_error, MidStreamFallbackError)
         else _stream_fallback_error_for_raised(attempt, stream_error, model, has_generated_content)
     )
     if fallback_error is None:
-        raise stream_error
+        _raise_stream_failure(attempt, stream_error, not content_seen)
     # A native error frame or a refusal the wrapper raised fails the attempt too (a raised error or a
     # bridged frame already did).
     attempt.report_failure(fallback_error)
@@ -1469,16 +1534,20 @@ async def _anthropic_fallback_attempt(
     attempt: StreamAttempt, e: MidStreamFallbackError, wrapper: FallbackAwareAnthropicMessagesStream
 ) -> AsyncGenerator[bytes, None]:
     """Re-enters the fallback walk for a ``/v1/messages`` stream error and yields what the fallback produces."""
+    from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_content_delta_chunk
+
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )
+    content_seen = False  # rebind-ok: set at the fallback's first content delta
     try:
         fallback_response: Final = await attempt.fallback(trigger)
         async for fallback_item in _anthropic_yield_recovered(fallback_response, wrapper):
+            content_seen = content_seen or is_anthropic_content_delta_chunk(fallback_item)
             yield fallback_item
     except Exception as fallback_error:  # noqa: BLE001  # as the Python wrapper: logged, then the stream's error raises
         verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
-        _raise_fallback_failure(fallback_error)
+        _raise_stream_failure(attempt, fallback_error, before_content=not content_seen)
 
 
 # --- Responses API ------------------------------------------------------------------------------
@@ -1681,6 +1750,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
     async def stream_with_fallbacks() -> AsyncGenerator[object, None]:
         held: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
         response_id_exposed = False  # rebind-ok: set once, before an early-released event is yielded
+        output_started = False  # rebind-ok: set at the first event that is not held
         try:
             async for item in _areported(
                 attempt,
@@ -1695,6 +1765,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 for held_event in held:
                     yield held_event
                 held = ()
+                output_started = True
                 yield item
             for held_event in held:
                 yield held_event
@@ -1718,10 +1789,10 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             ) as recovered_stream:
                 async for recovered_item in recovered_stream:
                     yield recovered_item
-        except Exception:
+        except Exception as stream_error:  # noqa: BLE001  # re-raised, with the walk's outcome on a fallback hop
             for held_event in held:
                 yield held_event
-            raise
+            _raise_stream_failure(attempt, stream_error, before_content=not output_started)
         finally:
             with anyio.CancelScope(shield=True):
                 if hasattr(source_iterator, "aclose"):
@@ -1940,7 +2011,7 @@ async def _responses_fallback_attempt(
         if not fallback_yielded:
             for held_event in held:
                 yield held_event
-        _raise_fallback_failure(fallback_error)
+        _raise_stream_failure(attempt, fallback_error, before_content=continued is None and not fallback_yielded)
     finally:
         if fallback_response is not None and hasattr(fallback_response, "aclose"):
             with anyio.CancelScope(shield=True):
@@ -2039,5 +2110,6 @@ __all__ = [
     "StreamAttempt",
     "open_attempt_stream",
     "open_attempt_stream_sync",
+    "provider_error",
     "shape_attempt_kwargs",
 ]

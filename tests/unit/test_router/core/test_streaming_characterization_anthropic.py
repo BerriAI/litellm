@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.router_core import RouterCore
@@ -32,6 +33,7 @@ from tests.unit.test_router.core.streaming_helpers import (
     ByteStream,
     anthropic_stream,
     collect_bytes,
+    drain_into,
     error_frame,
     install_orjson_stub_if_missing,
     refusal_delta,
@@ -515,3 +517,116 @@ async def test_a_stream_retry_keeps_reporting_the_first_deployment_when_the_retr
     first, _retried = host.deployments_called()
     assert hidden(stream)["model_id"] == first
     assert headers(stream)["x-litellm-attempted-retries"] == 1
+
+
+# --- both errors when the cross-group fallback also fails -------------------------------------
+
+PRIMARY_RATE_LIMITED: Final = "litellm.RateLimitError: slow down"
+OUTCOME: Final = "\n\nLiteLLM: model group 'a' failed with the error above. Fallback to b also failed: "
+FALLBACK_FRAME_DOWN: Final = error_frame("api_error", "fallback down")
+
+
+def frame_error_message(frame: bytes) -> str:
+    data_line: Final = next(line for line in frame.split(b"\n") if line.startswith(b"data: "))
+    payload: Final = TypeAdapter(dict[str, dict[str, str] | str]).validate_json(data_line.removeprefix(b"data: "))
+    error: Final = payload["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "api_error"
+    return error["message"]
+
+
+def with_router_debug(make_core: MakeCore, host: ScriptedHost) -> RouterCore:
+    host.set_dynamic(expose_router_debug_in_errors=True)
+    return make_core(model_list=GROUPS_AB, fallbacks=[{"a": ["b"]}], num_retries=0)
+
+
+async def test_a_fallback_stream_raising_before_content_carries_the_primarys_error_and_the_outcome(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, error=server_error()))
+    core = with_router_debug(make_core, host)
+    seen: list[object] = []
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await drain_into(await open_stream(core), seen)
+    assert seen == [MESSAGE_START]
+    assert raised.value.message == f"{PRIMARY_RATE_LIMITED}{OUTCOME}litellm.InternalServerError: boom"
+    assert host.deployments_called() == ["a", "b"]
+
+
+async def test_a_fallback_streams_error_frame_before_content_carries_the_primarys_error_and_the_outcome(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert event_names(frames) == [b"message_start", b"error"]
+    message = frame_error_message(frames[1])
+    assert message.startswith(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
+    assert "fallback down" in message.removeprefix(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
+
+
+async def test_a_primary_error_frame_whose_fallback_fails_to_open_carries_the_outcome(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", anthropic_stream(MESSAGE_START, error_frame("overloaded_error", "primary overloaded")))
+    host.answer("openai/b", server_error())
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError, match="primary overloaded") as raised:
+        await collect_bytes(await open_stream(core))
+    assert raised.value.message.endswith(f"{OUTCOME}litellm.InternalServerError: boom")
+
+
+async def test_a_primary_error_frame_whose_fallback_stream_fails_before_content_carries_both_errors(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", anthropic_stream(MESSAGE_START, error_frame("overloaded_error", "primary overloaded")))
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert event_names(frames) == [b"message_start", b"error"]
+    primary, _, fallback = frame_error_message(frames[1]).partition(OUTCOME)
+    assert "primary overloaded" in primary
+    assert "fallback down" in fallback
+
+
+async def test_a_fallback_streams_error_frame_after_content_is_forwarded_verbatim(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, text_delta("B"), FALLBACK_FRAME_DOWN))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames == [MESSAGE_START, text_delta("B"), FALLBACK_FRAME_DOWN]
+
+
+async def test_a_fallback_stream_raising_after_content_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, text_delta("B"), error=server_error()))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_bytes(await open_stream(core))
+    assert raised.value.message == "litellm.InternalServerError: boom"
+
+
+async def test_an_error_frame_with_no_fallback_is_forwarded_verbatim_under_router_debug(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.set_dynamic(expose_router_debug_in_errors=True)
+    host.answer("openai/a", anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN))
+    core = make_core(model_list=GROUPS_AB, num_retries=0)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames == [MESSAGE_START, FALLBACK_FRAME_DOWN]
+
+
+async def test_without_router_debug_a_fallback_streams_error_frame_is_forwarded_verbatim(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN))
+    core = make_core(model_list=GROUPS_AB, fallbacks=[{"a": ["b"]}], num_retries=0)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames == [MESSAGE_START, FALLBACK_FRAME_DOWN]
