@@ -726,3 +726,28 @@ async def test_a_fallback_streams_crlf_error_frame_keeps_its_line_endings(
     frames = await collect_bytes(await open_stream(core))
     assert frames[1].count(b"\r\n") == FALLBACK_FRAME_DOWN.count(b"\n")
     assert OUTCOME.replace("\n", "\\n") in frames[1].decode()
+
+
+async def test_a_fallback_stream_ending_inside_a_frame_still_forwards_every_byte(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    delta = text_delta("B")
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, delta[:30]))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert b"".join(frames) == MESSAGE_START + delta[:30]
+
+
+async def test_a_fallback_stream_raising_inside_a_frame_forwards_the_partial_frame_then_raises(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    delta = text_delta("B")
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, delta[:30], error=server_error()))
+    core = with_router_debug(make_core, host)
+    seen: list[object] = []
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await drain_into(await open_stream(core), seen)
+    assert seen == [MESSAGE_START, delta[:30]]
+    assert raised.value.message == "litellm.InternalServerError: boom"
