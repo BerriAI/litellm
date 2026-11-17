@@ -866,6 +866,26 @@ def test_key_ref_is_accepted_with_blank_stored_key(
     assert app_config({"litellm_credential_name": "copilot-app"} if named else values) == _CONFIG
 
 
+def test_named_credential_with_whitespace_only_key_and_no_key_ref_fails_at_signing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": _CONFIG.app_id,
+        "github_copilot_app_installation_id": _CONFIG.installation_id,
+        "github_copilot_app_private_key": "   ",
+    }
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="copilot-app", credential_values=values, credential_info={})],
+    )
+    config: Final = app_config({"litellm_credential_name": "copilot-app"})
+    assert config is not None
+    with pytest.raises(AuthenticationError, match="Unable to sign a GitHub App JWT"):
+        manager("", lambda request: httpx.Response(500), Clock()).resolve(config)
+
+
 @pytest.mark.parametrize("blank", ("", "   "))
 def test_blank_app_fields_without_app_auth_type_are_not_app_auth(blank: str) -> None:
     assert app_config({key: blank for key in APP_FIELDS}) is None

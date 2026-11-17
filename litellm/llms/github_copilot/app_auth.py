@@ -86,10 +86,8 @@ def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfi
     installation: Final = _value(values, APP_FIELDS[1])
     key_ref: Final = _value(values, APP_FIELDS[2])
     stored_key: Final = _value(values, APP_PRIVATE_KEY)
-    stored_key_selected: Final = isinstance(stored_key, str) and bool(stored_key.strip())
-    valid_key_source: Final = (
-        stored_key_selected and _is_blank(key_ref) and (credential is not None or validate_stored_key)
-    ) or (
+    stored_key_selected: Final = isinstance(stored_key, str) and bool(stored_key) and _is_blank(key_ref)
+    valid_key_source: Final = (stored_key_selected and (credential is not None or validate_stored_key)) or (
         _is_blank(stored_key)
         and isinstance(key_ref, str)
         and bool(key_ref.strip())
