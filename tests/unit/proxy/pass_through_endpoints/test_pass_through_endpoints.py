@@ -13515,8 +13515,9 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path
     ("flat_cost", "upstream_cost", "expected"),
     [(0.5, None, 0.5), (0.0, None, 0.0), (0.5, "0.75", 0.75), (0.5, "0", 0.0)],
 )
+@pytest.mark.parametrize("delivery", ["json", "bytes", "interrupted-bytes"])
 async def test_passthrough_header_and_callback_share_finalized_cost(
-    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float
+    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float, delivery: str
 ) -> None:
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
@@ -13532,8 +13533,19 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
         {} if upstream_cost is None else {"x-litellm-response-cost": upstream_cost, "x-litellm-total-tokens": "12"}
     )
 
+    class FileStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"partial-file"
+            if delivery == "interrupted-bytes":
+                raise httpx.ReadError("upstream stopped after a partial delivery")
+
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+        if delivery == "json":
+            return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+        return httpx.Response(
+            200, stream=FileStream(), headers={**upstream_headers, "content-type": "application/octet-stream"},
+            request=request,
+        )
 
     client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
@@ -13545,12 +13557,23 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
             request=request, target="http://cost-upstream.invalid/results", custom_headers={},
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
         )
-        payload: Final = await asyncio.wait_for(observed, timeout=10)
+        if delivery != "json":
+            assert isinstance(result, StreamingResponse)
+            assert await anext(result.body_iterator) == b"partial-file"
+            if delivery == "interrupted-bytes":
+                with pytest.raises(httpx.ReadError, match="partial delivery"):
+                    await anext(result.body_iterator)
+            else:
+                with pytest.raises(StopAsyncIteration):
+                    await anext(result.body_iterator)
         await GLOBAL_LOGGING_WORKER.flush()
+        assert observed.done(), "Delivered bytes must retain their known cost in the spend log"
+        payload: Final = observed.result()
         assert result.status_code == 200
-        assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
         assert payload["response_cost"] == pytest.approx(expected)
-        assert payload["cost_finalized"] is True
+        if delivery == "json":
+            assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
+            assert payload["cost_finalized"] is True
         if upstream_cost is not None:
             assert payload["total_tokens"] == 12
     finally:

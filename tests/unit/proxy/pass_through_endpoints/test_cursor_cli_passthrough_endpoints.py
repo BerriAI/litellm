@@ -538,6 +538,32 @@ def test_configured_content_guardrails_cannot_be_silently_bypassed(
     assert not respx_mock.calls
 
 
+@pytest.mark.parametrize("enforcing", [False, True])
+def test_v2_content_callbacks_cannot_be_silently_bypassed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, enforcing: bool
+) -> None:
+    from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, on
+
+    class ContentFilter(CustomLoggerV2):
+        @on(Hook.post_call_success, reads={Field.response}, may_abort=True)
+        async def filter_content(self, view: object, ctx: CallContext[object]) -> Abort:
+            return Abort(status_code=403, detail="Content requires inspection")
+
+    class TransportLogger(CustomLoggerV2):
+        @on(Hook.call_ended, reads={Field.outcome})
+        async def record(self, view: object, ctx: CallContext[object]) -> None:
+            return None
+
+    callback: Final = ContentFilter() if enforcing else TransportLogger()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"native-response")
+    response: Final = client.post(f"/cursor-cli/{_RUN}", headers=_HEADERS, content=b"\xff")
+    assert response.status_code == (403 if enforcing else 200), response.text
+    assert upstream.called is not enforcing
+    if not enforcing:
+        assert response.content == b"native-response"
+
+
 def test_legacy_moderation_cannot_be_silently_bypassed(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:

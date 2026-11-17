@@ -152,6 +152,43 @@ async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [
+    "owner-budget", "customer-model", "customer-tokens", "customer-budget",
+    "customer_org_id", "customer_team_id", "customer_member_id", "resolved-customer-model",
+])
+async def test_opaque_admission_checks_tuple_backed_inherited_controls(scope: str) -> None:
+    from litellm.models.budget import BudgetLimit
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    customer_scope: Final = CustomerScopeAuth(
+        key="customer_org", entity_id="restricted-customer",
+        allowed_models=("restricted-model",) if scope == "customer-model" else None,
+        tpm_limit=1000 if scope == "customer-tokens" else None,
+        budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),) if scope == "customer-budget" else (),
+    )
+    identity: Final = UserAPIKeyAuth(
+        customer_hierarchy=CustomerHierarchyAuth(customer_org_id="restricted-customer", scopes=(customer_scope,)),
+        metadata={scope: "bound-customer"} if scope.endswith("_id") else {},
+    ).with_customer_model_scopes((("restricted-model",),) if scope == "resolved-customer-model" else ())
+    user: Final = LiteLLM_UserTable(
+        user_id="restricted-owner", user_role=LitellmUserRoles.PROXY_ADMIN,
+        budget_limits=(BudgetLimitEntry(budget_duration="1d", max_budget=10),) if scope == "owner-budget" else None,
+    )
+    route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
+    with pytest.raises(HTTPException) as denied:
+        await common_checks(
+            request_body={}, team_object=None, user_object=user, end_user_object=None,
+            global_proxy_spend=None, general_settings={}, route=route, llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()), valid_token=identity,
+            request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
+            skip_budget_checks=True,
+        )
+    assert denied.value.status_code == 403
+    assert "cannot enforce" in denied.value.detail
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("lookup_error", [False, True])
 async def test_opaque_member_budget_lookup_fails_closed_when_budget_checks_are_skipped(
     monkeypatch: pytest.MonkeyPatch, lookup_error: bool

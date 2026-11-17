@@ -14,7 +14,7 @@ import math
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -45,7 +45,7 @@ from litellm.constants import (
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -115,6 +115,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1272,18 +1273,25 @@ def request_skips_budget_checks(
     return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
+_OPAQUE_CONTROL_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _opaque_control_items(value: object) -> Iterable[object]:
+    return _OPAQUE_CONTROL_ITEMS.validate_python(value) if isinstance(value, (list, tuple)) else ()
+
+
 def check_opaque_inference_controls(value: object, *, depth: int = 0) -> None:
     if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(status_code=403, detail="Opaque inference cannot verify control nesting beyond the limit")
     fields: Final = as_str_mapping(value)
     if fields is None:
-        for item in as_object_list(value) or ():
+        for item in _opaque_control_items(value):
             check_opaque_inference_controls(item, depth=depth + 1)
         return
     for name, control in fields.items():
         if control in (None, {}, [], ()):
             continue
-        if name in {"models", "team_models", "allowed_models"} and "*" not in (as_object_list(control) or ()):
+        if name in {"models", "team_models", "allowed_models"} and "*" not in (_opaque_control_items(control)):
             raise HTTPException(status_code=403, detail="Opaque inference cannot enforce model restrictions")
         if name.endswith(("tpm_limit", "tpd_limit", "max_budget", "model_rpm_limit")) or name in {
             "tpm_limit_per_model",
@@ -1410,6 +1418,10 @@ async def common_checks(
     )
 
     if opaque_cursor and valid_token is not None:
+        if customer_usage_requested({}, customer_usage_key_fields(valid_token)):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce customer-bound key policies")
+        for customer_models in valid_token.customer_model_scopes:
+            check_opaque_inference_controls({"allowed_models": customer_models})
         if valid_token.agent_id is not None:
             raise HTTPException(
                 status_code=403, detail="Opaque inference does not support keys bound to LiteLLM agents"

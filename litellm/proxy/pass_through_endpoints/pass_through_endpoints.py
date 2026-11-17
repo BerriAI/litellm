@@ -1331,6 +1331,18 @@ def _raw_pass_through_body(request: Request) -> str | bytes | None:
     return value if isinstance(value, (str, bytes)) else None
 
 
+def _v2_requires_inference_controls(callback: object) -> bool:
+    from litellm.integrations.custom_logger_v2 import CustomLoggerV2, Hook
+
+    if not isinstance(callback, CustomLoggerV2):
+        return False
+    return any(
+        subscription.may_abort or bool(subscription.writes)
+        for subscription in callback.subscriptions.values()
+        if subscription.hook is not Hook.response_headers
+    )
+
+
 def _check_opaque_content(raw_response: bool) -> None:
     if not raw_response:
         return
@@ -1340,9 +1352,10 @@ def _check_opaque_content(raw_response: bool) -> None:
     if get_policy_registry().get_all_policies():
         raise HTTPException(status_code=403, detail="Opaque passthrough cannot enforce content policies")
     capabilities: Final = ProxyLogging.callback_capabilities()
+    has_content_hooks: Final = capabilities.has_content_enforcer or capabilities.has_moderation_override
     if (
-        capabilities.has_content_enforcer
-        or capabilities.has_moderation_override
+        has_content_hooks
+        or any(_v2_requires_inference_controls(callback) for callback in capabilities.hook_callbacks)
         or any(isinstance(callback, CustomGuardrail) for callback in capabilities.resolved_callbacks)
     ):
         raise HTTPException(status_code=403, detail="Opaque passthrough cannot inspect content for guardrails")
@@ -1538,6 +1551,7 @@ async def _opaque_passthrough_response(
                 logging_obj=logging_obj,
                 custom_llm_provider=provider,
                 success_handler_kwargs=dict(kwargs or {}),
+                raw_response=True,
             ),
             upstream_status=response.status_code,
             user_api_key_dict=user,
@@ -4029,6 +4043,7 @@ async def _relay_passthrough_response_bytes(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: str | None,
     success_handler_kwargs: dict,
+    raw_response: bool = False,
 ) -> AsyncGenerator[bytes, None]:
     """
     Yield upstream bytes to the client without accumulating them, then fire the
@@ -4054,9 +4069,10 @@ async def _relay_passthrough_response_bytes(
             )
         stream_exception: Final = sys.exc_info()[1]
         await response.aclose()
-        if response.status_code < 400 and (
-            upstream_fully_relayed or isinstance(stream_exception, (GeneratorExit, asyncio.CancelledError))
-        ):
+        stream_finished: Final = upstream_fully_relayed or isinstance(
+            stream_exception, (GeneratorExit, asyncio.CancelledError)
+        )
+        if response.status_code < 400 and (not raw_response or stream_finished):
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=response,
