@@ -585,6 +585,9 @@ banned-module-level-imports = ["prisma"]
 "litellm.rust_bridge._native.RustKeyRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 "litellm.rust_bridge._native.RustJwtKeyMappingRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 "litellm.rust_bridge._native.RustModelAccessGroupRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustBudgetRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustEndUserRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustUserRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 
 [tool.ruff.lint.per-file-ignores]
 "litellm/main.py" = ["F401"]

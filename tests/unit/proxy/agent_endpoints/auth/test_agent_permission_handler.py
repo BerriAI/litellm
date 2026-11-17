@@ -851,6 +851,7 @@ async def test_managed_agent_invocation_grants_intersect_verified_user_grants(
 async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches(
     monkeypatch: pytest.MonkeyPatch, revoked: str
 ) -> None:
+    users: Final = install_rust_auth_stores(monkeypatch).user
     from unittest.mock import MagicMock
 
     from litellm.proxy import proxy_server
@@ -883,15 +884,15 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     cache.set_cache(object_permission_cache_key("grant"), permission)
     cache.set_cache("access_group_id:group", group)
     client: Final = MagicMock()
-    client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=human)
+    users.writer = {"human": human.model_dump(mode="json")}
     client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
     client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await verified_human_agent_grants("human", "team") == frozenset({"target"})
-    client.writer_db.litellm_usertable.find_unique.return_value = (
-        human.model_copy(update={"teams": []}) if revoked == "user" else human
+    users.writer["human"] = (human.model_copy(update={"teams": []}) if revoked == "user" else human).model_dump(
+        mode="json"
     )
     client.writer_db.litellm_teamtable.find_unique.return_value = (
         team.model_copy(update={"members_with_roles": []})
@@ -907,7 +908,7 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
         group.model_copy(update={"access_agent_ids": []}) if grouped else group
     )
     assert await verified_human_agent_grants("human", "team") == frozenset()
-    client.db.litellm_usertable.find_unique.assert_not_called()
+    assert all(writer for _, writer in users.sign_ins)
     client.db.litellm_teamtable.find_unique.assert_not_called()
     client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
     client.db.litellm_accessgrouptable.find_unique.assert_not_called()

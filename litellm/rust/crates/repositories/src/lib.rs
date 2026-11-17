@@ -10,17 +10,23 @@ macro_rules_attribute::attribute_alias! {
         #[derive(Clone, Debug, PartialEq, sqlx::FromRow)];
 }
 
+mod budget;
 mod database;
+mod end_user;
 mod jwt_key_mapping;
 mod key;
 mod model_access_group;
 mod raw_json;
 #[cfg(test)]
 mod test_support;
+mod user;
 mod utc_timestamp;
 
+pub use budget::{Budget, BudgetRepository};
 pub use database::{Database, Side};
+pub use end_user::{EndUserRecord, EndUserRepository};
 pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim};
 pub use key::{FetchedKey, KeyRepository};
 pub use model_access_group::{ModelAccessGroupBudget, ModelAccessGroupRepository};
 use raw_json::RawJson;
+pub use user::{SignIn, User, UserRepository};

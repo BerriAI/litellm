@@ -1423,6 +1423,7 @@ async def test_cached_proxy_admin_key_sets_via_virtual_key_marker():
 @pytest.mark.asyncio
 async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
     monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
     default_budget_id: str | None,
     expected_limits: tuple[int | None, int | None],
 ) -> None:
@@ -1449,9 +1450,7 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
         tpm_limit=7,
     )
     mock_prisma_client: Final = prisma_with_empty_config()
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
+    rust_auth_stores.budget.rows[budget.budget_id] = budget.model_dump()
 
     user_api_key_cache: Final = UserApiKeyCache()
 
@@ -3790,14 +3789,17 @@ async def _run_centralized_checks_with_key_end_user_budget(
 
     import litellm.proxy.proxy_server as _proxy_server_mod
 
-    async def _find_budget(where: Mapping[str, str]) -> MagicMock | None:
-        budget_id = where["budget_id"]
-        return _end_user_budget_row(budget_id, budgets[budget_id]) if budget_id in budgets else None
+    stores = RustAuthStores()
+    stores.budget.rows.update(
+        {budget_id: _end_user_budget_row(budget_id, cap).dict() for budget_id, cap in budgets.items()}
+    )
+    if end_user_row is not None:
+        row = end_user_row.dict()
+        stores.end_user.rows[row["user_id"]] = row
+    store_patch = pytest.MonkeyPatch()
+    install_rust_auth_stores(store_patch, stores)
 
     prisma_client = prisma_with_empty_config()
-    prisma_client.db.query_raw = AsyncMock(return_value=[])
-    prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
@@ -3829,6 +3831,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
                 route="/chat/completions",
             )
     finally:
+        store_patch.undo()
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
 
@@ -4700,6 +4703,7 @@ async def test_centralized_common_checks_loads_member_budget_and_exempts_discove
 )
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skips_default_member_budget_lookup_errors_on_exempt_routes(
+    rust_auth_stores: RustAuthStores,
     route: str,
     path: str,
     must_raise: bool,
@@ -4739,9 +4743,7 @@ async def test_centralized_common_checks_skips_default_member_budget_lookup_erro
         model_type=LiteLLM_UserTable,
     )
     prisma_client: Final = prisma_with_empty_config()
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        side_effect=RuntimeError("budget database unavailable")
-    )
+    rust_auth_stores.budget.rows[budget_id] = RuntimeError("budget database unavailable")
     router: Final = litellm.Router(
         model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}],
     )
@@ -4792,7 +4794,7 @@ async def test_centralized_common_checks_skips_default_member_budget_lookup_erro
             )
 
         assert token.team_member_model_max_budget is None
-        prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once_with(where={"budget_id": budget_id})
+        assert rust_auth_stores.budget.lookups == [budget_id]
     finally:
         for attribute, value in originals.items():
             setattr(_proxy_server_mod, attribute, value)
@@ -5008,12 +5010,12 @@ async def test_member_model_budget_load_uses_default_without_membership() -> Non
 
 
 @pytest.mark.asyncio
-async def test_member_model_budget_load_fails_closed_on_default_lookup_error() -> None:
+async def test_member_model_budget_load_fails_closed_on_default_lookup_error(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     token, team_object, prisma_client, user_api_key_cache = _team_member_model_budget_load_inputs()
     prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        side_effect=RuntimeError("budget database unavailable")
-    )
+    rust_auth_stores.budget.rows["default-budget"] = RuntimeError("budget database unavailable")
 
     with pytest.raises(RuntimeError, match="budget database unavailable"):
         await _load_team_member_default_model_budget(
@@ -5027,12 +5029,12 @@ async def test_member_model_budget_load_fails_closed_on_default_lookup_error() -
 
 
 @pytest.mark.asyncio
-async def test_member_model_budget_load_skips_default_lookup_error_when_checks_are_skipped() -> None:
+async def test_member_model_budget_load_skips_default_lookup_error_when_checks_are_skipped(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     token, team_object, prisma_client, user_api_key_cache = _team_member_model_budget_load_inputs()
     prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        side_effect=RuntimeError("budget database unavailable")
-    )
+    rust_auth_stores.budget.rows["default-budget"] = RuntimeError("budget database unavailable")
 
     await _load_team_member_default_model_budget(
         user_api_key_auth_obj=token,
@@ -5047,10 +5049,9 @@ async def test_member_model_budget_load_skips_default_lookup_error_when_checks_a
 
 
 @pytest.mark.asyncio
-async def test_member_model_budget_load_allows_missing_default_row() -> None:
+async def test_member_model_budget_load_allows_missing_default_row(rust_auth_stores: RustAuthStores) -> None:
     token, team_object, prisma_client, user_api_key_cache = _team_member_model_budget_load_inputs()
     prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
     await _load_team_member_default_model_budget(
         user_api_key_auth_obj=token,
@@ -5099,16 +5100,12 @@ async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
             setattr(_proxy_server_mod, k, v)
 
 
-def _unrestricted_end_user_prisma(spend: float):
+def _unrestricted_end_user_prisma(stores: RustAuthStores, spend: float):
     """Prisma stand-in where "customer-1" exists but restricts nothing: no row matches the
     restricted-registry query, and the row itself carries only spend."""
-    end_user_row = MagicMock()
-    end_user_row.user_id = "customer-1"
-    end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
+    stores.end_user.rows["customer-1"] = {"user_id": "customer-1", "blocked": False, "spend": spend}
 
     mock_prisma = prisma_with_empty_config()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
@@ -5153,7 +5150,7 @@ def _chat_request():
 
 
 @pytest.mark.asyncio
-async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend():
+async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend(rust_auth_stores: RustAuthStores):
     """
     Regression: a token-supplied end-user budget must still be checked against the end user's
     recorded spend.
@@ -5163,7 +5160,7 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
     load it, because the reservation counter cold-starts from the spend on the loaded row; skipping
     the load admits a customer who is already double their budget.
     """
-    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    mock_prisma = _unrestricted_end_user_prisma(rust_auth_stores, spend=100.0)
     token = UserAPIKeyAuth(
         api_key="sk-test",
         token="hashed-token",
@@ -5199,9 +5196,9 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
 
 
 @pytest.mark.asyncio
-async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
+async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget(rust_auth_stores: RustAuthStores):
     """The companion case: with no token budget an unrestricted end user costs zero row reads."""
-    mock_prisma = _unrestricted_end_user_prisma(spend=100.0)
+    mock_prisma = _unrestricted_end_user_prisma(rust_auth_stores, spend=100.0)
     token = UserAPIKeyAuth(
         api_key="sk-test",
         token="hashed-token",
@@ -5230,7 +5227,7 @@ async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
                 route="/chat/completions",
             )
 
-    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+    assert rust_auth_stores.end_user.lookups == []
 
 
 @pytest.mark.asyncio

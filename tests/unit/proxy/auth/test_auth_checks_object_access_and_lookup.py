@@ -4,7 +4,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Awaitable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -66,7 +66,6 @@ from litellm.proxy.auth.auth_checks import (
     _check_agent_access_group_model_access,
     _check_agent_caller_model_access,
     _check_team_member_budget,
-    _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
     _tag_max_budget_check,
@@ -107,9 +106,13 @@ from litellm.utils import get_utc_datetime
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from tests._master_key import MASTER_KEY
+from pydantic import BaseModel
+from pydantic_core import to_json
+
 from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import ProxyLogging
+from tests.unit.proxy.rust_auth_stores import FakeBudgetStore, FakeEndUserStore, FakeUserStore
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
@@ -127,6 +130,92 @@ def _rendered_log_message(call):
     values = call.args[1:]
     return message % values if values else message
 
+
+def _prisma_row(row: object) -> Mapping[str, object]:
+    return row.model_dump() if isinstance(row, BaseModel) else row.dict()  # pyright: ignore[reportAttributeAccessIssue]
+
+
+class _PrismaEndUserStore(FakeEndUserStore):
+    """The end user store answering from a test's Prisma double, so its call assertions keep holding."""
+
+    def __init__(self, prisma: MagicMock) -> None:
+        super().__init__()
+        self._prisma: Final = prisma
+
+    async def find_with_budget_and_object_permission(self, end_user_id: str) -> str | None:
+        self.lookups.append(end_user_id)
+        row: Final = await self._prisma.db.litellm_endusertable.find_unique(where={"user_id": end_user_id})
+        return None if row is None else to_json(_prisma_row(row)).decode()
+
+    async def find_restricted_ids(self, limit: int) -> list[str]:
+        rows: Final = await self._prisma.db.litellm_endusertable.find_many(take=limit)
+        return [row.user_id for row in rows]
+
+
+class _PrismaBudgetStore(FakeBudgetStore):
+    def __init__(self, prisma: MagicMock) -> None:
+        super().__init__()
+        self._prisma: Final = prisma
+
+    async def find_end_user_default_budget(self, budget_id: str) -> str | None:
+        self.lookups.append(budget_id)
+        row: Final = await self._prisma.db.litellm_budgettable.find_unique(where={"budget_id": budget_id})
+        return None if row is None else to_json(_prisma_row(row)).decode()
+
+
+class _PrismaUserStore(FakeUserStore):
+    """The user store answering from a test's Prisma double: the row by id, the email-in-use probe and the
+    null-email backfill, each through the table calls the test configured."""
+
+    def __init__(self, prisma: MagicMock) -> None:
+        super().__init__()
+        self._prisma: Final = prisma
+
+    def _users(self, writer: bool) -> MagicMock:
+        writer_table: Final = self._prisma.writer_db.litellm_usertable
+        return (
+            writer_table
+            if writer and isinstance(writer_table.find_unique, AsyncMock)
+            else self._prisma.db.litellm_usertable
+        )
+
+    async def resolve(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        email_verified: bool | None = None,
+        links_any_user: bool,
+        use_writer: bool = False,
+    ) -> str | None:
+        self.sign_ins.append(({"user_id": user_id, "sso_user_id": sso_user_id, "user_email": user_email}, use_writer))
+        row: Final = await self._users(use_writer).find_unique(
+            where={"user_id": user_id}, include={"organization_memberships": True}
+        )
+        return None if row is None else to_json({"organization_memberships": [], **_prisma_row(row)}).decode()
+
+    async def email_belongs_to_another_user(self, user_email: str, user_id: str) -> bool:
+        self.email_checks.append((user_email, user_id))
+        other: Final = await self._prisma.db.litellm_usertable.find_first(
+            where={"user_email": {"equals": user_email, "mode": "insensitive"}, "user_id": {"not": user_id}}
+        )
+        return other is not None
+
+    async def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> str | None:
+        if not links_any_user and await self.email_belongs_to_another_user(user_email, user_id):
+            return None
+        users: Final = self._users(True)
+        writes: Final = users if isinstance(users.update_many, AsyncMock) else self._prisma.db.litellm_usertable
+        await writes.update_many(where={"user_id": user_id, "user_email": None}, data={"user_email": user_email})
+        row: Final = await users.find_unique(where={"user_id": user_id})
+        return None if row is None else row.user_email
+
+
+def _rust_stores_over_prisma(stores: RustAuthStores, prisma: MagicMock) -> None:
+    stores.end_user = _PrismaEndUserStore(prisma)
+    stores.budget = _PrismaBudgetStore(prisma)
+    stores.user = _PrismaUserStore(prisma)
 
 
 @pytest.fixture(autouse=True)
@@ -772,6 +861,137 @@ async def test_fetch_key_object_from_db_fails_a_stalled_burst_within_the_deadlin
     assert {r.token for r in after if r is not None} == {f"after-{i}" for i in range(PROXY_DB_LOOKUP_MAX_CONCURRENCY)}
 
 
+class _StalledBudgetStore(FakeBudgetStore):
+    async def find_end_user_default_budget(self, budget_id: str) -> str | None:
+        await asyncio.Event().wait()
+        return None
+
+
+class _StalledEndUserStore(FakeEndUserStore):
+    async def find_with_budget_and_object_permission(self, end_user_id: str) -> str | None:
+        self.lookups.append(end_user_id)
+        await asyncio.Event().wait()
+        return None
+
+
+class _StalledUserStore(FakeUserStore):
+    async def resolve(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        email_verified: bool | None = None,
+        links_any_user: bool,
+        use_writer: bool = False,
+    ) -> str | None:
+        await asyncio.Event().wait()
+        return None
+
+    async def email_belongs_to_another_user(self, user_email: str, user_id: str) -> bool:
+        await asyncio.Event().wait()
+        return False
+
+
+async def _stalled_budget_read() -> object:
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+
+    return await get_team_member_default_budget(
+        budget_id="stalled-budget",
+        prisma_client=MagicMock(),
+        user_api_key_cache=UserApiKeyCache(),
+        raise_on_lookup_error=True,
+    )
+
+
+async def _stalled_user_read() -> object:
+    return await get_user_object(
+        user_id="stalled-user",
+        prisma_client=MagicMock(),
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        check_db_only=True,
+    )
+
+
+async def _stalled_email_read() -> object:
+    from litellm.proxy.auth.auth_checks import email_belongs_to_another_user
+
+    return await email_belongs_to_another_user(MagicMock(), "stalled@example.com", "stalled-user")
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param(_stalled_budget_read, id="budget"),
+        pytest.param(_stalled_user_read, id="user"),
+        pytest.param(_stalled_email_read, id="email-owner"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_stalled_rust_repository_read_fails_at_the_db_lookup_deadline(
+    read: Callable[[], Awaitable[object]], _clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(budget=_StalledBudgetStore(), end_user=_StalledEndUserStore(), user=_StalledUserStore()),
+    )
+    with patch(  # test-quality-ok: lowers the module-level lookup deadline so the stalled-read test finishes fast
+        "litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05
+    ):
+        started: Final = time.monotonic()
+        with pytest.raises(DBLookupDeadlineExceeded):
+            await read()
+        assert time.monotonic() - started < 2
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_end_user_read_answers_none_at_the_db_lookup_deadline(
+    _clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch
+):
+    stores: Final = install_rust_auth_stores(monkeypatch, RustAuthStores(end_user=_StalledEndUserStore()))
+    with patch(  # test-quality-ok: lowers the module-level lookup deadline so the stalled-read test finishes fast
+        "litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05
+    ):
+        started: Final = time.monotonic()
+        found: Final = await auth_checks.get_end_user_object(
+            end_user_id="stalled-end-user",
+            prisma_client=MagicMock(),
+            user_api_key_cache=UserApiKeyCache(),
+            token_end_user_max_budget=1.0,
+        )
+        assert (found, time.monotonic() - started < 2, stores.end_user.lookups) == (None, True, ["stalled-end-user"])
+
+
+class _StalledRestrictedRegistryStore(FakeEndUserStore):
+    async def find_restricted_ids(self, limit: int) -> list[str]:
+        await asyncio.Event().wait()
+        return []
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_end_user_registry_falls_back_at_the_db_lookup_deadline(
+    _clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch
+):
+    """A stalled restricted end user registry is unusable rather than parking the request, so per-id lookups take
+    over, and the stall is marked for readiness."""
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+
+    install_rust_auth_stores(monkeypatch, RustAuthStores(end_user=_StalledRestrictedRegistryStore()))
+    with patch(  # test-quality-ok: lowers the module-level lookup deadline so the stalled-read test finishes fast
+        "litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05
+    ):
+        started: Final = time.monotonic()
+        registry: Final = await auth_checks._load_end_user_restricted_registry(
+            prisma_client=MagicMock(), user_api_key_cache=UserApiKeyCache()
+        )
+        assert (registry, time.monotonic() - started < 2) == (None, True)
+
+    assert db_lookup_stall_tracker.stalled_within(60)
+
+
 @pytest.mark.asyncio
 async def test_team_lookup_fails_at_the_db_lookup_deadline_while_writes_stay_unbounded(_clear_db_lookup_stall):
     """Team, user, budget, and membership reads share the key lookup's deadline through
@@ -926,7 +1146,7 @@ def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
 
 
 @pytest.mark.asyncio
-async def test_default_internal_user_params_with_get_user_object(monkeypatch):
+async def test_default_internal_user_params_with_get_user_object(rust_auth_stores: RustAuthStores, monkeypatch):
     """Test that default_internal_user_params is used when creating a new user via get_user_object"""
     # Set up default_internal_user_params
     default_params = {
@@ -959,6 +1179,7 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     }
 
     # Setup the mock returns
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
 
@@ -993,7 +1214,9 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("has_budget_duration", [True, False])
-async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budget_duration):
+async def test_get_user_object_upsert_sets_budget_reset_at(
+    rust_auth_stores: RustAuthStores, monkeypatch, has_budget_duration
+):
     """The JWT first-login upsert must compute budget_reset_at when
     default_internal_user_params carries a budget_duration; otherwise the row
     lands with budget_reset_at=NULL and shows a null reset time until the next
@@ -1005,6 +1228,7 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = AsyncMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
@@ -1036,9 +1260,10 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
         assert "budget_reset_at" not in creation_args
 
 
-
 @pytest.mark.asyncio
-async def test_get_user_object_upsert_starts_each_default_window_with_its_own_reset(monkeypatch):
+async def test_get_user_object_upsert_starts_each_default_window_with_its_own_reset(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     monkeypatch.setattr(
         litellm,
         "default_internal_user_params",
@@ -1051,6 +1276,7 @@ async def test_get_user_object_upsert_starts_each_default_window_with_its_own_re
     )
     prisma_client: Final = MagicMock()
     prisma_client.db = AsyncMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
@@ -1079,9 +1305,10 @@ async def test_get_user_object_upsert_starts_each_default_window_with_its_own_re
         for window in windows
     )
 
-def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
+
+def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    stores.user.error = error
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
@@ -1105,10 +1332,12 @@ def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
     ],
     ids=["connect_error", "read_timeout", "p1001_as_data_error"],
 )
-async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user(outage):
+async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user(
+    rust_auth_stores: RustAuthStores, outage
+):
     from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
 
-    prisma_client, cache = _user_read_raising(outage)
+    prisma_client, cache = _user_read_raising(rust_auth_stores, outage)
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
         with pytest.raises(type(outage)) as raised:
@@ -1135,10 +1364,12 @@ async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user
     ],
     ids=["query_level_data_error", "runtime_error"],
 )
-async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user(failure):
+async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user(
+    rust_auth_stores: RustAuthStores, failure
+):
     from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
 
-    prisma_client, cache = _user_read_raising(failure)
+    prisma_client, cache = _user_read_raising(rust_auth_stores, failure)
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
         with pytest.raises(ValueError, match="User doesn't exist in db\\.") as raised:
@@ -1156,7 +1387,7 @@ async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_miss
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
+async def test_get_user_object_check_db_only_ignores_recent_miss(rust_auth_stores: RustAuthStores, monkeypatch):
     """A database-only read is never answered by the per-worker negative memo: a row created after a miss on
     this worker is returned within db_cache_expiry seconds instead of raising UserNotFoundError, so the token
     exchange mints for a user JWT auth just accepted."""
@@ -1166,6 +1397,7 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
     monkeypatch.setitem(auth_checks.last_db_access_time, f"user_id:{user_id}", (None, time.time()))
     db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
 
     result = await get_user_object(
@@ -1182,7 +1414,7 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_upsert_includes_user_email():
+async def test_get_user_object_upsert_includes_user_email(rust_auth_stores: RustAuthStores):
     """Test that user_email is included when creating a new user via get_user_object upsert"""
     # Mock the necessary dependencies
     mock_prisma_client = MagicMock()
@@ -1208,6 +1440,7 @@ async def test_get_user_object_upsert_includes_user_email():
     }
 
     # Setup the mock returns - user does not exist
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
@@ -1241,7 +1474,7 @@ async def test_get_user_object_upsert_includes_user_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfills_null_email_from_cache_hit() -> None:
+async def test_get_user_object_backfills_null_email_from_cache_hit(rust_auth_stores: RustAuthStores) -> None:
     """
     Regression (LIT-4710): an existing user row with a null user_email must be
     backfilled from the JWT-provided email even when served from cache, so the
@@ -1254,6 +1487,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit() -> None:
     await cache.async_set_cache(key="jwt-user-1", value=existing, model_type=LiteLLM_UserTable)
 
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
@@ -1287,7 +1521,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfills_null_email_from_db_read():
+async def test_get_user_object_backfills_null_email_from_db_read(rust_auth_stores: RustAuthStores):
     """
     Regression (LIT-4710): a user row read from the DB with a null user_email is
     backfilled from the JWT-provided email before it is cached and returned.
@@ -1301,6 +1535,7 @@ async def test_get_user_object_backfills_null_email_from_db_read():
     )
 
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=[db_row, backfilled_row])
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
@@ -1357,7 +1592,7 @@ async def test_get_user_object_does_not_overwrite_existing_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfill_race_prefers_db_email() -> None:
+async def test_get_user_object_backfill_race_prefers_db_email(rust_auth_stores: RustAuthStores) -> None:
     """
     LIT-4710 race guard: when the null-guarded update matches 0 rows because a
     concurrent writer already backfilled an email, the cache must be refreshed
@@ -1373,6 +1608,7 @@ async def test_get_user_object_backfill_race_prefers_db_email() -> None:
         user_role="internal_user",
     )
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=winner_row)
@@ -1395,7 +1631,7 @@ async def test_get_user_object_backfill_race_prefers_db_email() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfill_caches_persisted_email_not_proposed() -> None:
+async def test_get_user_object_backfill_caches_persisted_email_not_proposed(rust_auth_stores: RustAuthStores) -> None:
     """
     LIT-4710 cache-coherence: even when the null-guarded update succeeds, the
     cache must be refreshed from the row the DB actually holds, not this
@@ -1413,6 +1649,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed() ->
         user_role="internal_user",
     )
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=persisted_row)
@@ -1435,7 +1672,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed() ->
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_upsert_routes_default_team_to_membership(monkeypatch):
+async def test_get_user_object_upsert_routes_default_team_to_membership(rust_auth_stores: RustAuthStores, monkeypatch):
     """Regression for LIT-4324: a configured default team (list of NewUserRequestTeam
     dicts) must not be written into the Prisma create payload (teams is a String[] column
     that rejects dicts). Instead it must be routed through add_new_user_to_default_team so
@@ -1448,6 +1685,7 @@ async def test_get_user_object_upsert_routes_default_team_to_membership(monkeypa
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = AsyncMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
@@ -5090,6 +5328,7 @@ async def test_personal_key_owner_teams_reports_over_budget_and_blocked_teams(
 
 @pytest.mark.asyncio
 async def test_personal_key_owner_teams_check_db_only_refreshes_cached_owner(
+    rust_auth_stores: RustAuthStores,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy.auth import auth_checks
@@ -5109,6 +5348,7 @@ async def test_personal_key_owner_teams_check_db_only_refreshes_cached_owner(
     await cache.async_set_cache(key=user_id, value=cached_owner, model_type=LiteLLM_UserTable)
     logging_obj: Final = ProxyLogging(user_api_key_cache=cache)
     prisma: Final = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma)
     prisma.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=database_owner)
     monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-a")))
     monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
@@ -5442,45 +5682,6 @@ async def test_virtual_key_max_budget_alert_check_per_key_merges_with_global():
         }
     finally:
         litellm.default_key_max_budget_alert_emails = original
-
-
-@pytest.mark.asyncio
-async def test_get_fuzzy_user_object_case_insensitive_email():
-    """Test that _get_fuzzy_user_object uses case-insensitive email lookup"""
-    # Setup mock Prisma client
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-
-    # Mock user data with mixed case email
-    test_user = LiteLLM_UserTable(
-        user_id="test_123",
-        sso_user_id=None,
-        user_email="Test@Example.com",  # Mixed case in DB
-        organization_memberships=[],
-        max_budget=None,
-    )
-
-    # Test: SSO ID not found, find by email with different casing
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-
-    # Search with lowercase email (different from DB)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma,
-        sso_user_id=None,
-        user_email="test@example.com",  # Lowercase search
-    )
-
-    # Verify user was found despite case difference
-    assert result == test_user
-
-    # Verify the query used case-insensitive mode
-    mock_prisma.db.litellm_usertable.find_first.assert_called_once()
-    call_args = mock_prisma.db.litellm_usertable.find_first.call_args
-    assert call_args.kwargs["where"]["user_email"]["equals"] == "test@example.com"
-    assert call_args.kwargs["where"]["user_email"]["mode"] == "insensitive"
-    assert call_args.kwargs["include"] == {"organization_memberships": True}
 
 
 @pytest.mark.asyncio
@@ -6119,7 +6320,7 @@ async def _check_member_without_membership_row(prisma_client: MagicMock) -> None
 
 @pytest.mark.asyncio
 async def test_fail_closed_rejects_member_without_membership_row_with_a_403_naming_member_add(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ) -> None:
     from fastapi import HTTPException
 
@@ -6128,6 +6329,7 @@ async def test_fail_closed_rejects_member_without_membership_row_with_a_403_nami
 
     spend: Final = FakeSpendCounters(redis={})
     prisma_client: Final = _member_without_row_prisma(100.0)
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", prisma_client)
@@ -6143,12 +6345,15 @@ async def test_fail_closed_rejects_member_without_membership_row_with_a_403_nami
 
 
 @pytest.mark.asyncio
-async def test_fail_closed_off_still_admits_member_without_membership_row(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fail_closed_off_still_admits_member_without_membership_row(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+) -> None:
     import litellm.proxy.proxy_server as ps
     from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
     spend: Final = FakeSpendCounters(redis={})
     prisma_client: Final = _member_without_row_prisma(100.0)
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", prisma_client)
@@ -6159,7 +6364,7 @@ async def test_fail_closed_off_still_admits_member_without_membership_row(monkey
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
+async def test_team_member_budget_check_falls_back_to_team_default_budget_id(rust_auth_stores: RustAuthStores):
     """When a member's TeamMembership has no linked budget row, the check
     should fall back to team.metadata["team_member_budget_id"] and still
     enforce the cap. Pre-fix, this path silently skipped enforcement."""
@@ -6194,6 +6399,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
     fake_budget_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": 50.0})
 
     prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_budget_row)
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
@@ -6252,7 +6458,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_per_member_override_wins_over_team_default():
+async def test_team_member_budget_check_per_member_override_wins_over_team_default(rust_auth_stores: RustAuthStores):
     """If a member has a per-member budget AND the team carries a
     team_member_budget_id default, the per-member value wins and the
     fallback prisma lookup is never performed."""
@@ -6287,6 +6493,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
     fake_budget_row.max_budget = 50.0
 
     prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_budget_row)
 
     mocked_spend = 70.0
@@ -6342,7 +6549,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
+async def test_team_member_budget_check_null_clone_falls_back_to_team_default(rust_auth_stores: RustAuthStores):
     """Per-member NULL max_budget falls through to the team default cap."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
@@ -6375,6 +6582,7 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
     fake_default_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": 65.0})
 
     prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_default_row)
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
@@ -6406,7 +6614,9 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_null_clone_with_null_default_skips_enforcement():
+async def test_team_member_budget_check_null_clone_with_null_default_skips_enforcement(
+    rust_auth_stores: RustAuthStores,
+):
     """When per-member and team default are both NULL, enforcement still skips."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
@@ -6438,6 +6648,7 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
     fake_default_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": None})
 
     prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_default_row)
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
@@ -6465,7 +6676,7 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_zero_team_default_treated_as_no_cap():
+async def test_team_member_budget_check_zero_team_default_treated_as_no_cap(rust_auth_stores: RustAuthStores):
     """A team default budget with max_budget=0.0 (likely a stale/accidental
     write) must not block every member. The fallback path treats 0 as
     "no cap"; per-member rows still respect 0 as an explicit disable."""
@@ -6501,6 +6712,7 @@ async def test_team_member_budget_check_zero_team_default_treated_as_no_cap():
     fake_default_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": 0.0})
 
     prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_default_row)
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
@@ -6528,7 +6740,7 @@ async def test_team_member_budget_check_zero_team_default_treated_as_no_cap():
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_zero_per_member_row_still_blocks():
+async def test_team_member_budget_check_zero_per_member_row_still_blocks(rust_auth_stores: RustAuthStores):
     """A per-member row with max_budget=0.0 is treated as an explicit admin
     disable - enforcement still blocks. Only the team-default fallback
     path treats 0 as no cap."""
@@ -6559,6 +6771,7 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
 
     prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
@@ -6605,13 +6818,12 @@ def _validation_cache():
     return cache
 
 
-def _patch_validation_helpers(monkeypatch, *, end_user=None, user=None, fuzzy=None):
+def _patch_validation_helpers(monkeypatch, *, end_user=None, user=None):
     """Stub out the DB helpers resolve_and_validate_end_user_id delegates to."""
     from litellm.proxy.auth import auth_checks
 
     monkeypatch.setattr(auth_checks, "get_end_user_object", AsyncMock(return_value=end_user))
     monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(return_value=user))
-    monkeypatch.setattr(auth_checks, "_get_fuzzy_user_object", AsyncMock(return_value=fuzzy))
 
 
 @pytest.mark.asyncio
@@ -6685,7 +6897,6 @@ async def test_resolve_end_user_matches_end_user_table(_validate_flag_on, monkey
 
 @pytest.mark.asyncio
 async def test_resolve_end_user_matches_user_table_by_user_id(_validate_flag_on, monkeypatch):
-    from litellm.proxy.auth import auth_checks
     from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch, user=MagicMock())
@@ -6698,7 +6909,6 @@ async def test_resolve_end_user_matches_user_table_by_user_id(_validate_flag_on,
     )
     assert result == "user-xyz"
     # email fallback should not run for a non-email input
-    auth_checks._get_fuzzy_user_object.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -6725,8 +6935,6 @@ async def test_resolve_end_user_matches_user_table_by_email(_validate_flag_on, m
     user_kwargs = auth_checks.get_user_object.await_args.kwargs
     assert user_kwargs["user_id"] == "Alice@Example.com"
     assert user_kwargs["user_email"] == "Alice@Example.com"
-    # email branch must not bypass the cached helper with a raw fuzzy call
-    auth_checks._get_fuzzy_user_object.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -6846,7 +7054,6 @@ async def test_resolve_end_user_uses_cached_valid_result(_validate_flag_on, monk
     assert result == "alice@example.com"
     auth_checks.get_end_user_object.assert_not_awaited()
     auth_checks.get_user_object.assert_not_awaited()
-    auth_checks._get_fuzzy_user_object.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -8313,7 +8520,9 @@ async def test_spend_capable_non_llm_routes_still_enforce_budget(route):
 
 
 @pytest.mark.asyncio
-async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(monkeypatch):
+async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     from litellm.proxy.auth.auth_checks import get_default_end_user_budget
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", "budget-default-1")
@@ -8322,6 +8531,7 @@ async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(mon
     budget_row.dict = lambda: {"budget_id": "budget-default-1", "max_budget": 12.5, "tpm_limit": 100}
 
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
 
     mock_cache = MagicMock()
@@ -8341,7 +8551,7 @@ async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(mon
 
 
 @pytest.mark.asyncio
-async def test_get_team_member_default_budget_caches_json_safe_payload():
+async def test_get_team_member_default_budget_caches_json_safe_payload(rust_auth_stores: RustAuthStores):
     """The Redis layer json.dumps() the cached value, so datetime columns on the budget row
     must be dumped to ISO strings before the write, and the read side must give back a model.
     """
@@ -8356,6 +8566,7 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
     }
 
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
 
     cache, auth_store = shared_cache()
@@ -8386,13 +8597,16 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
 
 
 @pytest.mark.asyncio
-async def test_get_team_member_default_budget_reraises_lookup_error_when_requested() -> None:
+async def test_get_team_member_default_budget_reraises_lookup_error_when_requested(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     from litellm.proxy.auth.auth_checks import get_team_member_default_budget
 
     lookup_error: Final = RuntimeError("budget database unavailable")
     cache: Final = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     prisma_client: Final = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=lookup_error)
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -8407,10 +8621,13 @@ async def test_get_team_member_default_budget_reraises_lookup_error_when_request
 
 
 @pytest.mark.asyncio
-async def test_get_team_member_default_budget_returns_none_on_lookup_error_by_default() -> None:
+async def test_get_team_member_default_budget_returns_none_on_lookup_error_by_default(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     from litellm.proxy.auth.auth_checks import get_team_member_default_budget
 
     prisma_client: Final = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         side_effect=RuntimeError("budget database unavailable")
     )
@@ -8427,13 +8644,14 @@ async def test_get_team_member_default_budget_returns_none_on_lookup_error_by_de
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_db_fetch_returns_validated_end_user():
+async def test_get_end_user_object_db_fetch_returns_validated_end_user(rust_auth_stores: RustAuthStores):
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     end_user_row = MagicMock()
     end_user_row.dict = lambda: {"user_id": "eu-1", "blocked": False, "spend": 3.0}
 
     mock_prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
 
     mock_cache = MagicMock()
@@ -8454,7 +8672,7 @@ async def test_get_end_user_object_db_fetch_returns_validated_end_user():
 
 def _end_user_registry_row(user_id: str):
     """A row as the restricted-id registry query sees it: only ``user_id`` is read off it."""
-    return {"user_id": user_id}
+    return SimpleNamespace(user_id=user_id)
 
 
 def _end_user_db_row(user_id: str, **fields):
@@ -8462,18 +8680,6 @@ def _end_user_db_row(user_id: str, **fields):
     row.user_id = user_id
     row.dict = lambda: {"user_id": user_id, "blocked": False, "spend": 0.0, **fields}
     return row
-
-
-_RESTRICTED_END_USER_WHERE = {
-    "OR": [
-        {"blocked": True},
-        {"budget_id": {"not": None}},
-        {"allowed_model_region": {"not": None}},
-        {"default_model": {"not": None}},
-        {"object_permission_id": {"not": None}},
-        {"models": {"is_empty": False}},
-    ]
-}
 
 
 @pytest.fixture
@@ -8485,6 +8691,7 @@ def end_user_registry_skip_enabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
+    rust_auth_stores: RustAuthStores,
     end_user_registry_skip_enabled,
 ):
     """
@@ -8498,7 +8705,8 @@ async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -8512,10 +8720,11 @@ async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
     )
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
-    mock_prisma.db.query_raw.assert_awaited_once()
-    assert mock_prisma.db.query_raw.call_args.args[1] == END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    registry_call = mock_prisma.db.litellm_endusertable.find_many.call_args
+    assert registry_call.kwargs["take"] == END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1
 
-    mock_prisma.db.query_raw.reset_mock()
+    mock_prisma.db.litellm_endusertable.find_many.reset_mock()
     assert (
         await get_end_user_object(
             end_user_id="eu-anon-2",
@@ -8525,17 +8734,20 @@ async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
         is None
     )
     # A second, different unknown id inside the TTL costs nothing: no rebuild, no row fetch.
-    mock_prisma.db.query_raw.assert_not_awaited()
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_still_fetches_restricted_end_user(end_user_registry_skip_enabled):
+async def test_get_end_user_object_still_fetches_restricted_end_user(
+    rust_auth_stores: RustAuthStores, end_user_registry_skip_enabled
+):
     """An id in the registry keeps today's path: fetched, TTL-bounded in cache, then served cached."""
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=_end_user_db_row("eu-blocked", blocked=True)
     )
@@ -8563,12 +8775,15 @@ async def test_get_end_user_object_still_fetches_restricted_end_user(end_user_re
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_caches_empty_restricted_registry(end_user_registry_skip_enabled):
+async def test_get_end_user_object_caches_empty_restricted_registry(
+    rust_auth_stores: RustAuthStores, end_user_registry_skip_enabled
+):
     """No restricted end users at all is a valid answer and must be cached, not re-queried."""
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -8593,12 +8808,13 @@ async def test_get_end_user_object_caches_empty_restricted_registry(end_user_reg
         )
         is None
     )
-    mock_prisma.db.query_raw.assert_awaited_once()
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_per_id_fetch(
+    rust_auth_stores: RustAuthStores,
     end_user_registry_skip_enabled,
 ):
     """
@@ -8611,7 +8827,8 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(side_effect=Exception("registry query failed"))
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
     )
@@ -8635,7 +8852,7 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
         user_api_key_cache=cache,
     )
     assert second is not None and second.blocked is True
-    mock_prisma.db.query_raw.assert_awaited_once()
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
 
     # The window closing (here: the entry expiring) puts the registry back in play.
     await cache.async_delete_cache(key=end_user_restricted_registry_cache_key())
@@ -8645,11 +8862,11 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
         user_api_key_cache=cache,
     )
     assert third is not None and third.blocked is True
-    assert mock_prisma.db.query_raw.await_count == 2
+    assert mock_prisma.db.litellm_endusertable.find_many.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_registry_db_error_is_logged_at_warning(end_user_registry_skip_enabled):
+async def test_registry_db_error_is_logged_at_warning(rust_auth_stores: RustAuthStores, end_user_registry_skip_enabled):
     """
     A registry that stops loading is a silent enforcement degradation, so seeing it must not
     require debug logging: per-id lookups still enforce restrictions, but an operator has no other
@@ -8658,7 +8875,8 @@ async def test_registry_db_error_is_logged_at_warning(end_user_registry_skip_ena
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(side_effect=Exception("registry query failed"))
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-1", blocked=True))
 
     with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
@@ -8677,6 +8895,7 @@ async def test_registry_db_error_is_logged_at_warning(end_user_registry_skip_ena
 
 @pytest.mark.asyncio
 async def test_end_user_registry_load_is_single_flighted_across_concurrent_requests(
+    rust_auth_stores: RustAuthStores,
     end_user_registry_skip_enabled,
 ):
     """
@@ -8688,12 +8907,13 @@ async def test_end_user_registry_load_is_single_flighted_across_concurrent_reque
     """
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
-    async def fake_query_raw(*args):
+    async def fake_find_many(**kwargs):
         await asyncio.sleep(0)
         return [_end_user_registry_row("eu-blocked")]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=fake_find_many)
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -8709,12 +8929,13 @@ async def test_end_user_registry_load_is_single_flighted_across_concurrent_reque
     )
 
     assert all(result is None for result in results)
-    mock_prisma.db.query_raw.assert_awaited_once()
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refetching(
+    rust_auth_stores: RustAuthStores,
     end_user_registry_skip_enabled,
 ):
     """Past the cap the registry is unusable: keep the per-id path, but stop rebuilding the set."""
@@ -8722,7 +8943,8 @@ async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refet
 
     oversized = [_end_user_registry_row(f"eu-{index}") for index in range(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)]
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=oversized)
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=oversized)
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
     )
@@ -8745,12 +8967,14 @@ async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refet
         user_api_key_cache=cache,
     )
     assert second is not None and second.blocked is True
-    mock_prisma.db.query_raw.assert_awaited_once()
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
     assert mock_prisma.db.litellm_endusertable.find_unique.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestricted_end_users(monkeypatch):
+async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestricted_end_users(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     """
     With ``max_end_user_budget_id`` set, an existing unrestricted row is not equivalent to a missing
     one: the default budget is grafted onto whatever row exists and is then enforced, so the skip
@@ -8765,7 +8989,8 @@ async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestrict
     budget_row.dict = lambda: {"budget_id": "default-eu-budget", "max_budget": 25.0}
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
 
@@ -8778,11 +9003,12 @@ async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestrict
     assert result is not None
     assert result.litellm_budget_table is not None
     assert result.litellm_budget_table.max_budget == 25.0
-    mock_prisma.db.query_raw.assert_not_awaited()
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted_end_users(
+    rust_auth_stores: RustAuthStores,
     end_user_registry_skip_enabled,
 ):
     """
@@ -8795,7 +9021,8 @@ async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=100.0))
     cache = UserApiKeyCache()
 
@@ -8809,7 +9036,7 @@ async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted
     assert result is not None
     assert result.spend == 100.0
     mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
-    mock_prisma.db.query_raw.assert_not_awaited()
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
 
 
 def _budget_lookup_by_id(budgets: Mapping[str, float]) -> AsyncMock:
@@ -8828,6 +9055,7 @@ def _budget_lookup_by_id(budgets: Mapping[str, float]) -> AsyncMock:
 
 @pytest.mark.asyncio
 async def test_get_end_user_object_key_default_budget_beats_global_default_without_leaking_across_keys(
+    rust_auth_stores: RustAuthStores,
     monkeypatch,
 ):
     """Two service-account keys with different ``end_user_budget_id`` values must each see their
@@ -8840,7 +9068,8 @@ async def test_get_end_user_object_key_default_budget_beats_global_default_witho
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id(
         {"global-eu-budget": 100.0, "svc-a-budget": 0.5, "svc-b-budget": 7.0}
@@ -8875,7 +9104,9 @@ async def test_get_end_user_object_key_default_budget_beats_global_default_witho
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_cached_row_does_not_carry_another_keys_default_budget(monkeypatch):
+async def test_get_end_user_object_cached_row_does_not_carry_another_keys_default_budget(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     """A key without a default must see the end user unrestricted even after a key with a default
     populated the shared per-end-user cache entry for the same id."""
     from litellm.proxy.auth.auth_checks import get_end_user_object
@@ -8884,7 +9115,8 @@ async def test_get_end_user_object_cached_row_does_not_carry_another_keys_defaul
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
     cache = UserApiKeyCache()
@@ -8908,7 +9140,9 @@ async def test_get_end_user_object_cached_row_does_not_carry_another_keys_defaul
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_caches_row_with_global_default_but_never_a_key_default(monkeypatch):
+async def test_get_end_user_object_caches_row_with_global_default_but_never_a_key_default(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     """The cached row is what post-request readers (Prometheus customer gauges) see: it must keep
     the proxy-wide default exactly as before, while a key default stays on the request copy."""
     from litellm.proxy.auth.auth_checks import get_end_user_object
@@ -8918,7 +9152,8 @@ async def test_get_end_user_object_caches_row_with_global_default_but_never_a_ke
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-cached"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5, "global-budget": 7.0})
     cache = UserApiKeyCache()
@@ -8939,6 +9174,7 @@ async def test_get_end_user_object_caches_row_with_global_default_but_never_a_ke
 
 @pytest.mark.asyncio
 async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_without_global_default(
+    rust_auth_stores: RustAuthStores,
     end_user_registry_skip_enabled,
 ):
     """With no proxy-wide default, a key default alone must keep the registry skip off, otherwise
@@ -8947,7 +9183,8 @@ async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_wit
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=3.0))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 2.0})
 
@@ -8962,17 +9199,20 @@ async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_wit
     assert result.spend == 3.0
     assert result.litellm_budget_table is not None
     assert result.litellm_budget_table.max_budget == 2.0
-    mock_prisma.db.query_raw.assert_not_awaited()
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_explicit_end_user_budget_beats_key_default(monkeypatch):
+async def test_get_end_user_object_explicit_end_user_budget_beats_key_default(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
 
     mock_prisma = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=_end_user_db_row(
             "eu-vip",
@@ -8995,12 +9235,15 @@ async def test_get_end_user_object_explicit_end_user_budget_beats_key_default(mo
 
 
 @pytest.mark.asyncio
-async def test_resolve_default_end_user_budget_falls_back_to_global_when_key_budget_is_missing(monkeypatch):
+async def test_resolve_default_end_user_budget_falls_back_to_global_when_key_budget_is_missing(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     from litellm.proxy.auth.auth_checks import resolve_default_end_user_budget
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
 
     mock_prisma = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"global-eu-budget": 100.0})
 
     resolved = await resolve_default_end_user_budget(
@@ -9015,7 +9258,9 @@ async def test_resolve_default_end_user_budget_falls_back_to_global_when_key_bud
 
 
 @pytest.mark.asyncio
-async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users(monkeypatch):
+async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
     """
     With ``validate_end_user_id_in_db`` on, existence itself is the answer, so the skip stays off.
 
@@ -9028,7 +9273,8 @@ async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    _rust_stores_over_prisma(rust_auth_stores, mock_prisma)
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-known-1"))
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -9040,7 +9286,7 @@ async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users
     )
 
     assert resolved == "eu-known-1"
-    mock_prisma.db.query_raw.assert_not_awaited()
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -11295,7 +11541,7 @@ async def test_key_without_agent_never_consults_agent_access_groups():
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_temp_budget_increase_extends_cap():
+async def test_team_member_budget_check_temp_budget_increase_extends_cap(rust_auth_stores: RustAuthStores):
     """Spend above max_budget but below max_budget + active temp increase
     must not raise; once the increase expires the same spend must raise."""
     from litellm.caching.dual_cache import DualCache
@@ -11325,6 +11571,7 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
 
     prisma_client = MagicMock()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
@@ -11935,9 +12182,8 @@ async def test_baggage_mapping_still_rejects_client_metadata_tags():
     assert get_request_guardrails(data) == []
 
 
-
 @pytest.fixture
-def fresh_user_lookups() -> None:
+def fresh_user_lookups(rust_auth_stores: RustAuthStores) -> None:
     auth_checks.last_db_access_time.clear()
     auth_checks.email_in_use_checked_at.clear()
 
@@ -12021,7 +12267,9 @@ async def test_email_marked_unverified_never_selects_an_unlinked_row(upsert: boo
     claim_id: Final = "idp-new"
 
     if upsert:
-        user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=False, upsert=True)
+        user: Final = await _sign_in(
+            table, claim_id=claim_id, email="owner@example.com", email_verified=False, upsert=True
+        )
         assert user is not None and user.user_id == claim_id and user.user_email is None
     else:
         with pytest.raises(UserNotFoundError):
@@ -12029,30 +12277,6 @@ async def test_email_marked_unverified_never_selects_an_unlinked_row(upsert: boo
 
     assert table.row("owner").sso_user_id is None
     assert table.with_email("owner@example.com") == ["owner"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-@pytest.mark.parametrize("email_verified", [None, True])
-async def test_email_links_an_unlinked_row_when_not_marked_unverified(email_verified: bool | None) -> None:
-    table: Final = UserTable(user_row("owner", "owner@example.com"))
-    claim_id: Final = "idp-new"
-
-    user: Final = await _sign_in(table, claim_id=claim_id, email="Owner@Example.com", email_verified=email_verified)
-
-    assert user is not None and user.user_id == "owner"
-    assert table.row("owner").sso_user_id == claim_id
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-@pytest.mark.parametrize("email_verified", [None, True, False])
-async def test_linked_owner_keeps_signing_in_by_sso_id(email_verified: bool | None) -> None:
-    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
-
-    user: Final = await _sign_in(table, claim_id="idp-owner", email="owner@example.com", email_verified=email_verified)
-
-    assert user is not None and user.user_id == "owner"
 
 
 @pytest.mark.asyncio
@@ -12159,19 +12383,6 @@ async def test_a_user_created_with_an_unverified_email_never_takes_a_later_sign_
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fresh_user_lookups")
-async def test_an_existing_user_its_own_id_signs_in_to_stays_with_that_id() -> None:
-    table: Final = UserTable(user_row("idp-first", "owner@example.com"))
-    await _sign_in(table, claim_id="idp-first", email="owner@example.com")
-
-    with pytest.raises(UserNotFoundError):
-        await _sign_in(table, claim_id="idp-second", email="owner@example.com")
-
-    assert table.row("idp-first").sso_user_id == "idp-first"
-    assert [r.user_id for r in table.rows] == ["idp-first"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
 @pytest.mark.parametrize("sso_user_id", [None, "idp-other"])
 async def test_a_user_is_linked_only_to_its_own_id(sso_user_id: str | None) -> None:
     table: Final = UserTable(user_row("key-owner", "owner@example.com"))
@@ -12200,39 +12411,6 @@ async def test_opt_out_leaves_an_existing_user_unlinked(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fresh_user_lookups")
-async def test_opt_out_restores_a_created_user_joining_a_later_sign_in_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
-    table: Final = UserTable()
-    await _sign_in(table, claim_id="idp-first", email="owner@example.com", upsert=True)
-    assert table.row("idp-first").sso_user_id is None
-
-    later: Final = await _sign_in(table, claim_id="idp-second", email="owner@example.com", upsert=True)
-
-    assert later is not None and later.user_id == "idp-first"
-    assert [r.user_id for r in table.rows] == ["idp-first"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-@pytest.mark.parametrize(
-    "owner_sso_user_id, email_verified",
-    [("idp-owner", None), (None, False), ("idp-owner", False)],
-)
-async def test_opt_out_restores_linking_any_row_by_email(
-    monkeypatch: pytest.MonkeyPatch, owner_sso_user_id: str | None, email_verified: bool | None
-) -> None:
-    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
-    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id=owner_sso_user_id))
-    claim_id: Final = "idp-new"
-
-    user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=email_verified)
-
-    assert user is not None and user.user_id == "owner"
-    assert table.row("owner").sso_user_id == claim_id
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
 @pytest.mark.parametrize(
     "emails", [["owner@example.com"] * 3, ["owner@example.com", "OWNER@example.com", "Owner@Example.COM"]]
 )
@@ -12240,11 +12418,11 @@ async def test_email_in_use_check_runs_once_per_window_on_cached_sign_ins(emails
     table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
     cache: Final = UserApiKeyCache()
     await _sign_in(table, claim_id="second", email=None, cache=cache)
-    table.first_lookups.clear()
+    table.email_checks.clear()
     users: Final = [await _sign_in(table, claim_id="second", email=email, cache=cache) for email in emails]
 
     assert [getattr(user, "user_email", "missing") for user in users] == [None] * len(emails)
-    assert len(table.first_lookups) == 1
+    assert len(table.email_checks) == 1
 
 
 @pytest.mark.asyncio
@@ -12265,7 +12443,7 @@ async def test_email_in_use_check_stays_once_per_window_while_other_users_load(f
     table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
     cache: Final = UserApiKeyCache()
     await _sign_in(table, claim_id="second", email=None, cache=cache)
-    table.first_lookups.clear()
+    table.email_checks.clear()
 
     async def sign_in_after_other_users_load(round_number: int) -> LiteLLM_UserTable | None:
         for i in range(150):
@@ -12275,7 +12453,7 @@ async def test_email_in_use_check_stays_once_per_window_while_other_users_load(f
     users: Final = [await sign_in_after_other_users_load(round_number) for round_number in range(3)]
 
     assert [getattr(user, "user_email", "missing") for user in users] == [None] * 3
-    assert len(table.first_lookups) == 1
+    assert len(table.email_checks) == 1
 
 
 @pytest.mark.asyncio
@@ -12291,19 +12469,6 @@ async def test_email_with_an_underscore_matches_only_itself(other_email: str) ->
     assert table.row("other").sso_user_id == "idp-other"
     assert own is not None and own.user_email is None
     assert sorted(table.with_email("ann_lee@example.com")) == [linked.user_id]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-@pytest.mark.parametrize("email", ["a%b@example.com", "back\\slash@example.com"])
-async def test_email_fallback_finds_an_email_with_a_wildcard_character(email: str) -> None:
-    table: Final = UserTable(user_row("owner", email), user_row("other", "aXb@example.com"))
-    claim_id: Final = "idp-new"
-
-    user: Final = await _sign_in(table, claim_id=claim_id, email=email.upper())
-
-    assert user is not None and user.user_id == "owner"
-    assert table.row("owner").sso_user_id == claim_id
 
 
 @pytest.mark.asyncio
@@ -12338,14 +12503,14 @@ async def test_concurrent_cached_sign_ins_share_one_email_in_use_check(fixed_clo
     table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
     cache: Final = UserApiKeyCache()
     await _sign_in(table, claim_id="second", email=None, cache=cache)
-    table.first_lookups.clear()
+    table.email_checks.clear()
 
     users: Final = await asyncio.gather(
         *(_sign_in(table, claim_id="second", email="owner@example.com", cache=cache) for _ in range(8))
     )
 
     assert all(user is not None and user.user_email is None for user in users)
-    assert len(table.first_lookups) == 1
+    assert len(table.email_checks) == 1
 
 
 @pytest.mark.asyncio
@@ -12361,97 +12526,3 @@ async def test_one_rows_skipped_email_does_not_hold_back_another_rows_fill() -> 
     third: Final = await _sign_in(table, claim_id="third", email="owner@example.com", cache=third_cache)
 
     assert third is not None and third.user_email == "owner@example.com"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-async def test_a_second_sign_in_id_cannot_take_a_user_the_first_one_linked() -> None:
-    table: Final = UserTable(user_row("owner", "owner@example.com"))
-
-    first: Final = await _sign_in(table, claim_id="idp-first", email="owner@example.com")
-    with pytest.raises(UserNotFoundError):
-        await _sign_in(table, claim_id="idp-second", email="owner@example.com")
-
-    assert first is not None and first.user_id == "owner"
-    assert table.row("owner").sso_user_id == "idp-first"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-async def test_email_fallback_skips_a_linked_user_to_reach_an_unlinked_one_with_the_same_email() -> None:
-    table: Final = UserTable(
-        user_row("linked", "owner@example.com", sso_user_id="idp-other"),
-        user_row("unlinked", "OWNER@example.com"),
-    )
-
-    user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com")
-
-    assert user is not None and user.user_id == "unlinked"
-    assert table.row("unlinked").sso_user_id == "idp-new"
-    assert table.row("linked").sso_user_id == "idp-other"
-
-
-class _LinkedMidLookup(UserTable):
-    def __init__(self, winner: str, *rows: LiteLLM_UserTable) -> None:
-        super().__init__(*rows)
-        self.winner = winner
-
-    async def find_first(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
-        found: Final = await super().find_first(where, include)
-        if found is not None and "sso_user_id" in where:
-            await self.update(where={"user_id": found.user_id}, data={"sso_user_id": self.winner})
-        return found
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-@pytest.mark.parametrize("winner, resolved", [("idp-other", None), ("idp-new", "owner")])
-async def test_a_sign_in_that_loses_the_link_race_gets_the_user_only_if_its_own_id_won(
-    winner: str, resolved: str | None
-) -> None:
-    table: Final = _LinkedMidLookup(winner, user_row("owner", "owner@example.com"))
-
-    if resolved is None:
-        with pytest.raises(UserNotFoundError):
-            await _sign_in(table, claim_id="idp-new", email="owner@example.com")
-    else:
-        user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com")
-        assert user is not None and user.user_id == resolved
-
-    assert table.row("owner").sso_user_id == winner
-    assert [r.user_id for r in table.rows] == ["owner"]
-
-
-class _StaleFirstSsoLookup(UserTable):
-    def __init__(self, *rows: LiteLLM_UserTable) -> None:
-        super().__init__(*rows)
-        self.stale_reads = 1
-
-    async def find_unique(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
-        if "sso_user_id" in where and self.stale_reads:
-            self.stale_reads -= 1
-            return None
-        return await super().find_unique(where, include)
-
-    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
-        from prisma.errors import UniqueViolationError
-
-        if any(r.sso_user_id == data.get("sso_user_id") for r in self.rows):
-            raise UniqueViolationError({"user_facing_error": {"meta": {"target": ["sso_user_id"]}}})
-        return await super().update_many(where, data)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("fresh_user_lookups")
-@pytest.mark.parametrize("unlinked_twin", [False, True])
-async def test_a_sign_in_that_misses_its_freshly_linked_user_reads_it_again(unlinked_twin: bool) -> None:
-    rows: Final = [user_row("owner", "owner@example.com", sso_user_id="idp-new")]
-    if unlinked_twin:
-        rows.append(user_row("twin", "OWNER@example.com"))
-    table: Final = _StaleFirstSsoLookup(*rows)
-
-    user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com", upsert=True)
-
-    assert user is not None and user.user_id == "owner"
-    assert sorted(r.user_id for r in table.rows) == sorted(r.user_id for r in rows)
-

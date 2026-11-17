@@ -1,6 +1,5 @@
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -25,6 +24,7 @@ from litellm.proxy.auth.resolvers.grants import (
     user_models,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 USER_ID = "user-1"
 TEAM_ID = "team-1"
@@ -35,25 +35,18 @@ if TYPE_CHECKING:
 
 @pytest.mark.parametrize("user_exists", (True, False), ids=("created-on-another-worker", "still-missing"))
 async def test_session_grants_recheck_a_recently_missing_user(
-    user_exists: bool, monkeypatch: pytest.MonkeyPatch
+    user_exists: bool, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ) -> None:
     monkeypatch.setattr("time.time", lambda: 1_700_000_000.0)
     user_id: Final = "session-user-after-miss"
     row: Final = LiteLLM_UserTable(user_id=user_id, user_role="internal_user")
-    read: Final = AsyncMock(return_value=None)
-    database: Final = cast(
-        "PrismaClient",
-        SimpleNamespace(
-            db=SimpleNamespace(
-                litellm_usertable=SimpleNamespace(find_unique=read, find_first=AsyncMock(return_value=None))
-            )
-        ),
-    )
+    database: Final = cast("PrismaClient", SimpleNamespace(db=SimpleNamespace()))
     resolver: Final = GrantResolver(database, UserApiKeyCache())
     forget_missing_user(user_id)
     try:
         assert await resolver.resolve(UserLookup(user_id=user_id), team_id=None) == UserGone(user_id=user_id)
-        read.return_value = row if user_exists else None
+        if user_exists:
+            rust_auth_stores.user.rows[user_id] = row.model_dump(mode="json")
 
         outcome: Final = await resolver.resolve(UserLookup(user_id=user_id), team_id=None)
 

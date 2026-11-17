@@ -11,6 +11,7 @@ from litellm.proxy.mcp_server import mcp_server_manager
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 def actor(tools: tuple[str, ...] | None, *, delegated: bool = False) -> UserAPIKeyAuth:
@@ -152,7 +153,7 @@ async def test_managed_agent_tool_ceiling_reads_the_admitted_policy_not_the_regi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["tools", "servers", "disabled", "outage"])
 async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
-    monkeypatch: pytest.MonkeyPatch, change: str
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores, change: str
 ) -> None:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
 
@@ -166,18 +167,17 @@ async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
     cache.set_cache("human", user)
     cache.set_cache(object_permission_cache_key("user-grant"), permission)
     client: Final = MagicMock()
-    client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    users: Final = rust_auth_stores.user
+    users.writer = {"human": user.model_dump()}
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     auth: Final = actor(("read", "write"), delegated=True)
     assert set(await MCPRequestHandler.get_allowed_tools_for_server("slack", auth)) == {"read", "write"}
     if change == "disabled":
-        client.writer_db.litellm_usertable.find_unique.return_value = user.model_copy(
-            update={"metadata": {"scim_active": False}}
-        )
+        users.writer["human"] = user.model_copy(update={"metadata": {"scim_active": False}}).model_dump()
     elif change == "outage":
-        client.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("writer unavailable")
+        users.writer["human"] = RuntimeError("writer unavailable")
     elif change == "servers":
         client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission.model_copy(
             update={"mcp_servers": [], "mcp_tool_permissions": {}}
@@ -193,7 +193,7 @@ async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
         assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (
             ["read"] if change == "tools" else []
         )
-    client.db.litellm_usertable.find_unique.assert_not_called()
+    assert all(writer for _, writer in users.sign_ins)
     client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
 
 
@@ -265,6 +265,7 @@ async def test_autonomous_agent_toolset_and_access_group_revocations_bind_on_the
 @pytest.mark.parametrize("has_grant", [True, False])
 @pytest.mark.parametrize("agent_tools", [("read", "write"), None])
 async def test_delegated_mcp_uses_explicit_team_grants_even_for_dashboard_admins(
+    rust_auth_stores: RustAuthStores,
     monkeypatch: pytest.MonkeyPatch,
     role: str,
     open_channel: str,
@@ -305,7 +306,7 @@ async def test_delegated_mcp_uses_explicit_team_grants_even_for_dashboard_admins
         object_permission_id="team-grant",
     )
     client: Final = MagicMock()
-    client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    rust_auth_stores.user.writer = {user.user_id: user.model_dump()}
     client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
@@ -534,6 +535,7 @@ async def test_managed_agent_mcp_access_is_capped_at_the_invoking_callers_grants
 @pytest.mark.parametrize("fresh", [False, True])
 @pytest.mark.parametrize("caller_kind", ["team", "user"])
 async def test_caller_mcp_revocation_uses_fresh_policy(
+    rust_auth_stores: RustAuthStores,
     monkeypatch: pytest.MonkeyPatch,
     fresh: bool,
     caller_kind: str,
@@ -565,7 +567,7 @@ async def test_caller_mcp_revocation_uses_fresh_policy(
     )
     database: Final = MagicMock()
     database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    rust_auth_stores.user.writer = {user.user_id: user.model_dump()}
     database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=current_permission)
     cache: Final = UserApiKeyCache()
     cache.set_cache("team_id:caller", team.model_copy(update={"object_permission": cached_permission}))

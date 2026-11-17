@@ -39,13 +39,16 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.repositories import rust_database
 from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServerManager
 from litellm.proxy.utils import ProxyLogging
+from litellm.rust_bridge._native import RustUserRepository
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from tests.unit.proxy.rust_auth_stores import FakeUserStore
 
 
 def generate_mock_mcp_server_db_record(
@@ -9274,7 +9277,9 @@ def _mock_mcp_resolution_prisma_client(
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=find_many_side_effect)
     prisma.db.litellm_mcpservertable.find_unique = unique_lookup(server, "server_id")
     prisma.db.litellm_teamtable.find_unique = unique_lookup(team, "team_id")
-    prisma.db.litellm_usertable.find_unique = unique_lookup(user, "user_id")
+    users: Final = rust_database.repository(RustUserRepository)
+    if isinstance(users, FakeUserStore) and user is not None:
+        users.rows[user.user_id] = user.model_dump(mode="json")
     prisma.db.litellm_organizationtable.find_unique = unique_lookup(organization, "organization_id")
     prisma.db.litellm_accessgrouptable.find_unique = unique_lookup(access_group, "access_group_id")
     prisma.db.litellm_objectpermissiontable.find_unique = unique_lookup(object_permission, "object_permission_id")
@@ -9288,6 +9293,7 @@ def _mock_mcp_resolution_cache() -> MagicMock:
     return cache
 
 
+@pytest.mark.usefixtures("rust_auth_stores")
 class TestMCPServerResolutionRegressions:
     @pytest.mark.asyncio
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
@@ -9790,6 +9796,7 @@ class TestMCPServerResolutionRegressions:
         health_check.assert_awaited_once()
 
 
+@pytest.mark.usefixtures("rust_auth_stores")
 class TestMCPServerResolutionCharacterization:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("caller", ["denied", "admin"])

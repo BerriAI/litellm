@@ -12,10 +12,10 @@ import jwt
 import pytest
 import respx
 from cryptography.hazmat.primitives.asymmetric import rsa
-from starlette.types import Message
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.types import Message
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -29,8 +29,8 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
-    LiteLLM_TeamTableCachedObj,
     LiteLLM_TeamMembership,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     RoleBasedPermissions,
@@ -52,6 +52,7 @@ from litellm.proxy.utils import hash_token
 from litellm.types.agents import AgentResponse
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 _RUN: Final = "agent.v1.AgentService/RunSSE"
 _APPEND: Final = "aiserver.v1.BidiService/BidiAppend"
@@ -363,7 +364,8 @@ def test_unenforceable_or_disallowed_key_policies_fail_closed(
 
 
 @pytest.mark.parametrize(
-    "budget_field", ["max_budget", "team_max_budget", "user_max_budget", "organization_max_budget", "end_user_max_budget"]
+    "budget_field",
+    ["max_budget", "team_max_budget", "user_max_budget", "organization_max_budget", "end_user_max_budget"],
 )
 @pytest.mark.parametrize("limit,spend", [(0, 0), (10, 0), (10, 11)])
 def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
@@ -389,9 +391,10 @@ def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
 
 
 @pytest.fixture
-def member_gateway(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tuple[str, MagicMock]:
+def member_gateway(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+) -> tuple[str, MagicMock]:
     database: Final = prisma_with_empty_config()
-    database.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     cache: Final = UserApiKeyCache()
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
@@ -457,12 +460,15 @@ def test_effective_default_member_limits_control_opaque_admission(
 
 @pytest.mark.parametrize("lookup", ["missing", "error"])
 def test_unverifiable_default_member_budgets_block_opaque_admission(
-    client: TestClient, member_gateway: tuple[str, MagicMock], respx_mock: respx.MockRouter, lookup: str
+    client: TestClient,
+    member_gateway: tuple[str, MagicMock],
+    rust_auth_stores: RustAuthStores,
+    respx_mock: respx.MockRouter,
+    lookup: str,
 ) -> None:
-    key, database = member_gateway
-    database.db.litellm_budgettable.find_unique = AsyncMock(
-        return_value=None, side_effect=ConnectionError("budget lookup unavailable") if lookup == "error" else None
-    )
+    key, _ = member_gateway
+    if lookup == "error":
+        rust_auth_stores.budget.rows["default-member-budget"] = ConnectionError("budget lookup unavailable")
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     response: Final = client.post(
         f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
