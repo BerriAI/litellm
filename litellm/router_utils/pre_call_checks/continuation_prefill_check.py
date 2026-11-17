@@ -13,8 +13,8 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.routing_common_utils import MID_STREAM_CONTINUATION_KWARG
 from litellm.litellm_core_utils.rules import Rules
-from litellm.router_utils.common_utils import MID_STREAM_CONTINUATION_KWARG
 from litellm.types.llms.openai import AllMessageValues, OutputTextDeltaEvent
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 from litellm.utils import supports_assistant_prefill

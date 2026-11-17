@@ -27,6 +27,7 @@ from litellm.llms.bedrock.common_utils import (
     build_bedrock_stream_error,
     get_bedrock_agent_response_stream_shape,
 )
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS
 from litellm.types.llms.bedrock_invoke_agents import (
     InvokeAgentChunkPayload,
     InvokeAgentEvent,
@@ -180,7 +181,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         return {
             "inputText": query,
             "enableTrace": True,
-            **optional_params,
+            **{key: value for key, value in optional_params.items() if key not in AWS_AUTH_PARAM_KEYS},
         }
 
     def _parse_aws_event_stream(

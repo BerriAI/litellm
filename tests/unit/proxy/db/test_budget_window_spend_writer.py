@@ -407,9 +407,7 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("replaces_window_start", "replaced_param"), [(None, None), (WINDOW_A, datetime(2026, 8, 1))]
-)
+@pytest.mark.parametrize(("replaces_window_start", "replaced_param"), [(None, None), (WINDOW_A, datetime(2026, 8, 1))])
 async def test_open_window_spend_row_moves_only_the_window_the_caller_saw_end(replaces_window_start, replaced_param):
     db = _FakeDB()
 
@@ -425,7 +423,9 @@ async def test_open_window_spend_row_moves_only_the_window_the_caller_saw_end(re
     ((query, params),) = db.execute_raw_calls
     normalized = " ".join(query.split())
     assert "ON CONFLICT (entity_type, entity_id, window_duration) DO UPDATE" in normalized
-    assert normalized.endswith("WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')")
+    assert normalized.endswith(
+        "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
+    )
     assert params == ("model_max_budget", "k1", "1d", datetime(2026, 8, 31), replaced_param)
 
 
@@ -544,7 +544,7 @@ async def test_new_row_is_correct_when_the_batch_logs_have_not_flushed_yet():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "entity_type, expected_column",
-    [("key", "api_key = $1"), ("team", "team_id = $1")],
+    [("key", "api_key = $1"), ("team", "team_id = $1"), ("user", '"user" = $1')],
 )
 async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_type, expected_column):
     db = _FakeDB(existing_rows=[{"total": 1.25, "before_batch": 0.75}])
@@ -561,7 +561,12 @@ async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_ty
     ((query, params),) = db.query_raw_calls
     normalized = " ".join(query.split())
     assert expected_column in normalized
-    assert "FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))" in normalized
+    assert (
+        'FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
+        'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id) '
+        "OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))"
+        in normalized
+    )
     assert 'FROM "LiteLLM_SpendLogs"' in normalized
     # startTime is TIMESTAMP(3): the bound is floored to the second so the
     # batch's own earliest row cannot round under it.
@@ -598,7 +603,7 @@ async def test_seed_aggregate_returns_none_for_an_entity_type_with_no_spend_logs
 
     totals = await spend_logs_seed_totals(
         prisma_client=_FakePrismaClient(db),
-        entity_type="user",
+        entity_type="unsupported",
         entity_id="u1",
         window_start=WINDOW_A,
         batch_started_at=None,
@@ -635,3 +640,21 @@ async def test_rolling_a_window_row_renders_a_postgres_update_span(
         new_window_start=WINDOW_B,
     )
     assert await postgres_span_names() == ("postgres.update LiteLLM_BudgetWindowSpend",)
+
+
+@pytest.mark.asyncio
+async def test_window_reads_inside_an_enclosing_transaction_use_its_connection():
+    client_db = _FakeDB()
+    transaction = _FakeDB(existing_rows=[])
+
+    await commit_window_spend_updates(
+        prisma_client=_FakePrismaClient(client_db),
+        transactions=(
+            build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0, started_at=BATCH_STARTED_AT),
+        ),
+        outer_transaction=transaction,
+    )
+
+    assert client_db.query_raw_calls == []
+    assert len(transaction.query_raw_calls) == 2
+    assert len(transaction.batcher.calls) == 1

@@ -60,6 +60,7 @@ from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
@@ -72,6 +73,7 @@ from litellm.router_strategy.complexity_router.request_models import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    SHADOW_EVAL_RUBRIC_VERSION,
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterAvailabilityRequest,
     AutoRouterAvailabilityResponse,
@@ -85,12 +87,17 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
     ShadowEvalDirection,
+    ShadowEvalGradePair,
     ShadowEvalJobResponse,
     ShadowEvalJobTargetResponse,
     ShadowEvalResult,
+    ShadowEvalRubricJobResponse,
+    ShadowEvalRubricResultResponse,
+    ShadowEvalRubricSlice,
     ShadowEvalSlice,
     ShadowEvalTargetType,
     StartShadowEvalRequest,
+    StartShadowEvalRubricRequest,
 )
 
 if TYPE_CHECKING:
@@ -235,8 +242,10 @@ _RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(st
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
+    from litellm.proxy.utils import query_raw_rows
+
     async with db_span("auto_router_report_query", sql_relation(query)):
-        return _RAW_ROWS.validate_python(await prisma_client.db.query_raw(query, *args))
+        return _RAW_ROWS.validate_python(await query_raw_rows(prisma_client.db, query, *args))
 
 
 async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
@@ -359,7 +368,7 @@ async def _authorize_models_this_test_can_call(
     for model in models:
         await can_key_call_resolved_model(
             model=model,
-            llm_model_list=llm_router.model_list,
+            llm_model_list=llm_router.registry().all(),
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )
@@ -456,7 +465,9 @@ async def get_auto_router_availability(
         ):
             raise HTTPException(status_code=403, detail="Cannot check another user's auto router")
     existing: Final = saved.deployment if saved is not None else None
-    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(llm_router.config_deployments())
+    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(
+        llm_router.registry().deployments(source="config")
+    )
     candidate: Final = MappingProxyType(
         {
             "litellm_params": MappingProxyType(
@@ -481,14 +492,14 @@ async def _resolve_saved_routing_test(
 ) -> AutoRouterRoutingTestRequest:
     if data.saved_model_id is None:
         return data
-    deployment: Final = llm_router.get_deployment(data.saved_model_id)
+    deployment: Final = llm_router.registry().deployment(data.saved_model_id)
     if deployment is None or deployment.model_info.blocked:
         raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and deployment.model_info.team_id != data.team_id:
         raise HTTPException(status_code=403, detail="Saved auto router belongs to a different team")
     await can_key_call_resolved_model(
         model=deployment.model_info.team_public_model_name or deployment.model_name,
-        llm_model_list=llm_router.model_list,
+        llm_model_list=llm_router.registry().all(),
         valid_token=user_api_key_dict,
         llm_router=llm_router,
     )
@@ -610,9 +621,9 @@ async def preview_auto_router_routing(
     )
 
     try:
-        complexity_router: Final = ComplexityRouter(
+        complexity_strategy: Final = ComplexityRouter(
             model_name=resolved.router_name,
-            litellm_router_instance=llm_router,
+            ctx=RoutingContext(llm_router),
             complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
             default_model=resolved.complexity_router_config.resolve_default_model(resolved.default_model),
             derive_savings_baseline=False,
@@ -628,7 +639,7 @@ async def preview_auto_router_routing(
     refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
-        hook_response: Final = await complexity_router.async_pre_routing_hook(
+        hook_response: Final = await complexity_strategy.async_pre_routing_hook(
             model=resolved.router_name,
             request_kwargs=request_kwargs,
             messages=request_kwargs["messages"],
@@ -865,7 +876,7 @@ async def _recorded_autorouter_savings(
             entity_id_field="user_id",
             entity_id=user_id,
             exclude_entity_ids=None,
-            api_key=api_key,
+            api_key=(api_key,) if api_key is not None else None,
             start_date=start_day,
             end_date=end_day,
             model=None,
@@ -936,7 +947,7 @@ def _idle_router_groups(
     zero: Final = _summed_agg_row(())
     idle: Final = frozenset(
         key
-        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        for key in map(_strategy_router_key, llm_router.registry().all() or ())
         if key is not None and key not in covered
     )
     return tuple(
@@ -1047,7 +1058,7 @@ async def get_auto_router_session(
     fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
     id is bounded the way the writer bounded it, so an oversized client id still finds its row.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -1058,6 +1069,11 @@ async def get_auto_router_session(
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
+    total: Final = (
+        await proxy_logging_obj.session_spend_totals.read(user_api_key_dict.api_key, session_id)
+        if user_api_key_dict.api_key
+        else None
+    )
     saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
     _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
@@ -1069,6 +1085,7 @@ async def get_auto_router_session(
         turns=row.turns,
         last_model=row.last_model,
         spend=row.spend,
+        total_spend=total,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=saved_spend,
@@ -1101,13 +1118,15 @@ def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> Non
 
 
 def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
+    router_registry: Final = llm_router.registry()
     return any(
         router_name in registry
         for registry in (
-            llm_router.auto_routers,
-            llm_router.complexity_routers,
-            llm_router.adaptive_routers,
-            llm_router.quality_routers,
+            router_registry.plugins("auto"),
+            router_registry.plugins("complexity"),
+            router_registry.plugins("adaptive"),
+            router_registry.plugins("quality"),
+            router_registry.plugins("switchyard"),
         )
     )
 
@@ -1183,7 +1202,7 @@ def _validate_model_scope(llm_router: "Router | None", models: Sequence[str]) ->
         model
         for model in models
         if judge_target(llm_router, model).via == "nothing"
-        and (llm_router is None or model not in llm_router.team_public_model_names)
+        and (llm_router is None or model not in llm_router.registry().names(kind="team_public"))
     )
     if unreachable:
         raise HTTPException(
@@ -1212,7 +1231,7 @@ def _router_arm_models(llm_router: "Router | None", router_name: str) -> tuple[t
     this lookup is unscoped; what each tier NAME resolves to is the team-dependent half, and
     it belongs to the caller that compares them.
     """
-    deployments: Final = llm_router.get_model_list(model_name=router_name) if llm_router is not None else None
+    deployments: Final = llm_router.registry().deployments(router_name) if llm_router is not None else None
     return tuple(
         dict.fromkeys(
             (dependency.role, dependency.model_name)
@@ -1380,6 +1399,7 @@ GROUP BY a.job_id
 _FUNNEL_TOTALS_SQL: Final = """
 SELECT COUNT(*)::int AS legs_with_rows,
     COALESCE(SUM(not_sampled), 0)::int AS not_sampled,
+    COALESCE(SUM(same_model), 0)::int AS same_model,
     COALESCE(SUM(unjudgeable), 0)::int AS unjudgeable,
     COALESCE(SUM(shed), 0)::int AS shed,
     COALESCE(SUM(withheld), 0)::int AS withheld
@@ -1408,6 +1428,7 @@ WHERE group_id = $1 AND stopped_by IS NULL
 class _FunnelTotalsRow(LiteLLMBaseModel):
     legs_with_rows: int
     not_sampled: int
+    same_model: int
     unjudgeable: int
     shed: int
     withheld: int
@@ -1446,6 +1467,51 @@ class _AttemptTotalsRow(LiteLLMBaseModel):
 
 
 _ATTEMPT_TOTALS_ROWS: Final = TypeAdapter(list[_AttemptTotalsRow])
+
+# Grades are counted per arm on the same rows the preference results read (errors
+# excluded); a verdict row without grades is counted as ungraded, never as a grade.
+_RUBRIC_GRADE_COUNTS_SQL: Final = """
+SELECT COALESCE(a.router_name, j.router_name) AS grp, a.real_grade, a.shadow_grade, COUNT(*)::int AS turn_count
+FROM "LiteLLM_ShadowEvalAttempt" a
+JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
+WHERE a.job_id = ANY($1::text[]) AND a.outcome != 'error'
+GROUP BY 1, 2, 3
+"""
+
+
+class _GradeCountRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    grp: str
+    real_grade: int | None
+    shadow_grade: int | None
+    turn_count: int
+
+    @property
+    def grade_pair(self) -> tuple[int, int] | None:
+        if self.real_grade is None or self.shadow_grade is None:
+            return None
+        return self.real_grade, self.shadow_grade
+
+
+_GRADE_COUNT_ROWS: Final = TypeAdapter(list[_GradeCountRow])
+
+
+def _rubric_slice(group: str, rows: Sequence[_GradeCountRow]) -> ShadowEvalRubricSlice:
+    pairs: Final = sorted(frozenset(pair for row in rows if (pair := row.grade_pair) is not None))
+    return ShadowEvalRubricSlice(
+        group=group,
+        graded_count=sum(row.turn_count for row in rows if row.grade_pair is not None),
+        ungraded_count=sum(row.turn_count for row in rows if row.grade_pair is None),
+        grade_distribution=tuple(
+            ShadowEvalGradePair(
+                real_grade=real_grade,
+                shadow_grade=shadow_grade,
+                turn_count=sum(row.turn_count for row in rows if row.grade_pair == (real_grade, shadow_grade)),
+            )
+            for real_grade, shadow_grade in pairs
+        ),
+    )
 
 
 def _pct_of(numerator: int, denominator: int) -> float:
@@ -1490,6 +1556,7 @@ class _LegRow(LiteLLMBaseModel):
     models: tuple[str, ...] = ()
     direction: ShadowEvalDirection
     baseline_model: str | None = None
+    skip_same_model: bool = False
     judge_model: str
     shadow_percentage: float
     max_turns: int
@@ -1498,6 +1565,8 @@ class _LegRow(LiteLLMBaseModel):
     ends_at: datetime
     stopped_at: datetime | None = None
     stopped_by: str | None = None
+    rubric: str | None = None
+    rubric_version: int | None = None
 
     @property
     def arm_router_names(self) -> tuple[str, ...]:
@@ -1560,6 +1629,7 @@ def _group_response(
         models=first.models,
         direction=first.direction,
         baseline_model=first.baseline_model,
+        skip_same_model=first.skip_same_model,
         judge_model=first.judge_model,
         shadow_percentage=first.shadow_percentage,
         created_at=first.created_at,
@@ -1642,8 +1712,16 @@ async def _with_target_labels(
     )
 
 
+async def _job_funnel(prisma_client: "PrismaClient", leg_ids: Sequence[str]) -> _FunnelTotalsRow | None:
+    """Job-level coverage counts, or None unless EVERY leg has a funnel row: a partial seed
+    (one leg's insert failed) must read as unknown, not as counts missing a leg's traffic."""
+    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, list(leg_ids))
+    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
+    return counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
+
+
 async def _shadow_eval_results(
-    prisma_client: "PrismaClient", legs: Sequence[_LegRow]
+    prisma_client: "PrismaClient", legs: Sequence[_LegRow], funnel: _FunnelTotalsRow | None
 ) -> tuple[ShadowEvalResult | None, Mapping[tuple[str, str], ShadowEvalSlice]]:
     """One job's stratified verdicts, plus each target's own slice keyed by the
     (target_type, target_id) pair so a key, team, and user sharing an id can never
@@ -1676,11 +1754,6 @@ async def _shadow_eval_results(
         await _query_raw(prisma_client, _ATTEMPT_AGG_BY_ROUTER_SQL, leg_ids) or ()
     )
     total_turns: Final = sum(r.turn_count for r in by_tier)
-    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, leg_ids)
-    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
-    # Coverage only when EVERY leg has a funnel row: a partial seed (one leg's insert
-    # failed) must read as unknown, not as job-level counts missing a leg's traffic.
-    funnel: Final = counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
     result: Final = ShadowEvalResult(
         by_tier=_slices(by_tier),
         by_current_model=_slices(by_model),
@@ -1736,9 +1809,17 @@ async def start_shadow_eval(
     seconds. Shadow and judge calls bill to the sampled request's own identity but are
     excluded from request counts and auto-router adoption metrics.
     """
+    _require_admin_writer(user_api_key_dict, "start a shadow eval")
+    return await _create_shadow_eval_job(data, user_api_key_dict, rubric=None)
+
+
+async def _create_shadow_eval_job(
+    data: StartShadowEvalRequest, user_api_key_dict: UserAPIKeyAuth, rubric: str | None
+) -> ShadowEvalJobResponse:
+    """Validate and claim a job for an authorized writer. The rubric columns are written
+    only for a rubric job, so a preference-only job inserts exactly what it always did."""
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
-    _require_admin_writer(user_api_key_dict, "start a shadow eval")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     unconfigured: Final = tuple(
@@ -1850,6 +1931,7 @@ async def start_shadow_eval(
         "models": list(data.models),
         "direction": data.direction,
         "baseline_model": data.baseline_model,
+        "skip_same_model": data.skip_same_model,
         "judge_model": data.judge_model,
         "shadow_percentage": data.shadow_percentage,
         "max_turns": SHADOW_EVAL_TURN_VALVE,
@@ -1857,6 +1939,7 @@ async def start_shadow_eval(
         "created_by": user_api_key_dict.user_id,
         "created_at": now,
         "ends_at": ends_at,
+        **({"rubric": rubric, "rubric_version": SHADOW_EVAL_RUBRIC_VERSION} if rubric is not None else {}),
     }
     try:
         # Leg ids are minted here rather than by the DB default so the funnel seed below
@@ -1912,10 +1995,104 @@ async def start_shadow_eval(
         models=data.models,
         direction=data.direction,
         baseline_model=data.baseline_model,
+        skip_same_model=data.skip_same_model,
         judge_model=data.judge_model,
         shadow_percentage=data.shadow_percentage,
         created_at=now,
         ends_at=ends_at,
+    )
+
+
+@router.post(
+    "/auto_router/shadow_eval/rubric/start",
+    tags=["auto router"],
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ShadowEvalRubricJobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_shadow_eval_rubric(
+    data: StartShadowEvalRubricRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ShadowEvalRubricJobResponse:
+    """
+    Start a shadow eval whose judge, besides picking the better response, grades each
+    response from 1 (fails the rubric's criteria) to 5 (fully meets them). Everything
+    else matches /auto_router/shadow_eval/start, and the job's preference results stay
+    on the regular job endpoints. Read grades from
+    /auto_router/shadow_eval/{job_id}/rubric_results.
+
+    Disabled unless LITELLM_SHADOW_EVAL_RUBRIC_ENABLED=true. Each worker process reads
+    its own environment, so a change applies only once every worker is redeployed or
+    restarted with it. A worker without rubric support ignores the setting and samples a
+    rubric job as a preference-only job, so enable it only after every API and sampling
+    worker sharing the database runs a version with this route. Workers with the setting
+    off neither start nor sample rubric jobs.
+
+    Rolling back to a version without rubric support is not zero-downtime for rubric
+    jobs. Before any older worker starts: apply the setting off to every upgraded worker,
+    stop every running rubric job with /auto_router/shadow_eval/{job_id}/stop, and wait
+    until every upgraded worker's in-flight evaluations have finished, for example by
+    draining or stopping those workers. The roughly 10 second job cache expiry alone does
+    not guarantee that drain.
+    """
+    from litellm.integrations.shadow_eval_logger import (
+        SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR,
+        is_shadow_eval_rubric_enabled,
+    )
+
+    _require_admin_writer(user_api_key_dict, "start a shadow eval")
+    if not is_shadow_eval_rubric_enabled():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Rubric shadow evals are disabled. Set {SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR}=true once every "
+                "worker sharing this database supports rubric grading"
+            ),
+        )
+    job: Final = await _create_shadow_eval_job(data, user_api_key_dict, rubric=data.rubric)
+    return ShadowEvalRubricJobResponse.model_validate(
+        {
+            **job.model_dump(exclude={"router_name", "status"}),
+            "rubric": data.rubric,
+            "rubric_version": SHADOW_EVAL_RUBRIC_VERSION,
+        }
+    )
+
+
+@router.get(
+    "/auto_router/shadow_eval/{job_id}/rubric_results",
+    tags=["auto router"],
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ShadowEvalRubricResultResponse,
+)
+async def get_shadow_eval_rubric_results(
+    job_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ShadowEvalRubricResultResponse:
+    """A rubric job's grades: graded and ungraded turn counts and the joint distribution
+    of (real_grade, shadow_grade), overall and per router arm. A job started without a
+    rubric is a 404 here."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    legs: Final = _LEG_ROWS.validate_python(
+        await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()
+    )
+    first: Final = legs[0] if legs else None
+    if first is None or first.rubric is None or first.rubric_version is None:
+        raise HTTPException(status_code=404, detail=f"No rubric shadow eval job {job_id}")
+    rows: Final = _GRADE_COUNT_ROWS.validate_python(
+        await _query_raw(prisma_client, _RUBRIC_GRADE_COUNTS_SQL, [leg.id for leg in legs]) or ()
+    )
+    routers: Final = sorted(frozenset((*first.arm_router_names, *(row.grp for row in rows))))
+    return ShadowEvalRubricResultResponse(
+        job_id=job_id,
+        rubric=first.rubric,
+        rubric_version=first.rubric_version,
+        overall=_rubric_slice("all", rows),
+        by_router=tuple(_rubric_slice(name, tuple(row for row in rows if row.grp == name)) for name in routers),
     )
 
 
@@ -1998,7 +2175,8 @@ async def get_shadow_eval_job(
     labeled: Final = await _with_target_labels(
         prisma_client, (_group_response(job_id, legs, await _leg_attempt_counts(prisma_client, legs)),)
     )
-    results, verdicts_by_target = await _shadow_eval_results(prisma_client, legs)
+    funnel: Final = await _job_funnel(prisma_client, leg_ids)
+    results, verdicts_by_target = await _shadow_eval_results(prisma_client, legs, funnel)
     return labeled[0].model_copy(
         update={
             "judged_count": totals[0].judged_count if totals else 0,
@@ -2006,6 +2184,7 @@ async def get_shadow_eval_job(
             "judge_spend": round(totals[0].judge_spend, 6) if totals else 0.0,
             "last_error": latest_error.error if latest_error else None,
             "results": results,
+            "same_model_skipped_count": funnel.same_model if funnel is not None else None,
             "targets": tuple(
                 target.model_copy(update={"verdicts": verdicts_by_target.get((target.target_type, target.target_id))})
                 for target in labeled[0].targets

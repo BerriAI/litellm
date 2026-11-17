@@ -416,7 +416,7 @@ def vertex_claude_peer(request: Request) -> Reply:
 
 
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
-def test_rust_messages_route_loads_a_claude_key_file_and_names_unloadable_credentials(
+def test_rust_enabled_messages_route_loads_a_claude_key_file_and_names_unloadable_credentials(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     token_url: Final = gateway.upstream_url.rstrip("/")
@@ -452,7 +452,7 @@ def test_rust_messages_route_loads_a_claude_key_file_and_names_unloadable_creden
             candidate,
             wire,
             ask(str(tmp_path / "missing.json"), "rust refuses a missing file"),
-            "failed to open application credentials file",
+            FILE_MESSAGE,
             str(tmp_path),
         )
         refused(

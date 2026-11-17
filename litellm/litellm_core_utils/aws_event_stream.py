@@ -47,16 +47,17 @@ class EventStreamTally:
         self.events += 1
         self.bytes_decoded += event.prelude.total_length
         event_type: Final = _string_header(headers, ":event-type")
-        if (
-            self.event_statuses is None
-            or _string_header(headers, ":message-type") != "event"
-            or (event_type is not None and event_type in self.event_statuses)
-        ):
+        if self._is_recognized(_string_header(headers, ":message-type"), event_type):
             self.recognized_events += 1
             return
         self.unrecognized_event_types = self.unrecognized_event_types | {event_type or "<missing>"}
         if not self.unrecognized_head:
             self.unrecognized_head = event.payload[:STREAM_HEAD_BYTES]
+
+    def _is_recognized(self, message_type: str | None, event_type: str | None) -> bool:
+        if self.event_statuses is None or message_type != "event":
+            return True
+        return event_type is not None and event_type in self.event_statuses
 
     def undecoded_stream(self, response_headers: Mapping[str, str] | None) -> UndecodedEventStream | None:
         undecoded: Final = self.bytes_received - self.bytes_decoded

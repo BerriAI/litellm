@@ -34,6 +34,7 @@ from management_client import ManagementClient
 from models import (
     KeyGenerateBody,
     OrgNewBody,
+    TeamBlockBody,
     TeamInfoParams,
     TeamMemberAddBody,
     TeamMemberDeleteBody,
@@ -49,10 +50,6 @@ TeamRole = Literal["admin", "user"]
 _TEAM_TPM_LIMIT: Final = 1000
 _TEAM_MAX_BUDGET: Final = 10.0
 _ORG_MAX_BUDGET: Final = 100.0
-
-
-class TeamBlockBody(BaseModel):
-    team_id: str
 
 
 class MemberUpdateBody(BaseModel):

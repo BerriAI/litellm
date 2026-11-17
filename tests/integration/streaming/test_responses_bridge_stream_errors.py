@@ -474,9 +474,10 @@ def test_native_responses_stream_forwards_the_failed_response_on_both_legs(gatew
         assert response.status_code == 200, response.text
         frames: Final = data_frames(response.text)
         assert [frame["type"] for frame in frames] == ["response.created", "response.failed"], response.text
+        assert [name for name, _ in sse_events(response.text)] == ["response.created", "response.failed"], response.text
         failed: Final = object_value(frames[-1]["response"])
         assert failed["status"] == "failed", failed
         assert object_value(failed["error"])["code"] == "rate_limit_exceeded", failed
-        assert response.text.rstrip().endswith("data: [DONE]"), response.text
+        assert "data: [DONE]" not in response.text, response.text
         assert len(wire.drain()) == 1
         assert spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
