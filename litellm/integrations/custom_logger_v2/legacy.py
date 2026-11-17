@@ -33,8 +33,6 @@ ResultT: Final = TypeVar("ResultT")
 
 SyncLegacyBinding: TypeAlias = Callable[[object, object], object]
 
-# These hook points are the only ones where v1 custom logger subclasses are
-# checked to see if they run in parallel
 PARALLEL_GUARDRAIL_HOOKS: Final = frozenset({Hook.pre_call, Hook.post_call_success})
 LEGACY_READS: Final = frozenset({Field.deprecated_kwargs, Field.deprecated_response_obj})
 PROXY_REQUEST_KEYS: Final[Mapping[Field, str]] = MappingProxyType(
@@ -428,6 +426,8 @@ def run_subscribers_sync(
 
 def kwargs_after(result: HookResult) -> object:
     match result.outcome:
+        case Abort(exception=Exception() as error):
+            raise error
         case Abort() | Respond() as terminal:
             raise V2Outcome(terminal, result.patches)
         case _:

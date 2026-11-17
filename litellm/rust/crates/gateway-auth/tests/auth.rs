@@ -7,60 +7,22 @@ use axum::{
     middleware::from_extractor_with_state,
     routing::get,
 };
-use futures_util::future::BoxFuture;
 use litellm_config::Config;
 use litellm_gateway_auth::{Auth, RequireMasterKey, hash_token};
 use litellm_secret_value::SecretValue;
-use litellm_secrets::source::SecretSource;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tower::ServiceExt;
-
-struct Secrets;
-
-impl SecretSource for Secrets {
-    fn get_secret_str<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> BoxFuture<'a, Result<Option<SecretValue>, litellm_secrets::Error>> {
-        Box::pin(async move {
-            match name {
-                "MASTER_KEY" => Ok(Some(SecretValue::new("resolved-key"))),
-                "EMPTY" => Ok(Some(SecretValue::new(""))),
-                "ERROR" => Err(litellm_secrets::Error::ExternalRead(
-                    litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
-                )),
-                _ => Ok(None),
-            }
-        })
-    }
-}
-
-#[fixture]
-fn secrets() -> Arc<dyn SecretSource> {
-    Arc::new(Secrets)
-}
 
 #[rstest]
 #[case::literal("literal-key", Some("Bearer literal-key"), 204)]
-#[case::reference("os.environ/MASTER_KEY", Some("Bearer resolved-key"), 204)]
-#[case::reference_is_not_a_token(
-    "os.environ/MASTER_KEY",
-    Some("Bearer os.environ/MASTER_KEY"),
-    401
-)]
 #[case::wrong("literal-key", Some("Bearer other-key"), 401)]
 #[case::missing("literal-key", None, 401)]
 #[case::wrong_scheme("literal-key", Some("Basic literal-key"), 401)]
 #[case::empty_token("literal-key", Some("Bearer "), 401)]
-#[case::missing_reference("os.environ/MISSING", Some("Bearer os.environ/MISSING"), 500)]
-#[case::empty_reference("os.environ/EMPTY", Some("Bearer "), 500)]
 #[case::empty_key("", Some("Bearer "), 500)]
 #[case::whitespace_key("   ", Some("Bearer "), 500)]
-#[case::empty_reference_name("os.environ/", Some("Bearer os.environ/"), 500)]
-#[case::secret_failure("os.environ/ERROR", Some("Bearer private-backend-detail"), 500)]
 #[tokio::test]
 async fn enforces_configured_keys_without_exposing_secrets(
-    secrets: Arc<dyn SecretSource>,
     #[case] key: &str,
     #[case] authorization: Option<&str>,
     #[case] status: u16,
@@ -72,7 +34,7 @@ async fn enforces_configured_keys_without_exposing_secrets(
     let app = Router::new()
         .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
         .layer(from_extractor_with_state::<RequireMasterKey, _>(
-            Auth::from_config(&config, secrets),
+            Auth::from_config(&config),
         ));
     let request = Request::get("/protected");
     let request = match authorization {
@@ -86,9 +48,7 @@ async fn enforces_configured_keys_without_exposing_secrets(
     assert_eq!(response.status().as_u16(), status);
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     let text = std::str::from_utf8(&body).unwrap();
-    assert!(!text.contains("private-backend-detail"));
     assert!(!text.contains("literal-key"));
-    assert!(!text.contains("resolved-key"));
 }
 
 #[rstest]
@@ -481,18 +441,16 @@ async fn route_profile_uses_only_its_selected_credentials(
 
 #[rstest]
 #[tokio::test]
-async fn master_rotation_preserves_session_owner_but_rejects_the_old_key(
-    secrets: Arc<dyn SecretSource>,
-) {
+async fn master_rotation_preserves_session_owner_but_rejects_the_old_key() {
     let first =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: first-key\n").unwrap();
     let second =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: second-key\n").unwrap();
-    let original = Auth::from_config(&first, secrets.clone())
+    let original = Auth::from_config(&first)
         .authenticate(&SecretValue::new("first-key"))
         .await
         .unwrap();
-    let rotated = Auth::from_config(&second, secrets);
+    let rotated = Auth::from_config(&second);
     let replacement = rotated
         .authenticate(&SecretValue::new("second-key"))
         .await
