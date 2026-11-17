@@ -43,6 +43,10 @@ from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, buil
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import (
+    FAILURE_ROW_ALREADY_WRITTEN,
+    FAILURE_ROW_ALREADY_WRITTEN_KEY,
+    GUARDRAIL_ENDPOINT_FAILURE,
+    GUARDRAIL_ENDPOINT_FAILURE_KEY,
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     BilledFailedAttempt,
@@ -982,6 +986,46 @@ async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_r
         call_args: Final = spend_writer.update_database.call_args
         assert call_args.kwargs["kwargs"]["litellm_params"]["api_base"] == api_base
         assert call_args.kwargs["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/guardrails/apply_guardrail", "/apply_guardrail"])
+async def test_async_post_call_failure_hook_logs_a_failure_the_guardrail_endpoint_marked(route: str) -> None:
+    verdict: Final = [
+        {"guardrail_name": "bedrock-guard", "guardrail_status": "guardrail_intervened", "guardrail_cost": 0.00075}
+    ]
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data={
+            "metadata": {"standard_logging_guardrail_information": verdict},
+            GUARDRAIL_ENDPOINT_FAILURE_KEY: GUARDRAIL_ENDPOINT_FAILURE,
+        },
+        original_exception=HTTPException(status_code=400, detail="Violated guardrail policy"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route=route),
+    )
+
+    assert spend_writer.update_database.await_count == 1
+    written: Final = spend_writer.update_database.call_args.kwargs
+    assert written["response_cost"] == 0.00075
+    assert written["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
+    assert written["kwargs"]["litellm_params"]["metadata"]["standard_logging_guardrail_information"] == verdict
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("marker", [None, True, "litellm_guardrail_endpoint_failure"])
+async def test_async_post_call_failure_hook_skips_a_guardrail_endpoint_failure_the_endpoint_did_not_mark(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
+    marker: object,
+) -> None:
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data={"guardrail_name": "bedrock-guard", "text": "hello", GUARDRAIL_ENDPOINT_FAILURE_KEY: marker},
+        original_exception=HTTPException(status_code=401, detail="Authentication Error"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route="/apply_guardrail"),
+    )
+
+    assert spend_writer.update_database.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -4412,6 +4456,38 @@ async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
             original_exception=exception,
             user_api_key_dict=user_api_key_dict,
         )
+    assert len(writer.rows) == rows_written
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_data", "rows_written"),
+    [
+        ({**_ROUTED_REQUEST, FAILURE_ROW_ALREADY_WRITTEN_KEY: FAILURE_ROW_ALREADY_WRITTEN}, 0),
+        ({**_ROUTED_REQUEST, FAILURE_ROW_ALREADY_WRITTEN_KEY: True}, 1),
+        (_ROUTED_REQUEST, 1),
+    ],
+    ids=["already-written", "client-spoofed-marker", "unmarked"],
+)
+async def test_async_post_call_failure_hook_settles_the_reservation_but_writes_no_second_row_for_a_billed_failure(
+    request_data: Mapping[str, object], rows_written: int
+) -> None:
+    writer: Final = _RecordingSpendWriter()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route="/v1/responses",
+        budget_reservation={"reserved_cost": 0.5, "entries": []},
+    )
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation", new_callable=AsyncMock
+    ) as release:
+        await ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer)).async_post_call_failure_hook(
+            request_data={**request_data, "metadata": dict[str, object]()},
+            original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="gpt-4o-mini"),
+            user_api_key_dict=user_api_key_dict,
+        )
+    assert release.await_count == 1
+    assert release.await_args.kwargs["budget_reservation"] is user_api_key_dict.budget_reservation
     assert len(writer.rows) == rows_written
 
 

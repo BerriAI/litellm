@@ -274,6 +274,7 @@ pub enum AwsAuthFlow {
         role: String,
         session_name: Option<String>,
         web_identity_role: Option<String>,
+        web_identity_token_file: Option<String>,
         sts_region: Option<String>,
     },
     Profile {
@@ -320,9 +321,10 @@ pub fn classify_auth(
     config: AwsAuthConfig,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> AwsAuthFlow {
-    let web_identity_role = env_lookup(AWS_WEB_IDENTITY_TOKEN_FILE)
+    let web_identity = env_lookup(AWS_WEB_IDENTITY_TOKEN_FILE)
         .filter(|token_file| !token_file.is_empty())
-        .and_then(|_| env_lookup(AWS_ROLE_ARN));
+        .and_then(|token_file| Some((env_lookup(AWS_ROLE_ARN)?, token_file)));
+    let (web_identity_role, web_identity_token_file) = web_identity.unzip();
     let config = config.with_environment(env_lookup);
     let sts_region = config.sts_region(env_lookup);
     if let (Some(token), Some(role), Some(session_name)) = (
@@ -342,6 +344,7 @@ pub fn classify_auth(
             role,
             session_name: config.session_name.clone(),
             web_identity_role,
+            web_identity_token_file,
             sts_region,
         };
     }
@@ -553,6 +556,7 @@ async fn build_provider(
             role,
             session_name,
             web_identity_role,
+            web_identity_token_file,
             sts_region,
         } => {
             let running_as = RunningAs {
@@ -565,6 +569,22 @@ async fn build_provider(
                 return Ok(loader.ambient().await);
             }
             let sdk_config = loader.sts_config(&resolved, sts_region).await;
+            if let (Some(irsa_role), Some(token_file), None, None) = (
+                &web_identity_role,
+                web_identity_token_file,
+                &resolved.access_key_id,
+                &resolved.secret_access_key,
+            ) {
+                return Ok(SharedCredentialsProvider::new(IrsaCrossAccount {
+                    sdk_config,
+                    token_file,
+                    irsa_role: irsa_role.clone(),
+                    role,
+                    session_name,
+                    external_id: resolved.external_id,
+                    session_tags: resolved.session_tags,
+                }));
+            }
             let builder = aws_config::sts::AssumeRoleProvider::builder(role)
                 .session_name(session_name.unwrap_or_else(default_session_name));
             let builder = match resolved.external_id {
@@ -742,6 +762,100 @@ impl ProvideCredentials for WebIdentityProvider {
                 "litellm-web-identity",
             ))
         })
+    }
+}
+
+#[derive(Debug)]
+struct IrsaCrossAccount {
+    sdk_config: aws_types::SdkConfig,
+    token_file: String,
+    irsa_role: String,
+    role: String,
+    session_name: Option<String>,
+    external_id: Option<SecretValue>,
+    session_tags: Option<Vec<AwsSessionTag>>,
+}
+
+impl IrsaCrossAccount {
+    async fn credentials(&self) -> Result<Credentials, CredentialsError> {
+        let session_name = self
+            .session_name
+            .clone()
+            .unwrap_or_else(default_session_name);
+        let token = std::fs::read_to_string(&self.token_file).map_err(|error| {
+            CredentialsError::provider_error(Error::WebIdentityToken(litellm_error::Source::new(
+                error,
+            )))
+        })?;
+        let irsa = aws_sdk_sts::Client::new(&self.sdk_config)
+            .assume_role_with_web_identity()
+            .role_arn(&self.irsa_role)
+            .role_session_name(&session_name)
+            .web_identity_token(token.trim())
+            .send()
+            .await
+            .map_err(CredentialsError::provider_error)?;
+        let irsa = irsa.credentials().ok_or_else(|| {
+            CredentialsError::provider_error(Error::MissingWebIdentityCredentials)
+        })?;
+        let client = aws_sdk_sts::Client::new(
+            &self
+                .sdk_config
+                .to_builder()
+                .credentials_provider(SharedCredentialsProvider::new(Credentials::new(
+                    irsa.access_key_id(),
+                    irsa.secret_access_key(),
+                    Some(irsa.session_token().to_owned()),
+                    None,
+                    "litellm-irsa",
+                )))
+                .build(),
+        );
+        let _ = client.get_caller_identity().send().await;
+        let tags = self
+            .session_tags
+            .iter()
+            .flatten()
+            .map(|tag| {
+                aws_sdk_sts::types::Tag::builder()
+                    .key(&tag.key)
+                    .value(&tag.value)
+                    .build()
+                    .map_err(CredentialsError::invalid_configuration)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let response = client
+            .assume_role()
+            .role_arn(&self.role)
+            .role_session_name(&session_name)
+            .set_external_id(self.external_id.as_ref().map(|id| id.expose().to_owned()))
+            .set_tags((!tags.is_empty()).then_some(tags))
+            .send()
+            .await
+            .map_err(CredentialsError::provider_error)?;
+        let credentials = response.credentials().ok_or_else(|| {
+            CredentialsError::provider_error("AWS AssumeRole response had no credentials")
+        })?;
+        let expiration = SystemTime::try_from(*credentials.expiration())
+            .map_err(CredentialsError::provider_error)?;
+        Ok(Credentials::new(
+            credentials.access_key_id(),
+            credentials.secret_access_key(),
+            Some(credentials.session_token().to_owned()),
+            Some(expiration),
+            "litellm-irsa-assumed-role",
+        ))
+    }
+}
+
+impl ProvideCredentials for IrsaCrossAccount {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(self.credentials())
     }
 }
 
@@ -2176,6 +2290,99 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
+    #[case::named_session(
+        Some("attributed"),
+        Some("arn:aws:sts::123456789012:assumed-role/irsa/attributed")
+    )]
+    #[case::default_session_and_a_failed_caller_probe(None, None)]
+    #[tokio::test]
+    async fn irsa_cross_account_assumes_the_irsa_role_with_the_session_name_before_the_target(
+        #[case] session_name: Option<&str>,
+        #[case] caller_arn: Option<&'static str>,
+    ) {
+        const IRSA_ROLE: &str = "arn:aws:iam::210987654321:role/irsa";
+        let token_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(token_file.path(), " irsa.jwt.value\n").unwrap();
+        let token_path = token_file.path().to_str().unwrap().to_owned();
+        let sts = Sts {
+            caller_arns: Arc::new(std::sync::Mutex::new(vec![caller_arn])),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            session_name: session_name.map(str::to_owned),
+            external_id: Some("external".into()),
+            sts_endpoint: Some("https://sts.eu-west-1.amazonaws.com".into()),
+            ..AwsAuthConfig::default()
+        }));
+
+        let credentials = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &|name: &str| match name {
+                    AWS_WEB_IDENTITY_TOKEN_FILE => Some(token_path.clone()),
+                    AWS_ROLE_ARN => Some(IRSA_ROLE.to_owned()),
+                    _ => None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(credentials.access_key_id(), "role-access");
+        let [web, caller, assume] = sts.sent().try_into().unwrap();
+        assert_eq!(
+            [web.action(), caller.action(), assume.action()],
+            [
+                "AssumeRoleWithWebIdentity",
+                "GetCallerIdentity",
+                "AssumeRole"
+            ]
+        );
+        let session = web.form["RoleSessionName"].clone();
+        match session_name {
+            Some(name) => assert_eq!(session, name),
+            None => assert!(session.starts_with("litellm-session-"), "{session}"),
+        }
+        assert_eq!(
+            web.form,
+            std::collections::BTreeMap::from([
+                ("Action".to_owned(), "AssumeRoleWithWebIdentity".to_owned()),
+                ("RoleArn".to_owned(), IRSA_ROLE.to_owned()),
+                ("RoleSessionName".to_owned(), session.clone()),
+                ("Version".to_owned(), "2011-06-15".to_owned()),
+                ("WebIdentityToken".to_owned(), "irsa.jwt.value".to_owned()),
+            ])
+        );
+        assert_eq!(web.authorization, None);
+        assert_eq!(
+            assume.form,
+            std::collections::BTreeMap::from([
+                ("Action".to_owned(), "AssumeRole".to_owned()),
+                ("ExternalId".to_owned(), "external".to_owned()),
+                ("RoleArn".to_owned(), TARGET_ROLE.to_owned()),
+                ("RoleSessionName".to_owned(), session),
+                ("Version".to_owned(), "2011-06-15".to_owned()),
+            ])
+        );
+        for signed in [&caller, &assume] {
+            let authorization = signed.authorization.as_deref().unwrap();
+            assert!(
+                authorization.contains("Credential=web-access/"),
+                "{authorization}"
+            );
+            assert!(
+                authorization.contains("/eu-west-1/sts/aws4_request"),
+                "{authorization}"
+            );
+        }
+        for request in [&web, &caller, &assume] {
+            assert_eq!(request.host, "sts.eu-west-1.amazonaws.com");
+        }
+    }
+
     fn web_identity_source(token: &str) -> AwsCredentialSource {
         AwsCredentialSource::from_params(
             &AwsParams {
@@ -2310,12 +2517,12 @@ mod tests {
     #[case::keys_with_a_role_assume_it(
         params_keys(AwsParams { aws_role_name: Some(TARGET_ROLE.into()), ..AwsParams::default() }),
         &[],
-        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, web_identity_token_file: None, sts_region: Some("eu-central-1".into()) }
     )]
     #[case::keys_under_an_ambient_role_assume_it(
         params_keys(AwsParams::default()),
         &[(AWS_ROLE_NAME, TARGET_ROLE)],
-        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, web_identity_token_file: None, sts_region: Some("eu-central-1".into()) }
     )]
     #[case::keys_with_a_profile_use_the_profile(
         params_keys(AwsParams { aws_profile_name: Some("work".into()), ..AwsParams::default() }),
@@ -2325,7 +2532,7 @@ mod tests {
     #[case::a_blank_role_is_still_a_role(
         params_keys(AwsParams { aws_role_name: Some(String::new()), ..AwsParams::default() }),
         &[],
-        AwsAuthFlow::AssumeRole { role: String::new(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+        AwsAuthFlow::AssumeRole { role: String::new(), session_name: None, web_identity_role: None, web_identity_token_file: None, sts_region: Some("eu-central-1".into()) }
     )]
     fn params_keys_follow_python_credential_precedence(
         #[case] params: AwsParams,

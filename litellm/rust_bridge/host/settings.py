@@ -10,6 +10,7 @@ class HttpSettings:
     ssl_certificate: object
     ssl_security_level: object
     ssl_ecdh_curve: object
+    rsa_key_exchange_and_chacha20_excluded: bool
     force_ipv4: object
     http2: object
     aiohttp_trust_env: object
@@ -163,13 +164,14 @@ def url_policy() -> UrlPolicy:
 
 def http_settings() -> HttpSettings:
     import litellm
-    from litellm.llms.custom_httpx.http_handler import default_user_agent
+    from litellm.llms.custom_httpx.http_handler import default_user_agent, rsa_key_exchange_and_chacha20_excluded
 
     return HttpSettings(
         ssl_verify=litellm.ssl_verify,
         ssl_certificate=litellm.ssl_certificate,
         ssl_security_level=litellm.ssl_security_level,
         ssl_ecdh_curve=litellm.ssl_ecdh_curve,
+        rsa_key_exchange_and_chacha20_excluded=rsa_key_exchange_and_chacha20_excluded(),
         force_ipv4=litellm.force_ipv4,
         http2=litellm.http2,
         aiohttp_trust_env=litellm.aiohttp_trust_env,

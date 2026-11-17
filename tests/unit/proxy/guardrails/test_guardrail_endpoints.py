@@ -1,10 +1,11 @@
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime
+from functools import partial
+from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, List, Literal, Optional
-from unittest.mock import AsyncMock, Mock
+from typing import Dict, Final, List, Literal, NamedTuple, Optional
+from unittest.mock import AsyncMock, Mock, create_autospec
 
 import httpx
 import pytest
@@ -13,9 +14,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import JsonValue
 from pytest_mock import MockerFixture
 
+import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
@@ -44,7 +50,9 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureContentSafetyPromptShieldGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -4204,3 +4212,237 @@ async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_wo
     assert returned is response
     callback.assert_called_once()
     assert callback.call_args.args[0] == {"response": {"response_text": "masked"}}
+
+
+_GUARDRAIL_RECORDS: Final = "standard_logging_guardrail_information"
+_BEDROCK_TEXT_ALLOWED: Final = {"action": "NONE", "outputs": [], "assessments": []}
+_BEDROCK_BLOCKED: Final = {
+    "action": "GUARDRAIL_INTERVENED",
+    "outputs": [{"text": "blocked"}],
+    "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}],
+}
+
+
+class _BedrockGuardrailCall(NamedTuple):
+    response: httpx.Response
+    bedrock_payloads: Sequence[Mapping[str, object]]
+    logged: Mapping[str, object]
+    failure_hook_request: Mapping[str, object]
+    spend_rows: Sequence[Mapping[str, object]]
+
+
+class _CapturingLogger(CustomLogger):
+    def __init__(self, message_logging: bool = True, legacy_message_logging: bool = True) -> None:
+        super().__init__(turn_off_message_logging=not message_logging, message_logging=legacy_message_logging)
+        self.logged: Final[list[Mapping[str, object]]] = []
+        self.failure_hook_requests: Final[list[Mapping[str, object]]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.append(kwargs["standard_logging_object"])
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.append(kwargs["standard_logging_object"])
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        self.failure_hook_requests.append(request_data)
+
+
+def _bedrock_guard(handler: AsyncHTTPHandler, latest_user_message_only: bool = False) -> CustomGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-guard",
+        guardrailIdentifier="gr-1",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=handler,
+        experimental_use_latest_role_message_only=latest_user_message_only,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+
+async def _apply_bedrock_guardrail_over_http(
+    mocker: MockerFixture,
+    bedrock_answers: Sequence[Mapping[str, object]],
+    body: Mapping[str, object],
+    guardrail: Callable[[AsyncHTTPHandler], CustomGuardrail] = _bedrock_guard,
+    capture_logger: Callable[[], _CapturingLogger] = _CapturingLogger,
+    headers: Mapping[str, str] = MappingProxyType({}),
+    other_loggers: Sequence[CustomLogger] = (),
+) -> _BedrockGuardrailCall:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.proxy_server import ProxyConfig, openai_exception_handler
+    from litellm.proxy.utils import ProxyLogging
+
+    sent: Final[list[httpx.Request]] = []
+
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=bedrock_answers[len(sent) - 1])
+
+    capture: Final = capture_logger()
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    mocker.patch.object(
+        litellm,
+        "callbacks",
+        [
+            guardrail(AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))),
+            *other_loggers,
+            capture,
+            ProxyDBLogger(spend_writer=lambda: spend_writer),
+        ],
+    )
+    mocker.patch.object(litellm, "_async_success_callback", [])
+    mocker.patch.object(litellm, "_async_failure_callback", [])
+    mocker.patch.object(litellm, "success_callback", [])
+    mocker.patch.object(litellm, "failure_callback", [])
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test_api_key", request_route="/guardrails/apply_guardrail"
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        response: Final = await client.post(
+            "/guardrails/apply_guardrail", json={"guardrail_name": "bedrock-guard", **body}, headers=dict(headers)
+        )
+    assert len(capture.logged) == 1
+    return _BedrockGuardrailCall(
+        response=response,
+        bedrock_payloads=tuple(json.loads(request.content) for request in sent),
+        logged=capture.logged[0],
+        failure_hook_request=capture.failure_hook_requests[0] if capture.failure_hook_requests else {},
+        spend_rows=tuple(call.kwargs for call in spend_writer.update_database.await_args_list),
+    )
+
+
+def _logged_verdicts(call: _BedrockGuardrailCall) -> list[tuple[object, object]]:
+    return [(record["guardrail_name"], record["guardrail_status"]) for record in call.logged["guardrail_information"]]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_logs_a_blocked_request_with_the_guardrail_verdict(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_BLOCKED,), {"text": "hello"})
+
+    assert call.response.status_code == 400
+    assert call.logged["status"] == "failure"
+    assert _logged_verdicts(call) == [("bedrock-guard", "guardrail_intervened")]
+    assert [record["guardrail_status"] for record in call.failure_hook_request["metadata"][_GUARDRAIL_RECORDS]] == [
+        "guardrail_intervened"
+    ]
+    assert [row["kwargs"]["litellm_params"]["metadata"]["status"] for row in call.spend_rows] == ["failure"]
+    assert [
+        record["guardrail_status"]
+        for record in call.spend_rows[0]["kwargs"]["litellm_params"]["metadata"][_GUARDRAIL_RECORDS]
+    ] == ["guardrail_intervened"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_logs_an_allowed_request_with_the_guardrail_verdict(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_TEXT_ALLOWED,), {"text": "hello"})
+
+    assert call.response.status_code == 200
+    assert call.logged["status"] == "success"
+    assert _logged_verdicts(call) == [("bedrock-guard", "success")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_never_logs_a_verdict_the_caller_supplied(mocker: MockerFixture) -> None:
+    forged: Final = {"guardrail_name": "forged", "guardrail_status": "success"}
+
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_TEXT_ALLOWED,), {"text": "hello", "metadata": {_GUARDRAIL_RECORDS: [forged]}}
+    )
+
+    assert _logged_verdicts(call) == [("bedrock-guard", "success")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bedrock_action", ["ANONYMIZED", "BLOCKED"])
+@pytest.mark.parametrize(
+    ("capture_logger", "headers"),
+    [
+        pytest.param(
+            partial(_CapturingLogger, message_logging=False),
+            MappingProxyType({}),
+            id="callback-turns-off-message-logging",
+        ),
+        pytest.param(
+            partial(_CapturingLogger, legacy_message_logging=False),
+            MappingProxyType({}),
+            id="callback-sets-message-logging-false",
+        ),
+        pytest.param(_CapturingLogger, MappingProxyType({"litellm-enable-message-redaction": "true"}), id="request-header"),
+    ],
+)
+async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_callback_receives(
+    mocker: MockerFixture, bedrock_action: str, capture_logger: Callable[[], _CapturingLogger], headers: Mapping[str, str]
+) -> None:
+    answer: Final = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "please bill my card {CREDIT_DEBIT_CARD_NUMBER}"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": bedrock_action}
+                    ]
+                }
+            }
+        ],
+    }
+
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker,
+        (answer,),
+        {"text": "please bill my card 4111111111111111"},
+        capture_logger=capture_logger,
+        headers=headers,
+    )
+
+    assert [name for name, _ in _logged_verdicts(call)] == ["bedrock-guard"]
+    redacted_fields: Final = str({field: call.logged[field] for field in ("messages", "response", "guardrail_information")})
+    assert "please bill my card" not in redacted_fields
+    assert "4111111111111111" not in redacted_fields
+
+
+@pytest.mark.asyncio
+async def test_one_callback_opting_out_of_message_logging_leaves_the_guardrail_details_to_the_others(
+    mocker: MockerFixture,
+) -> None:
+    answer: Final = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "please bill my card {CREDIT_DEBIT_CARD_NUMBER}"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": "ANONYMIZED"}]
+                }
+            }
+        ],
+    }
+    opted_out: Final = _CapturingLogger(legacy_message_logging=False)
+
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (answer,), {"text": "please bill my card 4111111111111111"}, other_loggers=(opted_out,)
+    )
+
+    assert "please bill my card" in str(call.logged["guardrail_information"])
+    assert [record["guardrail_name"] for record in opted_out.logged[0]["guardrail_information"]] == ["bedrock-guard"]
+    assert "please bill my card" not in str(opted_out.logged[0]["guardrail_information"])
