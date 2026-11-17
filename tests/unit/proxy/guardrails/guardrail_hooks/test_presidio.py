@@ -2370,6 +2370,83 @@ async def test_apply_guardrail_unmask_on_response(output_parse_pii: bool) -> Non
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_response_scan_does_not_mint_restoration_tokens() -> None:
+    """
+    A scan-role callback applied to a response masks without adding numbered
+    tokens to the restoration map, so a later restore can only bring back
+    request-originated values. The same callback applied to a request still
+    tokenises, which is what makes restoration possible at all.
+    """
+    text = "Reach me at alice@example.com"
+    start = text.index("alice@example.com")
+    analyze_results = [
+        {"entity_type": "EMAIL_ADDRESS", "start": start, "end": start + len("alice@example.com"), "score": 1.0}
+    ]
+
+    @asynccontextmanager
+    async def payload_aware_iterator():
+        class MockResponse:
+            def __init__(self, body):
+                self.status = 200
+                self.content_type = "application/json"
+                self.headers = {"Content-Type": "application/json"}
+                self._body = body
+
+            async def text(self):
+                return json.dumps(self._body)
+
+            async def json(self):
+                return self._body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None, timeout=None):
+                if url.endswith("analyze"):
+                    return MockResponse(analyze_results)
+                return MockResponse(
+                    {"text": "Reach me at <EMAIL_ADDRESS>", "items": [{"entity_type": "EMAIL_ADDRESS"}]}
+                )
+
+        yield MockSession()
+
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        output_parse_pii=True,
+        _callback_role="scan",
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK},
+    )
+    with patch.object(guardrail, "_get_session_iterator", payload_aware_iterator):
+        response_data = {"model": "gpt-4o", "metadata": {"pii_tokens": {"<PERSON_1>": "John Smith"}}}
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data=response_data,
+            input_type="response",
+        )
+        assert result["texts"][0] == "Reach me at <EMAIL_ADDRESS>", result["texts"]
+        assert response_data["metadata"]["pii_tokens"] == {"<PERSON_1>": "John Smith"}, response_data["metadata"][
+            "pii_tokens"
+        ]
+
+        request_data = {"model": "gpt-4o", "metadata": {"pii_tokens": {}}}
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert result["texts"][0] == "Reach me at <EMAIL_ADDRESS_1>", result["texts"]
+        assert request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": "alice@example.com"}, request_data[
+            "metadata"
+        ]["pii_tokens"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("input_type", ["request", "response"])
 async def test_standalone_scans_without_restoration_tokens(input_type: Literal["request", "response"]) -> None:
     """
