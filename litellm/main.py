@@ -144,13 +144,16 @@ from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
+from litellm.llms.bedrock.chat.unresolved_arn_thinking_hint import with_unresolved_arn_thinking_hint
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
+    bedrock_capability_model,
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
     for_bedrock_json_tool_retry,
+    is_bedrock_application_inference_profile_arn,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -4548,7 +4551,8 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
         converse_uses_native_output: Final = AmazonConverseConfig().uses_native_output(
             converse_model, converse_params, litellm_params
         )
-        response = call_with_native_output_fallback(
+        converse_call: Final = partial(
+            call_with_native_output_fallback,
             converse_attempt,
             (
                 partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
@@ -4566,6 +4570,13 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 if converse_uses_native_output
                 else None
             ),
+        )
+        response = (
+            with_unresolved_arn_thinking_hint(converse_call)
+            if is_bedrock_application_inference_profile_arn(
+                bedrock_capability_model(converse_model, litellm_params.get("base_model"))
+            )
+            else converse_call()
         )
     elif bedrock_route == "converse_like":
         model = model.replace("converse_like/", "")
