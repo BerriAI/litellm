@@ -6,7 +6,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { isUserTeamAdminForAnyTeam } from "@/utils/roles";
-import { menuGroups, visibleMenuGroups, type MenuVisibilityContext } from "@/components/leftnav";
+import { menuGroups, visibleMenuGroups, type MenuVisibilityContext } from "@/components/LeftNav";
 
 export const useVisibleMenuGroups = () => {
   const { userId, userRole, isViewOnly } = useAuthorized();
