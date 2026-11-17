@@ -5,8 +5,8 @@ import json
 import logging
 import struct
 import uuid
-from pathlib import Path
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Final, cast  # noqa: TID251  # narrows the untyped Messages entries to their call shape
 
 import pytest
@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import model_cost_table
 from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.bedrock.base_aws_llm import AwsAuthError
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_RESPONSE, RATE_LIMITED
@@ -741,6 +742,7 @@ async def test_bedrock_mantle_runs_the_invoke_helpers_on_the_bedrock_capabilitie
         f"bedrock_mantle/{_SPLIT_MODEL}",
         {"litellm_provider": "bedrock_mantle", "mode": "chat", "supports_adaptive_thinking": not bedrock_adaptive},
     )
+    model_cost_table.changed_in_place()
 
     await _RUST_ENTRY(
         model=f"bedrock_mantle/{_SPLIT_MODEL}",
@@ -1164,3 +1166,37 @@ async def test_bedrock_mantle_refusal_without_credentials_raises_the_transforms_
     assert type(rust_raised.value) is litellm.BadRequestError
     assert rust_raised.value.status_code == 400
     assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", (MANTLE_MODEL, "bedrock/mantle/anthropic.claude-opus-4-8"))
+async def test_bedrock_mantle_reads_its_capabilities_from_the_rust_catalog(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    from litellm.rust_bridge.host import model_capabilities
+
+    def python_probe(*_args: object) -> object:
+        raise AssertionError("a Mantle call reads its capabilities from the Rust catalog")
+
+    monkeypatch.setattr(model_capabilities, "anthropic_model_capabilities", python_probe)
+    route: Final = {"model": model, **({} if model == MANTLE_MODEL else {"api_key": None, **AWS})}
+
+    await _mantle(_RUST_ENTRY, server, **route)
+
+    assert_served_natively(server)
+
+
+@pytest.mark.asyncio
+async def test_bedrock_mantle_route_sends_the_project_id_as_the_workspace_header(server: RecordingServer) -> None:
+    await _mantle(
+        _RUST_ENTRY,
+        server,
+        model="bedrock/mantle/anthropic.claude-opus-4-8",
+        api_key=None,
+        aws_bedrock_project_id="proj_abc123def456",
+        **AWS,
+    )
+
+    [sent] = server.requests
+    assert sent.headers["anthropic-workspace-id"] == "proj_abc123def456"
+    assert "aws_bedrock_project_id" not in _OBJECT.validate_python(sent.body)

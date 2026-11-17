@@ -19,7 +19,7 @@ use litellm_inference_messages::{
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
-    anthropic::model_capabilities::{mantle_capabilities, with_invoke_flags},
+    anthropic::model_capabilities::with_invoke_flags,
     azure_ai::common_utils::{
         CALLABLE_TOKEN_PROVIDER, CALLER_TOKEN_PROVIDER_PARAM, ENTRA_ID_PARAMS,
     },
@@ -175,7 +175,6 @@ const AZURE_AI_PROVIDER: &str = "azure_ai";
 const ENABLE_TOKEN_REFRESH: &str = "enable_azure_ad_token_refresh";
 
 const BEDROCK_PROVIDER: &str = "bedrock";
-const MANTLE_PASSTHROUGH_PARAMS: [&str; 1] = ["aws_bedrock_project_id"];
 const BEDROCK_PASSTHROUGH_PARAMS: [&str; 2] = ["model_id", "guardrailConfig"];
 const BEDROCK_METADATA_PARAMS: [&str; 2] = ["metadata", "litellm_metadata"];
 const BEDROCK_SPEND_LOGS_METADATA: &str = "spend_logs_metadata";
@@ -695,30 +694,28 @@ impl MessagesPythonHost {
             _ => None,
         };
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
-        let requested = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
         let capabilities = match &mantle {
-            Some(lookup) => mantle_capabilities(
-                &requested,
-                self.capabilities(py, &lookup.model, Some(lookup.provider))?,
-                &self.capabilities(py, &lookup.model, Some(BEDROCK_PROVIDER))?,
-                super::model_catalog::bedrock_capabilities(
-                    py,
-                    &lookup.model,
-                    argument("model_info")?,
-                )?,
-            ),
-            None if bedrock => MessagesModelCapabilities {
-                bedrock: with_invoke_flags(
-                    super::model_catalog::bedrock_capabilities(
-                        py,
-                        &model,
-                        argument("model_info")?,
-                    )?,
-                    &requested,
-                ),
-                ..requested
-            },
-            None => requested,
+            Some(_) => super::model_catalog::route_capabilities(
+                py,
+                &model,
+                custom_llm_provider.as_deref(),
+                argument("model_info")?,
+            )?,
+            None if bedrock => {
+                let requested = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
+                MessagesModelCapabilities {
+                    bedrock: with_invoke_flags(
+                        super::model_catalog::bedrock_capabilities(
+                            py,
+                            &model,
+                            argument("model_info")?,
+                        )?,
+                        &requested,
+                    ),
+                    ..requested
+                }
+            }
+            None => self.capabilities(py, &model, custom_llm_provider.as_deref())?,
         };
         let shaping = MessagesShaping {
             capabilities,
@@ -744,13 +741,7 @@ impl MessagesPythonHost {
             (Some(azure), _) => {
                 azure_settled_params(azure, argument(CALLER_TOKEN_PROVIDER_PARAM)?)?
             }
-            (None, true) => bedrock_litellm_params(py, argument)?
-                .into_iter()
-                .chain(match mantle.is_some() {
-                    true => project_optional_fields(MANTLE_PASSTHROUGH_PARAMS, argument)?,
-                    false => Map::new(),
-                })
-                .collect(),
+            (None, true) => bedrock_litellm_params(py, argument)?,
             (None, false) => Map::new(),
         };
         let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
