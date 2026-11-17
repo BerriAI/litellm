@@ -2194,12 +2194,89 @@ def _paused_turn_replay(
     return tuple(block for block in tool_invokes if _block_id(block) not in dropped_ids), ()
 
 
+_BACK_TO_BACK_JSON_OBJECTS: Final = re.compile(r"\}\s*\{")
+_NO_SPLIT_TOOL_USE_IDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({})
+
+
+def _assistant_tool_call_arguments(messages: Sequence[object]) -> tuple[tuple[str, object], ...]:
+    tool_calls: Final = itertools.chain.from_iterable(
+        parts_of(message_field(message, "tool_calls"))
+        for message in messages
+        if message_field(message, "role") == "assistant"
+    )
+    return tuple(
+        (tool_id, message_field(message_field(tool_call, "function"), "arguments"))
+        for tool_call in tool_calls
+        if isinstance(tool_id := message_field(tool_call, "id"), str)
+    )
+
+
+def _anthropic_argument_object_count(arguments: object) -> int:
+    if not isinstance(arguments, str) or _BACK_TO_BACK_JSON_OBJECTS.search(arguments) is None:
+        return 1
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        return max(len(salvage_concatenated_tool_arguments(arguments)), 1)
+    return 1
+
+
+def _anthropic_split_tool_use_ids(messages: Sequence[object]) -> Mapping[str, tuple[str, ...]]:
+    """The extra ``tool_use`` ids each tool call with concatenated JSON argument objects splits into."""
+    calls: Final = tuple(
+        (tool_id, _anthropic_argument_object_count(arguments))
+        for tool_id, arguments in _assistant_tool_call_arguments(messages)
+    )
+    if all(count == 1 for _, count in calls):
+        return _NO_SPLIT_TOOL_USE_IDS
+    return MappingProxyType(
+        {
+            tool_id: tuple(sanitize_anthropic_tool_use_id(extra_id) for extra_id in extra_ids if extra_id)
+            for (tool_id, _), (_, *extra_ids) in zip(calls, _split_tool_call_ids(calls), strict=True)
+            if extra_ids
+        }
+    )
+
+
+def _anthropic_tool_inputs(
+    arguments: str | None, tool_name: str, tool_id: str, split_tool_use_ids: Mapping[str, tuple[str, ...]]
+) -> tuple[tuple[str, Any], ...]:
+    try:
+        return ((tool_id, parse_tool_call_arguments(arguments, tool_name=tool_name, context="Anthropic tool invoke")),)
+    except ValueError:
+        objects: Final = salvage_concatenated_tool_arguments(arguments) if isinstance(arguments, str) else ()
+        tool_use_ids: Final = (tool_id, *split_tool_use_ids.get(tool_id, ()))
+        if len(objects) != len(tool_use_ids):
+            raise
+        return tuple(zip(tool_use_ids, objects, strict=True))
+
+
+def _reject_split_server_tool_call(tool_inputs: Sequence[object], tool_name: str) -> None:
+    if len(tool_inputs) != 1:
+        raise ValueError(
+            f"Server tool call '{tool_name}' carries {len(tool_inputs)} concatenated JSON argument objects"
+        )
+
+
+def _anthropic_tool_results_for_split_ids(
+    tool_result: AnthropicMessagesToolResultParam, split_ids: Sequence[str]
+) -> tuple[AnthropicMessagesToolResultParam, ...]:
+    shared: Final = {key: value for key, value in tool_result.items() if key != "cache_control"}
+    return tuple(
+        cast(  # cast-ok: a TypedDict rebuilt without one optional key is a plain dict to the type checker
+            AnthropicMessagesToolResultParam, {**shared, "tool_use_id": split_id}
+        )
+        for split_id in split_ids
+    )
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: Sequence[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
     server_tool_call_ids: Container[str] = frozenset(),
+    split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2254,10 +2331,11 @@ def convert_to_anthropic_tool_invoke(
             str,
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
         )
-        tool_input = parse_tool_call_arguments(
+        tool_inputs = _anthropic_tool_inputs(
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"),
-            tool_name=tool_name,
-            context="Anthropic tool invoke",
+            tool_name,
+            tool_id,
+            split_tool_use_ids,
         )
 
         server_tool_result = (
@@ -2266,12 +2344,13 @@ def convert_to_anthropic_tool_invoke(
             else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         )
         if server_tool_result is not None:
+            _reject_split_server_tool_call(tool_inputs, tool_name)
             anthropic_tool_invoke.append(
                 {
                     "type": "server_tool_use",
                     "id": tool_id,
                     "name": tool_name,
-                    "input": tool_input,
+                    "input": tool_inputs[0][1],
                 }
             )
             anthropic_tool_invoke.append(server_tool_result)
@@ -2280,27 +2359,35 @@ def convert_to_anthropic_tool_invoke(
         elif (
             tool_id in server_tool_call_ids or is_anthropic_server_tool_use(tool_id)
         ) and tool_id not in answered_tool_ids:
+            _reject_split_server_tool_call(tool_inputs, tool_name)
             anthropic_tool_invoke.append(
-                {"type": "server_tool_use", "id": tool_id, "name": tool_name, "input": tool_input}
+                {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_inputs[0][1],
+                }
             )
         else:
-            sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
-            _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
-                type="tool_use",
-                id=sanitized_tool_id,
-                name=tool_name,
-                input=tool_input,
-            )
+            _tool_use_params = [
+                AnthropicMessagesToolUseParam(
+                    type="tool_use",
+                    id=sanitize_anthropic_tool_use_id(tool_use_id),
+                    name=tool_name,
+                    input=tool_input,
+                )
+                for tool_use_id, tool_input in tool_inputs
+            ]
 
             _content_element = add_cache_control_to_content(
-                anthropic_content_element=_anthropic_tool_use_param,
+                anthropic_content_element=_tool_use_params[-1],
                 original_content_element=dict(tool),
             )
 
             if "cache_control" in _content_element:
-                _anthropic_tool_use_param["cache_control"] = _content_element["cache_control"]
+                _tool_use_params[-1]["cache_control"] = _content_element["cache_control"]
 
-            anthropic_tool_invoke.append(_anthropic_tool_use_param)
+            anthropic_tool_invoke.extend(_tool_use_params)
 
     return anthropic_tool_invoke
 
@@ -3078,6 +3165,7 @@ def anthropic_messages_pt(
     messages = [_sanitize_empty_text_content(m) for m in messages]
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
+    split_tool_use_ids: Final = _anthropic_split_tool_use_ids(messages)
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -3208,8 +3296,13 @@ def anthropic_messages_pt(
                 user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
             ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
-                user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                _tool_result = convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                user_content.append(_tool_result)
+                user_content.extend(
+                    _anthropic_tool_results_for_split_ids(
+                        _tool_result,
+                        split_tool_use_ids.get(str(message_field(user_message_types_block, "tool_call_id")), ()),
+                    )
                 )
 
             msg_i += 1
@@ -3271,6 +3364,7 @@ def anthropic_messages_pt(
                     tool_results=_provider_specific_fields.get("tool_results"),
                     answered_tool_ids=client_answered_tool_ids,
                     server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
+                    split_tool_use_ids=split_tool_use_ids,
                 )
                 if assistant_tool_calls is not None
                 else ()
@@ -4379,6 +4473,47 @@ class BedrockImageProcessor:
         return cls._create_bedrock_block(BedrockSourceBlock(bytes=img_bytes), mime_type, image_format)
 
 
+def _bedrock_split_tool_use_ids(tool_id: str, object_count: int) -> tuple[str, ...]:
+    return tuple(
+        _sanitize_bedrock_tool_use_id(tool_id if index == 0 else f"{tool_id}_{index}") for index in range(object_count)
+    )
+
+
+def _bedrock_argument_object_count(arguments: object) -> int:
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import split_concatenated_json_objects
+
+    if not isinstance(arguments, str) or not arguments.strip():
+        return 1
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        return max(len(split_concatenated_json_objects(arguments)), 1)
+    return 1
+
+
+def _bedrock_split_off_tool_use_ids(messages: Sequence[object]) -> Mapping[str, tuple[str, ...]]:
+    """The extra ``toolUse`` ids each tool call with concatenated JSON argument objects splits into."""
+    return MappingProxyType(
+        {
+            ids[0]: ids[1:]
+            for tool_id, arguments in _assistant_tool_call_arguments(messages)
+            if len(ids := _bedrock_split_tool_use_ids(tool_id, _bedrock_argument_object_count(arguments))) > 1
+        }
+    )
+
+
+def _bedrock_tool_results_for_split_ids(
+    tool_result: BedrockContentBlock, split_off_tool_use_ids: Mapping[str, tuple[str, ...]]
+) -> tuple[BedrockContentBlock, ...]:
+    result: Final = tool_result.get("toolResult")
+    if result is None:
+        return ()
+    return tuple(
+        BedrockContentBlock(toolResult={**result, "toolUseId": split_id})
+        for split_id in split_off_tool_use_ids.get(result["toolUseId"], ())
+    )
+
+
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
     model: str | None = None,
@@ -4454,10 +4589,9 @@ def _convert_to_bedrock_tool_call_invoke(
                         parsed_objects = split_concatenated_json_objects(arguments)
                         if parsed_objects:
                             # First object keeps the original tool id.
-                            for obj_idx, obj in enumerate(parsed_objects):
-                                block_id = _sanitize_bedrock_tool_use_id(
-                                    tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
-                                )
+                            for block_id, obj in zip(
+                                _bedrock_split_tool_use_ids(tool_id, len(parsed_objects)), parsed_objects, strict=True
+                            ):
                                 bedrock_tool = BedrockToolUseBlock(input=obj, name=name, toolUseId=block_id)
                                 _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
                             # cache_control applies to the whole original
@@ -5229,12 +5363,14 @@ class BedrockConverseMessagesProcessor:
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
         )
+        split_off_tool_use_ids: Final = _bedrock_split_off_tool_use_ids(messages)
+        message_count: Final = len(messages)
 
-        while msg_i < len(messages):
+        while msg_i < message_count:
             user_content: list[BedrockContentBlock] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
-            while msg_i < len(messages) and messages[msg_i]["role"] == "user":
+            while msg_i < message_count and messages[msg_i]["role"] == "user":
                 message_block = get_user_message_block_or_continue_message(
                     message=messages[msg_i],
                     user_continue_message=user_continue_message,
@@ -5319,10 +5455,11 @@ class BedrockConverseMessagesProcessor:
 
             ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
             tool_content: list[BedrockContentBlock] = []
-            while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+            while msg_i < message_count and messages[msg_i]["role"] == "tool":
                 current_message = messages[msg_i]
                 tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
                 tool_content.append(tool_call_result)
+                tool_content.extend(_bedrock_tool_results_for_split_ids(tool_call_result, split_off_tool_use_ids))
 
                 # Check if we need to add a separate cachePoint block
                 tool_msg_cache_control = None
@@ -5371,7 +5508,7 @@ class BedrockConverseMessagesProcessor:
                     contents.append(BedrockMessageBlock(role="user", content=tool_content))
             assistant_content: list[BedrockContentBlock] = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+            while msg_i < message_count and messages[msg_i]["role"] == "assistant":
                 assistant_message_block = get_assistant_message_block_or_continue_message(
                     message=messages[msg_i],
                     assistant_continue_message=assistant_continue_message,
@@ -5692,12 +5829,14 @@ def _bedrock_converse_messages_pt(
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
     )
+    split_off_tool_use_ids: Final = _bedrock_split_off_tool_use_ids(messages)
+    message_count: Final = len(messages)
 
-    while msg_i < len(messages):
+    while msg_i < message_count:
         user_content: list[BedrockContentBlock] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "user":
+        while msg_i < message_count and messages[msg_i]["role"] == "user":
             message_block = get_user_message_block_or_continue_message(
                 message=messages[msg_i],
                 user_continue_message=user_continue_message,
@@ -5780,12 +5919,13 @@ def _bedrock_converse_messages_pt(
 
         ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
         tool_content: list[BedrockContentBlock] = []
-        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+        while msg_i < message_count and messages[msg_i]["role"] == "tool":
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
             current_message = messages[msg_i]
 
             # Add the tool result first
             tool_content.append(tool_call_result)
+            tool_content.extend(_bedrock_tool_results_for_split_ids(tool_call_result, split_off_tool_use_ids))
 
             # Check if we need to add a separate cachePoint block
             tool_msg_cache_control = None
@@ -5834,7 +5974,7 @@ def _bedrock_converse_messages_pt(
                 contents.append(BedrockMessageBlock(role="user", content=tool_content))
         assistant_content: list[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+        while msg_i < message_count and messages[msg_i]["role"] == "assistant":
             assistant_message_block = get_assistant_message_block_or_continue_message(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,

@@ -9768,3 +9768,75 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+def _history_with_concatenated_tool_arguments(*payloads: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List files in /a and /b"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": _concatenated_json(*payloads)},
+                },
+                {
+                    "id": "call_1__concat_1",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": '{"path": "/c"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+        {"role": "tool", "tool_call_id": "call_1__concat_1", "content": "c.txt"},
+    ]
+
+
+def test_anthropic_messages_pt_splits_concatenated_tool_arguments_and_answers_every_tool_use():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"})
+
+    _, assistant, tool_results = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    tool_uses = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = [block["id"] for block in tool_uses]
+    assert len(set(tool_use_ids)) == 3
+    results_by_id = {block["tool_use_id"]: block["content"] for block in tool_results["content"]}
+    assert results_by_id == {tool_use_ids[0]: "a.txt", tool_use_ids[1]: "a.txt", tool_use_ids[2]: "c.txt"}
+
+
+def test_anthropic_messages_pt_rejects_truncated_concatenated_tool_arguments():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"})
+    messages[1]["tool_calls"][0]["function"]["arguments"] += '{"path": '
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'ls'"):
+        anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_every_tool_use_split_from_concatenated_arguments(use_async: bool):
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"})
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    if use_async:
+        _, assistant, tool_results = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages, model, "bedrock"
+        )
+    else:
+        _, assistant, tool_results = _bedrock_converse_messages_pt(messages, model, "bedrock")
+
+    tool_uses = [block["toolUse"] for block in assistant["content"] if "toolUse" in block]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    results_by_id = {
+        block["toolResult"]["toolUseId"]: block["toolResult"]["content"]
+        for block in tool_results["content"]
+        if "toolResult" in block
+    }
+    assert results_by_id == {
+        tool_uses[0]["toolUseId"]: [{"text": "a.txt"}],
+        tool_uses[1]["toolUseId"]: [{"text": "a.txt"}],
+        tool_uses[2]["toolUseId"]: [{"text": "c.txt"}],
+    }
