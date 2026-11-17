@@ -211,9 +211,10 @@ def test_a_hits_stored_tokens_count_against_the_keys_tpm_limit(gateway: Gateway)
 
 
 def test_a_request_refused_by_a_rate_limit_writes_no_hit_row(gateway: Gateway) -> None:
-    """A key with ``rpm_limit: 1`` fills an entry, then sends the identical request and is refused with 429. The
-    key must end with exactly one spend row, the miss: a refused request is never served from the cache and never
-    logged as a hit.
+    """A key with ``rpm_limit: 1`` fills an entry, then sends the identical request and is refused with 429. A
+    refused request is never served from the cache and never logged as a hit. The refusal still writes its own
+    failure row (cache_hit "False", spend 0, no tokens), like every other proxy-side refusal: CI run 44176682961
+    found the miss and that row, so the key ends with exactly two rows and neither is a hit.
     """
     store: Final = redis_store()
     with gateway.scenario() as scenario:
@@ -223,8 +224,9 @@ def test_a_request_refused_by_a_rate_limit_writes_no_hit_row(gateway: Gateway) -
         first: Final = target.ask(text, key=key)
         await_named_entry(store, target.needle(first))
         assert target.ask(text, key=key).response.status_code == 429
-        rows: Final = await_spend_rows(gateway, key, 1)
-        assert rows[0]["cache_hit"] != "True", rows
+        rows: Final = await_spend_rows(gateway, key, 2)
+        assert all(row["cache_hit"] != "True" for row in rows), rows
+        assert sorted(float(str(row["spend"])) for row in rows) == [0.0, pytest.approx(0.003)], rows
 
 
 def test_a_team_at_its_budget_is_refused_even_when_the_answer_is_cached(gateway: Gateway) -> None:

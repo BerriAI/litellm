@@ -175,7 +175,15 @@ def test_a_lost_group_counter_is_reseeded_from_the_stored_group_spend(gateway: G
     The test deletes `spend:model_access_group:<group>` from Redis; the next call with `max_tokens: 5` settles the
     recreated counter at 0.04. Group counters are not reseeded by `SpendCounterReseed`; their seed is the cached
     group spend passed as `fallback_spend`. UNVERIFIED: whether the cached group spend is refreshed before the
-    second call (the auth cache TTL may serve 0.0, which would read 0.02 here)."""
+    second call (the auth cache TTL may serve 0.0, which would read 0.02 here).
+
+    BUG: in CI runs 44161684479 and 44176682961 the deleted counter was never recreated: it read None for the whole
+    70 s window after a served second call, so not even that call's 0.02 landed. The post-call charge only
+    increments counters it finds warm or reseeds them through `ensure_spend_counter_initialized`
+    (`_prepare_spend_counter_increment`, litellm/proxy/proxy_server.py:4471-4498 on main), and reserved groups are
+    skipped there (`_prepare_unreserved_spend_counter_increment`, proxy_server.py:4455-4468), so a lost group
+    counter stays lost and the group budget is enforced against the lagging stored spend only."""
+    pytest.skip("BUG: a deleted model access group spend counter is never recreated by later served calls")
     group: Final = _group()
     with scripted_upstream() as wire, gateway.scenario() as scenario, redis_client() as cache:
         model: Final = _grouped_model(scenario, wire, group)

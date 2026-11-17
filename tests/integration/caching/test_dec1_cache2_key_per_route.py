@@ -39,6 +39,7 @@ from tests.integration.caching.dec1_cache_support import Exchange, filled, probe
 from tests.integration.caching.response_cache_case import (
     MESSAGE,
     MESSAGES_MODEL,
+    await_entry,
     json_response,
     prompt,
     redis_store,
@@ -456,7 +457,8 @@ def test_messages_deployments_of_one_group_share_one_entry(gateway: Gateway) -> 
     """One ``/v1/messages`` model group has two Anthropic deployments, each on its own scripted scenario. The
     same request is sent three times. Exactly one upstream call may happen across both deployments, and every
     answer must carry the same message id: the key uses the model group, never the deployment, also on the
-    Rust messages path.
+    Rust messages path. The fill is checked against both scenarios: ``Probe.send`` only counts its own scenario,
+    and CI run 44176682961 routed the fill to the second deployment, which read as a cache hit.
     """
     store: Final = redis_store()
     with gateway.scenario() as scenario:
@@ -465,7 +467,9 @@ def test_messages_deployments_of_one_group_share_one_entry(gateway: Gateway) -> 
         second_deployment: Final = probe(scenario, json_response(MESSAGE), name=name, model=MESSAGES_MODEL)
         text: Final = prompt()
         answers: list[Exchange] = [first_deployment.messages(text)]  # mutable-ok: collected in order
-        filled(store, answers[0])
+        # The router may send the fill to either deployment, so the fill is counted across both scenarios.
+        assert first_deployment.calls() + second_deployment.calls() == 1, answers[0].response.text
+        await_entry(store, answers[0].id())
         answers += [first_deployment.messages(text), first_deployment.messages(text)]
         assert first_deployment.calls() + second_deployment.calls() == 1
         assert len({exchange.id() for exchange in answers}) == 1, [exchange.response.text for exchange in answers]

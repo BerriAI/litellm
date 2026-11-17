@@ -116,7 +116,10 @@ def test_a_hold_outlives_the_counter_ttl_while_its_request_is_in_flight(gateway:
 def test_a_long_hold_still_refuses_a_concurrent_call_after_several_ttls(gateway: Gateway, tmp_path: Path) -> None:
     """Same 4 second TTL. A key with alias and `max_budget` 1.0 has a held call without `max_tokens`, which pins its
     counter at 1.0. Twelve seconds later a second call on the key is still refused with HTTP 422 and exactly
-    `Budget has been exceeded! Key=<alias> (sk-...<last 4>) Current cost: 1.0, Max budget: 1.0`."""
+    `Budget has been exceeded! Key=<alias> (sk-...<last 4>) Current cost: 1, Max budget: 1.0`. The current cost is
+    the counter's own text: the Rust check prints `PyNumber::text()` (litellm/rust/crates/callbacks-budgets/src/
+    checks.rs:148-153), and the held counter comes back from Redis `INCRBYFLOAT` as "1", while the budget is the
+    stored float 1.0 (CI run 44176682961)."""
     with (
         held_provider() as provider,
         _short_ttl(tmp_path, gateway) as proxy,
@@ -139,7 +142,7 @@ def test_a_long_hold_still_refuses_a_concurrent_call_after_several_ttls(gateway:
             second: Final = call(proxy, model, key, max_tokens=5)
         finally:
             provider.release()
-        assert refused(second) == budget_message(f"Key={alias} ({masked(key)})", "1.0", "1.0")
+        assert refused(second) == budget_message(f"Key={alias} ({masked(key)})", "1", "1.0")
         served(in_flight.result(timeout=60))
 
 

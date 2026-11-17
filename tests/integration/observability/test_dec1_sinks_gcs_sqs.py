@@ -366,14 +366,19 @@ def test_sqs_strip_base64_files_removes_inline_data_urls(sqs: SinkRig) -> None:
 
 
 def test_sqs_application_encryption_hides_the_payload(sqs_encrypted: SinkRig) -> None:
-    """With application level encryption on, every MessageBody must be {"__encrypted__": true, "payload": <str>} and
-    neither the user text nor the call id may appear in any SQS post."""
+    """With application level encryption on, every MessageBody must be {"__encrypted__": true, "payload": {...}}
+    where the payload is the AES-GCM envelope of three base64 strings `nonce`, `ciphertext` and `tag`
+    (`AppCrypto.encrypt_json`, litellm/litellm_core_utils/app_crypto.py:18-28, sent by litellm/integrations/sqs.py:
+    280-283), and neither the user text nor the call id may appear in any SQS post."""
     call_id, text = new_call_id(), marker()
     assert chat(sqs_encrypted, call_id, text).status_code == 200
     messages: Final = eventually(sqs_encrypted.sqs_messages, lambda found: len(found) >= 1, seconds=60)
     for message in messages:
         assert message["__encrypted__"] is True
-        assert isinstance(message["payload"], str)
+        payload = message["payload"]
+        assert isinstance(payload, dict), message
+        assert sorted(payload) == ["ciphertext", "nonce", "tag"], message
+        assert all(isinstance(value, str) and value for value in payload.values()), message
     held(
         lambda: tuple(
             r for r in sqs_encrypted.peer("sqs").posts() if text.encode() in r.body or call_id.encode() in r.body

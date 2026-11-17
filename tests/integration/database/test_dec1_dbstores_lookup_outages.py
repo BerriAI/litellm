@@ -21,8 +21,9 @@ Contract, read from litellm/proxy/auth/user_api_key_auth.py (`run_centralized_co
 The rig (`lookup_outage` in `dec1_dbstores_support.py`) boots a private proxy on a scratch database behind a relay
 that drops any connection whose outbound bytes contain a per-rig marker. Each test embeds that marker in the id of
 exactly one object (team, customer, project, organization), so only the lookups naming it fail. The key itself is
-looked up by its hash, which never contains the marker. Keys are never used before the relay is armed, so their
-owners are not cached. Not duplicated: whole-database outages (`test_dec1_failures_postgres_*`), key lookup
+looked up by its hash, which never contains the marker. Keys are never used before the relay is armed, but the
+management calls that create a team, an organization and a key read those objects and cache them, so the tests
+that need a cold lookup run on the `cold` rig (2 s auth cache) and wait past that TTL before arming the relay. Not duplicated: whole-database outages (`test_dec1_failures_postgres_*`), key lookup
 failures (`test_dec1_keys_db_unavailable.py`).
 """
 
@@ -38,7 +39,7 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import eventually, gateway_from_environment, string_value
+from tests.integration._support.client import eventually, gateway_from_environment, held, string_value
 from tests.integration._support.database import scratch_database
 from tests.integration._support.database_relay import (
     dropped_connection_relay,
@@ -76,6 +77,37 @@ def strict(tmp_path_factory: pytest.TempPathFactory) -> Iterator[LookupOutage]:
         ) as rig,
     ):
         yield rig
+
+
+COLD_CACHE_SECONDS: Final = 2
+"""`user_api_key_cache_ttl` of the `cold` rig. `/team/new`, `/organization/new` and `/key/generate` read the
+objects they name and leave them in the auth cache (60 s by default), so a lookup that should fail on a key's
+first request is otherwise never sent: CI runs 44161684479 and 44176682961 served all three cold-lookup tests
+from that cache."""
+
+
+@pytest.fixture(scope="module")
+def cold(tmp_path_factory: pytest.TempPathFactory) -> Iterator[LookupOutage]:
+    """The strict rig with a 2 second auth cache, for tests whose first request must miss the cache."""
+    with (
+        gateway_from_environment() as shared,
+        lookup_outage(
+            shared,
+            tmp_path_factory.mktemp("dec1-dbstores-cold"),
+            general_settings={"allow_requests_on_db_unavailable": False, "user_api_key_cache_ttl": COLD_CACHE_SECONDS},
+        ) as rig,
+    ):
+        yield rig
+
+
+def _cache_expired(rig: LookupOutage) -> None:
+    """A bounded wait past the cold rig's auth cache TTL, so the objects the management calls cached are gone and
+    the next request reads them from the database. The proxy must stay live meanwhile."""
+    held(
+        lambda: rig.proxy.request("GET", "/health/liveliness").status_code,
+        lambda status: status == 200,
+        holding=COLD_CACHE_SECONDS + 1,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -125,18 +157,19 @@ def test_a_team_lookup_failure_lets_the_key_vouch_with_the_team_models_it_carrie
     assert error_of(refused)["type"] == "team_model_access_denied", refused.text
 
 
-def test_a_team_lookup_failure_does_not_serve_a_key_whose_team_records_no_models(strict: LookupOutage) -> None:
+def test_a_team_lookup_failure_does_not_serve_a_key_whose_team_records_no_models(cold: LookupOutage) -> None:
     """A team without a model list (every model) has a never used key; the team lookup is dropped and
     `allow_requests_on_db_unavailable` is false.
 
     The request is not served and nothing reaches the upstream: an empty recorded list reads as "every model"
     and `team_blocked: false`, so the key may not vouch for its team (`_token_can_vouch_for_team`).
     """
-    rig: Final = strict
+    rig: Final = cold
     model: Final = rig.scenario.model()
     team: Final = _failing_team(rig)
     key: Final = rig.scenario.key(team_id=team)
     text: Final = marker()
+    _cache_expired(rig)
     refused: Final = _armed_chat(rig, key, model, text=text)
     assert refused.status_code != 200, refused.text
     assert upstream_requests(rig.proxy, text) == []
@@ -172,15 +205,17 @@ def test_with_the_availability_flag_a_team_lookup_failure_serves_an_unvouched_ke
     assert rig.dropped()
 
 
-def test_a_team_key_is_served_again_once_the_team_lookup_recovers(strict: LookupOutage) -> None:
+def test_a_team_key_is_served_again_once_the_team_lookup_recovers(cold: LookupOutage) -> None:
     """The unvouched team key is refused while its team lookup fails, then the relay is disarmed.
 
     The next request is served with 200 without restarting anything: the failure was not cached as "no team".
     """
-    rig: Final = strict
+    rig: Final = cold
     model: Final = rig.scenario.model()
     key: Final = rig.scenario.key(team_id=_failing_team(rig))
-    assert _armed_chat(rig, key, model).status_code != 200
+    _cache_expired(rig)
+    refused: Final = _armed_chat(rig, key, model)
+    assert refused.status_code != 200, refused.text
     assert_ok(eventually(lambda: chat_as(rig.proxy, key, model), lambda r: r.status_code == 200, seconds=10))
 
 
@@ -261,7 +296,7 @@ def _team_in_failing_org(rig: LookupOutage) -> str:
     return rig.scenario.team(organization_id=organization)
 
 
-def test_an_unseen_organization_whose_lookup_fails_answers_503(strict: LookupOutage) -> None:
+def test_an_unseen_organization_whose_lookup_fails_answers_503(cold: LookupOutage) -> None:
     """A team inside an organization named with the marker has a never used key; the organization lookup is
     dropped and no last known copy exists.
 
@@ -269,9 +304,10 @@ def test_an_unseen_organization_whose_lookup_fails_answers_503(strict: LookupOut
     re-raises a database unavailable error). Assumes a dropped connection is classified as "database
     unavailable" by `PrismaDBExceptionHandler`.
     """
-    rig: Final = strict
+    rig: Final = cold
     model: Final = rig.scenario.model()
     key: Final = rig.scenario.key(team_id=_team_in_failing_org(rig))
+    _cache_expired(rig)
     assert_denied(
         _armed_chat(rig, key, model), status=503, error_type="no_db_connection", message=DB_UNAVAILABLE_MESSAGE
     )

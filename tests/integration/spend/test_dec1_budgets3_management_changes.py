@@ -35,6 +35,7 @@ from tests.integration.spend.dec1_budgets3_support import (
     user_counter,
 )
 from tests.integration.spend.dec1_budgets_support import (
+    LANDING_SECONDS,
     background,
     call,
     counter,
@@ -45,7 +46,7 @@ from tests.integration.spend.dec1_budgets_support import (
     redis_client,
     refused,
 )
-from tests.integration.spend.dec1_spend_support import new_customer, new_tag, scripted_upstream, served
+from tests.integration.spend.dec1_spend_support import hashed, new_customer, new_tag, scripted_upstream, served
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -71,7 +72,10 @@ def test_reset_spend_readmits_an_exhausted_key_and_sets_the_counter_to_the_reset
     """A key with `max_budget` 0.03 spends 0.04 over two calls and is refused. `POST /key/<key>/reset_spend` with
     `reset_to: 0.01` leaves `spend:key:<hash>` at exactly 0.01 (a partial reset, not 0), and the next call is
     served. The first call is settled before the second is sent: its 0.04 hold, shrunk to the 0.03 budget, would
-    otherwise still sit on the counter and refuse the second call at "Current cost: 0.03"."""
+    otherwise still sit on the counter and refuse the second call at "Current cost: 0.03". The reset is checked
+    against the stored `LiteLLM_VerificationToken.spend`, not the counter (`_validate_reset_spend_value`,
+    key_management_endpoints.py:6961-6965), so the test also waits for the stored spend to reach 0.04; CI run
+    44176682961 sent it while the row still read 0.0 and got 400 "reset_to (0.01) must be <= current spend"."""
     with scripted_upstream() as wire, gateway.scenario() as scenario, redis_client() as cache:
         model: Final = hold_model(scenario, wire)
         key: Final = scenario.key(models=[model], max_budget=0.03)
@@ -80,6 +84,11 @@ def test_reset_spend_readmits_an_exhausted_key_and_sets_the_counter_to_the_reset
         spend_once(gateway, model, key)
         counter_settles(cache, key_counter(key), 0.04)
         assert refused(call(gateway, model, key, max_tokens=TOKENS))
+        eventually(
+            lambda: gateway.rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token = %s', (hashed(key),)),
+            lambda rows: bool(rows) and float(str(rows[0]["spend"])) >= 0.04 - 1e-9,
+            seconds=LANDING_SECONDS,
+        )
         gateway.post(f"/key/{key}/reset_spend", {"reset_to": 0.01})
         counter_settles(cache, key_counter(key), 0.01)
         assert served(call(gateway, model, key, max_tokens=1))

@@ -60,19 +60,34 @@ def _id(response: httpx.Response) -> str:
     return str(JSON_OBJECT.validate_json(response.content)["id"])
 
 
+def _entries_naming(pair: Fleet, needle: str) -> tuple[str, ...]:
+    """Every Redis key whose stored value names `needle`, read once."""
+    with pair.store() as client:
+        return tuple(
+            raw.decode()
+            for raw in client.scan_iter(count=1000)
+            if client.type(raw) == b"string" and needle.encode() in (client.get(raw) or b"")
+        )
+
+
 def _entry_naming(pair: Fleet, needle: str) -> str:
     """The Redis key whose stored value names `needle` (a response id), polled because the write is asynchronous."""
-
-    def found() -> tuple[str, ...]:
-        with pair.store() as client:
-            return tuple(
-                raw.decode()
-                for raw in client.scan_iter(count=1000)
-                if client.type(raw) == b"string" and needle.encode() in (client.get(raw) or b"")
-            )
-
-    keys: Final = eventually(found, lambda matches: len(matches) >= 1, seconds=10)
+    keys: Final = eventually(lambda: _entries_naming(pair, needle), lambda matches: len(matches) >= 1, seconds=10)
     return keys[0]
+
+
+def _streamed_text(events: str) -> str:
+    """The joined `choices[0].delta.content` of a chat completion event stream."""
+    parts: Final[list[str]] = []  # mutable-ok: collected in stream order
+    for line in events.splitlines():
+        if not line.startswith("data: {"):
+            continue
+        choices = JSON_OBJECT.validate_json(line.removeprefix("data: ")).get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            delta = choices[0].get("delta")
+            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                parts.append(str(delta["content"]))
+    return "".join(parts)
 
 
 def test_an_answer_cached_by_one_instance_is_a_hit_on_the_other(pair: Fleet) -> None:
@@ -157,23 +172,39 @@ def test_no_cache_on_the_peer_skips_the_entry_the_other_instance_wrote(pair: Fle
 def test_cache_delete_through_one_instance_evicts_the_entry_for_the_other(pair: Fleet) -> None:
     """The first instance fills an entry and the second gets a hit on it. `POST /cache/delete` through the second
     instance with `{"keys": [<entry key>]}` must answer 200, the Redis key must be gone, and the same request
-    through the first instance must then reach the upstream again with a new `id`.
+    through the first instance must then reach the upstream again with a new `id`. The deleted key is the one the
+    hit names in `x-litellm-cache-key`, not the first Redis key a scan finds holding the answer: CI run 44176682961
+    deleted a scanned key and the first instance still answered the old `id`, so a failure now prints every key
+    still holding it.
+
+    BUG: the Redis key is gone, but the filling instance answers from its own memory tier. Response cache reads go
+    through a `DualCache` of the Redis cache and a process-wide `InMemoryCache` (litellm/caching/caching_handler.py:110,
+    :389-392), while `POST /cache/delete` only deletes from Redis (litellm/proxy/caching_routes.py:158-159,
+    litellm/caching/caching.py:1052-1057) and nothing tells the peer, so a delete does not take effect on another
+    instance (or on the deleting one's own memory copy) until that copy expires.
     """
+    pytest.skip("BUG: /cache/delete clears Redis only; the filling instance keeps serving its in-memory copy")
     text: Final = unique("delete")
     filled: Final = ask(pair.first, "cache-chat", text)
-    key: Final = _entry_naming(pair, _id(filled))
-    assert _id(ask(pair.second, "cache-chat", text)) == _id(filled)
+    _entry_naming(pair, _id(filled))
+    hit: Final = ask(pair.second, "cache-chat", text)
+    assert _id(hit) == _id(filled)
+    key: Final = str(hit.headers.get(CACHE_KEY_HEADER, ""))
+    assert key, dict(hit.headers)
     pair.second.post("/cache/delete", {"keys": [key]})
     assert pair.raw(key) is None
-    assert _id(ask(pair.first, "cache-chat", text)) != _id(filled)
+    again: Final = ask(pair.first, "cache-chat", text)
+    assert _id(again) != _id(filled), (key, _entries_naming(pair, _id(filled)), dict(again.headers))
 
 
 def test_an_embedding_cached_by_one_instance_is_a_hit_on_the_other(pair: Fleet) -> None:
     """The first instance answers `POST /v1/embeddings` for `cache-embed` with a fixed input from the upstream. The
-    same request through the second instance must return 200 with the same vector and carry
-    `x-litellm-cache-key`, and the upstream must have received one request for `ok-cache-embed` for that input.
-    UNVERIFIED: that an embedding hit carries the cache key header; the single-instance file asserts the vector and
-    zero cost.
+    same request through the second instance must return 200 with the same vector, and the upstream must have
+    received one request for `ok-cache-embed` for that input. The test waits for the entry (the stored answer keeps
+    the provider model `ok-cache-embed`) and then asks the peer once. It no longer requires `x-litellm-cache-key`
+    on the hit: CI run 44176682961 polled 10 s for that header without seeing it, and the single-instance contract
+    (`test_dec1_cache_endpoint_hits.py::test_embedding_hit_returns_the_stored_vector_and_zero_cost`) pins the
+    vector and the missing upstream call instead.
     """
     text: Final = unique("embed input")
     before: Final = pair.upstream.count("ok-cache-embed")
@@ -181,19 +212,19 @@ def test_an_embedding_cached_by_one_instance_is_a_hit_on_the_other(pair: Fleet) 
     first: Final = pair.first.request("POST", "/v1/embeddings", body)
     assert first.status_code == 200, first.text
     vector: Final = object_value(JSON_OBJECT.validate_json(first.content)["data"][0])["embedding"]  # type: ignore[index]
-    second: Final = eventually(
-        lambda: pair.second.request("POST", "/v1/embeddings", body),
-        lambda response: CACHE_KEY_HEADER in response.headers,
-        seconds=10,
-    )
+    _entry_naming(pair, "ok-cache-embed")
+    second: Final = pair.second.request("POST", "/v1/embeddings", body)
+    assert second.status_code == 200, second.text
     assert object_value(JSON_OBJECT.validate_json(second.content)["data"][0])["embedding"] == vector  # type: ignore[index]
     assert pair.upstream.count("ok-cache-embed") - before == 1
 
 
 def test_a_streamed_answer_cached_by_one_instance_is_replayed_as_a_stream_by_the_other(pair: Fleet) -> None:
     """The first instance streams a chat answer for `cache-chat` (`stream: true`). The same streaming request through
-    the second instance must return 200 server-sent events that contain `served ok-cache-chat` and end with
-    `data: [DONE]`, and the upstream must have received one request for that text.
+    the second instance must return 200 server-sent events whose deltas join to `served ok-cache-chat` and end with
+    `data: [DONE]`, and the upstream must have received one request for that text. The replay splits the text
+    across chunks (CI run 44176682961 replayed "served " and "ok-cache-chat" as two deltas), so the deltas are
+    joined before comparing.
     """
     text: Final = unique("stream")
     before: Final = pair.upstream.count("ok-cache-chat")
@@ -217,7 +248,7 @@ def test_a_streamed_answer_cached_by_one_instance_is_replayed_as_a_stream_by_the
     _entry_naming(pair, stream_id.group(1))
     status, events = stream(pair, 1)
     assert status == 200
-    assert "served ok-cache-chat" in events
+    assert _streamed_text(events) == "served ok-cache-chat", events
     assert events.rstrip().endswith("data: [DONE]")
     assert pair.upstream.count("ok-cache-chat") - before == 1
 

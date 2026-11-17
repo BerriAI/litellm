@@ -238,10 +238,12 @@ def test_native_and_bridged_responses_rows_share_call_type_and_daily_endpoint(ga
 
 
 def test_bridged_responses_row_names_the_anthropic_provider(gateway: Gateway) -> None:
-    """The bridged `/v1/responses` row's `custom_llm_provider` is `anthropic` and its `request_id` is the `resp_`
-    id the caller received, not the Anthropic `msg_` id, so `previous_response_id` lookups find it. The row is
-    found through the key (CI run 44161684479 found no row under the caller's id within the landing window), so a
-    failure prints the row and shows which id it was filed under."""
+    """The bridged `/v1/responses` row's `custom_llm_provider` is `anthropic`. Its `request_id` is the inner
+    `chatcmpl-` id of the chat completion the bridge ran, not the opaque `resp_` id the caller received: the
+    caller's id wraps that inner id (`_build_responses_api_response_id`, litellm/responses/utils.py:824-834), and a
+    `previous_response_id` lookup decodes it back before matching `request_id`
+    (`_referenced_request_ids`, litellm/responses/litellm_completion_transformation/session_handler.py:231-235).
+    CI run 44176682961 showed the row under `chatcmpl-<uuid>` while the caller held a `resp_` id."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = messages_model(scenario, wire)
         key: Final = scenario.key(models=[model])
@@ -250,7 +252,9 @@ def test_bridged_responses_row_names_the_anthropic_provider(gateway: Gateway) ->
         )
         row: Final = rows_of_key(gateway, key, 1)[0]
         assert row["custom_llm_provider"] == "anthropic", row
-        assert row["request_id"] == string_value(body["id"]), row
+        assert string_value(body["id"]).startswith("resp_"), body
+        assert str(row["request_id"]).startswith("chatcmpl-"), row
+        assert row["request_id"] != body["id"], row
 
 
 def test_an_embedding_batch_of_inputs_writes_one_row(gateway: Gateway) -> None:
