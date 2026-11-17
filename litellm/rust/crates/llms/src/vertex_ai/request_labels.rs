@@ -216,16 +216,12 @@ fn caller_header_labels(encoded: &str) -> Vec<Label> {
         .collect()
 }
 
+/// The first label of each key, in order, stopping once the most Vertex AI keeps are found.
 fn first_occurrences(labels: impl IntoIterator<Item = Label>) -> Vec<Label> {
+    let mut seen = std::collections::HashSet::new();
     labels
         .into_iter()
-        .fold(Vec::new(), |mut kept: Vec<Label>, (key, value)| {
-            if !kept.iter().any(|(existing, _)| *existing == key) {
-                kept.push((key, value));
-            }
-            kept
-        })
-        .into_iter()
+        .filter(|(key, _)| seen.insert(key.clone()))
         .take(PARTNER_REQUEST_LABELS_MAX)
         .collect()
 }
@@ -326,6 +322,20 @@ mod tests {
             let decoded = general_purpose::STANDARD.decode(value).unwrap();
             labels_in_order(std::str::from_utf8(&decoded).unwrap())
         })
+    }
+
+    #[rstest]
+    fn first_occurrences_keep_each_key_once_in_order_up_to_the_limit() {
+        let label = |key: usize, value: &str| (format!("k{key}"), value.to_owned());
+        let labels = [label(1, "first"), label(0, "a"), label(1, "again")]
+            .into_iter()
+            .chain((0..200_000).map(|key| label(key, "late")));
+        let kept = super::first_occurrences(labels);
+        assert_eq!(kept.len(), super::PARTNER_REQUEST_LABELS_MAX);
+        assert_eq!(
+            kept[..3],
+            [label(1, "first"), label(0, "a"), label(2, "late")]
+        );
     }
 
     #[rstest]
