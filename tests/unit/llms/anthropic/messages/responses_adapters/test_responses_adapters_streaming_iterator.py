@@ -179,6 +179,7 @@ class TestReasoningItemWithoutSummaryText:
             ("content_block_start", 0),
             ("content_block_delta", 0),
             ("content_block_delta", 0),
+            ("content_block_delta", 0),
             ("content_block_stop", 0),
             ("content_block_start", 1),
             ("content_block_delta", 1),
@@ -190,10 +191,73 @@ class TestReasoningItemWithoutSummaryText:
         assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
 
     def test_the_reasoning_item_id_is_never_streamed_as_a_signature(self):
-        """A stand-in signature would be replayed as a real one, so none is ever sent."""
+        """A stand-in signature would be replayed as a real one, so the block closes with an empty one."""
         chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weighing options"]))
 
-        assert not [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+        signature_deltas: Final = [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+        assert [(c["index"], c["delta"]["signature"]) for c in signature_deltas] == [(0, "")]
+        assert chunks[chunks.index(signature_deltas[0]) + 1] == {"type": "content_block_stop", "index": 0}
+
+
+class TestRawReasoningTextIsStreamedAsThinking:
+    """Servers that return a reasoning item's raw text (vLLM and OpenRouter for gpt-oss)
+    stream it as ``response.reasoning_text.delta`` instead of a summary."""
+
+    def test_reasoning_text_deltas_become_one_closed_thinking_block(self):
+        chunks: Final = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.reasoning_text.delta", "item_id": "rs_1", "content_index": 0, "delta": "17*23"},
+                {"type": "response.reasoning_text.delta", "item_id": "rs_1", "content_index": 0, "delta": " is 391."},
+                {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "391"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.completed"},
+            ]
+        )
+
+        assert [(c["type"], c.get("index"), c.get("content_block") or c.get("delta")) for c in chunks[1:-2]] == [
+            ("content_block_start", 0, {"type": "thinking", "thinking": "", "signature": ""}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": "17*23"}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": " is 391."}),
+            ("content_block_delta", 0, {"type": "signature_delta", "signature": ""}),
+            ("content_block_stop", 0, None),
+            ("content_block_start", 1, {"type": "text", "text": ""}),
+            ("content_block_delta", 1, {"type": "text_delta", "text": "391"}),
+            ("content_block_stop", 1, None),
+        ]
+
+    def test_a_whole_reasoning_item_without_deltas_becomes_one_closed_thinking_block(self):
+        reasoning_item: Final = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "Just answer 391."}],
+            "encrypted_content": None,
+        }
+        chunks: Final = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": reasoning_item},
+                {"type": "response.output_item.done", "item": reasoning_item},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "391"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.completed"},
+            ]
+        )
+
+        assert [(c["type"], c.get("index"), c.get("content_block") or c.get("delta")) for c in chunks[1:-2]] == [
+            ("content_block_start", 0, {"type": "thinking", "thinking": "", "signature": ""}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": "Just answer 391."}),
+            ("content_block_delta", 0, {"type": "signature_delta", "signature": ""}),
+            ("content_block_stop", 0, None),
+            ("content_block_start", 1, {"type": "text", "text": ""}),
+            ("content_block_delta", 1, {"type": "text_delta", "text": "391"}),
+            ("content_block_stop", 1, None),
+        ]
 
 
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"

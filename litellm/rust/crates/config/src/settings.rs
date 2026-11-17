@@ -1,13 +1,36 @@
-use litellm_python_compat::lenient::IsTrue;
+use litellm_python_compat::lenient::{IsTrue, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_with::serde_as;
 use veil::Redact;
 
 use crate::{
-    AdditionalFields, CacheSettings, JwtAuthSettings, Object, PassThroughEndpoint, RedisSettings,
-    RouteList, Spelled, Value, value::one_or_many,
+    AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, PassThroughEndpoint,
+    RedisSettings, RolePermissions, RouteList, Spelled, Value, value::one_or_many,
 };
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UserHeaderMapping {
+    pub header_name: String,
+    pub litellm_user_role: LitellmRole,
+}
+
+fn user_header_mappings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Box<[UserHeaderMapping]>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Shape {
+        One(UserHeaderMapping),
+        Many(Box<[UserHeaderMapping]>),
+    }
+    Ok(match Option::<Shape>::deserialize(deserializer)? {
+        None => Box::default(),
+        Some(Shape::One(mapping)) => Box::new([mapping]),
+        Some(Shape::Many(mappings)) => mappings,
+    })
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,8 +104,23 @@ pub struct GeneralSettings {
     pub enable_oauth2_auth: bool,
     #[serde_as(as = "IsTrue")]
     pub enable_oauth2_proxy_auth: bool,
+    #[serde_as(as = "IsTrue")]
+    pub allow_user_auth: bool,
+    #[serde_as(as = "StrBool")]
+    pub allow_requests_on_db_unavailable: bool,
     pub public_routes: Option<RouteList>,
+    pub allowed_ips: Option<Box<[String]>>,
+    pub allowed_routes: Option<Box<[String]>>,
+    pub custom_auth: Option<String>,
+    pub litellm_key_header_name: Option<String>,
     pub litellm_jwtauth: Option<JwtAuthSettings>,
+    pub role_permissions: Option<Box<[RolePermissions]>>,
+    /// `bool(general_settings.get("enforce_rbac"))`
+    #[serde_as(as = "Truthy")]
+    pub enforce_rbac: bool,
+    pub user_header_name: Option<String>,
+    #[serde(deserialize_with = "user_header_mappings")]
+    pub user_header_mappings: Box<[UserHeaderMapping]>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -124,8 +162,18 @@ impl Default for GeneralSettings {
             enable_jwt_auth: false,
             enable_oauth2_auth: false,
             enable_oauth2_proxy_auth: false,
+            allow_user_auth: false,
+            allow_requests_on_db_unavailable: false,
             public_routes: None,
+            allowed_ips: None,
+            allowed_routes: None,
+            custom_auth: None,
+            litellm_key_header_name: None,
             litellm_jwtauth: None,
+            role_permissions: None,
+            enforce_rbac: false,
+            user_header_name: None,
+            user_header_mappings: Box::default(),
             additional_fields: AdditionalFields::default(),
         }
     }
@@ -192,6 +240,7 @@ pub struct LiteLlmSettings {
 
 #[cfg(test)]
 mod tests {
+    use super::GeneralSettings;
     use crate::JwtAuthSettings;
 
     #[test]
@@ -204,5 +253,11 @@ mod tests {
 
         assert!(!debug.contains("credential-value"), "{debug}");
         assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[test]
+    fn unset_text_flags_are_false() {
+        let general: GeneralSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!general.allow_requests_on_db_unavailable && !general.enforce_rbac);
     }
 }

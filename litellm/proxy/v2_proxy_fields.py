@@ -48,14 +48,13 @@ def write_rate_limit_statuses(args: HookArgs, value: object) -> None:
 
 def output_cap(args: HookArgs) -> OutputCap | None:
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # the limiter's own explicit-cap rule
+        _get_explicit_output_cap,  # pyright: ignore[reportPrivateUsage]  # the limiter's own explicit-cap rule
     )
 
     request: Final = mapping(args.request)
     if request is None:
         return None
-    explicit: Final = _PROXY_MaxParallelRequestsHandler_v3._get_explicit_output_cap(request, args.call_type)  # pyright: ignore[reportPrivateUsage]  # the limiter's own explicit-cap rule
-    return coerce_record(OutputCap, {"explicit": explicit})
+    return coerce_record(OutputCap, {"explicit": _get_explicit_output_cap(request, args.call_type)})
 
 
 def _raised(error: Exception | None, prefix: str) -> Mapping[str, object]:
@@ -92,18 +91,40 @@ def _fallback_on_saturation(request: Mapping[str, object]) -> tuple[Mapping[str,
     return {"fallback_on_saturation": enabled, "fallback_walk_armed": saturation_fallback_walk_armed()}, ()
 
 
+def _metadata_get(request: Mapping[str, object], bucket: str, name: str) -> object:
+    # The limiter read these buckets with ``.get``, so a bucket that is not a mapping raises the same error.
+    found: Final[object] = getattr(request.get(bucket) or {}, "get")(name)  # noqa: B009  # the bucket's own ``get``, raising as the limiter did
+    return found
+
+
+def request_session_id(request: Mapping[str, object]) -> str | None:
+    """The agent session a request belongs to: ``litellm_session_id``, else the session id in its metadata."""
+    session_id: Final = request.get("litellm_session_id")
+    if session_id:
+        return str(session_id)
+    for bucket in ("metadata", "litellm_metadata"):
+        metadata_session_id = _metadata_get(request, bucket, "session_id")
+        if metadata_session_id:
+            return str(metadata_session_id)
+    return None
+
+
+def resolved_agent_id(auth: object, request: Mapping[str, object]) -> object:
+    """The agent a request is made for. The key's own agent wins over one the request metadata names."""
+    key_agent_id: Final = getattr(auth, "agent_id", None)
+    if key_agent_id:
+        return key_agent_id
+    return _metadata_get(request, "metadata", "agent_id") or _metadata_get(request, "litellm_metadata", "agent_id")
+
+
 def limiter_request(args: HookArgs) -> LimiterRequest | None:
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # the limiter's own readers
-    )
 
     request: Final = mapping(args.request)
     if request is None:
         return None
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3
-    session_id, session_error = _attempt(lambda: limiter._get_session_id_from_data(None, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportUnknownMemberType]  # the reader never touches the instance
-    agent_id, agent_error = _attempt(lambda: limiter._get_resolved_agent_id(None, args.auth, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportUnknownMemberType]  # the reader never touches the instance
+    session_id, session_error = _attempt(lambda: request_session_id(request))
+    agent_id, agent_error = _attempt(lambda: resolved_agent_id(args.auth, request))
     saturation, saturation_rejected = _fallback_on_saturation(request)
     return coerce_record(
         LimiterRequest,
@@ -179,5 +200,7 @@ __all__ = [
     "post_call_facts",
     "proxy_call_facts",
     "rate_limit_statuses",
+    "request_session_id",
+    "resolved_agent_id",
     "write_rate_limit_statuses",
 ]

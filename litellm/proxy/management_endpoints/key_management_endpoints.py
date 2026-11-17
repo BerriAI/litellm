@@ -1099,7 +1099,7 @@ def _validate_caller_can_change_key_ownership(
     """
     Non-admin callers must not rebind a key's ``user_id`` to a different
     user. The ``user_id`` on a verification token is what
-    ``_return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
+    ``return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
     to derive the request's role; a non-admin rebinding their own key's
     ``user_id`` to a ``PROXY_ADMIN`` row promotes themselves.
 
@@ -3412,6 +3412,7 @@ async def _process_single_key_update(
     """
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
+    validate_budget_duration(update_key_request.budget_duration)
 
     check_permissions_caller_permission(
         data=update_key_request,
@@ -4468,6 +4469,8 @@ async def bulk_update_keys(
         - key: str - The key identifier (token) to update
         - budget_id: Optional[str] - Budget ID associated with the key
         - max_budget: Optional[float] - Max budget for key
+        - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+        - user_id: Optional[str] - Owner user ID, or null to remove the owner
         - team_id: Optional[str] - Team ID associated with key
         - tags: Optional[List[str]] - Tags for organizing keys
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
