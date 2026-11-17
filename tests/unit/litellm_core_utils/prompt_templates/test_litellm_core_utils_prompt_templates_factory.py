@@ -7646,6 +7646,84 @@ def test_ensure_alternating_roles(messages, expected_messages, user_continue_mes
     assert messages == expected_messages
 
 
+@pytest.mark.parametrize(
+    "empty_user_message",
+    [{"role": "user", "content": ""}, {"role": "user", "content": []}, {"role": "user", "content": None}, {"role": "user"}],
+    ids=["empty_string", "empty_list", "null", "missing"],
+)
+@pytest.mark.parametrize(
+    "user_continue_message, expected_last_message",
+    [
+        (None, {"role": "user", "content": "Please continue."}),
+        ({"role": "user", "content": "Keep going"}, {"role": "user", "content": "Keep going"}),
+    ],
+    ids=["default", "configured"],
+)
+def test_ensure_alternating_roles_fills_an_empty_trailing_user_message_with_the_continue_message(
+    empty_user_message, user_continue_message, expected_last_message
+):
+    history = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
+
+    assert get_completion_messages(
+        messages=[*history, empty_user_message],
+        assistant_continue_message=None,
+        user_continue_message=user_continue_message,
+        ensure_alternating_roles=True,
+    ) == [*history, expected_last_message]
+
+
+def test_an_empty_trailing_user_message_is_kept_without_ensure_alternating_roles():
+    messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": ""}]
+
+    assert (
+        get_completion_messages(
+            messages=messages,
+            assistant_continue_message=None,
+            user_continue_message={"role": "user", "content": "Keep going"},
+            ensure_alternating_roles=False,
+        )
+        == messages
+    )
+
+
+_STRICT_TEMPLATE_API_BASE: Final = "https://strict-template.example.com/v1"
+_STRICT_TEMPLATE_REPLY: Final = {
+    "id": "chatcmpl-strict",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "strict-template-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "user_continue_message", [None, {"role": "user", "content": "Keep going"}], ids=["default", "configured"]
+)
+def test_a_system_prompt_folded_into_the_continue_message_never_reaches_a_later_request(
+    respx_mock: respx.MockRouter, user_continue_message: dict[str, str] | None
+) -> None:
+    route: Final = respx_mock.post(f"{_STRICT_TEMPLATE_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_STRICT_TEMPLATE_REPLY)
+    )
+
+    def send(messages: list[dict[str, str]]) -> None:
+        litellm.completion(
+            model="openai/strict-template-model",
+            api_base=_STRICT_TEMPLATE_API_BASE,
+            api_key="test-key",
+            messages=messages,
+            ensure_alternating_roles=True,
+            supports_system_message=False,
+            user_continue_message=user_continue_message,
+        )
+
+    send([{"role": "system", "content": "First tenant secret"}, {"role": "user", "content": ""}])
+    send([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}])
+
+    assert "First tenant secret" not in json.dumps(json.loads(route.calls.last.request.read())["messages"])
+
+
 def test_ensure_alternating_roles_with_tool_calls():
     """Fixes Regression in #18685"""
     messages = [

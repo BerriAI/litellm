@@ -497,7 +497,9 @@ _EMPTY_USER_MESSAGES: Final = (
 
 
 @pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-def test_an_empty_trailing_user_message_still_ends_the_request_on_a_user_turn(empty_user_message: dict) -> None:
+def test_an_empty_trailing_user_message_still_ends_the_request_on_a_user_turn(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
     contents: Final = transformation.gemini_convert_messages_with_history(
         [
             {"role": "user", "content": "Hi"},
@@ -514,7 +516,9 @@ def test_an_empty_trailing_user_message_still_ends_the_request_on_a_user_turn(em
 
 
 @pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-def test_an_empty_user_message_between_assistant_turns_keeps_the_roles_alternating(empty_user_message: dict) -> None:
+def test_an_empty_user_message_between_assistant_turns_keeps_the_roles_alternating(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
     contents: Final = transformation.gemini_convert_messages_with_history(
         [
             {"role": "user", "content": "Hi"},
@@ -548,7 +552,9 @@ _WEATHER_TOOL_CALL: Final = {
 
 
 @pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-def test_an_empty_first_user_message_still_comes_before_the_function_call(empty_user_message: dict) -> None:
+def test_an_empty_first_user_message_still_comes_before_the_function_call(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
     contents: Final = transformation.gemini_convert_messages_with_history(
         [empty_user_message, _WEATHER_TOOL_CALL, {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"}]
     )
@@ -558,7 +564,9 @@ def test_an_empty_first_user_message_still_comes_before_the_function_call(empty_
 
 
 @pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-def test_an_empty_user_message_after_tool_results_adds_no_second_user_turn(empty_user_message: dict) -> None:
+def test_an_empty_user_message_after_tool_results_adds_no_second_user_turn(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
     contents: Final = transformation.gemini_convert_messages_with_history(
         [
             {"role": "user", "content": "Weather in Paris?"},

@@ -88,7 +88,10 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
-from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
+from litellm.responses.bridge_check import (
+    chat_target_accepts_reasoning_summary,
+    empty_user_turn_for_model_turn_end,
+)
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
     StoredTurns,
@@ -1363,7 +1366,7 @@ class LiteLLMCompletionResponsesConfig:
             request_input, context_management
         ) and provider_takes_compaction_blocks(model, custom_llm_provider)
         numbered_input: Final = request_input if caller_input is None else caller_input
-        bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        converted_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=request_input,
             responses_api_request=responses_api_request,
             replay_reasoning=True,
@@ -1389,12 +1392,22 @@ class LiteLLMCompletionResponsesConfig:
             )
             if names_non_string_fields
             and isinstance(numbered_input, list)
-            and any(map(_carries_non_string_field, bridged_messages))
+            and any(map(_carries_non_string_field, converted_messages))
             and provider_builds_anthropic_request(model, custom_llm_provider)
             else None
         )
         if malformed_field_error is not None:
             raise malformed_field_error
+        bridged_messages: Final = [
+            *converted_messages,
+            *empty_user_turn_for_model_turn_end(
+                input[-1] if isinstance(input, list) and input else None,
+                converted_messages,
+                bool(request_kwargs.get("ensure_alternating_roles")),
+                model,
+                custom_llm_provider,
+            ),
+        ]
 
         litellm_completion_request: dict = {
             "messages": (
@@ -2557,8 +2570,6 @@ class LiteLLMCompletionResponsesConfig:
             ]
         else:
             content: Final[object] = input_item.get("content")
-            if content is None and input_item.get("role") == "user":
-                return [GenericChatCompletionMessage(role="user", content="")]
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:

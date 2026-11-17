@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data as extract_file_data,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -753,6 +754,17 @@ def detect_first_expected_role(
     return None
 
 
+def _is_blank(content: object) -> bool:
+    return content is None or (isinstance(content, (str, list)) and not content)
+
+
+def is_empty_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_blank(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_blank(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
@@ -781,7 +793,7 @@ def _insert_user_continue_message(
         return messages
 
     result_messages: Final = messages.copy()  # Don't modify the input list
-    continue_message: Final = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
+    continue_message: Final = (user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE).copy()
 
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
@@ -836,7 +848,7 @@ def _insert_assistant_continue_message(
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    continue_message: Final = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+    continue_message: Final = (assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE).copy()
 
     # Find indexes where assistant_continue should be inserted (before that index)
     insert_before_indexes: Final[set] = set()
@@ -880,7 +892,12 @@ def get_completion_messages(
         return messages.copy()
 
     ## INSERT USER CONTINUE MESSAGE
-    messages = _insert_user_continue_message(messages, user_continue_message, ensure_alternating_roles)
+    filled_messages: Final = (
+        [*messages[:-1], (user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE).copy()]
+        if messages and is_empty_user_message(messages[-1])
+        else messages
+    )
+    messages = _insert_user_continue_message(filled_messages, user_continue_message, ensure_alternating_roles)
 
     ## INSERT ASSISTANT CONTINUE MESSAGE
     messages = _insert_assistant_continue_message(messages, assistant_continue_message, ensure_alternating_roles)
