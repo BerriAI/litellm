@@ -15200,6 +15200,9 @@ class TestErrorLogCarriesCallId:
             "message": "forged",
             "component": "forged",
             "litellm_call_id": "forged",
+            "component\x00": "forged",
+            "logger\x00": "forged",
+            "stacktrace\x00": "forged",
         }
 
         log_llm_api_exception(HTTPException(status_code=400, detail=detail), call_id)
@@ -15207,6 +15210,8 @@ class TestErrorLogCarriesCallId:
         (line,) = proxy_json_log_lines()
         assert line["error"] == "Invalid model name"
         assert line["component"] == verbose_proxy_logger.name
+        assert str(line["logger"]).startswith("common_request_processing.py:")
+        assert "stacktrace" not in line
         assert line["litellm_call_id"] == call_id
         assert "_handle_llm_api_exception(): Exception occured" in str(line["message"])
 

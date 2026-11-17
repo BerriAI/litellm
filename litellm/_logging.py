@@ -782,7 +782,9 @@ class JsonFormatter(Formatter):
         message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         fixed_fields: Final = {"message": message_str, "level": record.levelname, "timestamp": self.formatTime(record)}
         extra_fields: Final = {
-            key: value for key, value in _record_attributes(record).items() if key not in _NON_EXTRA_RECORD_ATTRS
+            key: value
+            for key, value in _record_attributes(record).items()
+            if key not in _NON_EXTRA_RECORD_ATTRS and "\x00" not in key
         }
         stacktrace_field: Final[Mapping[str, str]] = (
             {"stacktrace": record.exc_text or self.formatException(record.exc_info)} if record.exc_info else {}
@@ -797,7 +799,7 @@ class JsonFormatter(Formatter):
         message_fields: Final = {
             key: value
             for key, value in (_try_parse_json_message(message_str) or {}).items()
-            if key not in logger_fields and key not in _UNPROMOTABLE_MESSAGE_KEYS
+            if "\x00" not in key and key not in logger_fields and key not in _UNPROMOTABLE_MESSAGE_KEYS
         }
         json_record: Final = {**fixed_fields, **message_fields, **logger_fields}
         return safe_dumps(

@@ -579,7 +579,15 @@ def test_message_dict_keys_never_override_fields_the_logger_sets() -> None:
 
 
 def test_json_message_never_supplies_the_call_id_or_a_stacktrace() -> None:
-    message: Final = json.dumps({"litellm_call_id": "someone-elses-call", "stacktrace": "forged", "event": "giveup"})
+    message: Final = json.dumps(
+        {
+            "litellm_call_id": "someone-elses-call",
+            "stacktrace": "forged",
+            "litellm_call_id\x00": "someone-elses-call",
+            "stacktrace\x00": "forged",
+            "event": "giveup",
+        }
+    )
     obj: Final = json.loads(JsonFormatter().format(_make_record(logging.INFO, message)))
     assert "litellm_call_id" not in obj
     assert "stacktrace" not in obj
