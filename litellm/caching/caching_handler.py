@@ -1382,6 +1382,7 @@ class LLMCachingHandler:
             not _is_response_cache_excluded(model=model, kwargs=kwargs)
             and self._is_call_type_supported_by_cache(original_function=original_function)
             and no_store is not True
+            and kwargs.get("caching", True) is not False
         )
 
     _should_store_result_in_cache = should_store_result_in_cache

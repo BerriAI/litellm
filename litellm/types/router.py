@@ -309,6 +309,10 @@ class ModelInfo(MirroredPricingParams):
     pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
     tier: Literal["free", "paid"] | None = None
 
+    # Model-level response cache configuration
+    response_cache: bool | None = None
+    cache_ttl: int | float | None = None
+
     """
     Team Model Specific Fields
     """

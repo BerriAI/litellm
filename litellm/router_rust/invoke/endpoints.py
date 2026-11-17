@@ -879,6 +879,56 @@ def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], reque
     validate_router_connection(str(data.get("model")), _generic_provider(data), request)
 
 
+def _resolve_deployment_cache_policy(
+    deployment: Mapping[str, object],
+    global_caching: bool,
+    kwargs: dict[str, object],
+) -> bool:
+    """Apply model-level response-cache policy (response_cache, cache_ttl) to kwargs.
+
+    Returns the resolved caching boolean (model override > global default).
+    If response_cache is explicitly False, forces caching=False and sets
+    cache={"no-cache": True, "no-store": True} so client requests cannot bypass it.
+    """
+    model_info: Final = as_dict(deployment.get("model_info"))
+    litellm_params: Final = as_dict(deployment.get("litellm_params"))
+
+    response_cache: object = model_info.get("response_cache")
+    if response_cache is None:
+        response_cache = litellm_params.get("response_cache")
+    if response_cache is None:
+        cache_cfg: Final = as_dict(model_info.get("cache")) or as_dict(litellm_params.get("cache"))
+        if "enabled" in cache_cfg:
+            response_cache = cache_cfg["enabled"]
+        elif cache_cfg.get("no-cache") is True and cache_cfg.get("no-store") is True:
+            response_cache = False
+
+    caching: bool = global_caching
+    if response_cache is False:
+        caching = False
+        cache_dict: Final = as_dict(kwargs.get("cache"))
+        cache_dict["no-cache"] = True
+        cache_dict["no-store"] = True
+        kwargs["cache"] = cache_dict
+    elif response_cache is True:
+        caching = True
+
+    cache_ttl: object = model_info.get("cache_ttl")
+    if cache_ttl is None:
+        cache_ttl = litellm_params.get("cache_ttl")
+    if cache_ttl is None:
+        cache_cfg_ttl: Final = as_dict(model_info.get("cache")) or as_dict(litellm_params.get("cache"))
+        cache_ttl = cache_cfg_ttl.get("ttl")
+
+    if cache_ttl is not None:
+        cache_dict_ttl = as_dict(kwargs.get("cache"))
+        if "ttl" not in cache_dict_ttl:
+            cache_dict_ttl["ttl"] = cache_ttl
+        kwargs["cache"] = cache_dict_ttl
+
+    return caching
+
+
 def attempt_call(
     core: EndpointCore,
     plan: Plan,
@@ -897,7 +947,7 @@ def attempt_call(
     data: Final = _deployment_params(plan, deployment)
     model_name: Final = str(data.get("model"))
     _validate_decisions_connection(plan, data, request)
-    caching: Final = shaping.cache_responses
+    caching: Final = _resolve_deployment_cache_policy(deployment, shaping.cache_responses, kwargs)
     if fallback_model_group is not None:
         field: Final = plan.prepare_field or "metadata"
         kwargs[field] = {**as_dict(kwargs.get(field)), "model_group": fallback_model_group}
@@ -968,7 +1018,7 @@ def attempt_call(
             }
             return AttemptCall(plan.host_op, final, kwargs, str(data.get("model")), group)
         case "generic":
-            return _generic_attempt(core, plan, kwargs, deployment, data, requested, group)
+            return _generic_attempt(core, plan, kwargs, deployment, data, requested, group, caching=caching)
         case "generic_sync":
             update_kwargs_with_deployment(
                 shaping,
@@ -1010,6 +1060,7 @@ def _generic_attempt(
     data: dict[str, object],  # mutable-ok: the attempt's copy of the deployment params
     requested: str,
     group: str,
+    caching: bool | None = None,
 ) -> AttemptCall:
     """`_ageneric_api_call_with_fallbacks_helper` for one deployment."""
     from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
@@ -1044,7 +1095,7 @@ def _generic_attempt(
     provider: Final = _generic_provider(data)
     final: Final = {
         **without_retrieve_stream_defaults(data, kwargs),
-        "caching": core.shaping.cache_responses,
+        "caching": core.shaping.cache_responses if caching is None else caching,
         **kwargs,
         "model": model_name,
         **_session_with_model(kwargs.get("session"), model_name),
