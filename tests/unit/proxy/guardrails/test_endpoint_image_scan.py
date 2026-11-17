@@ -143,16 +143,22 @@ async def test_guardrail_that_cannot_scan_images_refuses_them(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "answer",
+    ("answer", "status_code", "reason", "recorded_status"),
     [
-        _NOT_EVALUATED,
-        {"action": "NONE", "outputs": [], "assessments": []},
-        {"Output": {"__type": "ServiceException"}},
+        (_NOT_EVALUATED, 422, "Image modality", "not_run"),
+        ({"action": "NONE", "outputs": [], "assessments": []}, 422, "Image modality", "not_run"),
+        ({"Output": {"__type": "ServiceException"}}, 502, "ServiceException", "guardrail_failed_to_respond"),
     ],
     ids=["reported-unguarded", "no-coverage-reported", "error-inside-a-200-body"],
 )
-async def test_image_bedrock_did_not_confirm_evaluating_is_not_reported_as_passed(answer: Mapping[str, object]) -> None:
-    with pytest.raises(HTTPException) as refused:
-        await scan_images(_apply_guardrail_api(_Bedrock(answer)), (_PNG,), {}, "request")
+async def test_image_bedrock_did_not_confirm_evaluating_is_not_reported_as_passed(
+    answer: Mapping[str, object], status_code: int, reason: str, recorded_status: str
+) -> None:
+    request_data: Final[dict[str, object]] = {}
 
-    assert refused.value.status_code == 422
+    with pytest.raises(HTTPException) as refused:
+        await scan_images(_apply_guardrail_api(_Bedrock(answer)), (_PNG,), request_data, "request")
+
+    assert refused.value.status_code == status_code
+    assert reason in refused.value.detail
+    assert [record["guardrail_status"] for record in request_data["metadata"][_RECORDS_KEY]] == [recorded_status]

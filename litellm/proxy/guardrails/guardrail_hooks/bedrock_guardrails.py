@@ -250,6 +250,18 @@ def _without_image_bytes(content: Sequence[BedrockContentItem]) -> tuple[Bedrock
     )
 
 
+def bedrock_error_type(response: BedrockGuardrailResponse) -> str | None:
+    error_type: Final = str((response.get("Output") or {}).get("__type", ""))
+    return error_type if "Exception" in error_type else None
+
+
+def _apply_guardrail_status(response: BedrockGuardrailResponse, images_sent: int) -> GuardrailStatus:
+    if bedrock_error_type(response) is not None:
+        return "guardrail_failed_to_respond"
+    images: Final = (response.get("guardrailCoverage") or {}).get("images") or {}
+    return "not_run" if images.get("guarded", 0) < images_sent else "success"
+
+
 def _allowed_dynamic_body_params(params: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in params.items() if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST}
 
@@ -1062,6 +1074,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         merged_response: Final = self._merge_bedrock_guardrail_responses(responses)
         self._log_apply_guardrail_success(
             merged_response=merged_response,
+            images_sent=sum(1 for item in content if "image" in item),
             request_data=request_data,
             event_type=event_type,
             start_time=start_time,
@@ -1397,6 +1410,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_success(
         self,
         merged_response: BedrockGuardrailResponse,
+        images_sent: int,
         request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
@@ -1416,11 +1430,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=dict(merged_response),
             request_data=request_data if request_data is not None else {},
-            guardrail_status=(
-                "guardrail_failed_to_respond"
-                if "Exception" in str((merged_response.get("Output") or {}).get("__type", ""))
-                else "success"
-            ),
+            guardrail_status=_apply_guardrail_status(merged_response, images_sent),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),

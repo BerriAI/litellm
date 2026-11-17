@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
-from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail, bedrock_error_type
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -39,6 +39,12 @@ async def scan_images(
         source="OUTPUT" if is_response else "INPUT",
         event_type=GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
     )
+    error_type: Final = bedrock_error_type(answer)
+    if error_type is not None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Guardrail '{guardrail.guardrail_name}' returned {error_type} instead of a verdict on the image.",
+        )
     coverage: Final = answer.get("guardrailCoverage") or {}
     if coverage.get("images", {}).get("guarded", 0) < len(images):
         raise _not_scanned(

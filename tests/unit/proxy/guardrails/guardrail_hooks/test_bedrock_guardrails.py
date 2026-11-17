@@ -6286,19 +6286,24 @@ async def test_attachment_scan_sends_image_only_turn_to_apply_guardrail_and_bloc
 
 
 @pytest.mark.asyncio
-async def test_attachment_scan_lets_a_passing_image_through():
+@pytest.mark.parametrize(
+    ("guarded", "logged_status"),
+    [(1, "success"), (0, "not_run")],
+    ids=["image-evaluated", "policy-without-image-modality"],
+)
+async def test_attachment_scan_lets_a_passing_image_through(guarded: int, logged_status: str):
     guardrail = _attachment_guardrail()
     data = _image_only_chat_request()
-    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(
-        guardrail, _passing_bedrock_httpx_response("ok")
-    )
+    response = _passing_bedrock_httpx_response("ok")
+    response.json.return_value["guardrailCoverage"] = {"images": {"guarded": guarded, "total": 1}}
+    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(guardrail, response)
 
     with post_patch as mock_post, credentials_patch, prepare_patch:
         await guardrail.async_scan_request_attachments(data=data, call_type=CallTypes.acompletion.value)
 
     assert mock_post.await_count == 1
     logged = data["metadata"]["standard_logging_guardrail_information"]
-    assert [entry["guardrail_status"] for entry in logged] == ["success"]
+    assert [entry["guardrail_status"] for entry in logged] == [logged_status]
 
 
 @pytest.mark.asyncio
