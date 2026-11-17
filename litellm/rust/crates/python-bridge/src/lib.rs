@@ -50,7 +50,7 @@ mod _native {
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
-    use crate::db::{NativeDatabase, NativeDatabaseFailure};
+    use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -216,6 +216,7 @@ mod tests {
                 "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
+                "DatabaseEndpoint",
                 "NativeDatabase",
                 "NativeDatabaseFailure",
                 "trace_encode_error",

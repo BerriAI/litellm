@@ -3,32 +3,21 @@ use std::{sync::Arc, time::Duration};
 use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_config::{CacheSettings, Config, RedisSettings};
 use litellm_env::Lookup;
+use litellm_http::ClientVariant;
 use litellm_python_compat::flags::{lower_is_true, str_to_bool_or_truthy};
 use litellm_redis_client::{RedisClient, RedisEvents};
-use litellm_redis_connect::{HostServices, RedisHosts, SharedEnvironment, TracingEvents};
-use litellm_redis_resolve::Expected;
+use litellm_redis_connect::{HostServices, RedisHosts, TracingEvents};
+use litellm_redis_resolve::{Expected, Surface};
 use litellm_redis_types::Resolution;
+use litellm_secrets::SecretResolver;
 use serde::Deserialize;
 
-use crate::Error;
-
-mod configured;
-mod layers;
-mod secrets;
-#[cfg(test)]
-mod surface_tests;
-
-use configured::ConfiguredRedis;
-use secrets::SecretSnapshot;
-
-pub(crate) struct Resources {
-    pub(crate) http: litellm_http::Client,
-    pub(crate) lookup: SharedEnvironment,
-}
+use crate::{Error, Resources};
 
 const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
 type Params = Resolution;
 
+#[derive(Clone, Default)]
 pub struct RedisClients {
     pub coordination: Option<RedisClient>,
     pub transaction_buffer: Option<RedisClient>,
@@ -48,24 +37,28 @@ enum Target {
     Environment(Params),
 }
 
-pub(crate) fn plan(config: &Config, lookup: &dyn Lookup) -> Result<Plan, Error> {
-    let response_cache = redis_cache_params(config)
-        .map(|settings| resolve(&ConfiguredRedis::cache_params(settings), lookup))
-        .transpose()?;
+pub(crate) async fn plan(config: &Config, secrets: &SecretResolver) -> Result<Plan, Error> {
+    let response_cache = match redis_cache_params(config) {
+        Some(settings) => resolve(Surface::CacheParams(settings), secrets).await?,
+        None => None,
+    };
     let coordination = match &config.general_settings.coordination_redis {
-        Some(settings) => Some(Target::Configured(resolve(
-            &ConfiguredRedis::coordination(settings)?,
-            lookup,
-        )?)),
+        Some(settings) => resolve(Surface::Coordination(settings), secrets)
+            .await?
+            .map(Target::Configured),
         None => match (&response_cache, config.litellm_settings.cache == Some(true)) {
             (Some(cache), _) => Some(Target::Configured(cache.clone())),
-            (None, true) => environment(lookup)?.map(Target::Configured),
-            (None, false) => optional_environment(lookup).map(Target::Environment),
+            (None, true) => resolve(Surface::Environment, secrets)
+                .await?
+                .map(Target::Configured),
+            (None, false) => optional_environment(secrets).await.map(Target::Environment),
         },
     };
     let transaction_buffer_fallback = match (&coordination, use_transaction_buffer(config)) {
         (Some(Target::Configured(_)), _) | (_, false) => None,
-        (Some(Target::Environment(_)) | None, true) => environment(lookup)?,
+        (Some(Target::Environment(_)) | None, true) => {
+            resolve(Surface::Environment, secrets).await?
+        }
     };
     Ok(Plan {
         coordination,
@@ -74,22 +67,23 @@ pub(crate) fn plan(config: &Config, lookup: &dyn Lookup) -> Result<Plan, Error> 
     })
 }
 
-pub(crate) async fn connect(
-    config: &Config,
-    lookup: &dyn Lookup,
-    resources: &Resources,
-) -> Result<RedisClients, Error> {
-    let plan = plan(config, lookup)?;
-    let breaker = breaker_config(lookup)?;
-    let events: Arc<dyn RedisEvents> = Arc::new(TracingEvents::new(lookup));
+pub(crate) async fn connect(config: &Config, resources: &Resources) -> Result<RedisClients, Error> {
+    let plan = plan(config, &resources.secrets).await?;
+    let environment: &dyn Lookup = resources.environment.as_ref();
+    let breaker = breaker_config(environment)?;
+    let events: Arc<dyn RedisEvents> = Arc::new(TracingEvents::new(environment));
+    let http = resources
+        .core
+        .pool
+        .client(&resources.http, ClientVariant::Provider)?;
     let hosts = RedisHosts::default();
     let client = |params: Params| -> Result<RedisClient, Error> {
         Ok(hosts.client(
             params,
             HostServices {
                 events: Some(events.clone()),
-                http: resources.http.clone(),
-                environment: resources.lookup.clone(),
+                http: http.clone(),
+                environment: resources.environment.clone(),
                 credential_provider: None,
             },
             breaker,
@@ -130,10 +124,9 @@ fn redis_cache_params(config: &Config) -> Option<&RedisSettings> {
     }
 }
 
-fn resolve(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Params, Error> {
-    let secrets = SecretSnapshot::read(configured.secret_names(), lookup);
-    let resolution = configured.resolve(&secrets, lookup)?;
-    for ignored in &resolution.ignored {
+async fn resolve(surface: Surface<'_>, secrets: &SecretResolver) -> Result<Option<Params>, Error> {
+    let resolution = litellm_redis_resolve::resolve(surface, secrets).await?;
+    for ignored in resolution.iter().flat_map(|resolution| &resolution.ignored) {
         tracing::warn!(
             "Redis setting {} is not supported by the Rust client and is ignored: {}",
             ignored.setting,
@@ -143,26 +136,8 @@ fn resolve(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Params, 
     Ok(resolution)
 }
 
-fn environment(lookup: &dyn Lookup) -> Result<Option<Params>, Error> {
-    match environment_has_target(lookup) {
-        true => Ok(Some(resolve(&ConfiguredRedis::environment_only(), lookup)?)),
-        false => Ok(None),
-    }
-}
-
-fn environment_has_target(lookup: &dyn Lookup) -> bool {
-    [
-        "REDIS_HOST",
-        "REDIS_URL",
-        "REDIS_CLUSTER_NODES",
-        "REDIS_SENTINEL_NODES",
-    ]
-    .iter()
-    .any(|name| lookup.get(name).is_some())
-}
-
-fn optional_environment(lookup: &dyn Lookup) -> Option<Params> {
-    match environment(lookup) {
+async fn optional_environment(secrets: &SecretResolver) -> Option<Params> {
+    match resolve(Surface::Environment, secrets).await {
         Ok(params) => params,
         Err(error) => {
             tracing::warn!(error = %error, "REDIS_* environment variables are invalid, cross-pod coordination stays in memory");
@@ -254,8 +229,7 @@ fn environment_value<T>(
 
 #[cfg(test)]
 mod tests {
-    use litellm_env::Lookup;
-    use std::{collections::HashMap, time::Duration};
+    use std::{collections::HashMap, sync::Arc, time::Duration};
 
     use litellm_config::Config;
     use litellm_redis_client::{Standalone, StaticAuth, commands};
@@ -263,17 +237,26 @@ mod tests {
     use litellm_redis_types::{Auth, HealthCheck};
     use rstest::rstest;
 
-    use std::sync::Arc;
+    use super::{Params, Plan, Target, plan, use_transaction_buffer};
+    use crate::{Error, Resources};
 
-    use super::{Params, Plan, Resources, Target, plan, use_transaction_buffer};
-    use crate::Error;
+    fn resources(config: &Config, environment: &[(&str, &str)]) -> Resources {
+        let environment: HashMap<String, String> = environment
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        Resources::over(
+            config,
+            Arc::new(move |name: &str| environment.get(name).cloned()),
+        )
+        .unwrap()
+    }
 
-    async fn connect(config: &Config, lookup: &dyn Lookup) -> Result<super::RedisClients, Error> {
-        let resources = Resources {
-            http: litellm_http::Client::for_test(),
-            lookup: Arc::new(|_: &str| None),
-        };
-        super::connect(config, lookup, &resources).await
+    async fn connect(
+        config: &Config,
+        environment: &[(&str, &str)],
+    ) -> Result<super::RedisClients, Error> {
+        super::connect(config, &resources(config, environment)).await
     }
 
     fn host(name: &str, port: u16) -> Params {
@@ -294,14 +277,9 @@ mod tests {
         }
     }
 
-    fn resolved(yaml: &str, environment: &[(&str, &str)]) -> Result<Plan, Error> {
-        let environment: HashMap<String, String> = environment
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect();
-        plan(&Config::from_yaml(yaml).unwrap(), &|name: &str| {
-            environment.get(name).cloned()
-        })
+    async fn resolved(yaml: &str, environment: &[(&str, &str)]) -> Result<Plan, Error> {
+        let config = Config::from_yaml(yaml).unwrap();
+        plan(&config, &resources(&config, environment).secrets).await
     }
 
     fn configured(coordination: Params, response_cache: Option<Params>) -> Plan {
@@ -345,12 +323,13 @@ mod tests {
         &[("REDIS_HOST", "env")],
         Plan { coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: Some(host("env", 6379)), response_cache: None }
     )]
-    fn resolves_each_redis_role_like_the_proxy(
+    #[tokio::test]
+    async fn resolves_each_redis_role_like_the_proxy(
         #[case] yaml: &str,
         #[case] environment: &[(&str, &str)],
         #[case] expected: Plan,
     ) {
-        assert_eq!(resolved(yaml, environment).unwrap(), expected);
+        assert_eq!(resolved(yaml, environment).await.unwrap(), expected);
     }
 
     /// Expected values from `str_to_bool(value) if isinstance(value, str) else value` read as a condition,
@@ -378,7 +357,8 @@ mod tests {
     }
 
     #[rstest]
-    fn redis_migration_regression_preserves_borrowed_cache_namespace() {
+    #[tokio::test]
+    async fn redis_migration_regression_preserves_borrowed_cache_namespace() {
         let yaml = "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache\n    namespace: responses\n    ttl: 600";
         let cache = Params {
             namespace: Some("responses".to_owned()),
@@ -386,7 +366,7 @@ mod tests {
         };
 
         assert_eq!(
-            resolved(yaml, &[]).unwrap(),
+            resolved(yaml, &[]).await.unwrap(),
             configured(cache.clone(), Some(cache))
         );
     }
@@ -400,11 +380,11 @@ mod tests {
             port_of(&server)
         ))
         .unwrap();
-        let clients = connect(&config, &|_: &str| None).await.unwrap();
+        let clients = connect(&config, &[]).await.unwrap();
         let coordination = clients.coordination.unwrap();
         let buffer = clients.transaction_buffer.unwrap();
         let cache = clients.response_cache.unwrap();
-        let unnamespaced = connect(&coordination_config(&server), &|_: &str| None)
+        let unnamespaced = connect(&coordination_config(&server), &[])
             .await
             .unwrap()
             .coordination
@@ -469,10 +449,14 @@ mod tests {
 
     #[rstest]
     #[case::malformed_cluster_nodes(&[("REDIS_CLUSTER_NODES", "[{\"host\": ")])]
-    fn redis_migration_regression_malformed_optional_environment_is_absent(
+    #[tokio::test]
+    async fn redis_migration_regression_malformed_optional_environment_is_absent(
         #[case] environment: &[(&str, &str)],
     ) {
-        assert_eq!(resolved("model_list: []", environment).unwrap(), NO_REDIS);
+        assert_eq!(
+            resolved("model_list: []", environment).await.unwrap(),
+            NO_REDIS
+        );
     }
 
     #[rstest]
@@ -485,11 +469,12 @@ mod tests {
         "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: env\n    port: not-a-port",
         &[]
     )]
-    fn a_malformed_port_outside_the_coordination_block_falls_back_to_6379_like_redis_py(
+    #[tokio::test]
+    async fn a_malformed_port_outside_the_coordination_block_falls_back_to_6379_like_redis_py(
         #[case] yaml: &str,
         #[case] environment: &[(&str, &str)],
     ) {
-        let plan = resolved(yaml, environment).unwrap();
+        let plan = resolved(yaml, environment).await.unwrap();
 
         let target = match (plan.coordination, plan.transaction_buffer_fallback) {
             (Some(Target::Configured(params) | Target::Environment(params)), _)
@@ -502,7 +487,8 @@ mod tests {
     #[rstest]
     #[case::port("port: not-a-port", "port")]
     #[case::ssl("ssl: maybe", "ssl")]
-    fn a_malformed_coordination_block_fails_like_the_pydantic_model(
+    #[tokio::test]
+    async fn a_malformed_coordination_block_fails_like_the_pydantic_model(
         #[case] setting: &str,
         #[case] expected: &str,
     ) {
@@ -510,6 +496,7 @@ mod tests {
             &format!("general_settings:\n  coordination_redis:\n    host: coord\n    {setting}"),
             &[],
         )
+        .await
         .unwrap_err();
 
         assert!(
@@ -522,11 +509,9 @@ mod tests {
     async fn redis_migration_regression_invalid_optional_environment_url_is_absent() {
         let config = Config::from_yaml("model_list: []").unwrap();
 
-        let clients = connect(&config, &|name: &str| {
-            (name == "REDIS_URL").then(|| "not a redis URL".to_owned())
-        })
-        .await
-        .unwrap();
+        let clients = connect(&config, &[("REDIS_URL", "not a redis URL")])
+            .await
+            .unwrap();
 
         assert!(clients.coordination.is_none());
     }
@@ -560,9 +545,7 @@ mod tests {
         let server = RedisServer::start().await.unwrap();
         server.stop().await.unwrap();
 
-        let clients = connect(&coordination_config(&server), &|_: &str| None)
-            .await
-            .unwrap();
+        let clients = connect(&coordination_config(&server), &[]).await.unwrap();
         let coordination = clients.coordination.unwrap();
         let while_down = coordination.ping().await;
         server.resume().await.unwrap();
@@ -575,9 +558,7 @@ mod tests {
     #[tokio::test]
     async fn the_coordination_client_survives_a_redis_restart_and_backs_the_transaction_buffer() {
         let server = RedisServer::start().await.unwrap();
-        let clients = connect(&coordination_config(&server), &|_: &str| None)
-            .await
-            .unwrap();
+        let clients = connect(&coordination_config(&server), &[]).await.unwrap();
         let coordination = clients.coordination.unwrap();
         coordination
             .send(commands::set("written", "1", Duration::from_secs(60)))
@@ -602,13 +583,15 @@ mod tests {
         let port = server.port().to_string();
         let config = Config::from_yaml("model_list: []").unwrap();
 
-        let clients = connect(&config, &|name: &str| match name {
-            "REDIS_HOST" => Some(server.host().to_owned()),
-            "REDIS_PORT" => Some(port.clone()),
-            "REDIS_SSL" => Some("true".to_owned()),
-            "REDIS_SSL_CA_CERTS" => Some(ca.clone()),
-            _ => None,
-        })
+        let clients = connect(
+            &config,
+            &[
+                ("REDIS_HOST", server.host()),
+                ("REDIS_PORT", port.as_str()),
+                ("REDIS_SSL", "true"),
+                ("REDIS_SSL_CA_CERTS", ca.as_str()),
+            ],
+        )
         .await
         .unwrap();
 
@@ -623,11 +606,10 @@ mod tests {
         server.stop().await.unwrap();
         let config = Config::from_yaml("model_list: []").unwrap();
 
-        let clients = connect(&config, &|name: &str| match name {
-            "REDIS_HOST" => Some("127.0.0.1".to_owned()),
-            "REDIS_PORT" => Some(port.clone()),
-            _ => None,
-        })
+        let clients = connect(
+            &config,
+            &[("REDIS_HOST", "127.0.0.1"), ("REDIS_PORT", port.as_str())],
+        )
         .await
         .unwrap();
 
@@ -642,11 +624,10 @@ mod tests {
         let port = port_of(&server);
         let config = Config::from_yaml("model_list: []").unwrap();
 
-        let clients = connect(&config, &|name: &str| match name {
-            "REDIS_HOST" => Some("127.0.0.1".to_owned()),
-            "REDIS_PORT" => Some(port.clone()),
-            _ => None,
-        })
+        let clients = connect(
+            &config,
+            &[("REDIS_HOST", "127.0.0.1"), ("REDIS_PORT", port.as_str())],
+        )
         .await
         .unwrap();
 
