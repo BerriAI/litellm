@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import re
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -10,6 +12,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import psycopg
 import pytest
 import yaml
 from anthropic import Anthropic, AsyncAnthropic
@@ -23,6 +26,7 @@ from integration._support.client import (
     object_value,
     string_value,
 )
+from integration._support.database import read_rows
 from integration._support.mail import Mailbox, smtp_sink
 from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
@@ -594,6 +598,87 @@ def test_user_bulk_update_stores_a_valid_soft_budget_and_rejects_one_above_a_max
         assert (user_info(gateway, roomy)["soft_budget"], user_info(gateway, tight)["soft_budget"]) == (20, None)
 
 
+def all_users_update(gateway: Gateway, **updates: JsonValue) -> httpx.Response:
+    return gateway.request("POST", "/user/bulk_update", {"all_users": True, "user_updates": updates})
+
+
+def test_all_users_update_stores_a_soft_budget_below_every_max_budget_and_null_clears_it(
+    alerting: AlertingProxy,
+) -> None:
+    gateway: Final = alerting.gateway
+    with gateway.scenario() as scenario:
+        capped: Final = scenario.user(max_budget=100)
+        uncapped: Final = scenario.user()
+
+        stored: Final = all_users_update(gateway, soft_budget=3)
+        assert stored.status_code == 200, stored.text
+        assert [user_info(gateway, user_id)["soft_budget"] for user_id in (capped, uncapped)] == [3, 3]
+        assert user_info(gateway, capped)["max_budget"] == 100
+
+        cleared: Final = all_users_update(gateway, soft_budget=None)
+        assert cleared.status_code == 200, cleared.text
+        assert [user_info(gateway, user_id)["soft_budget"] for user_id in (capped, uncapped)] == [None, None]
+
+
+def test_all_users_update_rejects_a_max_budget_lowered_to_a_stored_soft_budget_and_changes_no_row(
+    alerting: AlertingProxy,
+) -> None:
+    gateway: Final = alerting.gateway
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        warned: Final = scenario.user(max_budget=100, soft_budget=50)
+        plain: Final = scenario.user(max_budget=100)
+
+        lowered: Final = all_users_update(gateway, max_budget=50)
+        assert lowered.status_code == 400, lowered.text
+        assert "soft_budget (50.0) must be strictly lower than max_budget (50.0)" in lowered.text, lowered.text
+        crossed: Final = all_users_update(gateway, max_budget=40, soft_budget=45)
+        assert crossed.status_code == 400, crossed.text
+        assert [
+            (info["soft_budget"], info["max_budget"])
+            for info in (user_info(gateway, warned), user_info(gateway, plain))
+        ] == [(50, 100), (None, 100)]
+        assert gateway.chat(model, key=scenario.key(user_id=plain))["choices"]
+
+
+def sessions_waiting_on_a_user_row_lock(database_url: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT pid FROM pg_stat_activity"
+        " WHERE datname = current_database() AND wait_event_type = %s AND query LIKE %s",
+        ("Lock", '%"LiteLLM_UserTable"%FOR UPDATE%'),
+        database_url=database_url,
+    )
+
+
+def test_all_users_update_checks_the_soft_budget_against_a_max_budget_committed_while_it_waited_for_the_lock(
+    alerting: AlertingProxy,
+) -> None:
+    gateway: Final = alerting.gateway
+    database_url: Final = gateway.database_url or os.environ["DATABASE_URL"]
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as pool:
+        racing: Final = scenario.user(max_budget=100)
+        bystander: Final = scenario.user(max_budget=100)
+
+        with psycopg.connect(database_url) as holder:
+            holder.execute('UPDATE "LiteLLM_UserTable" SET max_budget = 5 WHERE user_id = %s', (racing,))
+            pending: Final = pool.submit(all_users_update, gateway, soft_budget=10)
+            eventually(
+                lambda: sessions_waiting_on_a_user_row_lock(database_url),
+                lambda waiting: len(waiting) == 1,
+                seconds=ALERT_SECONDS,
+            )
+            assert not pending.done()
+            holder.commit()
+        refused: Final = pending.result(timeout=ALERT_SECONDS)
+
+        assert refused.status_code == 400, refused.text
+        assert "soft_budget (10.0) must be strictly lower than max_budget (5.0)" in refused.text, refused.text
+        assert [
+            (info["soft_budget"], info["max_budget"])
+            for info in (user_info(gateway, racing), user_info(gateway, bystander))
+        ] == [(None, 5), (None, 100)]
+
+
 @pytest.mark.parametrize("max_budget", [None, 100.0])
 def test_user_over_soft_budget_gets_alert_and_request_still_succeeds(
     alerting: AlertingProxy, max_budget: float | None
@@ -623,6 +708,64 @@ def test_proxy_admin_over_soft_budget_gets_alert_and_request_still_succeeds(
 
         assert response["choices"], response
         assert_user_soft_budget_alert(exactly_one_alert_naming(alerting.alerts, user_id), user_id, SOFT_BUDGET, SPEND)
+
+
+@pytest.mark.parametrize("name", ["chat-openai-sdk-async-stream", "messages-httpx-stream", "responses-openai-sdk"])
+def test_proxy_admin_soft_budget_alert_fires_on_each_llm_endpoint(alerting: AlertingProxy, name: str) -> None:
+    gateway: Final = alerting.gateway
+    call: Final = CALLS[name]
+    with gateway.scenario() as scenario:
+        model: Final = call.model(scenario, gateway)
+        user_id: Final = crossing_user(scenario, user_role="proxy_admin")
+        marker: Final = f"admin-soft-budget-{uuid.uuid4().hex}"
+
+        received: Final = call.send(base_url(gateway), scenario.key(user_id=user_id), model, marker)
+
+        assert call.reply in received, received
+        assert len(upstream_requests_carrying(gateway, marker)) == 1
+        assert_user_soft_budget_alert(exactly_one_alert_naming(alerting.alerts, user_id), user_id, SOFT_BUDGET, SPEND)
+
+
+def test_proxy_admin_soft_budget_alerts_once_across_requests_and_keys(alerting: AlertingProxy) -> None:
+    gateway: Final = alerting.gateway
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user_id: Final = crossing_user(scenario, user_role="proxy_admin")
+
+        for key in (scenario.key(user_id=user_id), scenario.key(user_id=user_id)):
+            for _ in range(2):
+                assert gateway.chat(model, key=key)["choices"]
+
+        assert_user_soft_budget_alert(exactly_one_alert_naming(alerting.alerts, user_id), user_id, SOFT_BUDGET, SPEND)
+
+
+def test_proxy_admin_under_its_soft_budget_gets_no_alert(alerting: AlertingProxy) -> None:
+    gateway: Final = alerting.gateway
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        under_id: Final = scenario.user(user_role="proxy_admin", soft_budget=50.0, spend=SPEND)
+
+        assert gateway.chat(model, key=scenario.key(user_id=under_id))["choices"]
+
+        assert alerts_once_a_later_key_alert_lands(gateway, alerting.alerts, scenario, model, (under_id,)) == ()
+
+
+def test_proxy_admin_over_max_budget_with_a_soft_budget_is_blocked_before_the_upstream(
+    alerting: AlertingProxy,
+) -> None:
+    gateway: Final = alerting.gateway
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user_id: Final = scenario.user(user_role="proxy_admin", max_budget=0.8, soft_budget=SOFT_BUDGET, spend=SPEND)
+        marker: Final = f"admin-over-max-{uuid.uuid4().hex}"
+
+        blocked: Final = gateway.request(
+            "POST", "/v1/chat/completions", chat_body(model, marker), key=scenario.key(user_id=user_id)
+        )
+
+        assert blocked.status_code == 422, blocked.text
+        assert f"ExceededBudget: User={user_id} over budget. Spend=1.0, Budget=0.8" in blocked.text, blocked.text
+        assert upstream_requests_carrying(gateway, marker) == ()
 
 
 @pytest.mark.parametrize("call", CALLS.values(), ids=CALLS.keys())
@@ -1079,6 +1222,103 @@ def test_user_without_an_email_is_served_and_still_reaches_the_webhook(mailing: 
         )
         logged: Final = [line for line in mailing.log.read_text().splitlines() if user_id in line]
         assert logged == [], logged
+
+
+def test_proxy_admin_with_an_email_gets_one_webhook_event_and_one_account_email(mailing: MailingProxy) -> None:
+    gateway: Final = mailing.gateway
+    email: Final = f"admin-{uuid.uuid4().hex}@integration.test"
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user_id: Final = crossing_user(scenario, user_role="proxy_admin", user_email=email)
+        key: Final = scenario.key(user_id=user_id)
+
+        for _ in range(2):
+            assert gateway.chat(model, key=key)["choices"]
+
+        event: Final = JSON_OBJECT.validate_json(exactly_one_alert_naming(mailing.webhooks, user_id))
+        assert (event["event"], event["event_group"], event["user_id"], event["user_email"], event["soft_budget"]) == (
+            "soft_budget_crossed",
+            "user",
+            user_id,
+            email,
+            SOFT_BUDGET,
+        ), event
+        mails: Final = held(
+            lambda: mail_to(mailing.mailbox, email),
+            lambda found: len(found) == 1,
+            holding=QUIET_SECONDS,
+            seconds=ALERT_SECONDS,
+        )
+        assert "Your LiteLLM account has crossed its <b>soft budget limit of $0.5</b>" in mails[0], mails
+
+
+@pytest.mark.parametrize(
+    "fields", [{"user_role": "proxy_admin"}, {"user_email": ""}], ids=["proxy-admin-without-email", "empty-email"]
+)
+def test_user_with_no_usable_email_is_served_alerts_the_webhook_once_and_gets_no_email(
+    mailing: MailingProxy, fields: dict[str, JsonValue]
+) -> None:
+    gateway: Final = mailing.gateway
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user_id: Final = crossing_user(scenario, **fields)
+        key: Final = scenario.key(user_id=user_id)
+
+        for _ in range(3):
+            assert gateway.chat(model, key=key)["choices"]
+
+        event: Final = JSON_OBJECT.validate_json(exactly_one_alert_naming(mailing.webhooks, user_id))
+        assert (event["event"], event["event_group"], event["user_id"]) == ("soft_budget_crossed", "user", user_id)
+        assert not event["user_email"], event
+        sentinel_email: Final = f"sentinel-{uuid.uuid4().hex}@integration.test"
+        gateway.chat(model, key=scenario.key(user_id=crossing_user(scenario, user_email=sentinel_email)))
+        eventually(
+            lambda: mail_to(mailing.mailbox, sentinel_email), lambda found: len(found) > 0, seconds=ALERT_SECONDS
+        )
+        assert [html for delivery in mailing.mailbox.deliveries() if user_id in (html := delivery.html)] == []
+        logged: Final = [line for line in mailing.log.read_text().splitlines() if user_id in line]
+        assert logged == [], logged
+
+
+def soft_budget_mail(mailbox: Mailbox, recipient: str) -> str:
+    (mail,) = held(
+        lambda: tuple(html for html in mail_to(mailbox, recipient) if "soft budget limit" in html),
+        lambda found: len(found) == 1,
+        holding=QUIET_SECONDS,
+        seconds=ALERT_SECONDS,
+    )
+    return mail
+
+
+def test_user_and_key_soft_budget_emails_are_fully_formatted_and_differ_only_in_who_crossed(
+    mailing: MailingProxy,
+) -> None:
+    gateway: Final = mailing.gateway
+    user_email: Final = f"user-{uuid.uuid4().hex}@integration.test"
+    key_email: Final = f"key-{uuid.uuid4().hex}@integration.test"
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        gateway.chat(model, key=scenario.key(user_id=crossing_user(scenario, user_email=user_email)))
+        gateway.chat(
+            model,
+            key=scenario.key(
+                user_id=scenario.user(user_email=key_email, spend=SPEND),
+                soft_budget=SOFT_BUDGET,
+                spend=SPEND,
+            ),
+        )
+
+        user_mail: Final = soft_budget_mail(mailing.mailbox, user_email)
+        key_mail: Final = soft_budget_mail(mailing.mailbox, key_email)
+
+        for mail, recipient in ((user_mail, user_email), (key_mail, key_email)):
+            assert re.findall(r"\{\w+\}", mail) == [], mail
+            assert f"Hi {recipient}" in mail, mail
+            assert "<b>Current Spend:</b> $1.0" in mail, mail
+            assert "<b>Soft Budget:</b> $0.5" in mail, mail
+        assert user_mail.replace(user_email, key_email) == key_mail.replace(
+            "Your LiteLLM API key has crossed", "Your LiteLLM account has crossed"
+        )
 
 
 @dataclass(frozen=True, slots=True)
