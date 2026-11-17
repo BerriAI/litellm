@@ -33,30 +33,29 @@ impl CredentialExtractor for BearerOrXApiKey {
         single(parts, "x-api-key")
             .and_then(token)
             .map(Credential::Token)
+            .ok_or(Error::InvalidToken)
     }
 }
 
 fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
-    single(parts, AUTHORIZATION)?
-        .strip_prefix("Bearer ")
-        .ok_or(Error::InvalidToken)
+    single(parts, AUTHORIZATION)
+        .and_then(|value| value.strip_prefix("Bearer "))
         .and_then(token)
+        .ok_or(Error::InvalidBearer)
 }
 
-fn single(parts: &Parts, name: impl AsHeaderName) -> Result<&str, Error> {
+fn single(parts: &Parts, name: impl AsHeaderName) -> Option<&str> {
     let mut values = parts.headers.get_all(name).iter();
-    let value = values.next().ok_or(Error::InvalidToken)?;
-    if values.next().is_some() {
-        return Err(Error::InvalidToken);
+    match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().ok(),
+        _ => None,
     }
-    value.to_str().map_err(|_| Error::InvalidToken)
 }
 
-fn token(value: &str) -> Result<SecretValue, Error> {
+fn token(value: &str) -> Option<SecretValue> {
     Some(value.trim())
         .filter(|value| !value.is_empty() && !value.bytes().any(|byte| byte.is_ascii_whitespace()))
         .map(SecretValue::new)
-        .ok_or(Error::InvalidToken)
 }
 
 pub async fn authenticate(

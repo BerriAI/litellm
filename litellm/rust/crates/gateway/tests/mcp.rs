@@ -208,17 +208,25 @@ async fn mcp_protocol_routes_require_bearer_admission(
         .await
         .unwrap();
     assert_eq!(response.status(), 401);
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap(),
+        "missing or invalid bearer token"
+    );
     served.close().await;
 }
 
 #[rstest]
-#[case::missing(&[])]
-#[case::wrong_x_api_key(&[("x-api-key", "wrong")])]
-#[case::non_bearer_authorization(&[("authorization", "Basic admission-secret"), ("x-api-key", "admission-secret")])]
+#[case::missing(&[], "missing or invalid API key")]
+#[case::wrong_x_api_key(&[("x-api-key", "wrong")], "missing or invalid API key")]
+#[case::non_bearer_authorization(
+    &[("authorization", "Basic admission-secret"), ("x-api-key", "admission-secret")],
+    "missing or invalid bearer token"
+)]
 #[tokio::test]
 async fn mcp_rest_routes_reject_a_missing_or_invalid_key(
     #[future] served: Served,
     #[case] headers: &[(&str, &str)],
+    #[case] message: &str,
 ) {
     let served = served.await;
     let request = headers.iter().fold(
@@ -232,6 +240,7 @@ async fn mcp_rest_routes_reject_a_missing_or_invalid_key(
         .await
         .unwrap();
     assert_eq!(response.status(), 401);
+    assert_eq!(to_bytes(response.into_body(), 1024).await.unwrap(), message);
     served.close().await;
 }
 

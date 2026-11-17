@@ -112,6 +112,9 @@ async fn authenticates_before_serving_mounted_inference_routes(
         let text = response.text().await.unwrap();
         assert!(!text.contains("gateway-key"));
         assert!(!text.contains("unconfigured-model"));
+        if status == 401 {
+            assert_eq!(text, "missing or invalid API key");
+        }
     }
 
     shutdown.send(()).unwrap();
