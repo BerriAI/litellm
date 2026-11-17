@@ -27,7 +27,7 @@ from litellm.router_api import ChangeSet
 from litellm.router_rust.core import RustCore
 from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
 from litellm.router_rust.surface.health import logged_call
-from litellm.router_utils.cooldown_handlers import is_caller_timeout_408
+from litellm.router_utils.cooldown_handlers import is_caller_timeout_408, is_stream_ttft_expiry
 from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX, as_converted_stream
 from litellm.types.llms.openai import AllMessageValues
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
@@ -939,6 +939,93 @@ class _TTFTChatStream:
     async def aclose(self) -> None:
         await asyncio.sleep(0)
         self.closed.set()
+
+
+class _TTFTProviderTimeoutStream(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        raise TimeoutError("provider")
+        yield b""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ("chat/completions", "messages", "responses"))
+async def test_provider_timeout_before_output_is_not_caller_ttft_expiry(
+    endpoint: str,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+) -> None:
+    respx_mock.post(f"https://ttft.invalid/v1/{endpoint}").respond(200, stream=_TTFTProviderTimeoutStream())
+    router: Final = _ttft_router(messages=endpoint == "messages", fallback=False)
+    kwargs: Final = {
+        "model": "primary",
+        "stream": True,
+        "stream_ttft_timeout": 10,
+        "client_side_stream_ttft_timeout": True,
+    }
+    async def drain() -> None:
+        if endpoint == "responses":
+            responses_stream: Final = await router.aresponses(input="hi", **kwargs)
+            _ = tuple([chunk async for chunk in responses_stream])
+        elif endpoint == "messages":
+            messages_stream: Final = await router.aanthropic_messages(
+                messages=[{"role": "user", "content": "hi"}], max_tokens=10, **kwargs
+            )
+            _ = tuple([chunk async for chunk in messages_stream])
+        else:
+            chat_stream: Final = await router.acompletion(messages=[{"role": "user", "content": "hi"}], **kwargs)
+            _ = tuple([chunk async for chunk in chat_stream])
+    with pytest.raises((TimeoutError, litellm.APIConnectionError, litellm.Timeout)) as caught:
+        await drain()
+    assert not is_stream_ttft_expiry(caught.value)
+    assert not is_caller_timeout_408({"litellm_params": kwargs}, 408, exception=caught.value)
+
+
+@pytest.mark.asyncio
+async def test_provider_timeout_during_chat_fetch_is_not_caller_ttft_expiry() -> None:
+    router: Final = _ttft_router(fallback=False)
+    core: Final = router._core
+    assert isinstance(core, RustCore)
+    kwargs: Final = {
+        "model": "openai/ttft-primary",
+        "stream": True,
+        "stream_ttft_timeout": 10,
+        "client_side_stream_ttft_timeout": True,
+    }
+    attempt: Final = StreamAttempt(
+        core=core,
+        op="acompletion",
+        request=kwargs,
+        kwargs=kwargs,
+        group="primary",
+        order=None,
+        depth=0,
+        level=0,
+        deployment_id="ttft-primary",
+        attempted_retries=0,
+    )
+
+    async def make_call(*, client: object) -> _TTFTProviderTimeoutStream:
+        raise TimeoutError("provider")
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="ttft-primary",
+        custom_llm_provider="openai",
+        make_call=make_call,
+        logging_obj=LiteLLMLogging(
+            model="ttft-primary",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime(2024, 1, 1),
+            litellm_call_id="ttft-provider-fetch",
+            function_id="ttft-provider-fetch",
+        ),
+    )
+    with pytest.raises(TimeoutError, match="provider") as caught:
+        await open_attempt_stream(attempt, response)
+    assert not is_stream_ttft_expiry(caught.value)
+    assert not is_caller_timeout_408({"litellm_params": kwargs}, 408, exception=caught.value)
 
 
 @pytest.mark.asyncio

@@ -307,11 +307,13 @@ async def _until_first_output(
         if remaining <= 0:
             raise expired()
         try:
-            with anyio.fail_after(remaining):
+            with anyio.fail_after(remaining) as scope:
                 item: _ItemT = await items.__anext__()
         except StopAsyncIteration:
             return
         except TimeoutError as error:
+            if not scope.cancelled_caught:
+                raise
             raise expired() from error
         yield item
         if has_output(item):
@@ -2058,9 +2060,11 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
             try:
                 if needs_fetch:
                     try:
-                        with anyio.fail_after(max(0.0, chat_deadline - anyio.current_time())):
+                        with anyio.fail_after(max(0.0, chat_deadline - anyio.current_time())) as scope:
                             await stream.fetch_stream()
                     except TimeoutError as error:
+                        if not scope.cancelled_caught:
+                            raise
                         raise _mid_stream_retry_trigger(expired()) from error
                 return await _aread_first_chunk(stream, chat_deadline, expired)
             except BaseException:
