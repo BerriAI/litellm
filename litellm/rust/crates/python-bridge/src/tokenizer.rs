@@ -23,7 +23,7 @@ use pyo3::{
 #[cfg(feature = "tiktoken")]
 use pyo3::{
     exceptions::{PyKeyError, PyOverflowError, PyRuntimeError},
-    types::{PyBytes, PyInt},
+    types::PyBytes,
 };
 
 #[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
@@ -260,6 +260,21 @@ impl Tokenizer {
             .map_err(|error| TokenizerError::EncodeSpecial(error.into()).into())
     }
 
+    /// `encode_special` for tiktoken's `encode_to_numpy`, which raises on lone surrogates.
+    #[cfg(feature = "tiktoken")]
+    fn encode_special_strict(
+        &self,
+        py: Python<'_>,
+        text: &Bound<'_, PyString>,
+        allowed: Vec<String>,
+    ) -> PyResult<Vec<u32>> {
+        enter_native()?;
+        let tokenizer = self.tiktoken()?;
+        let text = text.to_cow()?;
+        release_gil(py, || tokenizer.encode_special(&text, &allowed))
+            .map_err(|error| TokenizerError::EncodeSpecial(error.into()).into())
+    }
+
     /// tiktoken's `encode_with_unstable`: `(stable_tokens, completions)`.
     #[cfg(feature = "tiktoken")]
     fn encode_with_unstable(
@@ -292,7 +307,7 @@ impl Tokenizer {
     }
 
     #[cfg(feature = "tiktoken")]
-    fn is_special_token(&self, token: &Bound<'_, PyInt>) -> PyResult<bool> {
+    fn is_special_token(&self, token: &Bound<'_, PyAny>) -> PyResult<bool> {
         let vocabulary = self.vocabulary()?;
         match token.extract::<u32>() {
             Ok(rank) => Ok(vocabulary.is_special_token(rank)),
@@ -804,26 +819,27 @@ mod tests {
     #[case::bool_false("False", false)]
     #[case::bool_true("True", false)]
     #[case::eot_token("100257", true)]
+    #[case::index_object_eot_token("type('Index', (), {'__index__': lambda self: 100257})()", true)]
+    #[case::index_object_overflow(
+        "type('Index', (), {'__index__': lambda self: 1 << 32})()",
+        false
+    )]
     fn is_special_token_handles_arbitrary_python_ints(#[case] expr: &str, #[case] expected: bool) {
         Python::initialize();
         Python::attach(|py| {
             let tokenizer = cl100k_tokenizer();
             let code = CString::new(expr).unwrap();
-            let value = py.eval(&code, None, None).unwrap();
-            let token = value.cast::<PyInt>().unwrap();
-            assert_eq!(tokenizer.is_special_token(token).unwrap(), expected);
+            let token = py.eval(&code, None, None).unwrap();
+            assert_eq!(tokenizer.is_special_token(&token).unwrap(), expected);
         });
     }
 
     #[rstest]
     #[case::high_surrogate("'\\ud800'", vec![])]
     #[case::trailing_low_surrogate("'x\\udc80'", vec![])]
-    #[case::surrogate_pair("'\\ud83d\\ude42'", vec![])]
+    #[case::surrogate_pair_halves("'\\ud83d\\ude42'", vec![])]
     #[case::with_allowed_special("'a\\ud800<|endoftext|>'", vec!["<|endoftext|>".to_owned()])]
-    fn encode_with_unstable_rejects_lone_surrogates(
-        #[case] expr: &str,
-        #[case] allowed: Vec<String>,
-    ) {
+    fn strict_encoders_reject_lone_surrogates(#[case] expr: &str, #[case] allowed: Vec<String>) {
         Python::initialize();
         Python::attach(|py| {
             let tokenizer = cl100k_tokenizer();
@@ -831,23 +847,35 @@ mod tests {
             let value = py.eval(&code, None, None).unwrap();
             let text = value.cast::<PyString>().unwrap();
 
-            let err = tokenizer
-                .encode_with_unstable(py, text, allowed)
+            let unstable = tokenizer
+                .encode_with_unstable(py, text, allowed.clone())
                 .expect_err("lone surrogates must raise UnicodeEncodeError");
-            assert!(err.is_instance_of::<PyUnicodeEncodeError>(py));
+            assert!(unstable.is_instance_of::<PyUnicodeEncodeError>(py));
+            let strict = tokenizer
+                .encode_special_strict(py, text, allowed)
+                .expect_err("lone surrogates must raise UnicodeEncodeError");
+            assert!(strict.is_instance_of::<PyUnicodeEncodeError>(py));
         });
     }
 
     #[test]
-    fn encode_with_unstable_succeeds_for_valid_utf8() {
+    fn strict_encoders_agree_with_encode_for_valid_utf8() {
         Python::initialize();
         Python::attach(|py| {
             let tokenizer = cl100k_tokenizer();
             let text = PyString::new(py, "hello world");
-            let (stable, completions) = tokenizer
+            let encoded = tokenizer.encode(py, &text).unwrap();
+
+            assert_eq!(
+                tokenizer
+                    .encode_special_strict(py, &text, Vec::new())
+                    .unwrap(),
+                encoded
+            );
+            let (stable, _) = tokenizer
                 .encode_with_unstable(py, &text, Vec::new())
                 .unwrap();
-            assert!(!stable.is_empty() || !completions.is_empty());
+            assert!(!stable.is_empty() && encoded.starts_with(&stable));
         });
     }
 }

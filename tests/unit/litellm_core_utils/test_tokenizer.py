@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Final, Literal
 
+import numpy
 import pytest
 import tiktoken
 from tokenizers import Tokenizer as ReferenceTokenizer
@@ -333,7 +334,7 @@ def test_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name: str) -> N
         ("a\ud800<|endoftext|>", frozenset(), ()),
     ),
 )
-def test_openai_encoding_unstable_rejects_lone_surrogates_like_tiktoken(
+def test_openai_encoding_strict_encoders_reject_lone_surrogates_like_tiktoken(
     name: str,
     text: str,
     allowed_special: frozenset[str] | Literal["all"],
@@ -346,12 +347,16 @@ def test_openai_encoding_unstable_rejects_lone_surrogates_like_tiktoken(
         reference.encode_with_unstable(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
     with pytest.raises(UnicodeEncodeError):
         encoding.encode_with_unstable(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    with pytest.raises(UnicodeEncodeError):
+        reference.encode_to_numpy(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    with pytest.raises(UnicodeEncodeError):
+        encoding.encode_to_numpy(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
     assert encoding.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special) == (
         reference.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
     )
 
 
-def test_openai_encoding_unstable_checks_disallowed_special_before_surrogates() -> None:
+def test_openai_encoding_strict_encoders_check_disallowed_special_before_surrogates() -> None:
     reference: Final = tiktoken.get_encoding("cl100k_base")
     encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
 
@@ -359,6 +364,10 @@ def test_openai_encoding_unstable_checks_disallowed_special_before_surrogates() 
         reference.encode_with_unstable("<|endoftext|>\ud800")
     with pytest.raises(ValueError, match="disallowed special token"):
         encoding.encode_with_unstable("<|endoftext|>\ud800")
+    with pytest.raises(ValueError, match="disallowed special token"):
+        reference.encode_to_numpy("<|endoftext|>\ud800")
+    with pytest.raises(ValueError, match="disallowed special token"):
+        encoding.encode_to_numpy("<|endoftext|>\ud800")
 
 
 @pytest.mark.parametrize(
@@ -599,3 +608,16 @@ def test_native_added_token_decoder_preserves_unrelated_import_failure():
         with pytest.raises(ModuleNotFoundError) as caught:
             native.get_added_tokens_decoder()
     assert caught.value is failure
+
+
+def test_openai_encoding_is_special_token_accepts_numpy_ids_from_encode_to_numpy() -> None:
+    reference: Final = tiktoken.get_encoding("cl100k_base")
+    encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
+    ids: Final = encoding.encode_to_numpy("hello<|endoftext|>", allowed_special="all")
+
+    assert ids.tolist() == reference.encode_to_numpy("hello<|endoftext|>", allowed_special="all").tolist()
+    assert ids.tolist()[-1] == encoding.eot_token
+    assert [encoding.is_special_token(token) for token in ids] == [token == encoding.eot_token for token in ids.tolist()]
+    assert encoding.is_special_token(numpy.int64(encoding.eot_token)) is True
+    assert encoding.is_special_token(numpy.int64(-1)) is False
+    assert encoding.is_special_token(numpy.uint64(2**32)) is False
