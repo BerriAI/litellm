@@ -718,6 +718,12 @@ def _received_log_ids(requests: Sequence[httpx.Request], log_format: LOG_FORMAT_
             yield event["id"]
 
 
+def _received_log_ids_with_auth(requests: Sequence[httpx.Request]) -> Iterator[tuple[str, str]]:
+    for request in requests:
+        for event in _batch_events(request.content, "json_array"):
+            yield event["id"], request.headers["Authorization"]
+
+
 class _InProcessLogSink:
     def __init__(self, *, hold_first: bool = False) -> None:
         self.hold_first: Final = hold_first
@@ -976,11 +982,7 @@ async def test_retired_logger_finishes_its_in_flight_send_and_hands_queued_logs_
         await in_flight
         await asyncio.wait_for(old._flush_task, timeout=5)
         await replacement.flush_queue()
-        delivered: Final = tuple(
-            (event["id"], request.headers["Authorization"])
-            for request in sink.requests
-            for event in _batch_events(request.content, "json_array")
-        )
+        delivered: Final = tuple(_received_log_ids_with_auth(sink.requests))
         assert delivered == (("in-flight", "old"), ("queued", "new"))
     finally:
         sink.release.set()
@@ -1019,11 +1021,7 @@ async def test_retired_logger_sends_late_events_through_its_replacement(
         await asyncio.wait_for(old._flush_task, timeout=5)
         log_event: Final = old.async_log_success_event if event == "success" else old.async_log_failure_event
         await log_event({"standard_logging_object": {"id": "late"}}, {"id": "late", "usage": {}}, None, None)
-        delivered: Final = tuple(
-            (logged["id"], request.headers["Authorization"])
-            for request in sink.requests
-            for logged in _batch_events(request.content, "json_array")
-        )
+        delivered: Final = tuple(_received_log_ids_with_auth(sink.requests))
         assert delivered == (("late", "new"),)
     finally:
         replacement.shutdown()
@@ -1068,11 +1066,7 @@ async def test_queued_logs_go_to_the_replacement_only_when_it_accepts_every_even
         old.shutdown(replacement=replacement)
         await asyncio.wait_for(old._flush_task, timeout=5)
         await replacement.flush_queue()
-        delivered: Final = tuple(
-            (logged["id"], request.headers["Authorization"])
-            for request in sink.requests
-            for logged in _batch_events(request.content, "json_array")
-        )
+        delivered: Final = tuple(_received_log_ids_with_auth(sink.requests))
         assert delivered == (("queued-success", sent_with),)
     finally:
         replacement.shutdown()
