@@ -688,14 +688,14 @@ async def resolve_vector_store_fallback_plan(
 
     primary: Final = normalize_litellm_params(vector_store)
     await assert_user_can_access_vector_store(primary, user_api_key_dict)
+    if not primary.get("is_config"):
+        return None
     try:
         ids: Final = fallback_ids(primary.get("litellm_params") or {})
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     if not ids:
         return None
-    if not primary.get("is_config"):
-        raise HTTPException(status_code=400, detail="Vector store fallbacks must be configured in YAML")
     registry: Final = litellm.vector_store_registry
     resolved: Final = tuple(
         registry.get_litellm_managed_vector_store_from_registry(store_id) if registry is not None else None

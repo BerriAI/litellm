@@ -547,7 +547,7 @@ async def test_config_only_fallback_enforces_loaded_team_grants_without_database
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("primary_config,backup_config", [(False, True), (True, False)])
-async def test_fallback_resolution_rejects_database_defined_stores(
+async def test_fallback_resolution_ignores_database_primary_and_rejects_database_backup(
     monkeypatch: pytest.MonkeyPatch, primary_config: bool, backup_config: bool
 ) -> None:
     from fastapi import HTTPException
@@ -567,6 +567,9 @@ async def test_fallback_resolution_rejects_database_defined_stores(
         is_config=backup_config,
     )
     monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
+    if not primary_config:
+        assert await resolve_vector_store_fallback_plan(primary, UserAPIKeyAuth(user_role="proxy_admin")) is None
+        return
     with pytest.raises(HTTPException) as refused:
         await resolve_vector_store_fallback_plan(primary, UserAPIKeyAuth(user_role="proxy_admin"))
     assert refused.value.status_code == 400
