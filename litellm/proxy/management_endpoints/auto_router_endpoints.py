@@ -1052,7 +1052,7 @@ async def get_auto_router_session(
     fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
     id is bounded the way the writer bounded it, so an oversized client id still finds its row.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -1063,6 +1063,11 @@ async def get_auto_router_session(
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
+    total: Final = (
+        await proxy_logging_obj.session_spend_totals.read(user_api_key_dict.api_key, session_id)
+        if user_api_key_dict.api_key
+        else None
+    )
     saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
     _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
@@ -1074,6 +1079,7 @@ async def get_auto_router_session(
         turns=row.turns,
         last_model=row.last_model,
         spend=row.spend,
+        total_spend=total,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=saved_spend,
@@ -1387,6 +1393,7 @@ GROUP BY a.job_id
 _FUNNEL_TOTALS_SQL: Final = """
 SELECT COUNT(*)::int AS legs_with_rows,
     COALESCE(SUM(not_sampled), 0)::int AS not_sampled,
+    COALESCE(SUM(same_model), 0)::int AS same_model,
     COALESCE(SUM(unjudgeable), 0)::int AS unjudgeable,
     COALESCE(SUM(shed), 0)::int AS shed,
     COALESCE(SUM(withheld), 0)::int AS withheld
@@ -1415,6 +1422,7 @@ WHERE group_id = $1 AND stopped_by IS NULL
 class _FunnelTotalsRow(LiteLLMBaseModel):
     legs_with_rows: int
     not_sampled: int
+    same_model: int
     unjudgeable: int
     shed: int
     withheld: int
@@ -1497,6 +1505,7 @@ class _LegRow(LiteLLMBaseModel):
     models: tuple[str, ...] = ()
     direction: ShadowEvalDirection
     baseline_model: str | None = None
+    skip_same_model: bool = False
     judge_model: str
     shadow_percentage: float
     max_turns: int
@@ -1567,6 +1576,7 @@ def _group_response(
         models=first.models,
         direction=first.direction,
         baseline_model=first.baseline_model,
+        skip_same_model=first.skip_same_model,
         judge_model=first.judge_model,
         shadow_percentage=first.shadow_percentage,
         created_at=first.created_at,
@@ -1649,8 +1659,16 @@ async def _with_target_labels(
     )
 
 
+async def _job_funnel(prisma_client: "PrismaClient", leg_ids: Sequence[str]) -> _FunnelTotalsRow | None:
+    """Job-level coverage counts, or None unless EVERY leg has a funnel row: a partial seed
+    (one leg's insert failed) must read as unknown, not as counts missing a leg's traffic."""
+    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, list(leg_ids))
+    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
+    return counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
+
+
 async def _shadow_eval_results(
-    prisma_client: "PrismaClient", legs: Sequence[_LegRow]
+    prisma_client: "PrismaClient", legs: Sequence[_LegRow], funnel: _FunnelTotalsRow | None
 ) -> tuple[ShadowEvalResult | None, Mapping[tuple[str, str], ShadowEvalSlice]]:
     """One job's stratified verdicts, plus each target's own slice keyed by the
     (target_type, target_id) pair so a key, team, and user sharing an id can never
@@ -1683,11 +1701,6 @@ async def _shadow_eval_results(
         await _query_raw(prisma_client, _ATTEMPT_AGG_BY_ROUTER_SQL, leg_ids) or ()
     )
     total_turns: Final = sum(r.turn_count for r in by_tier)
-    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, leg_ids)
-    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
-    # Coverage only when EVERY leg has a funnel row: a partial seed (one leg's insert
-    # failed) must read as unknown, not as job-level counts missing a leg's traffic.
-    funnel: Final = counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
     result: Final = ShadowEvalResult(
         by_tier=_slices(by_tier),
         by_current_model=_slices(by_model),
@@ -1857,6 +1870,7 @@ async def start_shadow_eval(
         "models": list(data.models),
         "direction": data.direction,
         "baseline_model": data.baseline_model,
+        "skip_same_model": data.skip_same_model,
         "judge_model": data.judge_model,
         "shadow_percentage": data.shadow_percentage,
         "max_turns": SHADOW_EVAL_TURN_VALVE,
@@ -1919,6 +1933,7 @@ async def start_shadow_eval(
         models=data.models,
         direction=data.direction,
         baseline_model=data.baseline_model,
+        skip_same_model=data.skip_same_model,
         judge_model=data.judge_model,
         shadow_percentage=data.shadow_percentage,
         created_at=now,
@@ -2005,7 +2020,8 @@ async def get_shadow_eval_job(
     labeled: Final = await _with_target_labels(
         prisma_client, (_group_response(job_id, legs, await _leg_attempt_counts(prisma_client, legs)),)
     )
-    results, verdicts_by_target = await _shadow_eval_results(prisma_client, legs)
+    funnel: Final = await _job_funnel(prisma_client, leg_ids)
+    results, verdicts_by_target = await _shadow_eval_results(prisma_client, legs, funnel)
     return labeled[0].model_copy(
         update={
             "judged_count": totals[0].judged_count if totals else 0,
@@ -2013,6 +2029,7 @@ async def get_shadow_eval_job(
             "judge_spend": round(totals[0].judge_spend, 6) if totals else 0.0,
             "last_error": latest_error.error if latest_error else None,
             "results": results,
+            "same_model_skipped_count": funnel.same_model if funnel is not None else None,
             "targets": tuple(
                 target.model_copy(update={"verdicts": verdicts_by_target.get((target.target_type, target.target_id))})
                 for target in labeled[0].targets

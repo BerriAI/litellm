@@ -96,6 +96,10 @@ class ProviderConnection:
     chatgpt_auth_file: str | None = None
     github_copilot_auth_type: str | None = None
     github_copilot_host: str | None = None
+    github_copilot_app_id: str | int | None = None
+    github_copilot_app_installation_id: str | int | None = None
+    github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
     github_copilot_user_session: object | None = None
     token_exchange_endpoint: str | None = None
     token_exchange_profile: str | None = None
@@ -306,6 +310,10 @@ def _int_from_decimal_string(value: object) -> object:
     return value
 
 
+def _bool_from_true_false_string(value: object) -> object:
+    return value == "true" if value in ("true", "false") else value
+
+
 @pydantic_dataclass(frozen=True, slots=True, kw_only=True)
 class ControlOptions:
     stream_chunk_size: (
@@ -316,6 +324,7 @@ class ControlOptions:
         ]
         | None
     ) = None
+    fake_stream: Annotated[bool, BeforeValidator(_bool_from_true_false_string), Field(strict=True)] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -355,6 +364,13 @@ class CallState:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class McpHandlerState:
+    recursion_guard: bool | None = field(default=None, metadata=wire("_skip_mcp_handler"))
+    skip_mcp_handler: bool | None = None
+    mcp_handler_context: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
     headroom_context: "HeadroomRequestContext | None" = field(default=None, metadata=wire("_headroom_request_context"))
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
@@ -362,6 +378,7 @@ class AgenticLoopState:
     api_surface: Literal["chat_completions", "responses"] | None = field(
         default=None, metadata=wire("_agentic_loop_api_surface")
     )
+    tool_choice: Mapping[str, object] | None = field(default=None, metadata=wire("_agentic_loop_tool_choice"))
     code_interpreter_active: bool | None = field(default=None, metadata=wire("_code_interpreter_interception_active"))
     code_interpreter_sandbox_key: str | None = field(
         default=None, metadata=wire("_code_interpreter_interception_sandbox_key")
@@ -433,6 +450,7 @@ class EntrypointState:
 class InternalState:
     call: CallState
     agentic_loop: AgenticLoopState
+    mcp_handler: McpHandlerState
     router: RouterState
     proxy: ProxyRequestState
     entrypoint: EntrypointState
@@ -460,3 +478,4 @@ def owned_wire_names(root: type) -> tuple[str, ...]:
 OWNED_KWARG_NAMES: Final = tuple(chain.from_iterable(owned_wire_names(root) for root in LITELLM_OWNED_ROOTS))
 AGENTIC_LOOP_KWARG_NAMES: Final = (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
 BEDROCK_BATCH_KWARG_NAMES: Final = wire_names(BedrockBatchConnection)
+MCP_HANDLER_KWARG_NAMES: Final = frozenset(wire_names(McpHandlerState))

@@ -5,6 +5,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import cache
 from importlib.resources import files
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,7 +17,6 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
     BlogPostsResponse,
     GetBlogPosts,
-    get_blog_posts,
 )
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
@@ -25,6 +25,13 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.db.health_check_latest import latest_by_model_name
 from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
+from litellm.proxy.public_endpoints.model_hub_rows import (
+    HubRow,
+    ModelGroupRow,
+    NoModelsConfigured,
+    PassThroughRow,
+    published_hub_rows,
+)
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
@@ -276,45 +283,52 @@ def _agent_create_fields() -> tuple[AgentCreateInfo, ...]:
     response_model=list[ModelGroupInfoProxy],
 )
 async def public_model_hub():
-    import litellm
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        convert_health_check_to_dict,
-    )
-    from litellm.proxy.proxy_server import (
-        get_model_group_info,
-        llm_router,
-        prisma_client,
-    )
-
-    if llm_router is None:
+    rows: Final = published_hub_rows()
+    if isinstance(rows, NoModelsConfigured):
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
-    model_groups: list[ModelGroupInfoProxy] = []
-    if litellm.public_model_groups is not None:
-        model_groups = get_model_group_info(  # rebind-ok: pre-existing rebinding on a rename-only line
-            llm_router=llm_router,
-            all_models_str=litellm.public_model_groups,
-            model_group=None,
+    health_checks_map: Final = await _legacy_health_checks()
+    return [_with_legacy_health(row, health_checks_map) for row in rows]
+
+
+async def _legacy_health_checks() -> Mapping[str, Mapping[str, object]]:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return MappingProxyType({})
+    try:
+        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        return MappingProxyType(
+            {
+                model_name: MappingProxyType(
+                    {
+                        "status": check.status,
+                        "response_time_ms": check.response_time_ms,
+                        "checked_at": check.checked_at.isoformat() if check.checked_at else None,
+                    }
+                )
+                for model_name, check in latest_by_model_name(latest_checks).items()
+            }
         )
+    except Exception:
+        return MappingProxyType({})
 
-    # Fetch health check information if available
-    health_checks_map: Final = {}
-    if prisma_client is not None:
-        try:
-            latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-            for model_name, check in latest_by_model_name(latest_checks).items():
-                health_checks_map[model_name] = convert_health_check_to_dict(check)
-        except Exception:
-            pass
 
-    for model_group in model_groups:
-        health_info = health_checks_map.get(model_group.model_group)
-        if health_info:
-            model_group.health_status = health_info.get("status")
-            model_group.health_response_time = health_info.get("response_time_ms")
-            model_group.health_checked_at = health_info.get("checked_at")
-
-    return model_groups
+def _with_legacy_health(row: HubRow, health_checks_map: Mapping[str, Mapping[str, object]]) -> ModelGroupInfoProxy:
+    match row:
+        case PassThroughRow():
+            return row.info
+        case ModelGroupRow():
+            health_info: Final = health_checks_map.get(row.info.model_group)
+            if not health_info:
+                return row.info
+            return row.info.model_copy(
+                update={
+                    "health_status": health_info.get("status"),
+                    "health_response_time": health_info.get("response_time_ms"),
+                    "health_checked_at": health_info.get("checked_at"),
+                }
+            )
 
 
 @router.get(
@@ -546,7 +560,9 @@ async def get_litellm_blog_posts() -> BlogPostsResponse:
     Falls back to the bundled local backup on any failure.
     """
     try:
-        return BlogPostsResponse(posts=get_blog_posts(url=litellm.blog_posts_url))
+        return BlogPostsResponse(
+            posts=await GetBlogPosts.aget_blog_posts(url=litellm.blog_posts_url, fetch=_fetch_remote_bytes)
+        )
     except Exception as e:
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
         return BlogPostsResponse(posts=GetBlogPosts.load_local_blog_posts())
