@@ -4178,6 +4178,46 @@ async def test_framing_still_applies_while_the_deployment_is_cooling_down(monkey
     assert cooling.count_source == "local_estimate"
 
 
+@pytest.mark.asyncio
+async def test_a_cooling_team_deployment_frames_with_its_own_settings_not_a_same_named_global_one(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "shared-framed",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-unused-global"},
+                "model_info": {"id": "global-framed", "token_count_framing": 7},
+            },
+            {
+                "model_name": "model_name_team-a_1",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-unused-team"},
+                "model_info": {
+                    "id": "team-a-framed",
+                    "team_id": "team-a",
+                    "team_public_model_name": "shared-framed",
+                    "token_count_framing": 100,
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="team-a-framed",
+        original_exception=Exception("rate limited"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+    messages: Final = [{"role": "user", "content": "hello there"}]
+
+    cooling: Final = await count_request_tokens(
+        request=TokenCountRequest(model="shared-framed", messages=messages), caller=UserAPIKeyAuth(team_id="team-a")
+    )
+
+    assert cooling.count_source == "local_estimate"
+    assert cooling.total_tokens - 100 == litellm.token_counter(model="shared-framed", messages=messages)
+
+
 _GEMINI_TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180
 
 
