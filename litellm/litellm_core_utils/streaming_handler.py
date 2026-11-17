@@ -98,6 +98,7 @@ _STREAMING_CHOICE_KEYS: Final = frozenset({"finish_reason", "index", "delta", "l
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = GChunk.__required_keys__
+_GCHUNK_VALUE_FIELDS: Final[frozenset[str]] = _GCHUNK_REQUIRED_FIELDS | {"tool_use"}
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
     {LlmProviders.OPENROUTER.value, LlmProviders.OPENCODE_GO.value}
@@ -1606,10 +1607,12 @@ class CustomStreamWrapper:
 
         chunk_fields: Final = as_str_mapping(chunk)
         generic_chunk: Final = chunk_fields if isinstance(chunk_fields, dict) else None
-        if (
-            # check if chunk is a generic streaming chunk
-            generic_chunk is not None and generic_chunk_has_all_required_fields(chunk=generic_chunk)
-        ) or (self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers):
+        has_only_generic_fields: Final = generic_chunk is not None and generic_chunk_has_all_required_fields(
+            chunk=generic_chunk
+        )
+        if has_only_generic_fields or (
+            self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers
+        ):
             if self.received_finish_reason is not None:
                 _chunk_has_content: Final = generic_chunk is not None and (
                     bool(generic_chunk.get("text", ""))
@@ -1622,7 +1625,7 @@ class CustomStreamWrapper:
                     generic_chunk is None or "provider_specific_fields" not in generic_chunk
                 ):
                     raise StopIteration
-            shape_error: Final = generic_chunk_shape_error(chunk)
+            shape_error: Final = None if has_only_generic_fields else generic_chunk_shape_error(chunk)
             if shape_error is not None:
                 raise ValueError(
                     f"Streaming chunk from {self.custom_llm_provider} is not a GenericStreamingChunk: {shape_error}"
@@ -1631,7 +1634,7 @@ class CustomStreamWrapper:
             generic_finish_reason: Final = anthropic_response_obj.get("finish_reason", "")
             completion_obj["content"] = anthropic_response_obj.get("text", "")
             if anthropic_response_obj.get("is_finished", False):
-                self.received_finish_reason = generic_finish_reason
+                self.received_finish_reason = generic_finish_reason or "stop"
 
             if generic_finish_reason:
                 self.intermittent_finish_reason = generic_finish_reason
@@ -3254,10 +3257,9 @@ def generic_chunk_shape_error(chunk: object) -> str | None:
     if fields is None:
         return f"expected a dict, got {type(chunk).__name__}"
     unexpected: Final = sorted(key for key in fields if key not in _GCHUNK_FIELDS)
-    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))
-    if not unexpected or not missing:
+    if not unexpected or any(fields.get(key) is not None for key in _GCHUNK_VALUE_FIELDS):
         return None
-    return f"missing {missing}, unexpected {unexpected}"
+    return f"missing {sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))}, unexpected {unexpected}"
 
 
 def convert_generic_chunk_to_model_response_stream(

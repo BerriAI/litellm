@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import itertools
 import json
+import logging
 import queue
 import sys
 import threading
@@ -4614,10 +4615,11 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             "missing ['finish_reason', 'is_finished', 'text'], unexpected ['choices']",
             id="openai-shaped",
         ),
+        pytest.param("hello", "expected a dict, got str", id="not-a-dict"),
     ],
 )
 def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
-    monkeypatch: pytest.MonkeyPatch, chunk: dict[str, object], message: str
+    monkeypatch: pytest.MonkeyPatch, chunk: object, message: str
 ):
     monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
     wrapper: Final = CustomStreamWrapper(
@@ -4633,12 +4635,29 @@ def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
     assert f"from my-custom-llm is not a GenericStreamingChunk: {message}" in str(excinfo.value)
 
 
-def test_custom_provider_stream_keeps_complete_chunks_with_extra_keys(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, "id": "chunk-1"}],
+            id="complete",
+        ),
+        pytest.param(
+            [
+                {"text": "hel", "logprobs": None},
+                {"text": "lo", "id": "chunk-2"},
+                {"is_finished": True, "finish_reason": "length", "id": "chunk-3"},
+            ],
+            id="partial",
+        ),
+    ],
+)
+def test_custom_provider_stream_keeps_generic_values_of_chunks_with_extra_keys(
+    monkeypatch: pytest.MonkeyPatch, chunks: list[dict[str, object]]
+):
     monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=iter(
-            [{"text": "hello", "is_finished": True, "finish_reason": "stop", "usage": None, "id": "chunk-1"}]
-        ),
+        completion_stream=iter(chunks),
         model="custom-model",
         logging_obj=MagicMock(),
         custom_llm_provider="my-custom-llm",
@@ -4647,7 +4666,25 @@ def test_custom_provider_stream_keeps_complete_chunks_with_extra_keys(monkeypatc
     assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
 
     assert assembled.choices[0].message.content == "hello"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+def test_custom_provider_stream_ends_with_stop_when_finished_chunk_has_no_finish_reason(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([{"text": "hello"}, {"is_finished": True}]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
     assert assembled.choices[0].finish_reason == "stop"
+    assert "Unmapped finish_reason" not in caplog.text
 
 
 @pytest.mark.parametrize(
