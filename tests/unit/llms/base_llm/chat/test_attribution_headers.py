@@ -9,7 +9,7 @@ transport that records what would have been sent, because the default path
 """
 
 import json
-from collections.abc import AsyncIterable, Iterable, Mapping
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from typing import Final, cast
 
 import httpx
@@ -185,10 +185,11 @@ def test_caller_header_overrides_attribution_any_casing(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
 @pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("spell", [str.title, str.upper], ids=["attribution_spelling", "other_spelling"])
 async def test_caller_client_default_header_overrides_attribution(
-    transport: _HeaderCapturingTransport, model: str, header: str, is_async: bool
+    transport: _HeaderCapturingTransport, model: str, header: str, is_async: bool, spell: Callable[[str], str]
 ) -> None:
-    client: Final = _client(transport, "sdk", is_async, default_headers={header.upper(): "my-client"})
+    client: Final = _client(transport, "sdk", is_async, default_headers={spell(header): "my-client"})
     messages: Final = [{"role": "user", "content": "hi"}]
 
     if is_async:
