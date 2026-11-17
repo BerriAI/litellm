@@ -28,7 +28,6 @@ from litellm.types.llms.openai import (
 from .json_loader import SimpleProviderConfig
 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-_REQUESTED_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
 _SCHEMA_LITERAL_KEYWORDS: Final = frozenset({"const", "default", "enum", "examples"})
 
@@ -294,8 +293,7 @@ def create_config_class(provider: SimpleProviderConfig):
             supported_params: Final = self.get_supported_openai_params(model)
 
             # Apply supported params
-            requested_params: Final = _REQUESTED_PARAMS_ADAPTER.validate_python(non_default_params)
-            for param, value in requested_params.items():
+            for param, value in non_default_params.items():
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value

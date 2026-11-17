@@ -62,7 +62,15 @@ That's it! The provider will be automatically loaded and available.
     
     // Optional: Special handling flags
     "special_handling": {
-      "convert_content_list_to_string": true
+      "convert_content_list_to_string": true,
+      // Send PDF and other `file` content parts as `image_url` parts carrying
+      // the file's data URL. A part with only a `file_id` gets a 400, or is
+      // dropped under `drop_params`
+      "convert_file_parts_to_image_url": true,
+      // Strip boolean `additionalProperties` from a `json_schema`
+      // response_format. A schema-valued `additionalProperties` (a map field)
+      // gets a 400, or is dropped under `drop_params`
+      "remove_additional_properties_from_response_format": true
     },
 
     // Optional: Capabilities every model of this provider has, used when a
