@@ -105283,5 +105283,173 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ]
+    },
+    "fal_ai/heygen/avatar-6/identity-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_2k": 0.145,
+        "source": "https://fal.ai/models/heygen/avatar-6/identity-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_2k": 0.145,
+        "source": "https://fal.ai/models/heygen/avatar-6/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/ref-video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_2k": 0.145,
+        "source": "https://fal.ai/models/heygen/avatar-6/ref-video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/turbo/identity-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.05,
+        "output_cost_per_second_2k": 0.0875,
+        "source": "https://fal.ai/models/heygen/avatar-6/turbo/identity-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/turbo/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.05,
+        "output_cost_per_second_2k": 0.0875,
+        "source": "https://fal.ai/models/heygen/avatar-6/turbo/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/turbo/ref-video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.05,
+        "output_cost_per_second_2k": 0.0875,
+        "source": "https://fal.ai/models/heygen/avatar-6/turbo/ref-video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/microsoft/mai-image-2.7/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($5 per million text input tokens, $8 per million image input tokens, $34 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0349,
+        "output_cost_per_image_1K": 0.0349,
+        "output_cost_per_image_2K": 0.1394,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/microsoft/mai-image-2.7/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($5 per million text input tokens, $8 per million image input tokens, $34 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt and one input image, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0437,
+        "output_cost_per_image_1K": 0.0437,
+        "output_cost_per_image_2K": 0.1482,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/microsoft/mai-image-2.7/flash/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($1.75 per million text input tokens, $2.50 per million image input tokens, $10 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0103,
+        "output_cost_per_image_1K": 0.0103,
+        "output_cost_per_image_2K": 0.041,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/flash/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/microsoft/mai-image-2.7/flash/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($1.75 per million text input tokens, $2.50 per million image input tokens, $10 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt and one input image, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0131,
+        "output_cost_per_image_1K": 0.0131,
+        "output_cost_per_image_2K": 0.0438,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/flash/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
     }
 }
