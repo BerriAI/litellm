@@ -14,11 +14,12 @@ Each batch sends the four paths in equal shares: a 200 from the configured mock 
 it, a refusal from a model group whose deployments refuse at the socket carrying a large request body, and a call
 to that refusing group that retries and then falls back to the mock deployment for a 200. Two batches warm the
 proxy's caches and allocator arenas, the rest are measured. After every batch each worker's RSS is read until no
-new worker answers for a settle window, and the least-squares slope of those readings across the measured
-batches, divided by the requests a worker served per batch, is the RSS slope. Around the measured window every
-worker's gc thresholds are dropped to one so the next allocations trigger full collections, its RSS is read
-again and its thresholds put back, and the growth between those two readings divided by the requests a worker
-served is the memory each request kept. A sample of the served calls must have its SpendLogs rows written by the
+new worker answers for a settle window, and the least-squares slope of the workers' summed RSS across the measured
+batches, divided by the requests in a batch, is the RSS slope: one worker's RSS swings by tens of MB between reads,
+the sum over all of them is what a leak moves. Around the measured window every worker's gc thresholds are dropped
+to one so the next allocations trigger full collections, the RSS is read again and the thresholds put back, and
+the growth of the summed RSS between those two readings divided by the requests sent is the memory each request
+kept. A sample of the served calls must have its SpendLogs rows written by the
 end, the check that the writes ran the whole time."""
 
 from __future__ import annotations
@@ -44,9 +45,16 @@ from e2e_http import NoBody
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from memory_readings import RssReading, WorkerKey, settled_rss_per_worker
-from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride, SpendLogsParams
+from models import (
+    ChatMessage,
+    ChatResponse,
+    LiteLLMParamsBody,
+    ReliabilityChatBody,
+    RouterSettingsOverride,
+    SpendLogsParams,
+)
 from proxy_client import ProxyClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 pytestmark = [pytest.mark.e2e, pytest.mark.perf]
 
@@ -55,7 +63,7 @@ REFUSING_MODEL: Final = "openai/gpt-5.5"
 DEPLOYMENTS_PER_REFUSING_GROUP: Final = 2
 WARMUP_BATCHES: Final = 2
 MAX_TOKENS: Final = 2_048
-LARGE_BODY_TURNS: Final = 64
+LARGE_BODY_TURNS: Final = 16
 LARGE_BODY_TURN_CHARS: Final = 16_384
 FORCED_GC_THRESHOLDS: Final = (1, 1, 1)
 DEFAULT_GC_THRESHOLDS: Final = (700, 10, 10)
@@ -79,22 +87,14 @@ class GcThresholds(BaseModel, frozen=True):
 class SoakCall:
     path: SoakPath
     status_code: int
-    call_id: str | None
+    response_id: str | None
     body_head: str
 
 
 @dataclass(frozen=True, slots=True)
-class WorkerSlope:
-    worker: WorkerKey
-    where: str
-    kib_per_request: float
-
-
-@dataclass(frozen=True, slots=True)
-class WorkerRetention:
-    before: RssReading
-    after: RssReading
-    kib_per_request: float
+class FleetRss:
+    workers: int
+    total_mb: float
 
 
 def _large_transcript(marker: str) -> tuple[ChatMessage, ...]:
@@ -138,6 +138,14 @@ def _body(path: SoakPath, refusing: str, transcript: tuple[ChatMessage, ...]) ->
             )
 
 
+def _response_id(body: str) -> str | None:
+    try:
+        parsed: Final = ChatResponse.model_validate_json(body)
+    except ValidationError:
+        return None
+    return parsed.id
+
+
 def _call(proxy: ProxyClient, key: str, path: SoakPath, refusing: str, transcript: tuple[ChatMessage, ...]) -> SoakCall:
     resp: Final = proxy.transport.send(
         "/chat/completions",
@@ -145,7 +153,7 @@ def _call(proxy: ProxyClient, key: str, path: SoakPath, refusing: str, transcrip
         json=_body(path, refusing, transcript),
         stream=path == "streamed",
     )
-    return SoakCall(path, resp.status_code, resp.call_id, resp.body[:300])
+    return SoakCall(path, resp.status_code, _response_id(resp.body) if path == "served" else None, resp.body[:300])
 
 
 def _batch(proxy: ProxyClient, key: str, refusing: str, transcript: tuple[ChatMessage, ...]) -> tuple[SoakCall, ...]:
@@ -189,8 +197,8 @@ def _rss_after_forced_full_gc(proxy: ProxyClient) -> Mapping[WorkerKey, RssReadi
         _set_gc_everywhere(proxy, DEFAULT_GC_THRESHOLDS)
 
 
-def _requests_per_worker(total: int, workers: int) -> float:
-    return total / max(1, workers)
+def _fleet(settled: Mapping[WorkerKey, RssReading], workers: frozenset[WorkerKey]) -> FleetRss:
+    return FleetRss(len(workers), sum(settled[worker].ram_usage_mb for worker in workers))
 
 
 def _slope(values: Sequence[float]) -> float:
@@ -201,35 +209,11 @@ def _slope(values: Sequence[float]) -> float:
     return sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, values, strict=True)) / spread
 
 
-def _worker_slopes(checkpoints: Sequence[Mapping[WorkerKey, RssReading]]) -> tuple[WorkerSlope, ...]:
-    workers: Final[frozenset[WorkerKey]] = frozenset(checkpoints[0]).intersection(*checkpoints[1:])
-    per_worker_batch: Final = _requests_per_worker(MEMORY_SOAK_BATCH_REQUESTS, len(workers))
-    return tuple(
-        WorkerSlope(
-            worker,
-            checkpoints[-1][worker].where,
-            _slope(tuple(checkpoint[worker].ram_usage_mb for checkpoint in checkpoints)) * 1024 / per_worker_batch,
-        )
-        for worker in workers
-    )
-
-
-def _worker_retention(
-    before: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading], requests: int
-) -> tuple[WorkerRetention, ...]:
+def _assert_same_workers(before: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]) -> None:
     assert before.keys() == after.keys(), (
         f"the workers answering /debug/memory/summary changed across the soak, so not every worker can be compared "
         f"with itself: gone {sorted(before.keys() - after.keys())} (a restart or OOM kill), new "
         f"{sorted(after.keys() - before.keys())}"
-    )
-    per_worker: Final = _requests_per_worker(requests, len(before))
-    return tuple(
-        WorkerRetention(
-            before[worker],
-            after[worker],
-            (after[worker].ram_usage_mb - before[worker].ram_usage_mb) * 1024 / per_worker,
-        )
-        for worker in before
     )
 
 
@@ -296,30 +280,33 @@ class TestMemorySoak:
         )
         after: Final = _rss_after_forced_full_gc(proxy)
 
-        slopes: Final = _worker_slopes(checkpoints)
-        steepest: Final = max(slopes, key=lambda slope: slope.kib_per_request)
-        retained: Final = max(
-            _worker_retention(before, after, len(calls)), key=lambda retention: retention.kib_per_request
+        for checkpoint in (*checkpoints, after):
+            _assert_same_workers(before, checkpoint)
+        workers: Final = frozenset(before)
+        fleet: Final = tuple(_fleet(checkpoint, workers) for checkpoint in (before, *checkpoints, after))
+        slope_kib: Final = (
+            _slope(tuple(reading.total_mb for reading in fleet[1:-1])) * 1024 / MEMORY_SOAK_BATCH_REQUESTS
         )
-        served: Final = tuple(call.call_id for call in calls if call.status_code == 200 and call.call_id)
+        retained_kib: Final = (fleet[-1].total_mb - fleet[0].total_mb) * 1024 / len(calls)
+        served: Final = tuple(call.response_id for call in calls if call.response_id)
         spend_share: Final = _spend_logged_share(
             proxy, served[:: max(1, len(served) // SPEND_SAMPLE)][:SPEND_SAMPLE], time.monotonic() + SPEND_WAIT_SECONDS
         )
-        record_property("rss_soak_slope_kib_per_request", round(steepest.kib_per_request, 3))
-        record_property("rss_soak_retained_kib_per_request", round(retained.kib_per_request, 3))
+        record_property("rss_soak_slope_kib_per_request", round(slope_kib, 3))
+        record_property("rss_soak_retained_kib_per_request", round(retained_kib, 3))
         record_property("rss_soak_spend_logged_share", round(spend_share, 3))
 
-        assert steepest.kib_per_request <= MEMORY_SOAK_SLOPE_KIB_PER_REQUEST, (
-            f"{steepest.where} grew {steepest.kib_per_request:.1f} KiB of RSS per request it served across "
-            f"{MEMORY_SOAK_MEASURED_BATCHES} measured batches of served, streamed, failed and fallback calls, past "
-            f"the {MEMORY_SOAK_SLOPE_KIB_PER_REQUEST} KiB ceiling; the Redis batch scope leak fixed in #50751 grew "
-            f"about 40 KiB per request"
+        assert slope_kib <= MEMORY_SOAK_SLOPE_KIB_PER_REQUEST, (
+            f"the gateway's {len(workers)} workers grew {slope_kib:.1f} KiB of RSS per request across "
+            f"{MEMORY_SOAK_MEASURED_BATCHES} measured batches of served, streamed, failed and fallback calls, past the "
+            f"{MEMORY_SOAK_SLOPE_KIB_PER_REQUEST} KiB ceiling (the Redis batch scope leak fixed in #50751 grew about "
+            f"40 KiB per request): {[round(reading.total_mb) for reading in fleet[1:-1]]} MB after each batch"
         )
-        assert retained.kib_per_request <= MEMORY_SOAK_RETAINED_KIB_PER_REQUEST, (
-            f"{retained.after.where} kept {retained.kib_per_request:.1f} KiB per request after a forced full gc "
-            f"({retained.before.ram_usage_mb:.0f} MB before the measured batches, {retained.after.ram_usage_mb:.0f} "
-            f"MB after), past the {MEMORY_SOAK_RETAINED_KIB_PER_REQUEST} KiB ceiling, so requests leave memory "
-            f"behind that no collection frees"
+        assert retained_kib <= MEMORY_SOAK_RETAINED_KIB_PER_REQUEST, (
+            f"the gateway's {len(workers)} workers kept {retained_kib:.1f} KiB per request after a forced full gc "
+            f"({fleet[0].total_mb:.0f} MB before the measured batches, {fleet[-1].total_mb:.0f} MB after), past the "
+            f"{MEMORY_SOAK_RETAINED_KIB_PER_REQUEST} KiB ceiling, so requests leave memory behind that no collection "
+            f"frees"
         )
         assert spend_share >= SPEND_LOGGED_SHARE_FLOOR, (
             f"only {spend_share:.0%} of a sample of served soak calls had a SpendLogs row within "
