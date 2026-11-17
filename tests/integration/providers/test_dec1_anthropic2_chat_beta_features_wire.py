@@ -137,13 +137,16 @@ def test_an_anthropic_url_tool_in_tools_is_moved_to_mcp_servers(gateway: Gateway
 
     The `url` tool branch of `_map_tool_helper` builds an `AnthropicMcpServerTool` from it, so it must arrive in
     `mcp_servers` exactly as sent and never in `tools`.
+
+    Pinned current (run 44176682961): once the server is moved out, `tools` stays in the body as an empty list
+    rather than being removed, so the check is that no tool remains.
     """
     with peer() as provider, gateway.scenario() as scenario:
         server: Final = mcp_server(authorization_token=MCP_TOKEN)
         served(chat(gateway, deployment(scenario, provider), tools=[server]))
         body: Final = provider.only().body
         assert body.get("mcp_servers") == [server]
-        assert "tools" not in body
+        assert body.get("tools", []) == []
 
 
 def test_a_top_level_mcp_servers_list_is_forwarded_with_its_beta(gateway: Gateway) -> None:

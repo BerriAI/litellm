@@ -110,10 +110,13 @@ def test_real_bedrock_access_denied_body_without_the_class_name_is_still_a_403(g
         assert response.status_code == 403, response.text
 
 
-def test_an_invalid_security_token_is_a_401_authentication_error(gateway: Gateway) -> None:
+def test_an_invalid_security_token_is_an_authentication_error_that_keeps_bedrocks_403(gateway: Gateway) -> None:
     """Bedrock answers HTTP 403 UnrecognizedClientException `The security token included in the request is invalid.`.
 
-    The text match comes first (`exception_mapping_utils.py:1053`), so the caller must get HTTP 401, not 403.
+    Pinned current (run 44176682961). The text match raises `AuthenticationError`
+    (litellm/litellm_core_utils/exception_mapping_utils.py:1061-1069) with Bedrock's own response, and the
+    openai base class takes the status from that response (litellm/exceptions.py:201-207), so the caller gets
+    HTTP 403 with `litellm.AuthenticationError: BedrockException Invalid Authentication` in the message.
     """
     with bedrock(
         gateway,
@@ -123,7 +126,8 @@ def test_an_invalid_security_token_is_a_401_authentication_error(gateway: Gatewa
         model=MODEL,
     ) as rig:
         response: Final = rig.chat(num_retries=0)
-        assert response.status_code == 401, response.text
+        assert response.status_code == 403, response.text
+        assert error_message(response).startswith("litellm.AuthenticationError:"), response.text
         assert "Invalid Authentication" in error_message(response), response.text
 
 
@@ -143,11 +147,14 @@ def test_input_too_long_is_a_400_context_window_error(gateway: Gateway) -> None:
         assert "Context Window Error" in error_message(response), response.text
 
 
-def test_an_invalid_model_identifier_on_converse_is_a_404(gateway: Gateway) -> None:
-    """Converse answers HTTP 400 `The provided model identifier is invalid.` for a model the cost map routes to Converse.
+def test_an_invalid_model_identifier_on_this_claude_deployment_stays_a_400(gateway: Gateway) -> None:
+    """Bedrock answers HTTP 400 `The provided model identifier is invalid.` for the module's Claude deployment.
 
-    It is mapped to `NotFoundError` with status 404 (`exception_mapping_utils.py:1027`), so the caller gets
-    HTTP 404 and the error is not retried.
+    Pinned current (run 44176682961). The `NotFoundError` branch
+    (litellm/litellm_core_utils/exception_mapping_utils.py:1035-1046) needs the failed response's request path to
+    end in `/converse` (`_came_from_bedrock_converse`, :972-976) and the model to reach Converse by default. This
+    deployment's error does not meet both, so it falls through to `BadRequestError`: the caller gets HTTP 400
+    and the error is still not retried.
     """
     with bedrock(
         gateway,
@@ -155,7 +162,8 @@ def test_an_invalid_model_identifier_on_converse_is_a_404(gateway: Gateway) -> N
         model=MODEL,  # pyright: ignore[reportArgumentType]
     ) as rig:
         response: Final = rig.chat(num_retries=2)
-        assert response.status_code == 404, response.text
+        assert response.status_code == 400, response.text
+        assert "The provided model identifier is invalid." in error_message(response), response.text
         assert len(rig.posts()) == 1
 
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from typing import Final
+from urllib.parse import unquote
 
 import pytest
 from integration._support.client import Gateway
@@ -70,13 +71,17 @@ def test_a_bare_mistral_7b_id_posts_to_invoke_with_the_mistral_instruct_prompt(g
     Bedrock must receive one `POST /model/mistral.mistral-7b-instruct-v0%3A2/invoke` with a bearer key and the
     body `{"prompt": "<s>[INST] <prompt> [/INST]\\n", "max_tokens": 50, "temperature": 0.3, "top_p": 0.9,
     "stop": ["END"]}` (`mistral_instruct_pt`, `factory.py:386`; `AmazonMistralConfig.map_openai_params`).
+
+    Run 44176682961 saw the colon unencoded (`v0:2`), although `BaseAWSLLM.encode_model_id`
+    (litellm/llms/bedrock/base_aws_llm.py:662-670) percent-encodes it on the Python invoke path. Both spellings
+    name the same model under bearer auth, so the path is compared after unquoting.
     """
     prompt: Final = marker()
     with bedrock(gateway, _mistral_reply, model=f"bedrock/{MISTRAL_7B}") as rig:
         response: Final = rig.chat(prompt, max_tokens=50, temperature=0.3, top_p=0.9, stop=["END"])
         assert response.status_code == 200, response.text
         sent: Final = rig.one_post()
-        assert sent.target == "/model/mistral.mistral-7b-instruct-v0%3A2/invoke", sent.target
+        assert unquote(sent.target) == "/model/mistral.mistral-7b-instruct-v0:2/invoke", sent.target
         assert sent.headers["authorization"] == f"Bearer {TOKEN}"
         assert body_of(sent) == {
             "prompt": f"<s>[INST] {prompt} [/INST]\n",
@@ -411,13 +416,16 @@ def test_invoke_guardrail_config_without_an_identifier_is_a_400_before_bedrock(g
         assert rig.posts() == ()
 
 
-def test_an_invoke_answer_bedrock_cannot_parse_is_a_422_style_bad_request(gateway: Gateway) -> None:
+def test_an_invoke_answer_bedrock_cannot_parse_is_a_422_bad_request(gateway: Gateway) -> None:
     """Bedrock answers HTTP 200 with a Mistral body missing `outputs` and `choices` (`{"unexpected": true}`).
 
     `transform_response` raises `BedrockError(status_code=422, "Error processing=...")`
     (`base_invoke_transformation.py:402`), which `_map_bedrock_exception` maps to `BadRequestError`, so the
-    caller must get HTTP 400 naming the unparsed body, never an empty 200.
-    UNVERIFIED: the outer status; 422 maps to BadRequestError in `exception_mapping_utils.py:1127`.
+    caller gets an error naming the unparsed body, never an empty 200.
+
+    Pinned current (run 44176682961): the error is a `BadRequestError` that keeps the `BedrockError`'s 422 as
+    its response status (the openai base class takes the status from the response, litellm/exceptions.py), so the
+    caller gets HTTP 422 with `"code": "422"`, not 400.
     """
 
     def respond(_: Request) -> Reply:
@@ -425,5 +433,6 @@ def test_an_invoke_answer_bedrock_cannot_parse_is_a_422_style_bad_request(gatewa
 
     with bedrock(gateway, respond, model=f"bedrock/{MISTRAL_7B}") as rig:
         response: Final = rig.chat(num_retries=0)
-        assert response.status_code == 400, response.text
+        assert response.status_code == 422, response.text
+        assert error_message(response).startswith("litellm.BadRequestError:"), response.text
         assert "unexpected" in error_message(response), response.text

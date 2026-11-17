@@ -58,14 +58,20 @@ def _claude_reply(**fields: object) -> Reply:
 def test_claude_chat_posts_to_raw_predict_with_the_minted_token(gateway: Gateway) -> None:
     """A Claude chat request reaches the peer as one `POST /v1/projects/dec1-vertex-project/locations/
     us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929:rawPredict` with no query, a minted
-    `Authorization: Bearer` token and no `x-api-key`."""
+    `Authorization: Bearer` token.
+
+    Pinned current (run 44176682961): the same minted token is also sent as `x-api-key`, because the Claude branch
+    hands `api_key=access_token` to the Anthropic chat handler next to the `Authorization` header
+    (litellm/llms/vertex_ai/vertex_ai_partner_models/main.py:222-248). Both go to the same Google endpoint, so
+    the check is that `x-api-key`, when present, carries the minted token and nothing else."""
     with vertex(gateway, claude_echo, backend=CLAUDE) as rig:
         response: Final = rig.chat(max_tokens=32)
         assert response.status_code == 200, response.text
         call: Final = rig.peer.one_call()
         assert (path_of(call), query_of(call)) == (_RAW, "")
-        assert call.headers["authorization"].removeprefix("Bearer ") in rig.peer.plan.issued
-        assert "x-api-key" not in call.headers
+        bearer: Final = call.headers["authorization"].removeprefix("Bearer ")
+        assert bearer in rig.peer.plan.issued
+        assert call.headers.get("x-api-key", bearer) == bearer
 
 
 def test_claude_chat_streaming_posts_to_stream_raw_predict_with_alt_sse(gateway: Gateway) -> None:

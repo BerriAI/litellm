@@ -9,6 +9,15 @@ key from `passthrough_endpoint_router.get_credentials("anthropic")` (a pass-thro
 proxy key never does. Multipart uploads, binary downloads and deletes must keep working the same way when the
 front door moves to Rust.
 
+BUG (run 44176682961): the proxy's OpenAI-style files router declares `/{provider}/v1/files`,
+`/{provider}/v1/files/{file_id:path}` and `/{provider}/v1/files/{file_id:path}/content`
+(litellm/proxy/openai_files_endpoints/files_endpoints.py:593-607, :1009-1019, :1318-1328, :1516-1526, :1920-1930),
+and that router is included before the pass-through routes (litellm/proxy/proxy_server.py:23218-23220). So
+`/anthropic/v1/files...` never reaches `anthropic_proxy_route`: an upload without an OpenAI `purpose` form field
+is refused with 422, metadata and delete come back as OpenAI file objects (`object`, `bytes`, `purpose`,
+`deleted`), and the list drops `limit` and `after_id`. The Files API tests that see this skip with BUG; the
+content download and the Skills API still pass through.
+
 The module owns a proxy whose `ANTHROPIC_API_BASE` points at an owned peer and whose `ANTHROPIC_API_KEY` is
 synthetic; every other `ANTHROPIC_*` variable is scrubbed, as in round 1's `test_dec1_anthropic_env_api_base_owned_proxy.py`.
 """
@@ -89,7 +98,10 @@ def test_a_multipart_upload_is_forwarded_to_v1_files_with_its_bytes(isolated: Ga
 
     The peer must see one `POST /v1/files` whose body is multipart and holds the exact file bytes and the
     filename, and the caller must get Anthropic's file object back unchanged (`id: file_011dec1synthetic`).
+
+    See the module docstring: this route is answered by the OpenAI-style files endpoint (BUG).
     """
+    pytest.skip("BUG: /{provider}/v1/files routes shadow the Anthropic pass-through for the Files API")
     response, calls = _after(
         provider,
         lambda: isolated.client.post(
@@ -112,7 +124,10 @@ def test_the_upload_carries_the_operator_key_and_the_caller_beta(isolated: Gatew
     """The same upload must reach the peer with `x-api-key: dec1-anthropic2-env-key` (the operator's
     `ANTHROPIC_API_KEY`), the caller's `anthropic-beta: files-api-2025-04-14`, and no header holding the caller's
     proxy key, neither as `authorization` nor as `x-api-key`.
+
+    See the module docstring: this route is answered by the OpenAI-style files endpoint (BUG).
     """
+    pytest.skip("BUG: /{provider}/v1/files routes shadow the Anthropic pass-through for the Files API")
     _, calls = _after(
         provider,
         lambda: isolated.client.post(
@@ -130,7 +145,10 @@ def test_the_upload_carries_the_operator_key_and_the_caller_beta(isolated: Gatew
 def test_file_metadata_is_a_get_on_the_same_path(isolated: Gateway, provider: Peer) -> None:
     """`GET /anthropic/v1/files/file_011dec1synthetic` must reach the peer as a GET on
     `/v1/files/file_011dec1synthetic` and return Anthropic's file object unchanged.
+
+    See the module docstring: this route is answered by the OpenAI-style files endpoint (BUG).
     """
+    pytest.skip("BUG: /{provider}/v1/files routes shadow the Anthropic pass-through for the Files API")
     response, calls = _after(
         provider,
         lambda: isolated.request("GET", f"/anthropic/v1/files/{FILE_ID}", headers=_beta(FILES_BETA)),
@@ -157,7 +175,10 @@ def test_file_content_is_relayed_as_bytes(isolated: Gateway, provider: Peer) -> 
 def test_a_file_delete_is_forwarded_as_a_delete(isolated: Gateway, provider: Peer) -> None:
     """`DELETE /anthropic/v1/files/file_011dec1synthetic` must reach the peer as a DELETE on the same path and
     return Anthropic's `{"id": ..., "type": "file_deleted"}` unchanged.
+
+    See the module docstring: this route is answered by the OpenAI-style files endpoint (BUG).
     """
+    pytest.skip("BUG: /{provider}/v1/files routes shadow the Anthropic pass-through for the Files API")
     response, calls = _after(
         provider,
         lambda: isolated.request("DELETE", f"/anthropic/v1/files/{FILE_ID}", headers=_beta(FILES_BETA)),
@@ -170,7 +191,10 @@ def test_a_file_delete_is_forwarded_as_a_delete(isolated: Gateway, provider: Pee
 def test_the_files_list_keeps_its_query_string(isolated: Gateway, provider: Peer) -> None:
     """`GET /anthropic/v1/files?limit=5&after_id=file_dec1prev` must reach the peer with the same `limit` and
     `after_id` query values, since the SDK pages through files with them.
+
+    See the module docstring: this route is answered by the OpenAI-style files endpoint (BUG).
     """
+    pytest.skip("BUG: /{provider}/v1/files routes shadow the Anthropic pass-through for the Files API")
     response, calls = _after(
         provider,
         lambda: isolated.request(

@@ -254,24 +254,17 @@ def test_a_google_quota_message_on_a_400_is_still_a_rate_limit(gateway: Gateway)
 
 
 def test_a_google_403_permission_denied_reaches_the_caller_as_403(gateway: Gateway) -> None:
-    """Google's 403 `PERMISSION_DENIED` envelope always has `"code": 403`, which the `403` text branch of
-    `_map_vertex_exception` matches first; it raises `BadRequestError`, whose status is fixed at 400, so
-    the `PermissionDeniedError` branch is unreachable for real Google bodies."""
-    pytest.skip("BUG: a Vertex 403 PERMISSION_DENIED reaches the caller as HTTP 400 BadRequestError")
+    """Google's 403 `PERMISSION_DENIED` envelope reaches the caller as HTTP 403 with Google's message.
+
+    Round 2 (run 44176682961) showed the proxy now answers 403 with `"type": "permission_error"` for this
+    body, so the earlier BUG skip and the companion test that pinned HTTP 400 were dropped. The message text
+    still starts with `litellm.BadRequestError: Vertex_aiException BadRequestError`, so only the status and
+    Google's message are asserted.
+    """
     message: Final = "Permission 'aiplatform.endpoints.predict' denied on resource."
     with vertex(gateway, lambda _r: google_error(403, "PERMISSION_DENIED", message)) as rig:
         response: Final = rig.chat()
         assert response.status_code == 403, response.text
-        assert message in response.text
-
-
-def test_a_google_403_is_currently_answered_as_400(gateway: Gateway) -> None:
-    """Pins today's observable status for the case above, so a port that changes it does so on purpose:
-    the caller gets HTTP 400 with `BadRequestError` and Google's message in the body."""
-    message: Final = "Permission 'aiplatform.endpoints.predict' denied on resource."
-    with vertex(gateway, lambda _r: google_error(403, "PERMISSION_DENIED", message)) as rig:
-        response: Final = rig.chat()
-        assert response.status_code == 400, response.text
         assert message in response.text
 
 

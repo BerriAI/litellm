@@ -288,14 +288,20 @@ def test_a_hit_without_a_source_uri_gets_chunk_and_data_source_ids(gateway: Gate
 
 
 def test_a_query_image_becomes_an_image_retrieval_query(gateway: Gateway) -> None:
-    """The caller sends `query_image: {"media_type": "image/png", "data": <base64>}` with a text `query`.
+    """The caller sends `query_image: {"type": "base64", "media_type": "image/png", "data": <base64>}` and an empty
+    `query`.
 
     Bedrock must receive `retrievalQuery == {"type": "IMAGE", "image": {"format": "png", "inlineContent": <base64>}}`
-    (`_retrieval_query`, `transformation.py:183`), the text query not being sent.
+    (`_retrieval_query`, `transformation.py:183`).
+
+    Test mistake fixed after run 44176682961: a non-empty text `query` next to `query_image` is refused with 400
+    `Send either query or query_image, not both` (`resolve_search_query`,
+    litellm/vector_stores/search_query.py:128-148), and `query_image` needs `type: base64`
+    (`VectorStoreSearchQueryImage`, litellm/types/vector_stores.py:83-88).
     """
     with knowledge_base(gateway, _hit) as kb:
         response: Final = kb.search(
-            query="similar pictures", query_image={"media_type": "image/png", "data": PNG_BASE64}
+            query="", query_image={"type": "base64", "media_type": "image/png", "data": PNG_BASE64}
         )
         assert response.status_code == 200, response.text
         assert json_body(kb.one_post())["retrievalQuery"] == {
@@ -316,13 +322,15 @@ def _image_and_text_hits(_: Request) -> Reply:
 
 
 def test_an_image_search_returns_image_hits_as_base64_sources(gateway: Gateway) -> None:
-    """With `query_image` set, Bedrock answers an IMAGE hit (`byteContent` a PNG data URI) and a text hit.
+    """With `query_image` set (and `query` empty, see the test above), Bedrock answers an IMAGE hit (`byteContent` a PNG data URI) and a text hit.
 
     Both must come back, the image as `{"type": "image", "source": {"type": "base64", "media_type": "image/png",
     "data": <base64 without the data URI prefix>}}`.
     """
     with knowledge_base(gateway, _image_and_text_hits) as kb:
-        response: Final = kb.search(query="pics", query_image={"media_type": "image/png", "data": PNG_BASE64})
+        response: Final = kb.search(
+            query="", query_image={"type": "base64", "media_type": "image/png", "data": PNG_BASE64}
+        )
         assert response.status_code == 200, response.text
         data: Final = response.json()["data"]
         assert len(data) == 2, data

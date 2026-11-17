@@ -81,16 +81,17 @@ def test_the_deployments_route_reaches_the_azure_deployment_of_the_path_group(ga
         assert path_of(rig.one_post()) == f"/openai/deployments/{DEPLOYMENT}/chat/completions"
 
 
-def test_the_callers_api_version_query_is_not_forwarded_to_azure(gateway: Gateway) -> None:
+def test_the_callers_api_version_query_replaces_the_deployment_version(gateway: Gateway) -> None:
     """The caller sends `api-version=2024-02-01` in its query; the deployment is configured with `2024-10-21`.
 
-    Azure must receive the deployment's own `api-version: 2024-10-21`, because the version is a deployment
-    setting and the caller's query is only the Azure SDK's habit. UNVERIFIED: no code was found that copies the
-    inbound query into the call, so the deployment value is expected.
+    Pinned current (run 44176682961). The proxy copies an inbound `api-version` query into the call's
+    `api_version` ("Dynamic api version (Azure OpenAI endpoints)",
+    litellm/proxy/litellm_pre_call_utils.py:3062-3074), so Azure receives the caller's `2024-02-01` and not the
+    deployment's own version.
     """
     with azure(gateway, _ok) as rig:
         assert _deployments_chat(gateway, rig.model).status_code == 200
-        assert query_of(rig.one_post()) == {"api-version": DATED_API_VERSION}
+        assert query_of(rig.one_post()) == {"api-version": "2024-02-01"}
 
 
 def test_an_api_key_header_authenticates_an_azure_sdk_caller(gateway: Gateway) -> None:

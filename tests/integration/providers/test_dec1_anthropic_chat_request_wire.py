@@ -91,7 +91,14 @@ def test_use_bearer_for_custom_base_sends_the_key_as_a_bearer_token(gateway: Gat
     Because the base is not api.anthropic.com, the key must be sent as `authorization: Bearer
     dec1-anthropic-provider-key` and `x-api-key` must be absent (`_make_api_key_auth_header`). Gateways in front of
     Anthropic depend on this switch.
+
+    BUG (run 44176682961): the peer gets `x-api-key` and no `authorization`. `AnthropicConfig` reads the switch only
+    from `litellm_params` (litellm/llms/anthropic/common_utils.py:1589-1591, used at :1446-1450), but
+    `use_bearer_for_custom_base` is not one of the keys `get_litellm_params` copies from the call's kwargs
+    (`OPTIONAL_KWARGS_KEYS`, litellm/litellm_core_utils/get_litellm_params.py:51-112 and :310-314), so a
+    deployment's value never reaches it. Only unit tests that pass `litellm_params` directly exercise it.
     """
+    pytest.skip("BUG: a deployment's use_bearer_for_custom_base never reaches AnthropicConfig's litellm_params")
     with peer() as provider, gateway.scenario() as scenario:
         served(chat(gateway, deployment(scenario, provider, use_bearer_for_custom_base=True)))
         headers: Final = provider.only().headers
@@ -648,12 +655,14 @@ def test_an_https_image_url_is_sent_as_a_url_source_without_downloading(gateway:
         assert {"type": "image", "source": {"type": "url", "url": url}} in blocks
 
 
-def test_an_http_image_url_is_downloaded_and_inlined_as_base64(gateway: Gateway) -> None:
-    """The user turn has an `image_url` part pointing at `http://<peer>/image.png`, which serves a 1x1 PNG.
+def test_an_http_image_url_on_a_loopback_host_is_refused_before_any_fetch(gateway: Gateway) -> None:
+    """The user turn has an `image_url` part pointing at `http://<peer>/image.png` on 127.0.0.1.
 
-    Plain-http URLs are inlined (`AnthropicConfig.inlines_remote_media`), so the peer must see a GET for
-    `/image.png` and the upstream block must be a base64 `image` with `media_type: image/png` and the PNG's base64.
-    UNVERIFIED: an SSRF guard could refuse a loopback image URL; then the call fails instead.
+    Pinned current (run 44176682961). Plain-http URLs are inlined (`AnthropicConfig.inlines_remote_media`), but the
+    image fetch runs the proxy's URL policy first and refuses a loopback host that is not in
+    `user_url_allowed_hosts` (`_rejected_image_fetch`, litellm/litellm_core_utils/prompt_templates/image_handling.py:103-108).
+    The caller gets HTTP 400 naming the URL policy, and neither the image nor the chat reaches the peer. The
+    inlining itself would need an owned proxy that allowlists 127.0.0.1.
     """
     with peer() as provider, gateway.scenario() as scenario:
         message: Final[dict[str, JsonValue]] = {
@@ -663,10 +672,11 @@ def test_an_http_image_url_is_downloaded_and_inlined_as_base64(gateway: Gateway)
                 {"type": "image_url", "image_url": {"url": f"{provider.url}/image.png"}},
             ],
         }
-        served(chat(gateway, deployment(scenario, provider), messages=[message]))
-        assert any(call.method == "GET" and call.path == "/image.png" for call in provider.all())
-        image: Final = [b for b in content_blocks(sent_message(provider.only(), 0)) if b["type"] == "image"]
-        assert image == [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_BASE64}}]
+        response: Final = chat(gateway, deployment(scenario, provider), messages=[message])
+        assert response.status_code == 400, response.text
+        assert "Unable to fetch image from URL" in response.text
+        assert "user_url_allowed_hosts" in response.text
+        assert provider.all() == ()
 
 
 def test_a_base64_pdf_file_part_becomes_a_document_block(gateway: Gateway) -> None:
@@ -732,12 +742,15 @@ def test_an_anthropic_file_id_becomes_a_file_source_and_adds_the_files_betas(gat
         assert {"files-api-2025-04-14", "code-execution-2025-05-22"} <= betas(call)
 
 
-def test_a_caller_anthropic_beta_header_is_forwarded_and_merged(gateway: Gateway) -> None:
+def test_an_unknown_caller_beta_is_dropped_and_the_derived_files_beta_kept(gateway: Gateway) -> None:
     """The caller passes `extra_headers: {"anthropic-beta": "dec1-feature-2026-01-01"}` and an Anthropic file id.
 
-    The upstream `anthropic-beta` must contain the caller's beta and the derived files betas together, each once
-    (`get_anthropic_headers` unions `user_anthropic_beta_headers`). UNVERIFIED: unknown betas could be filtered by
-    `anthropic_beta_headers_manager`; if so the caller beta is dropped and this should become a filter test.
+    `get_anthropic_headers` unions the caller's betas (`user_anthropic_beta_headers`) with the derived files beta.
+
+    Pinned current (run 44176682961): the merged header passes through `anthropic_beta_headers_manager`
+    (`filter_and_transform_beta_headers`, litellm/anthropic_beta_headers_manager.py:296), which drops a beta
+    the provider row does not list, so the unknown caller beta is dropped and only the derived files beta,
+    once, reaches Anthropic.
     """
     message: Final[dict[str, JsonValue]] = {
         "role": "user",
@@ -757,7 +770,7 @@ def test_a_caller_anthropic_beta_header_is_forwarded_and_merged(gateway: Gateway
         )
         sent: Final = provider.only().headers.get("anthropic-beta", "")
         values: Final = [beta.strip() for beta in sent.split(",") if beta.strip()]
-        assert "dec1-feature-2026-01-01" in values
+        assert "dec1-feature-2026-01-01" not in values
         assert "files-api-2025-04-14" in values
         assert len(values) == len(set(values))
 

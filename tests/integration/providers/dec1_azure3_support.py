@@ -321,4 +321,7 @@ def decoded_response_id(encoded: str) -> str:
     """Decode a proxy managed Responses id (`resp_` + base64 of
     `litellm:custom_llm_provider:{provider};model_id:{id};response_id:{raw}`, `litellm/types/utils.py:5308`)."""
     assert encoded.startswith("resp_"), encoded
-    return base64.b64decode(encoded.removeprefix("resp_")).decode()
+    body: Final = encoded.removeprefix("resp_")
+    # Run 44176682961 got an id without base64 padding; managed ids elsewhere use unpadded urlsafe base64
+    # (`litellm/llms/base_llm/managed_resources/utils.py:328`), so accept both alphabets and restore the padding.
+    return base64.urlsafe_b64decode(body.replace("+", "-").replace("/", "_") + "=" * (-len(body) % 4)).decode()

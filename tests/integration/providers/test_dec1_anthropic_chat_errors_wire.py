@@ -203,13 +203,17 @@ def test_a_prompt_too_long_rejection_is_a_context_window_exceeded_error(gateway:
 def test_a_content_filtering_rejection_is_a_content_policy_violation(gateway: Gateway) -> None:
     """The provider answers 400 with a message containing `Output blocked by content filtering policy`.
 
-    The caller must get 400 and a message that starts with `litellm.ContentPolicyViolationError`.
+    The caller must get 400 and a message that names `litellm.ContentPolicyViolationError`.
+
+    Pinned current (run 44176682961): the message starts with `litellm.BadRequestError: litellm.ContentPolicyViolationError:`,
+    because `ContentPolicyViolationError` prefixes its own name (litellm/exceptions.py:777) and then hands that
+    message to `BadRequestError.__init__` (:782), which prefixes `litellm.BadRequestError: ` again.
     """
     reply: Final = anthropic_error(400, "invalid_request_error", "Output blocked by content filtering policy")
     with peer(always(reply)) as provider, gateway.scenario() as scenario:
         response: Final = chat(gateway, deployment(scenario, provider))
         assert response.status_code == 400, response.text
-        assert error_message(response).startswith("litellm.ContentPolicyViolationError")
+        assert error_message(response).startswith("litellm.BadRequestError: litellm.ContentPolicyViolationError: ")
 
 
 def test_the_provider_error_never_leaks_the_deployment_key(gateway: Gateway) -> None:

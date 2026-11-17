@@ -201,6 +201,9 @@ def test_a_search_result_location_citation_is_returned_unchanged(gateway: Gatewa
 
     `provider_specific_fields.citations` must be `[[<that citation>]]`, one inner list per cited text block
     (`transformation.py:2937`), with every key kept, since RAG clients link the answer back by `source`.
+
+    Pinned current (run 44176682961): each citation also gains `supported_text`, the text of the block that cites
+    it (litellm/llms/anthropic/chat/transformation.py:2936-2948).
     """
     citation: Final[dict[str, JsonValue]] = {
         "type": "search_result_location",
@@ -214,14 +217,15 @@ def test_a_search_result_location_citation_is_returned_unchanged(gateway: Gatewa
     block: Final[dict[str, JsonValue]] = {"type": "text", "text": "It ships in blue.", "citations": [citation]}
     with peer(replying([block])) as provider, gateway.scenario() as scenario:
         body: Final = served(chat(gateway, deployment(scenario, provider)))
-        assert provider_fields(body).get("citations") == [[citation]]
+        assert provider_fields(body).get("citations") == [[{**citation, "supported_text": "It ships in blue."}]]
 
 
 def test_a_page_location_citation_on_a_pdf_is_returned_unchanged(gateway: Gateway) -> None:
     """The provider answers a text block with one `page_location` citation (`document_index: 0`,
     `document_title`, `start_page_number: 2`, `end_page_number: 3`, `cited_text`).
 
-    `provider_specific_fields.citations` must be `[[<that citation>]]` with the page numbers intact.
+    `provider_specific_fields.citations` must be `[[<that citation>]]` with the page numbers intact, plus the
+    `supported_text` of the citing block (pinned current, litellm/llms/anthropic/chat/transformation.py:2936-2948).
     """
     citation: Final[dict[str, JsonValue]] = {
         "type": "page_location",
@@ -234,7 +238,7 @@ def test_a_page_location_citation_on_a_pdf_is_returned_unchanged(gateway: Gatewa
     block: Final[dict[str, JsonValue]] = {"type": "text", "text": "Blue.", "citations": [citation]}
     with peer(replying([block])) as provider, gateway.scenario() as scenario:
         body: Final = served(chat(gateway, deployment(scenario, provider)))
-        assert provider_fields(body).get("citations") == [[citation]]
+        assert provider_fields(body).get("citations") == [[{**citation, "supported_text": "Blue."}]]
 
 
 def test_anthropic_rate_limit_headers_are_also_relayed_under_the_openai_names(gateway: Gateway) -> None:

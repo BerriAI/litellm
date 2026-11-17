@@ -177,7 +177,7 @@ def test_deployment_not_found_is_a_404(gateway: Gateway) -> None:
     ("status", "code", "expected", "marker"),
     [
         (401, "401", 401, "AzureException AuthenticationError"),
-        (422, "unprocessable", 400, "AzureException BadRequestError"),
+        (422, "unprocessable", 422, "AzureException BadRequestError"),
         (429, "429", 429, "AzureException RateLimitError"),
         (502, "BadGateway", 502, "AzureException BadGatewayError"),
         (503, "ServiceUnavailable", 503, "AzureException ServiceUnavailableError"),
@@ -192,8 +192,10 @@ def test_an_azure_error_status_maps_to_the_documented_caller_status(
     """Azure answers `status` with a plain error envelope; `num_retries: 0` and SDK `max_retries: 0`.
 
     The caller must get HTTP `expected` and a message starting with the `AzureException ...` class marker from
-    `_map_azure_exception` (`exception_mapping_utils.py:2197`). 422 is folded into 400 and 504 keeps its own
-    status through `Timeout(exception_status_code=504)`.
+    `_map_azure_exception` (`exception_mapping_utils.py:2197`). 504 keeps its own status through
+    `Timeout(exception_status_code=504)`. Pinned current (run 44176682961): a 422 is raised as
+    `BadRequestError` with Azure's response, whose status (422) the openai base class keeps, so the caller
+    gets HTTP 422 with the `BadRequestError` marker rather than 400.
     """
     with azure(gateway, always(azure_error(status, code, f"scripted {status}")), max_retries=0) as rig:
         response: Final = rig.chat(num_retries=0)

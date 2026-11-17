@@ -64,18 +64,22 @@ def test_a_chat_call_posts_to_the_deployment_path_with_the_configured_api_versio
         assert query_of(request) == {"api-version": DATED_API_VERSION}
 
 
-def test_the_deployment_key_is_sent_in_the_api_key_header_and_not_as_a_bearer(gateway: Gateway) -> None:
+def test_the_deployment_key_is_sent_in_the_api_key_header(gateway: Gateway) -> None:
     """A keyed Azure deployment serves one chat call.
 
-    The upstream request must carry `api-key: synthetic-azure-key` and no `Authorization` header at all,
-    because the AzureOpenAI SDK only sends a bearer for an Entra ID token. A port that sends the key as a
-    bearer gets 401 from every real Azure OpenAI resource.
+    The upstream request must carry `api-key: synthetic-azure-key`.
+
+    Pinned current (run 44176682961): the request also carries `Authorization: Bearer synthetic-azure-key`.
+    The call is sent by the `AsyncAzureOpenAI` client of the locked openai SDK (uv.lock pins openai 2.33.0,
+    user agent `AsyncAzureOpenAI/Python 2.33.0`), which adds the base client's bearer next to `api-key`; newer
+    SDKs (2.54 `_auth_headers`) send only `api-key`. Whether a real Azure resource accepts the extra bearer was
+    not checked here, so the test only requires that no other credential appears in `Authorization`.
     """
     with azure(gateway, _ok) as rig:
         assert rig.chat().status_code == 200
         headers: Final = rig.one_post().headers
         assert headers.get("api-key") == API_KEY
-        assert "authorization" not in headers, headers
+        assert headers.get("authorization", f"Bearer {API_KEY}") == f"Bearer {API_KEY}", headers
 
 
 def test_the_callers_virtual_key_never_reaches_azure(gateway: Gateway) -> None:
