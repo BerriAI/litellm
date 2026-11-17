@@ -10031,7 +10031,8 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
     from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
     from litellm.proxy.proxy_server import ProxyConfig
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
     under_another_key = encrypt_value_helper("stored-under-another-key", new_encryption_key="sk-another-master-key")
     for key in ("ROTATION_TEST_ENCRYPTED", "ROTATION_TEST_PLAINTEXT", "ROTATION_TEST_UNDER_ANOTHER_KEY"):
         monkeypatch.setenv(key, "restored-by-monkeypatch")
@@ -10081,7 +10082,8 @@ async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_
     from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
     from litellm.proxy.proxy_server import ProxyConfig
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
     monkeypatch.setenv("ROTATION_TEST_SAVED_A_MOMENT_AGO", "restored-by-monkeypatch")
     monkeypatch.delenv("ROTATION_TEST_SAVED_A_MOMENT_AGO")
 
@@ -10110,6 +10112,85 @@ async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_
     assert {key: decrypt_if_encrypted_with(value, "sk-new-master-key") for key, value in stored.items()} == {
         "ROTATION_TEST_SAVED_A_MOMENT_AGO": "saved-a-moment-ago"
     }
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_salt_key(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+    monkeypatch.setenv("ROTATION_TEST_SALTED", "restored-by-monkeypatch")
+    monkeypatch.delenv("ROTATION_TEST_SALTED")
+    delegated_stores = (
+        "rotate_mcp_server_credentials_master_key",
+        "rotate_mcp_user_credentials_master_key",
+        "rotate_mcp_user_env_vars_master_key",
+        "rotate_sso_identity_assertions_master_key",
+    )
+    delegates = {name: AsyncMock() for name in delegated_stores}
+    for name, delegate in delegates.items():
+        monkeypatch.setattr(f"litellm.proxy.management_endpoints.key_management_endpoints.{name}", delegate)
+    model_row = SimpleNamespace(
+        model_id="model-1",
+        model_name="salted-model",
+        litellm_params={
+            "model": encrypt_value_helper("openai/gpt-4o-mini"),
+            "api_key": encrypt_value_helper("sk-model"),
+        },
+        model_info={"id": "model-1"},
+    )
+    credential_row = CredentialItem(
+        credential_name="salted-credential",
+        credential_values={"api_key": encrypt_value_helper("sk-credential")},
+        credential_info={},
+    )
+    tx = MagicMock()
+    tx.litellm_proxymodeltable.update_many = AsyncMock()
+    prisma_client = AsyncMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.tx = MagicMock(
+        return_value=AsyncMock(__aenter__=AsyncMock(return_value=tx), __aexit__=AsyncMock(return_value=False))
+    )
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[model_row])
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[credential_row])
+    prisma_client.db.litellm_credentialstable.update = AsyncMock()
+    prisma_client.db.litellm_config.update = AsyncMock()
+    prisma_client.writer_db.litellm_config.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                param_name="environment_variables",
+                param_value={"ROTATION_TEST_SALTED": encrypt_value_helper("stored-env-value")},
+            )
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    await rotate_master_key(
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    model_params = tx.litellm_proxymodeltable.update_many.call_args.kwargs["data"]["litellm_params"].data
+    credential_update = prisma_client.db.litellm_credentialstable.update.call_args.kwargs["data"]
+    credential_values = credential_update["credential_values"].data
+    env_vars = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+    assert {
+        "model": decrypt_if_encrypted_with(model_params["api_key"], "sk-salt-key"),
+        "credential": decrypt_if_encrypted_with(credential_values["api_key"], "sk-salt-key"),
+        "env": decrypt_if_encrypted_with(env_vars["ROTATION_TEST_SALTED"], "sk-salt-key"),
+    } == {"model": "sk-model", "credential": "sk-credential", "env": "stored-env-value"}
+    keys_handed_to_stores = {name: delegate.await_args.kwargs["new_master_key"] for name, delegate in delegates.items()}
+    assert keys_handed_to_stores == dict.fromkeys(delegated_stores, "sk-salt-key")
 
 
 async def test_default_key_generate_params_duration(monkeypatch):
@@ -19235,6 +19316,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
     mock_rotate_mcp_user,
     mock_rotate_env_vars,
     mock_rotate_sso,
+    monkeypatch,
 ):
     """Master-key rotation must re-encrypt the SSO identity assertion store alongside
     the sibling per-user encrypted tables, or a salt rotation orphans every stored
@@ -19246,6 +19328,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         rotate_master_key,
     )
 
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db = MagicMock()
     mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
