@@ -484,6 +484,7 @@ class GoogleGenAIAdapter:
         contents: _JsonDictList | _JsonDict,
         config: Mapping[str, object] | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
+        reasoning_effort: object = None,
         **kwargs,
     ) -> dict[str, Any]:
         """
@@ -570,14 +571,38 @@ class GoogleGenAIAdapter:
         #########################################################
         # forward any litellm specific params
         #########################################################
-        completion_request_dict = dict(completion_request)
-        if litellm_params:
-            completion_request_dict = self._add_generic_litellm_params_to_request(
+        direct_effort: Final = reasoning_effort
+        generic_effort: Final[object] = getattr(litellm_params, "reasoning_effort", None)
+        direct_effort_fields: Final = _validated(_CONFIG_FIELDS, direct_effort)
+        generic_effort_fields: Final = _validated(_CONFIG_FIELDS, generic_effort)
+        if (
+            direct_effort is not None
+            and generic_effort is not None
+            and (
+                type(direct_effort) is not type(generic_effort)
+                or direct_effort != generic_effort
+                or (
+                    isinstance(direct_effort, dict)
+                    and isinstance(generic_effort, dict)
+                    and direct_effort_fields is not None
+                    and generic_effort_fields is not None
+                    and type(direct_effort_fields.get("effort")) is not type(generic_effort_fields.get("effort"))
+                )
+            )
+        ):
+            raise ValueError("Conflicting reasoning_effort in kwargs and litellm_params")
+        completion_request_dict: Final = {
+            **completion_request,
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        }
+        return (
+            self._add_generic_litellm_params_to_request(
                 completion_request_dict=completion_request_dict,
                 litellm_params=litellm_params,
             )
-
-        return completion_request_dict
+            if litellm_params
+            else completion_request_dict
+        )
 
     def _add_generic_litellm_params_to_request(
         self,
@@ -599,6 +624,9 @@ class GoogleGenAIAdapter:
             for key, value in litellm_dict.items():
                 if key in allowed_fields:
                     completion_request_dict[key] = value
+            reasoning_effort: Final[object] = getattr(litellm_params, "reasoning_effort", None)
+            if reasoning_effort is not None:
+                return {**completion_request_dict, "reasoning_effort": reasoning_effort}
         return completion_request_dict
 
     def translate_completion_output_params_streaming(
