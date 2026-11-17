@@ -1,8 +1,8 @@
 import copy
 import pickle
 import sys
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import Final, Literal
 
 import numpy
@@ -269,6 +269,19 @@ def test_openai_encoding_strict_encoders_check_disallowed_special_before_surroga
     )
     assert _raised(lambda: encoding.encode_to_numpy("<|endoftext|>\ud800")) is _raised(
         lambda: reference.encode_to_numpy("<|endoftext|>\ud800")
+    )
+
+
+def test_openai_encoding_raises_like_tiktoken_when_the_tokenizer_regex_fails() -> None:
+    reference: Final = tiktoken.get_encoding("cl100k_base")
+    encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
+    text: Final = " " * 1_000_000 + "x"
+    numpy_raised: Final = _raised(lambda: reference.encode_to_numpy(text))
+
+    assert numpy_raised is not None
+    assert _raised(lambda: encoding.encode_to_numpy(text)) is numpy_raised
+    assert _raised(lambda: encoding.encode(text, allowed_special="all")) is _raised(
+        lambda: reference.encode(text, allowed_special="all")
     )
 
 

@@ -15,9 +15,11 @@ use litellm_token_counter::fast::{FastCounter, FastTokenizer};
 use litellm_token_counter::{Error, TextCodec};
 use pyo3::{exceptions::PyUnicodeEncodeError, prelude::*, types::PyString};
 
+#[cfg(any(feature = "tiktoken", feature = "huggingface"))]
+use pyo3::exceptions::PyValueError;
 #[cfg(feature = "huggingface")]
 use pyo3::{
-    exceptions::{PyIOError, PyTypeError, PyValueError},
+    exceptions::{PyIOError, PyTypeError},
     types::PyDict,
 };
 #[cfg(feature = "tiktoken")]
@@ -104,9 +106,9 @@ impl From<TokenizerError> for PyErr {
                 PyValueError::new_err(message)
             }
             #[cfg(feature = "tiktoken")]
-            TokenizerError::NoVocabulary | TokenizerError::EncodeSpecial(_) => {
-                PyRuntimeError::new_err(message)
-            }
+            TokenizerError::NoVocabulary => PyRuntimeError::new_err(message),
+            #[cfg(feature = "tiktoken")]
+            TokenizerError::EncodeSpecial(_) => PyValueError::new_err(message),
             #[cfg(feature = "tiktoken")]
             TokenizerError::DecodeBytes(_) => PyKeyError::new_err(message),
             #[cfg(feature = "huggingface")]
@@ -256,12 +258,9 @@ impl Tokenizer {
     ) -> PyResult<Vec<u32>> {
         enter_native()?;
         let tokenizer = self.tiktoken()?;
-        let text = self.text(text)?;
-        release_gil(py, || tokenizer.encode_special(&text, &allowed))
-            .map_err(|error| TokenizerError::EncodeSpecial(error.into()).into())
+        encode_allowing(py, tokenizer, &self.text(text)?, &allowed)
     }
 
-    /// `encode_special` for tiktoken's `encode_to_numpy`, which raises on lone surrogates.
     #[cfg(feature = "tiktoken")]
     fn encode_special_strict(
         &self,
@@ -271,9 +270,7 @@ impl Tokenizer {
     ) -> PyResult<Vec<u32>> {
         enter_native()?;
         let tokenizer = self.tiktoken()?;
-        let text = text.to_cow()?;
-        release_gil(py, || tokenizer.encode_special(&text, &allowed))
-            .map_err(|error| TokenizerError::EncodeSpecial(error.into()).into())
+        encode_allowing(py, tokenizer, &text.to_cow()?, &allowed)
     }
 
     /// tiktoken's `encode_with_unstable`: `(stable_tokens, completions)`.
@@ -581,6 +578,17 @@ impl Tokenizer {
             Codec::Tiktoken(_) => Err(TokenizerError::NotHuggingFace.into()),
         }
     }
+}
+
+#[cfg(feature = "tiktoken")]
+fn encode_allowing(
+    py: Python<'_>,
+    tokenizer: &TiktokenTokenizer,
+    text: &str,
+    allowed: &[String],
+) -> PyResult<Vec<u32>> {
+    release_gil(py, || tokenizer.encode_special(text, allowed))
+        .map_err(|error| TokenizerError::EncodeSpecial(error.into()).into())
 }
 
 pub(crate) enum SharedCounter {
