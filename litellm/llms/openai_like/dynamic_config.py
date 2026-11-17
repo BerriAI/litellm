@@ -3,9 +3,11 @@ Dynamic configuration class generator for JSON-based providers.
 """
 
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, overload
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, TypeAlias, overload
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -30,6 +32,44 @@ from .json_loader import SimpleProviderConfig
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
 _SCHEMA_LITERAL_KEYWORDS: Final = frozenset({"const", "default", "enum", "examples"})
+
+
+@dataclass(frozen=True, slots=True)
+class _FilePartsSentByFileId:
+    provider_slug: str
+
+
+@dataclass(frozen=True, slots=True)
+class _MapFieldInResponseFormat:
+    provider_slug: str
+    model: str
+
+
+_UnsupportedRequest: TypeAlias = _FilePartsSentByFileId | _MapFieldInResponseFormat
+
+
+def _raise_public(failure: _UnsupportedRequest) -> NoReturn:
+    match failure:
+        case _FilePartsSentByFileId(provider_slug=provider_slug):
+            raise UnsupportedParamsError(
+                message=(
+                    f"{provider_slug} cannot read file parts sent by file_id. "
+                    "Send the file as file_data, or set `drop_params=True` to drop them"
+                ),
+                llm_provider=provider_slug,
+            )
+        case _MapFieldInResponseFormat(provider_slug=provider_slug, model=model):
+            raise UnsupportedParamsError(
+                message=(
+                    f"{provider_slug} does not support schema-valued additionalProperties (map fields) in "
+                    "response_format. To drop them, set `drop_params=True`"
+                ),
+                llm_provider=provider_slug,
+                model=model,
+            )
+        case _:
+            assert_never(failure)
+
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -85,17 +125,11 @@ def _without_unreadable_file_parts(message: AllMessageValues) -> AllMessageValue
 
 def _messages_with_readable_file_parts(
     messages: Sequence[AllMessageValues], provider_slug: str, drop_params: bool
-) -> tuple[AllMessageValues, ...]:
+) -> tuple[AllMessageValues, ...] | _FilePartsSentByFileId:
     readable: Final = tuple(_without_unreadable_file_parts(message) for message in messages)
     if readable == tuple(messages) or drop_params:
         return readable
-    raise UnsupportedParamsError(
-        message=(
-            f"{provider_slug} cannot read file parts sent by file_id. "
-            "Send the file as file_data, or set `drop_params=True` to drop them"
-        ),
-        llm_provider=provider_slug,
-    )
+    return _FilePartsSentByFileId(provider_slug=provider_slug)
 
 
 def _without_additional_properties(
@@ -124,19 +158,12 @@ def _schema_child_without_additional_properties(
 
 def _response_format_without_additional_properties(
     response_format: JsonValue, provider_slug: str, model: str, drop_params: bool
-) -> JsonValue:
+) -> JsonValue | _MapFieldInResponseFormat:
     without_flags: Final = _without_additional_properties(response_format, lambda item: not isinstance(item, bool))
     without_any: Final = _without_additional_properties(response_format, lambda _: False)
     if without_flags == without_any or drop_params:
         return without_any
-    raise UnsupportedParamsError(
-        message=(
-            f"{provider_slug} does not support schema-valued additionalProperties (map fields) in response_format. "
-            "To drop them, set `drop_params=True`"
-        ),
-        llm_provider=provider_slug,
-        model=model,
-    )
+    return _MapFieldInResponseFormat(provider_slug=provider_slug, model=model)
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -186,18 +213,22 @@ def create_config_class(provider: SimpleProviderConfig):
             messages: list[AllMessageValues],  # mutable-ok: overrides OpenAIGPTConfig's list signature
             litellm_params: Mapping[str, object],
         ) -> list[AllMessageValues]:  # mutable-ok: overrides OpenAIGPTConfig's list signature
-            readable: Final = (
-                list(
-                    _messages_with_readable_file_parts(
-                        messages,
-                        provider_slug=provider.slug,
-                        drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
-                    )
-                )
-                if provider.special_handling.get("convert_file_parts_to_image_url")
-                else messages
+            readable: Final = self._readable_messages(messages, litellm_params)
+            return super()._prompt_cache_ordered_messages(list(readable), litellm_params)
+
+        def _readable_messages(
+            self, messages: Sequence[AllMessageValues], litellm_params: Mapping[str, object]
+        ) -> Sequence[AllMessageValues]:
+            if not provider.special_handling.get("convert_file_parts_to_image_url"):
+                return messages
+            readable: Final = _messages_with_readable_file_parts(
+                messages,
+                provider_slug=provider.slug,
+                drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
             )
-            return super()._prompt_cache_ordered_messages(readable, litellm_params)
+            if isinstance(readable, _FilePartsSentByFileId):
+                _raise_public(readable)
+            return readable
 
         def _should_preserve_cache_control_for_endpoint(
             self,
@@ -281,6 +312,17 @@ def create_config_class(provider: SimpleProviderConfig):
 
             return supported_params
 
+        def _readable_response_format(self, response_format: JsonValue, model: str, drop_params: bool) -> JsonValue:
+            stripped: Final = _response_format_without_additional_properties(
+                response_format,
+                provider_slug=provider.slug,
+                model=model,
+                drop_params=drop_params or litellm.drop_params is True,
+            )
+            if isinstance(stripped, _MapFieldInResponseFormat):
+                _raise_public(stripped)
+            return stripped
+
         def map_openai_params(
             self,
             non_default_params: dict,
@@ -299,12 +341,7 @@ def create_config_class(provider: SimpleProviderConfig):
                     optional_params[provider.param_mappings[param]] = value
                 elif param in supported_params:
                     optional_params[param] = (
-                        _response_format_without_additional_properties(
-                            _JSON_VALUE_ADAPTER.validate_python(value),
-                            provider_slug=provider.slug,
-                            model=model,
-                            drop_params=drop_params or litellm.drop_params is True,
-                        )
+                        self._readable_response_format(_JSON_VALUE_ADAPTER.validate_python(value), model, drop_params)
                         if param == "response_format"
                         and provider.special_handling.get("remove_additional_properties_from_response_format")
                         else value
