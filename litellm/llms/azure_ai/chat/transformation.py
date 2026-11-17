@@ -1,12 +1,13 @@
 import copy
 import enum
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from httpx import Response
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -37,7 +38,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import add_path_to_api_base, supports_tool_choice
+from litellm.utils import add_path_to_api_base, durable_model_cost_registration, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -55,76 +56,12 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 )
 
 
-_DEFAULT_REASONING_EFFORT: Final = "default"
+_LEVELS_LEFT_TO_THE_MODEL: Final = frozenset(("default", "auto"))
 _REASONING_CONTENT_MODEL_PREFIXES: Final = (AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX.casefold(), "kimi-")
-_FOUNDRY_REASONING_EFFORTS: Final = (*REASONING_EFFORT_ADVERTISEMENT_ORDER, "auto")
-
-
-@dataclass(frozen=True, slots=True)
-class _RefusedReasoningEffort:
-    requested: object
 
 
 def _capability_models(model: str, base_model: str | None) -> tuple[str, ...]:
     return tuple(name.removeprefix("azure_ai/") for name in (model, base_model) if name)
-
-
-def _declares_reasoning_effort(model: str) -> bool:
-    row: Final = GetModelCostMap.loaded_model_cost_map_entry(f"azure_ai/{model.removeprefix('azure_ai/')}")
-    return row is not None and bool(declared_reasoning_efforts(row))
-
-
-def _refused_reasoning_effort_error(refused: _RefusedReasoningEffort, model: str) -> UnsupportedParamsError:
-    return UnsupportedParamsError(
-        message=f"azure_ai takes reasoning_effort as one of {', '.join(_FOUNDRY_REASONING_EFFORTS)}, "
-        f"got {refused.requested!r}. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
-        llm_provider="azure_ai",
-        model=model,
-        status_code=400,
-    )
-
-
-def _unsupported_reasoning_effort(
-    requested: object, model: str, drop_params: bool
-) -> Mapping[str, str] | _RefusedReasoningEffort:
-    if not drop_params and litellm.drop_params is not True:
-        return _RefusedReasoningEffort(requested)
-    verbose_logger.warning(
-        "Dropping reasoning_effort=%r for model=%r (drop_params=True) because Azure AI Foundry takes only a level name.",
-        requested,
-        model,
-    )
-    return {}
-
-
-def _reasoning_effort_level(
-    requested: object, model: str, drop_params: bool
-) -> Mapping[str, str] | _RefusedReasoningEffort:
-    fields: Final = as_str_mapping(requested)
-    level: Final = fields.get("effort") if fields is not None else requested
-    if level == _DEFAULT_REASONING_EFFORT:
-        return {}
-    if not isinstance(level, str) or level not in _FOUNDRY_REASONING_EFFORTS:
-        return _unsupported_reasoning_effort(requested, model, drop_params)
-    dropped: Final = {key: value for key, value in fields.items() if key != "effort"} if fields is not None else {}
-    if dropped:
-        verbose_logger.warning(
-            "Dropping reasoning_effort=%r for model=%r because Azure AI Foundry takes only a level name, "
-            "so only %r is sent.",
-            dropped,
-            model,
-            level,
-        )
-    return {"reasoning_effort": level}
-
-
-def _declared_reasoning_effort_param(
-    non_default_params: Mapping[str, object], model: str, base_model: str | None, drop_params: bool
-) -> Mapping[str, str] | _RefusedReasoningEffort:
-    declared: Final = any(_declares_reasoning_effort(name) for name in _capability_models(model, base_model))
-    if "reasoning_effort" not in non_default_params or not declared:
-        return {}
-    return _reasoning_effort_level(non_default_params["reasoning_effort"], model, drop_params)
 
 
 def _message_fields_to_strip(model: str, base_model: str | None) -> tuple[str, ...]:
@@ -154,6 +91,126 @@ class AzureAIGPT5Config(OpenAIGPT5Config):
 
 azureAIGPT5Config: Final = AzureAIGPT5Config()
 
+_REASONING_EFFORT: Final = "reasoning_effort"
+
+
+def _registered_catalog_row(key: str) -> Mapping[str, object] | None:
+    loaded: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    registered: Final = durable_model_cost_registration(key)
+    return loaded if registered is None else {**(loaded or {}), **registered}
+
+
+def _catalog_row(key: str) -> Mapping[str, object] | None:
+    canonical: Final = GetModelCostMap.loaded_model_cost_map_key(key)
+    catalog_row: Final = _registered_catalog_row(canonical) if canonical is not None else None
+    registered_row: Final = _registered_catalog_row(key)
+    if catalog_row is None or registered_row is None:
+        return registered_row if catalog_row is None else catalog_row
+    return {**catalog_row, **registered_row}
+
+
+def _catalog_levels(model: str) -> tuple[str, ...] | None:
+    row: Final = _catalog_row(f"azure_ai/{model.removeprefix('azure_ai/')}")
+    return declared_reasoning_efforts(row) if row is not None else None
+
+
+def _catalog_reasoning_efforts(model: str, base_model: str | None) -> tuple[str, ...] | None:
+    return next(filter(None, (_catalog_levels(name) for name in (base_model, model) if name)), None)
+
+
+def _with_reasoning_effort(
+    supported_params: Sequence[str], model: str
+) -> list[str]:  # mutable-ok: get_supported_openai_params returns a list its callers extend
+    if _REASONING_EFFORT in supported_params or not _catalog_levels(model):
+        return list(supported_params)
+    return [*supported_params, _REASONING_EFFORT]
+
+
+@dataclass(frozen=True, slots=True)
+class _SendReasoningEffort:
+    level: str
+    dropped_fields: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _LeaveReasoningEffortToModel:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _UnsendableReasoningEffort:
+    reason: str
+
+
+def _unsendable_reason(level: object, accepted_levels: tuple[str, ...]) -> str:
+    if isinstance(level, str) and level in REASONING_EFFORT_ADVERTISEMENT_ORDER:
+        return f"the model catalog lists only {list(accepted_levels)} in its reasoning_effort_levels."
+    return f"it is not one of the levels {', '.join(REASONING_EFFORT_ADVERTISEMENT_ORDER)}."
+
+
+def _foundry_reasoning_effort(
+    requested: object, accepted_levels: tuple[str, ...] | None
+) -> _SendReasoningEffort | _LeaveReasoningEffortToModel | _UnsendableReasoningEffort:
+    fields: Final = as_str_mapping(requested)
+    level: Final = fields.get("effort") if fields is not None else requested
+    if isinstance(level, str) and level in _LEVELS_LEFT_TO_THE_MODEL:
+        return _LeaveReasoningEffortToModel()
+    if isinstance(level, str) and (accepted_levels is None or level in accepted_levels):
+        return _SendReasoningEffort(level, {key: value for key, value in (fields or {}).items() if key != "effort"})
+    return _UnsendableReasoningEffort(
+        _unsendable_reason(level, accepted_levels or ())
+        if isinstance(level, str)
+        else "it names no level such as 'high'."
+    )
+
+
+def _reasoning_effort_params(
+    non_default_params: dict[str, object],  # mutable-ok: a drop removes the effort from the caller's params
+    model: str,
+    *,
+    base_model: str | None,
+    level_check_waived: bool,
+    drop_params: bool,
+) -> Mapping[str, str]:
+    if _REASONING_EFFORT not in non_default_params:
+        return {}
+    catalog_levels: Final = _catalog_reasoning_efforts(model, base_model)
+    if catalog_levels is None:
+        return {}
+    requested: Final = non_default_params[_REASONING_EFFORT]
+    outcome: Final = _foundry_reasoning_effort(requested, None if level_check_waived else catalog_levels)
+    match outcome:
+        case _SendReasoningEffort(level=level, dropped_fields=dropped_fields):
+            if dropped_fields:
+                verbose_logger.warning(
+                    "Dropping %s=%r for model=%r because Azure AI Foundry takes only a level name, so only %r is sent.",
+                    _REASONING_EFFORT,
+                    dropped_fields,
+                    model,
+                    level,
+                )
+            return {_REASONING_EFFORT: level}
+        case _LeaveReasoningEffortToModel():
+            non_default_params.pop(_REASONING_EFFORT)
+            return {}
+        case _UnsendableReasoningEffort(reason=reason) if drop_params:
+            verbose_logger.warning(
+                "Dropping %s=%r for model=%r (drop_params=True) because %s", _REASONING_EFFORT, requested, model, reason
+            )
+            non_default_params.pop(_REASONING_EFFORT)
+            return {}
+        case _UnsendableReasoningEffort(reason=reason):
+            raise UnsupportedParamsError(
+                message=f"azure_ai cannot send reasoning_effort={requested!r} for model={model} because {reason} "
+                "To drop it from the call, set `litellm.drop_params=True` or for proxy:\n\n"
+                "`litellm_settings:\n drop_params: true`\n",
+                llm_provider="azure_ai",
+                model=model,
+                status_code=400,
+            )
+        case _:
+            assert_never(outcome)
+
 
 class AzureAIStudioConfig(OpenAIConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
@@ -163,7 +220,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         supported_params = (
             azureAIGPT5Config.get_supported_openai_params(model)
             if azureAIGPT5Config.is_model_gpt_5_model(model)
-            else super().get_supported_openai_params(model)
+            else _with_reasoning_effort(super().get_supported_openai_params(model), model)
         )
         if not model_supports_tool_choice:
             supported_params = [param for param in supported_params if param != "tool_choice"]
@@ -172,12 +229,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         if not self._supports_stop_reason(model):
             supported_params = [param for param in supported_params if param != "stop"]
 
-        declared_extra: Final = (
-            ("reasoning_effort",)
-            if "reasoning_effort" not in supported_params and _declares_reasoning_effort(model)
-            else ()
-        )
-        return [*supported_params, *declared_extra]
+        return supported_params
 
     def map_openai_params(
         self,
@@ -185,7 +237,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         optional_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
         model: str,
         drop_params: bool,
+        *,
         base_model: str | None = None,
+        allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if azureAIGPT5Config.is_model_gpt_5_model(model):
             return azureAIGPT5Config.map_openai_params(
@@ -194,15 +248,22 @@ class AzureAIStudioConfig(OpenAIConfig):
                 model=model,
                 drop_params=drop_params,
             )
-        effort: Final = _declared_reasoning_effort_param(non_default_params, model, base_model, drop_params)
-        if isinstance(effort, _RefusedReasoningEffort):
-            raise _refused_reasoning_effort_error(effort, model)
-        return super().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params={**optional_params, **effort},
-            model=model,
-            drop_params=drop_params,
+        foundry_effort: Final = _reasoning_effort_params(
+            non_default_params,
+            model,
+            base_model=base_model,
+            level_check_waived=_REASONING_EFFORT in allowed_openai_params,
+            drop_params=drop_params or litellm.drop_params is True,
         )
+        return {
+            **super().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            ),
+            **foundry_effort,
+        }
 
     def _supports_stop_reason(self, model: str) -> bool:
         """
