@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
     parse_chirp_session_update,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.realtime.transformation import vertex_realtime_config
 from litellm.types.llms.vertex_ai_speech_to_text import (
     VertexSpeechStreamingConfigured,
     VertexSpeechStreamingResponse,
@@ -171,6 +172,26 @@ def test_beta_session_update_defaults_the_rate_and_auto_detects_the_language():
 def test_unsupported_session_settings_are_rejected(payload: str, message: str):
     with pytest.raises(ChirpProtocolError, match=message):
         parse_chirp_session_update(payload, MODEL)
+
+
+def _configure_command(turn_detection: str, drop_params: bool) -> list[object]:
+    config = vertex_realtime_config(
+        MODEL, access_token="token", resolve_access_token=_token, project="proj-1", location="us", drop_params=drop_params
+    )
+    config.transform_session_created_event(MODEL, "sess_1")
+    return [
+        json.loads(command) if isinstance(command, str) else command
+        for command in config.transform_realtime_request(_ga_session_update(turn_detection=turn_detection), MODEL)
+    ]
+
+
+def test_semantic_vad_falls_back_to_server_vad_under_drop_params():
+    assert _configure_command("semantic_vad", drop_params=True) == _configure_command("server_vad", drop_params=False)
+
+
+def test_semantic_vad_without_drop_params_names_the_drop_params_fallback():
+    with pytest.raises(ChirpProtocolError, match="Set drop_params to use server_vad instead"):
+        _configure_command("semantic_vad", drop_params=False)
 
 
 def test_session_update_configures_once_and_later_updates_are_ignored():

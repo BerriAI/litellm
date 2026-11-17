@@ -63,6 +63,12 @@ That's it! The provider will be automatically loaded and available.
     // Optional: Special handling flags
     "special_handling": {
       "convert_content_list_to_string": true
+    },
+
+    // Optional: Capabilities every model of this provider has, used when a
+    // model has no cost map row or its row leaves the field unset
+    "provider_info": {
+      "supports_function_calling": true
     }
   }
 }
@@ -118,6 +124,20 @@ This enables `litellm.responses(model="your_provider/model-name", ...)` with zer
 The provider inherits all request/response handling from OpenAI's Responses API config.
 
 If `supported_endpoints` is omitted, it defaults to `[]` (only chat completions, which is always enabled for JSON providers).
+
+When only some models serve an endpoint natively, list them under `model_supported_endpoints`. Every other model reaches `/v1/responses` and `/v1/messages` through chat completions:
+
+```json
+{
+  "your_provider": {
+    "supported_endpoints": ["/v1/chat/completions"],
+    "model_supported_endpoints": {
+      "model-a": ["/v1/messages"],
+      "model-b": ["/v1/responses"]
+    }
+  }
+}
+```
 
 ### How It Works
 

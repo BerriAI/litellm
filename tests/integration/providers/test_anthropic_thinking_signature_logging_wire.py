@@ -37,7 +37,7 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Wire, wire_server
 from pydantic import JsonValue
 
-pytestmark = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 _ANTHROPIC_KEY: Final = "scripted-anthropic-key"
 _ANTHROPIC_BASE: Final = "http://api.anthropic.com"

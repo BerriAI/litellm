@@ -8,14 +8,16 @@ from typing import Final
 from urllib.parse import urlparse
 
 from httpx._types import FileTypes, RequestFiles
+from pydantic import TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.litellm_core_utils.url_utils import SSRFError, join_api_base, validate_url
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _EXCLUDED_FORM_KEYS: Final = frozenset(
     {
         "model",
@@ -82,7 +84,7 @@ def _maybe_json(value: object) -> object:
     stripped: Final = value.strip()
     if not stripped or stripped[0] not in "{[":
         return value
-    return json.loads(stripped)
+    return _DECODED_JSON.validate_python(json.loads(stripped))
 
 
 def _reject_unsafe_media_url(url: str) -> None:
@@ -177,8 +179,8 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
             )
         trimmed: Final = resolved_api_base.rstrip("/")
         if trimmed.endswith("/v1"):
-            return f"{trimmed}/videos"
-        return f"{trimmed}/v1/videos"
+            return join_api_base(trimmed, "videos")
+        return join_api_base(trimmed, "v1/videos")
 
     def transform_video_create_request(
         self,

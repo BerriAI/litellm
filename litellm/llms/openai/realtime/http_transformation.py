@@ -1,6 +1,7 @@
 """OpenAI realtime HTTP transformation config (client_secrets + realtime_calls)."""
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -15,17 +16,29 @@ class OpenAIRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
     def get_complete_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         base = self.get_api_base(api_base).rstrip("/")
         base = base.removesuffix("/v1")
-        return f"{base}/v1/realtime/client_secrets"
+        return join_api_base(base, "v1/realtime/client_secrets")
 
     def get_realtime_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         base = self.get_api_base(api_base).rstrip("/")
         base = base.removesuffix("/v1")
-        return f"{base}/v1/realtime/calls"
+        return join_api_base(base, "v1/realtime/calls")
 
     def get_transcription_session_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         base = self.get_api_base(api_base).rstrip("/")
         base = base.removesuffix("/v1")
-        return f"{base}/v1/realtime/transcription_sessions"
+        return join_api_base(base, "v1/realtime/transcription_sessions")
+
+    def get_translation_client_secret_url(
+        self, api_base: str | None, model: str, api_version: str | None = None
+    ) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        base = base.removesuffix("/v1")
+        return f"{base}/v1/realtime/translations/client_secrets"
+
+    def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        base = base.removesuffix("/v1")
+        return f"{base}/v1/realtime/translations/calls"
 
     def validate_environment(
         self,

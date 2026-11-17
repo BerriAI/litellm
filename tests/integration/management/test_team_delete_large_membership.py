@@ -21,9 +21,11 @@ import httpx
 import psycopg
 import pytest
 import yaml
+from psycopg.rows import TupleRow
 from pydantic import JsonValue
 from redis import Redis
 
+from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from tests.integration._support.client import (
     Gateway,
     Scenario,
@@ -33,7 +35,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.process import owned_proxy_process
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
 
 LARGE_ROSTER: Final = 250
 POOL_LIMIT: Final = 5
@@ -46,7 +48,24 @@ FROM generate_series(1, %s::int) AS n
 # The master key's user id. `/team/new` appends the creator to the roster as an admin, so every team
 # created here carries this member alongside the ones the test adds.
 PROXY_ADMIN: Final = "default_user_id"
+KEYS_WELL_PAST_THE_PUBLISH_CAP: Final = 2500
+SEED_TEAM_KEYS_SQL: Final = """
+INSERT INTO "LiteLLM_VerificationToken" (token, team_id, models)
+SELECT encode(sha256(convert_to(%s || '-' || n::text, 'UTF8')), 'hex'), %s, '{}'::text[]
+FROM generate_series(1, %s::int) AS n
+"""
 TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
+LOCK_MODEL_ROW_SQL: Final = 'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s FOR UPDATE'
+LOCK_TEAM_KEY_ROWS_SQL: Final = 'SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s FOR UPDATE'
+LOCK_BUDGET_ROW_SQL: Final = 'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s FOR UPDATE'
+LOCK_HELD_PAST_DEFAULT_TRANSACTION_SECONDS: Final = 7
+POOL_HELD_PAST_DELETE_RETRIES_SECONDS: Final = 12
+SATURATED_POOL_LIMIT: Final = 2
+OLDEST_TRANSACTION_BLOCKED_BY_SQL: Final = """
+SELECT coalesce(max(extract(epoch FROM clock_timestamp() - xact_start)), 0)::float AS age
+FROM pg_stat_activity
+WHERE %s::int = ANY(pg_blocking_pids(pid))
+"""
 # Sessions blocked on the advisory lock the given backend holds, and nothing else on the shared rig.
 WAITERS_ON_HELD_LOCK_SQL: Final = """
 SELECT count(*)::int AS waiting
@@ -118,11 +137,35 @@ def _roster_user_ids(roster: JsonValue) -> list[str]:
     return sorted(string_value(object_value(member)["user_id"]) for member in roster)
 
 
+def _deleted_audit_rows(object_id: str, table_name: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT before_value FROM "LiteLLM_AuditLog" WHERE object_id = %s AND table_name = %s AND action = %s',
+        (object_id, table_name, "deleted"),
+    )
+
+
 def _waiters_on_lock_held_by(backend_pid: int) -> int:
     rows: Final = read_rows(WAITERS_ON_HELD_LOCK_SQL, ("%pg_advisory_xact_lock%", str(backend_pid)))
     waiting: Final = rows[0]["waiting"]
     assert isinstance(waiting, int)
     return waiting
+
+
+def _sessions_blocked_by(backend_pid: int) -> int:
+    rows: Final = read_rows(
+        "SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))",
+        (str(backend_pid),),
+    )
+    blocked: Final = rows[0]["blocked"]
+    assert isinstance(blocked, int)
+    return blocked
+
+
+def _oldest_transaction_blocked_by(backend_pid: int) -> float:
+    rows: Final = read_rows(OLDEST_TRANSACTION_BLOCKED_BY_SQL, (str(backend_pid),))
+    age: Final = rows[0]["age"]
+    assert isinstance(age, float)
+    return age
 
 
 def _remove_team_by_sql(team_id: str) -> None:
@@ -139,20 +182,44 @@ def _remove_team_by_sql(team_id: str) -> None:
     assert _team_rows(team_id) == []
 
 
-def _remove_team_if_present(gateway: Gateway, team_id: str) -> None:
-    """Cleanup for teams the test deletes itself: the API delete first, SQL for anything it leaves."""
-    if not _team_rows(team_id):
-        return
-    gateway.request("POST", "/team/delete", {"team_ids": [team_id]})
-    _remove_team_by_sql(team_id)
-
-
 def _create_team(scenario: Scenario, **fields: JsonValue) -> str:
     """A team the test deletes itself; cleanup only removes it if the test left it behind."""
     created: Final = scenario.gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}", **fields})
     team_id: Final = string_value(created["team_id"])
-    scenario.cleanups.callback(_remove_team_if_present, scenario.gateway, team_id)
+    scenario.cleanups.callback(_remove_team_by_sql, team_id)
     return team_id
+
+
+def _create_team_model(scenario: Scenario, team_id: str) -> str:
+    created: Final = scenario.gateway.post(
+        "/model/new",
+        {
+            "model_name": f"integration-{uuid.uuid4().hex}",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-integration"},
+            "model_info": {"team_id": team_id},
+        },
+    )
+    model_id: Final = string_value(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,))
+    return model_id
+
+
+def _team_model_rows(model_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,))
+
+
+def _delete_while_locked(gateway: Gateway, team_id: str, lock_sql: str, lock_target: str) -> httpx.Response:
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+            holder.execute(lock_sql, (lock_target,))
+            pending: Final = _post_in_background(pool, gateway, "/team/delete", {"team_ids": [team_id]})
+            eventually(
+                lambda: _oldest_transaction_blocked_by(holder.info.backend_pid),
+                lambda age: age > LOCK_HELD_PAST_DEFAULT_TRANSACTION_SECONDS,
+                seconds=30,
+            )
+            assert not pending.done(), "delete returned while the lock was still held"
+        return pending.result(timeout=60)
 
 
 def _generate_key(scenario: Scenario, **fields: JsonValue) -> str:
@@ -196,8 +263,8 @@ def _team_not_found_body(team_id: str) -> dict[str, JsonValue]:
     return {
         "error": {
             "message": f"{{'message': 'Team not found, passed team id: {team_id}.'}}",
-            "type": "auth_error",
-            "param": "None",
+            "type": "invalid_request_error",
+            "param": None,
             "code": "404",
         }
     }
@@ -386,6 +453,113 @@ def test_delete_waits_for_the_team_advisory_lock_and_completes_after_release(
         assert len(_tombstones(team)) == 1, _tombstones(team)
 
 
+def test_delete_completes_after_waiting_on_a_locked_team_model_row_past_the_default_transaction_timeout(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = _create_team(scenario)
+        model_id: Final = _create_team_model(scenario, team)
+        response: Final = _delete_while_locked(gateway, team, LOCK_MODEL_ROW_SQL, model_id)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"deleted_teams": [team]}
+        assert _team_rows(team) == []
+        assert _team_model_rows(model_id) == []
+        assert len(_tombstones(team)) == 1, _tombstones(team)
+
+
+def test_delete_completes_after_waiting_on_the_team_lock_past_the_default_transaction_timeout(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        user: Final = scenario.user()
+        team: Final = _create_team(scenario)
+        _bulk_member_add(gateway, team, [user])
+        response: Final = _delete_while_locked(gateway, team, TAKE_TEAM_LOCK_SQL, team)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"deleted_teams": [team]}
+        assert _team_rows(team) == []
+        assert _membership_user_ids(team) == []
+        assert _user_teams(user) == []
+        assert len(_tombstones(team)) == 1, _tombstones(team)
+
+
+def _park_on_team_key_rows(holder: psycopg.Connection[TupleRow], team_id: str) -> None:
+    _ = holder.execute(LOCK_TEAM_KEY_ROWS_SQL, (team_id,))
+
+
+def _park_on_deleted_key_records(holder: psycopg.Connection[TupleRow], _team_id: str) -> None:
+    _ = holder.execute('LOCK TABLE "LiteLLM_DeletedVerificationToken" IN SHARE MODE')
+
+
+def _requests_in_flight_including_this_one(proxy: Gateway) -> JsonValue:
+    return proxy.get("/health/backlog")["in_flight_requests"]
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize(
+    "park",
+    [
+        pytest.param(_park_on_team_key_rows, id="next-transaction-is-the-team-model-delete"),
+        pytest.param(_park_on_deleted_key_records, id="next-transaction-is-the-team-key-delete"),
+    ],
+)
+def test_delete_waits_for_a_pooled_connection_when_every_one_is_busy(
+    gateway: Gateway,
+    tmp_path: Path,
+    park: Callable[[psycopg.Connection[TupleRow], str], None],
+) -> None:
+    database_url: Final = os.environ["DATABASE_URL"]
+    with (
+        gateway.scenario() as scenario,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database_url},
+            config=_config_with_pool_limit(tmp_path, SATURATED_POOL_LIMIT),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        ThreadPoolExecutor(max_workers=3) as pool,
+    ):
+        team: Final = string_value(
+            owned.gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}"})["team_id"]
+        )
+        scenario.cleanups.callback(_remove_team_by_sql, team)
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,))
+        keys: Final = _seeded_team_keys(team, 3)
+        budget: Final = f"integration-{uuid.uuid4().hex}"
+        owned.gateway.post("/budget/new", {"budget_id": budget, "max_budget": 100})
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (budget,))
+        update_budget: Final = {"budget_id": budget, "max_budget": 1}
+
+        with psycopg.connect(database_url) as budget_holder:
+            budget_holder.execute(LOCK_BUDGET_ROW_SQL, (budget,))
+            first_connection_taker: Final = _post_in_background(pool, owned.gateway, "/budget/update", update_budget)
+            eventually(lambda: _sessions_blocked_by(budget_holder.info.backend_pid), lambda count: count == 1)
+            with psycopg.connect(database_url) as parking:
+                park(parking, team)
+                pending_delete: Final = _post_in_background(pool, owned.gateway, "/team/delete", {"team_ids": [team]})
+                eventually(lambda: _sessions_blocked_by(parking.info.backend_pid), lambda count: count == 1)
+                second_connection_taker: Final = _post_in_background(
+                    pool, owned.gateway, "/budget/update", update_budget
+                )
+                eventually(lambda: _requests_in_flight_including_this_one(owned.gateway), lambda count: count == 4)
+            eventually(
+                pending_delete.done,
+                lambda done: done,
+                seconds=POOL_HELD_PAST_DELETE_RETRIES_SECONDS,
+                return_last_on_timeout=True,
+            )
+
+        response: Final = pending_delete.result(timeout=60)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"deleted_teams": [team]}
+        takers: Final = (first_connection_taker, second_connection_taker)
+        assert [taker.result(timeout=60).status_code for taker in takers] == [200, 200]
+        assert _team_rows(team) == []
+        assert [_live_token(_hashed(key)) for key in keys] == [[], [], []]
+        assert len(_tombstones(team)) == 1, _tombstones(team)
+
+
 def test_deleting_two_teams_sharing_a_member_in_one_call_clears_both_from_the_member(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         user: Final = scenario.user()
@@ -467,6 +641,41 @@ def test_delete_writes_one_audit_row_for_the_team_and_one_per_key(gateway: Gatew
             {"table_name": "LiteLLM_TeamTable", "action": "deleted", "object_id": team},
             {"table_name": "LiteLLM_VerificationToken", "action": "deleted", "object_id": hashed},
         ]
+
+
+@pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120))
+def test_two_deletes_racing_on_one_team_write_one_tombstone_and_one_audit_row(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"], "LITELLM_STORE_AUDIT_LOGS": "true"},
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        user: Final = scenario.user()
+        team: Final = _create_team(scenario)
+        _bulk_member_add(owned.gateway, team, [user])
+
+        with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+            holder.execute(TAKE_TEAM_LOCK_SQL, (team,))
+            deletes: Final = tuple(
+                _post_in_background(pool, owned.gateway, "/team/delete", {"team_ids": [team]}) for _ in range(2)
+            )
+            eventually(
+                lambda: _waiters_on_lock_held_by(holder.info.backend_pid), lambda waiting: waiting == 2, seconds=30
+            )
+
+        assert [delete.result(timeout=60).status_code for delete in deletes] == [200, 200]
+        tombstones: Final = _tombstones(team)
+        assert [row["team_id"] for row in tombstones] == [team]
+        assert _roster_user_ids(tombstones[0]["members_with_roles"]) == sorted([PROXY_ADMIN, user])
+
+    team_audit_rows: Final = _deleted_audit_rows(team, "LiteLLM_TeamTable")
+    assert len(team_audit_rows) == 1, team_audit_rows
+    assert object_value(team_audit_rows[0]["before_value"])["team_id"] == team
 
 
 def test_second_delete_of_the_same_team_is_404_with_one_tombstone(gateway: Gateway) -> None:
@@ -632,3 +841,38 @@ def test_member_add_and_delete_released_together_leave_no_team_reference(gateway
         assert _user_teams(newcomer) == []
         assert _users_referencing(team) == []
         assert [row["team_id"] for row in _tombstones(team)] == [team]
+
+
+def _seeded_team_keys(team_id: str, count: int) -> tuple[str, ...]:
+    prefix: Final = f"sk-integration-{uuid.uuid4().hex}"
+    write_rows(SEED_TEAM_KEYS_SQL, (prefix, team_id, str(count)))
+    return tuple(f"{prefix}-{index}" for index in range(1, count + 1))
+
+
+def _models_status(proxy: Gateway, key: str) -> int:
+    return proxy.request("GET", "/v1/models", key=key).status_code
+
+
+def _statuses(proxy: Gateway, keys: Sequence[str]) -> dict[int, int]:
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses: Final = tuple(pool.map(lambda key: _models_status(proxy, key), keys))
+    return {status: statuses.count(status) for status in frozenset(statuses)}
+
+
+def test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_on_a_warmed_peer(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = _create_team(scenario)
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,))
+        keys: Final = _seeded_team_keys(team, KEYS_WELL_PAST_THE_PUBLISH_CAP)
+        assert _statuses(peer, keys) == {200: len(keys)}
+
+        response: Final = _post_with_timeout(
+            gateway, "/team/delete", {"team_ids": [team]}, timeout=2 * TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
+        )
+        assert response.status_code == 200, response.text
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,)) == []
+
+        _ = eventually(lambda: _models_status(peer, keys[-1]), lambda status: status == 401, seconds=10)
+        assert _statuses(peer, keys) == {401: len(keys)}

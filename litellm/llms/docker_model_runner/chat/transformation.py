@@ -10,6 +10,7 @@ from typing import Final, Literal, overload
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -23,6 +24,9 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     Docker Model Runner uses URLs in the format: /engines/{engine}/v1/chat/completions
     The engine name (e.g., "llama.cpp") is part of the API endpoint path.
     """
+
+    def _flattens_content_lists(self) -> bool:
+        return True
 
     @overload
     def _transform_messages(
@@ -104,12 +108,9 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         if not api_base:
             api_base = "http://localhost:22088/engines/llama.cpp"
 
-        # Remove trailing slashes from api_base
-        api_base = api_base.rstrip("/")
-
         # Build the URL: {api_base}/v1/chat/completions
         # api_base is expected to already contain the engine path
-        complete_url: Final = f"{api_base}/v1/chat/completions"
+        complete_url: Final = join_api_base(api_base, "v1/chat/completions")
 
         return complete_url
 

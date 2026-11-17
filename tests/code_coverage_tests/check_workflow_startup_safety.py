@@ -12,7 +12,7 @@ because CI cannot enforce them on itself.
    flagged: ``-`` appears in hyphenated input names like ``inputs.timeout-minutes``
    and ``/`` inside ref strings, so neither can be told apart from arithmetic by
    inspection alone.
-2. Callers of the reusable unit-test workflow keep the job timeout at or above
+2. Unit matrix rows keep the job timeout at or above
    the test budget plus the setup ceilings plus the runner overhead below.
    Otherwise the job deadline preempts pytest inside its own advertised budget,
    which is the failure the split timeouts exist to prevent, and it shows up as
@@ -24,7 +24,6 @@ because CI cannot enforce them on itself.
 import re
 import sys
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -33,8 +32,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent.parent
 WORKFLOWS_DIR: Final = REPO_ROOT / ".github" / "workflows"
-BASE_WORKFLOW: Final = "./.github/workflows/_test-unit-base.yml"
-BASE_WORKFLOW_PATH: Final = WORKFLOWS_DIR / "_test-unit-base.yml"
+UNIT_WORKFLOW_PATH: Final = WORKFLOWS_DIR / "test-unit.yml"
 
 # Runner time the job clock charges but no step owns: job init, the gaps between
 # steps, and post-job cleanup. Without it a job capped at exactly test + setup
@@ -44,24 +42,26 @@ JOB_OVERHEAD_MINUTES: Final = 5
 EXPRESSION: Final = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
 QUOTED: Final = re.compile(r"'[^']*'")
 ARITHMETIC: Final = re.compile(r"[+*]")
-MATRIX_REF: Final = re.compile(r"^\$\{\{\s*matrix\.(?P<key>[\w-]+)\s*\}\}$")
+JOB_DEADLINE: Final = "${{ matrix.job-timeout-minutes }}"
+TEST_DEADLINE: Final = "${{ matrix.timeout-minutes }}"
 
 
 class WorkflowStartupError(Exception):
     pass
 
 
-class ReusableCall(BaseModel):
-    uses: str | None = None
-    with_: Mapping[str, object] = Field(default_factory=dict, alias="with")
+class WorkflowJob(BaseModel):
     strategy: Mapping[str, object] = Field(default_factory=dict)
     steps: tuple[Mapping[str, object], ...] = ()
+    timeout_minutes: object = Field(default=None, alias="timeout-minutes")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "frozen": True}
 
 
 class WorkflowFile(BaseModel):
-    jobs: Mapping[str, ReusableCall] = Field(default_factory=dict)
+    jobs: Mapping[str, WorkflowJob] = Field(default_factory=dict)
+
+    model_config = {"frozen": True}
 
 
 def parse_workflow(text: str) -> WorkflowFile | str:
@@ -79,10 +79,10 @@ def arithmetic_expressions(text: str) -> Iterator[str]:
             yield body.strip()
 
 
-def setup_ceiling_minutes(base_text: str) -> int:
-    """Sum the per-step timeouts on everything the base workflow runs before pytest."""
-    base: Final = yaml.safe_load(base_text)
-    steps: Final = base["jobs"]["run"]["steps"]
+def setup_ceiling_minutes(unit_text: str) -> int:
+    """Sum the per-step timeouts on everything the unit job runs before pytest."""
+    workflow: Final = yaml.safe_load(unit_text)
+    steps: Final = workflow["jobs"]["unit"]["steps"]
     return sum(
         s["timeout-minutes"]
         for s in steps
@@ -90,100 +90,38 @@ def setup_ceiling_minutes(base_text: str) -> int:
     )
 
 
-def base_default(base_text: str, name: str) -> int:
-    base: Final = yaml.safe_load(base_text)
-    return base[True]["workflow_call"]["inputs"][name]["default"]
-
-
-@dataclass(frozen=True, slots=True)
-class Column:
-    """A budget the caller reads from one column of its own matrix."""
-
-    name: str
-
-
-def budget_source(job: ReusableCall, key: str, fallback: int) -> int | Column | str:
-    """A caller passes a literal, or `${{ matrix.x }}` naming a column of its matrix.
-
-    Anything else comes back as the reason it could not be read, since a budget
-    nothing can resolve has to be reported rather than passed over.
-    """
-    value: Final = job.with_.get(key)
-    if value is None:
-        return fallback
-    if isinstance(value, int):
-        return value
-
-    matrix_ref: Final = MATRIX_REF.match(str(value))
-    if not matrix_ref:
-        return f"passes `{key}: {value}`, which is neither a number nor a `matrix` reference."
-    return Column(matrix_ref.group("key"))
-
-
-def matrix_rows(job: ReusableCall) -> Sequence[Mapping[str, object]]:
-    matrix: Final = job.strategy.get("matrix", {})
-    entries: Final = matrix.get("include", ()) if isinstance(matrix, dict) else ()
-    return tuple(e for e in entries if isinstance(e, dict))
-
-
-def budget_pairs(job: ReusableCall, test_source: int | Column, job_source: int | Column) -> Iterator[tuple[int, int]]:
-    """Pair each shard's test budget with the job budget of that same shard.
-
-    Matrix-sourced budgets resolve per `include` row, so two matrix columns are
-    read off the same row rather than cross-producted across rows.
-    """
-    if isinstance(test_source, int) and isinstance(job_source, int):
-        yield test_source, job_source
+def timeout_contract_errors(rel: Path, workflow: WorkflowFile, ceiling: int) -> Iterator[str]:
+    job: Final = workflow.jobs.get("unit")
+    if job is None:
         return
-
-    for row in matrix_rows(job):
-        test_budget = row.get(test_source.name) if isinstance(test_source, Column) else test_source
-        job_budget = row.get(job_source.name) if isinstance(job_source, Column) else job_source
-        if isinstance(test_budget, int) and isinstance(job_budget, int):
-            yield test_budget, job_budget
-
-
-def unresolved_message(where: str, job: ReusableCall, sources: Sequence[int | Column]) -> str:
-    """Why no shard yielded a pair of budgets to compare.
-
-    Naming only the columns that resolve nowhere keeps the message honest: a
-    column every row supplies is not what left the pair unchecked.
-    """
-    rows: Final = matrix_rows(job)
-    missing: Final = tuple(
-        f"`matrix.{s.name}`"
-        for s in sources
-        if isinstance(s, Column) and not any(isinstance(row.get(s.name), int) for row in rows)
-    )
-    if missing:
-        return (
-            f"{where} reads a budget from {', '.join(missing)}, which no `include` row supplies "
-            "as a number, so the pair would go unchecked."
-        )
-    return (
-        f"{where} reads both budgets from its matrix, but no single `include` row supplies both "
-        "as numbers, so the pair would go unchecked."
-    )
-
-
-def job_errors(rel: Path, job_name: str, job: ReusableCall, ceiling: int, base_text: str) -> Iterator[str]:
-    where: Final = f"{rel}: job `{job_name}`"
-    test_source: Final = budget_source(job, "timeout-minutes", base_default(base_text, "timeout-minutes"))
-    job_source: Final = budget_source(job, "job-timeout-minutes", base_default(base_text, "job-timeout-minutes"))
-    sources: Final = (test_source, job_source)
-
-    unreadable: Final = tuple(f"{where} {reason}" for reason in sources if isinstance(reason, str))
-    if unreadable:
-        yield from unreadable
+    if job.timeout_minutes != JOB_DEADLINE:
+        yield f"{rel}: job `unit` sets timeout-minutes to `{job.timeout_minutes}`, not `{JOB_DEADLINE}`"
+    test_deadlines: Final = tuple(s.get("timeout-minutes") for s in job.steps if s.get("name") == "Run tests")
+    if test_deadlines != (TEST_DEADLINE,):
+        yield f"{rel}: job `unit` step `Run tests` must set timeout-minutes to `{TEST_DEADLINE}`, found {test_deadlines}"
+    matrix_value: Final = job.strategy.get("matrix", {})
+    if not isinstance(matrix_value, Mapping):
+        yield f"{rel}: job `unit` has no readable matrix"
         return
-
-    pairs: Final = tuple(budget_pairs(job, test_source, job_source))
-    if not pairs:
-        yield unresolved_message(where, job, sources)
+    entries_value: Final = matrix_value.get("include", ())
+    if not isinstance(entries_value, Sequence) or isinstance(entries_value, str) or not entries_value:
+        yield f"{rel}: job `unit` has no readable matrix include rows"
         return
-
-    for test_budget, job_budget in pairs:
-        required = test_budget + ceiling + JOB_OVERHEAD_MINUTES
+    for entry in entries_value:
+        if not isinstance(entry, Mapping):
+            yield f"{rel}: job `unit` has an unreadable matrix row"
+            continue
+        shard: Final = entry.get("shard", "<unnamed>")
+        test_budget: Final = entry.get("timeout-minutes")
+        job_budget: Final = entry.get("job-timeout-minutes")
+        where: Final = f"{rel}: job `unit`, shard `{shard}`"
+        if not isinstance(test_budget, int) or isinstance(test_budget, bool):
+            yield f"{where} has no integer timeout-minutes"
+            continue
+        if not isinstance(job_budget, int) or isinstance(job_budget, bool):
+            yield f"{where} has no integer job-timeout-minutes"
+            continue
+        required: Final = test_budget + ceiling + JOB_OVERHEAD_MINUTES
         if job_budget < required:
             yield (
                 f"{where} gives pytest {test_budget}m but caps the job at "
@@ -193,13 +131,7 @@ def job_errors(rel: Path, job_name: str, job: ReusableCall, ceiling: int, base_t
             )
 
 
-def timeout_contract_errors(rel: Path, workflow: WorkflowFile, ceiling: int, base_text: str) -> Iterator[str]:
-    for job_name, job in workflow.jobs.items():
-        if job.uses == BASE_WORKFLOW:
-            yield from job_errors(rel, job_name, job, ceiling, base_text)
-
-
-def workflow_errors(rel: Path, text: str, ceiling: int, base_text: str) -> Iterator[str]:
+def workflow_errors(rel: Path, text: str, ceiling: int) -> Iterator[str]:
     for expression in arithmetic_expressions(text):
         yield (
             f"{rel}: `${{{{ {expression} }}}}` uses arithmetic, which GitHub expressions do not "
@@ -211,22 +143,20 @@ def workflow_errors(rel: Path, text: str, ceiling: int, base_text: str) -> Itera
         yield f"{rel}: {workflow}"
         return
 
-    yield from timeout_contract_errors(rel, workflow, ceiling, base_text)
+    yield from timeout_contract_errors(rel, workflow, ceiling)
 
 
 def main() -> None:
-    base_text: Final = BASE_WORKFLOW_PATH.read_text()
-    ceiling: Final = setup_ceiling_minutes(base_text)
+    unit_text: Final = UNIT_WORKFLOW_PATH.read_text()
+    ceiling: Final = setup_ceiling_minutes(unit_text)
     errors: Final = tuple(
         error
         for path in sorted(WORKFLOWS_DIR.glob("*.y*ml"))
-        for error in workflow_errors(path.relative_to(REPO_ROOT), path.read_text(), ceiling, base_text)
+        for error in workflow_errors(path.relative_to(REPO_ROOT), path.read_text(), ceiling)
     )
 
     if errors:
-        raise WorkflowStartupError(
-            "Workflow startup invariants violated:\n  - " + "\n  - ".join(errors)
-        )
+        raise WorkflowStartupError("Workflow startup invariants violated:\n  - " + "\n  - ".join(errors))
 
     print(f"Workflow startup invariants hold (setup ceiling {ceiling}m)")
 
