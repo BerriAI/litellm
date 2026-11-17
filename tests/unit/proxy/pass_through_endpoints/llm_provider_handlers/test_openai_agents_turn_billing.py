@@ -15,7 +15,7 @@ import respx
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.constants import OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS
+from litellm.constants import OPENAI_AGENTS_SETTLED_FETCH_ATTEMPTS, OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
@@ -1065,6 +1065,42 @@ async def test_a_subagent_turn_from_before_the_call_is_never_billed_to_it(local_
 
 
 @pytest.mark.asyncio
+async def test_a_subagent_turn_a_later_root_turn_started_is_never_billed_to_the_earlier_call(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (
+                _turn("turn_2", CALL_STARTED_AT + 10, "completed", TURN_USAGE),
+                _turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),
+            ),
+        ),
+        session=_session(),
+        replies={
+            SUBAGENTS_URL: (_page({"id": "subagent_1", "object": "agent.session.subagent"}),),
+            SUBAGENT_TURNS_URL: (
+                _page(
+                    _turn("subturn_2", CALL_STARTED_AT + 12, "completed", TURN_USAGE),
+                    _turn("subturn_1", CALL_STARTED_AT + 3, "completed", SECOND_TURN_USAGE),
+                ),
+            ),
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "0d2f4b6d-8f0b-4d2f-9b4d-6f8b0d2f4b6d",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"] + SECOND_TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE) + _expected_cost(SECOND_TURN_USAGE))
+
+
+@pytest.mark.asyncio
 async def test_web_searches_in_a_billed_turn_add_their_per_call_price(local_model_cost_map: None):
     web_search: Final = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
     api: Final = _AgentsApi(
@@ -1092,6 +1128,64 @@ async def test_web_searches_in_a_billed_turn_add_their_per_call_price(local_mode
 
     assert per_search > 0
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE) + 2 * per_search)
+
+
+@pytest.mark.asyncio
+async def test_transient_failures_reading_a_settled_turns_agent_and_searches_still_bill_them(
+    local_model_cost_map: None,
+):
+    web_search: Final = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        replies={
+            f"{SESSIONS_URL}/{SESSION_ID}": (503, httpx.ConnectError("connection refused"), _session()),
+            ROOT_ITEMS_URL: (502, _page(web_search)),
+        },
+    )
+    rows: Final = _SpendRows()
+    per_search: Final = litellm.model_cost[AGENT_MODEL]["search_context_cost_per_query"]["search_context_size_medium"]
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "1e3a5c7e-9a1c-4e3a-8c5e-7a9c1e3a5c7e",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["model"] == AGENT_MODEL
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE) + per_search)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "reads"),
+    [pytest.param(404, 1, id="refused"), pytest.param(503, OPENAI_AGENTS_SETTLED_FETCH_ATTEMPTS, id="still_failing")],
+)
+async def test_a_settled_turns_agent_read_stops_retrying_when_refused_or_out_of_attempts(
+    local_model_cost_map: None, status_code: int, reads: int
+):
+    session_url: Final = f"{SESSIONS_URL}/{SESSION_ID}"
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        replies={session_url: (*([status_code] * reads), _session())},
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "2f4b6d8f-0b2d-4f4b-8d6f-8b0d2f4b6d8f",
+    )
+    row: Final = await rows.only_row()
+
+    assert api.urls.count(session_url) == reads
+    assert row["spend"] == 0
 
 
 @pytest.mark.asyncio

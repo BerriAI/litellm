@@ -19,6 +19,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     OPENAI_AGENTS_LIST_PAGE_LIMIT,
+    OPENAI_AGENTS_SETTLED_FETCH_ATTEMPTS,
     OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS,
     OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE,
     OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS,
@@ -839,6 +840,11 @@ class OpenAIAgentsTurnBiller:
         if failure is not None:
             return failure
         listed: Final = tuple(_listed_turns(turns_paths, pages))
+        if not listed:
+            return known
+        next_root_created_at: Final = await self._next_root_created_at(turn_start, root)
+        if isinstance(next_root_created_at, _FetchFailed):
+            return next_root_created_at
         latest: Final = MappingProxyType({claimed_turn.turn.id: claimed_turn for claimed_turn in listed})
         known_ids: Final = frozenset(claimed_turn.turn.id for claimed_turn in known)
         claimed_now: Final = tuple(
@@ -846,11 +852,17 @@ class OpenAIAgentsTurnBiller:
                 claimed_turn
                 for claimed_turn in listed
                 if claimed_turn.turn.id not in known_ids
-                and claimed_turn.turn.created_at >= root_created_at
+                and root_created_at <= claimed_turn.turn.created_at < next_root_created_at
                 and await self._claims.claim(claimed_turn.turn.id, claimant)
             ]
         )
         return (*(latest.get(claimed_turn.turn.id, claimed_turn) for claimed_turn in known), *claimed_now)
+
+    async def _next_root_created_at(self, turn_start: AgentsTurnStart, root: _ClaimedTurn) -> float | _FetchFailed:
+        roots: Final = await self._fetch_turns(turn_start, root.turns_path)
+        if isinstance(roots, _FetchFailed):
+            return roots
+        return min((turn.created_at for turn in roots.data if turn.created_at > root.turn.created_at), default=math.inf)
 
     async def _fetch(self, turn_start: AgentsTurnStart, path: str) -> bytes | _FetchFailed:
         try:
@@ -877,6 +889,24 @@ class OpenAIAgentsTurnBiller:
             verbose_proxy_logger.warning("OpenAI Agents passthrough: GET %s returned an unreadable body: %s", path, e)
             return _FetchFailed(reason=f"GET {path} returned an unreadable body", retryable=False)
 
+    async def _fetch_settled_page(
+        self,
+        turn_start: AgentsTurnStart,
+        path: str,
+        page_type: type[_PageT],
+        attempts_left: int = OPENAI_AGENTS_SETTLED_FETCH_ATTEMPTS,
+        delay: float = OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS,
+    ) -> _PageT | _FetchFailed:
+        page: Final = await self._fetch_page(turn_start, path, page_type)
+        if not isinstance(page, _FetchFailed) or not page.retryable:
+            return page
+        if attempts_left <= 1 or self._stopping.is_set():
+            return page
+        await self._wait(delay)
+        return await self._fetch_settled_page(
+            turn_start, path, page_type, attempts_left - 1, min(delay * 2, OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS)
+        )
+
     async def _fetch_turns(self, turn_start: AgentsTurnStart, turns_path: str) -> _TurnsPage | _FetchFailed:
         return await self._fetch_page(
             turn_start, f"{turns_path}?order=desc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}", _TurnsPage
@@ -884,7 +914,7 @@ class OpenAIAgentsTurnBiller:
 
     async def _web_search_calls(self, turn_start: AgentsTurnStart, items_path: str, after: str | None = None) -> int:
         cursor: Final = "" if after is None else f"&after={after}"
-        page: Final = await self._fetch_page(
+        page: Final = await self._fetch_settled_page(
             turn_start, f"{items_path}?limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}{cursor}", _ItemsPage
         )
         if isinstance(page, _FetchFailed):
@@ -903,7 +933,9 @@ class OpenAIAgentsTurnBiller:
     async def _agent(self, turn_start: AgentsTurnStart) -> AgentSpec | None:
         if turn_start.agent is not None:
             return turn_start.agent
-        session: Final = await self._fetch_page(turn_start, f"agents/sessions/{turn_start.session_id}", _Session)
+        session: Final = await self._fetch_settled_page(
+            turn_start, f"agents/sessions/{turn_start.session_id}", _Session
+        )
         return None if isinstance(session, _FetchFailed) else session.agent
 
     async def _response_cost(
