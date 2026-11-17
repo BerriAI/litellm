@@ -5,18 +5,13 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey};
-use litellm_python_compat::{
-    Value as PyValue,
-    json::{dumps, from_json},
-    repr::{repr, to_str},
-};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use super::{
     builders::token_failure,
     credentials::{Credentials, Expiry, Loaded, Minted, RefreshFuture},
-    failure::{GoogleLoginFailure, PythonException},
+    failure::{GoogleLoginFailure, PythonException, python_str},
     transport::Requests,
 };
 use crate::constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT};
@@ -85,35 +80,20 @@ fn grant(
     })
 }
 
-/// `_client._handle_error_response`: a body that is not JSON is the text itself, else
-/// `"{error}: {error_description}"` beside the response data.
+/// A refused token request: the endpoint's `error` and `error_description`, or its text.
 pub(crate) fn refused(body: &str) -> GoogleLoginFailure {
-    let data = match serde_json::from_str::<Value>(body) {
-        Ok(Value::String(text)) => return GoogleLoginFailure::new(PythonException::Refresh, text),
-        Ok(data) => data,
-        Err(_) => return GoogleLoginFailure::new(PythonException::Refresh, body),
+    let message = match serde_json::from_str::<Value>(body) {
+        Ok(Value::String(text)) => text,
+        Ok(Value::Object(fields)) if fields.contains_key("error") => {
+            let text = |name: &str| fields.get(name).map(|value| python_str(Some(value)));
+            match text("error_description") {
+                Some(description) => format!("{}: {description}", python_str(fields.get("error"))),
+                None => python_str(fields.get("error")),
+            }
+        }
+        _ => body.to_owned(),
     };
-    let details = match &data {
-        Value::Object(fields) if fields.contains_key("error") => format!(
-            "{}: {}",
-            to_str(&from_json(fields["error"].clone())),
-            to_str(&from_json(
-                fields
-                    .get("error_description")
-                    .cloned()
-                    .unwrap_or(Value::Null)
-            ))
-        ),
-        other => dumps(&from_json(other.clone())).unwrap_or_else(|_| other.to_string()),
-    };
-    GoogleLoginFailure::new(
-        PythonException::Refresh,
-        format!(
-            "({}, {})",
-            repr(&PyValue::Str(details)),
-            repr(&from_json(data))
-        ),
-    )
+    GoogleLoginFailure::new(PythonException::Refresh, message)
 }
 
 /// `_client._can_retry`.
@@ -152,12 +132,7 @@ pub(crate) fn expiry(
             .map(|seconds| seconds as f64),
         Some(_) => None,
     };
-    let seconds = seconds.ok_or_else(|| {
-        GoogleLoginFailure::new(
-            PythonException::Type,
-            "unsupported type for timedelta seconds component",
-        )
-    })?;
+    let seconds = seconds.ok_or_else(invalid_lifetime)?;
     Ok(Expiry::At(now + time::Duration::seconds_f64(seconds)))
 }
 
@@ -273,42 +248,31 @@ pub(crate) async fn token_endpoint_request(
     Ok(answer)
 }
 
-/// The response data google-auth reads a granted token from: the JSON body, or its text when it
-/// is not JSON.
-pub(crate) fn response_data(body: &str) -> Value {
-    serde_json::from_str(body).unwrap_or_else(|_| Value::String(body.to_owned()))
+/// A token reply whose `expires_in` is not a number of seconds.
+pub(crate) fn invalid_lifetime() -> GoogleLoginFailure {
+    GoogleLoginFailure::new(
+        PythonException::Refresh,
+        "The token endpoint's reply has an expires_in that is not a number of seconds.",
+    )
 }
 
-/// The `TypeError` Python raises for `data["access_token"]` on data that is not a dict.
-pub(crate) fn not_subscriptable(data: &Value) -> Option<GoogleLoginFailure> {
-    let message = match data {
-        Value::Object(_) => return None,
-        Value::String(_) => "string indices must be integers, not 'str'",
-        Value::Array(_) => "list indices must be integers or slices, not str",
-        Value::Null => "'NoneType' object is not subscriptable",
-        Value::Bool(_) => "'bool' object is not subscriptable",
-        Value::Number(number) if number.is_f64() => "'float' object is not subscriptable",
-        Value::Number(_) => "'int' object is not subscriptable",
-    };
-    Some(GoogleLoginFailure::new(PythonException::Type, message))
+/// A token reply that is not a JSON object.
+pub(crate) fn not_an_object() -> GoogleLoginFailure {
+    GoogleLoginFailure::new(
+        PythonException::Refresh,
+        "The token endpoint's reply is not a JSON object.",
+    )
 }
 
-/// `response_data["access_token"]` as `jwt_grant` and `_handle_refresh_grant_response` read it.
+/// The granted token reply, which must be a JSON object holding `access_token`.
 pub(crate) fn granted(body: &str) -> Result<Map<String, Value>, GoogleLoginFailure> {
-    let data = response_data(body);
-    if let Some(failure) = not_subscriptable(&data) {
-        return Err(failure);
-    }
-    let Value::Object(granted) = data else {
-        unreachable!("only a dict is subscriptable by a string");
+    let Ok(Value::Object(granted)) = serde_json::from_str::<Value>(body) else {
+        return Err(not_an_object());
     };
     if !granted.contains_key("access_token") {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            format!(
-                "('No access token in response.', {})",
-                repr(&from_json(Value::Object(granted)))
-            ),
+            "No access token in response.",
         ));
     }
     Ok(granted)
@@ -498,17 +462,17 @@ pub(crate) mod tests {
     #[case::invalid_grant(
         400,
         json!({"error": "invalid_grant", "error_description": "Invalid JWT Signature."}),
-        "('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})"
+        "invalid_grant: Invalid JWT Signature."
     )]
     #[case::no_description(
         400,
         json!({"error": "invalid_client"}),
-        "('invalid_client: None', {'error': 'invalid_client'})"
+        "invalid_client"
     )]
-    #[case::no_error_field(401, json!({"message": "no"}), "('{\"message\": \"no\"}', {'message': 'no'})")]
+    #[case::no_error_field(401, json!({"message": "no"}), r#"{"message":"no"}"#)]
     #[case::json_text(403, json!("plain text"), "plain text")]
     #[tokio::test]
-    async fn a_refusal_raises_google_auth_s_refresh_error(
+    async fn a_refusal_is_a_refresh_error_naming_the_endpoint_s_error(
         #[case] status: u16,
         #[case] answer: Value,
         #[case] expected: &str,
@@ -558,10 +522,7 @@ pub(crate) mod tests {
         let endpoint = endpoint(vec![(200, json!({"expires_in": 60}))]).await;
         assert_eq!(
             quick(&endpoint.url).mint().await.unwrap_err(),
-            GoogleLoginFailure::new(
-                PythonException::Refresh,
-                "('No access token in response.', {'expires_in': 60})"
-            )
+            GoogleLoginFailure::new(PythonException::Refresh, "No access token in response.")
         );
     }
 
@@ -577,23 +538,20 @@ pub(crate) mod tests {
     }
 
     #[rstest]
-    #[case::html(
-        "<html>token service unavailable</html>",
-        "string indices must be integers, not 'str'"
-    )]
-    #[case::json_text("\"granted\"", "string indices must be integers, not 'str'")]
-    #[case::list("[1]", "list indices must be integers or slices, not str")]
-    #[case::number("7", "'int' object is not subscriptable")]
-    #[case::null("null", "'NoneType' object is not subscriptable")]
+    #[case::html("<html>token service unavailable</html>")]
+    #[case::json_text("\"granted\"")]
+    #[case::list("[1]")]
+    #[case::number("7")]
+    #[case::null("null")]
     #[tokio::test]
-    async fn a_granted_body_that_is_not_a_dict_is_python_s_type_error(
-        #[case] body: &'static str,
-        #[case] expected: &str,
-    ) {
+    async fn a_granted_body_that_is_not_an_object_is_a_refresh_error(#[case] body: &'static str) {
         let (url, server) = raw_endpoint(body).await;
         assert_eq!(
             quick(&url).mint().await.unwrap_err(),
-            GoogleLoginFailure::new(PythonException::Type, expected)
+            GoogleLoginFailure::new(
+                PythonException::Refresh,
+                "The token endpoint's reply is not a JSON object."
+            )
         );
         server.abort();
     }

@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 
 use super::{
     builders::{TokenSource, token_failure},
-    failure::{GoogleLoginFailure, PythonException, python_str, python_type_name},
+    failure::{GoogleLoginFailure, PythonException, json_kind, python_str},
 };
 
 /// `google.auth._helpers.REFRESH_THRESHOLD`: a token this close to its expiry is stale.
@@ -68,7 +68,8 @@ impl Minted {
             expiry,
             non_string: match token {
                 Some(Value::String(_)) => None,
-                other => Some(python_type_name(other)),
+                Some(other) => Some(json_kind(other)),
+                None => Some("NoneType"),
             },
         }
     }

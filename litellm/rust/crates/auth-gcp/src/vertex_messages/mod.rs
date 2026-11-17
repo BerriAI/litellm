@@ -30,7 +30,7 @@ pub use failure::{CredentialsFile, GOOGLE_SDK_MISSING, GoogleLoginFailure, Pytho
 pub use transport::set_certifi_bundle;
 
 use credentials::{Loaded, managed};
-use failure::python_type;
+use failure::json_kind;
 use logins::{Login, LoginKey, Logins};
 use source::{CredentialsJson, load_vertex_credentials_source};
 
@@ -248,8 +248,8 @@ impl VertexMessagesAuth {
             Some(other) => Err(GoogleLoginFailure::new(
                 PythonException::Type,
                 format!(
-                    "Expected project_id to be a str but got {}",
-                    python_type(&other)
+                    "Expected project_id to be a str but got <class '{}'>",
+                    json_kind(&other)
                 ),
             )),
             None => Err(value_failure("Could not resolve project_id")),
@@ -999,7 +999,7 @@ mod tests {
     )]
     #[case::another_refusal_stands(
         (400, json!({"error": "invalid_client", "error_description": "The OAuth client was not found."})),
-        Err("('invalid_client: The OAuth client was not found.', {'error': 'invalid_client', 'error_description': 'The OAuth client was not found.'})"),
+        Err("invalid_client: The OAuth client was not found."),
         2
     )]
     #[tokio::test]
@@ -1043,7 +1043,7 @@ mod tests {
             refused,
             GoogleLoginFailure::new(
                 PythonException::Refresh,
-                "('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})"
+                "invalid_grant: Invalid JWT Signature."
             )
         );
         assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
@@ -1132,27 +1132,28 @@ mod tests {
     }
 
     #[rstest]
-    #[case::array(json!(["a"]), "'list' object has no attribute 'get'")]
+    #[case::array(json!(["a"]), "File {} is not a valid json file.")]
     #[case::impersonated_without_source(
         json!({"type": "impersonated_service_account", "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken"}),
-        "'NoneType' object has no attribute 'get'"
+        "Failed to load impersonated service account credentials from {}"
     )]
     #[tokio::test]
-    async fn application_default_files_google_auth_crashes_on_raise_its_attribute_error(
+    async fn unusable_application_default_files_are_default_credentials_errors(
         #[case] contents: Value,
         #[case] message: &str,
     ) {
         let file = key_file(&contents);
-        let error = auth(environment(&[(
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            file.path().to_str().unwrap(),
-        )]))
-        .login(MODEL, None, Some("p".into()))
-        .await
-        .unwrap_err();
+        let path = file.path().to_str().unwrap();
+        let error = auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", path)]))
+            .login(MODEL, None, Some("p".into()))
+            .await
+            .unwrap_err();
         assert_eq!(
             failure(error),
-            GoogleLoginFailure::new(PythonException::Attribute, message)
+            GoogleLoginFailure::new(
+                PythonException::DefaultCredentials,
+                message.replace("{}", path)
+            )
         );
     }
 
