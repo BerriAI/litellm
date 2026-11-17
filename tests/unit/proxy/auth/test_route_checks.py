@@ -392,6 +392,10 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(grou
     [
         ("/model/update", "POST"),
         ("/model/123e4567-e89b-12d3-a456-426614174000/update", "PATCH"),
+        ("/management/v1/customer_organizations", "POST"),
+        ("/management/v1/customer_organizations/org-1/default_budgets/budget-1", "DELETE"),
+        ("/management/v1/customer_teams/team-1", "PATCH"),
+        ("/management/v1/customer_members/member-1", "GET"),
     ],
 )
 def test_virtual_key_management_routes_allows_model_update(route: str, method: str) -> None:
@@ -2324,7 +2328,7 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
 # layer, even though the underlying handlers already gate on PROXY_ADMIN_VIEW_ONLY.
 #
 # Each route below corresponds to a network call made by the Logs page
-# (ui/litellm-dashboard/src/components/logs/) — see the comment on each.
+# (litellm/ui/litellm-dashboard/src/components/logs/) — see the comment on each.
 ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     # Main paginated log list — uiSpendLogsCall in request/useLogFilterLogic.ts & index.tsx
     "/spend/logs/ui",
@@ -2769,6 +2773,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
             "..",
             "..",
             "..",
+            "litellm",
             "enterprise",
             "litellm_enterprise",
             "proxy",

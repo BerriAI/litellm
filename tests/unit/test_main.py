@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError, AsyncOpenAI, OpenAI
+from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -40,6 +40,9 @@ from litellm.caching.caching import Cache
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+from litellm.integrations.langfuse.langfuse_prompt_management import langfuse_client_init
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -52,6 +55,7 @@ from litellm.types.utils import (
     Delta,
     ModelResponseStream,
     StandardCallbackDynamicParams,
+    StandardLoggingPayload,
     StreamingChoices,
     TextCompletionResponse,
     Usage,
@@ -101,6 +105,63 @@ def preserve_litellm_completion_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["image_generation", "embedding"])
+@pytest.mark.parametrize("deployment_id", [None, "health-deployment"])
+async def test_health_check_logs_the_same_cost_and_deployment_as_normal_calls(
+    mode: str, deployment_id: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[asyncio.Queue[StandardLoggingPayload]] = asyncio.Queue()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "standard/1024-x-1024/health-image",
+        {"input_cost_per_image": 0.25, "litellm_provider": "openai", "mode": "image_generation"},
+    )
+
+    class SpendCapture(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put_nowait(TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"]))
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [SpendCapture()])
+    model: Final = "openai/health-image" if mode == "image_generation" else "openai/text-embedding-3-small"
+    payload: Final = (
+        {"created": 1, "data": [{"url": "https://example.com/image.png"}]}
+        if mode == "image_generation"
+        else {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 10, "total_tokens": 10},
+        }
+    )
+    params: Final = {
+        "model": model,
+        "api_base": "https://health-test.example/v1",
+        "api_key": "test-key",
+        **({"model_info": {"id": deployment_id}} if deployment_id else {}),
+        **({"size": "1024x1024", "quality": "standard", "n": 1} if mode == "image_generation" else {}),
+    }
+    with respx.mock:
+        respx.post(url__regex=r"https://health-test.example/v1/.*").mock(return_value=httpx.Response(200, json=payload))
+        if mode == "image_generation":
+            await litellm.aimage_generation(**params, prompt="test")
+        else:
+            await litellm.aembedding(**params, input=["test"])
+        normal: Final = await asyncio.wait_for(events.get(), timeout=10)
+        result: Final = await litellm.ahealth_check(model_params=params.copy(), mode=mode, prompt="test")
+        assert "error" not in result, result
+        health: Final = await asyncio.wait_for(events.get(), timeout=10)
+
+    assert health["call_type"] == normal["call_type"]
+    assert health["model"] == normal["model"]
+    assert health["response_cost"] == normal["response_cost"]
+    assert health["response_cost"] > 0
+    assert health["model_id"] == (deployment_id or "")
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -880,6 +941,41 @@ def test_completion_drops_unanswered_claude_tool_search_calls_before_the_respons
         ("function_call", "toolu_01weather"),
         ("function_call_output", "toolu_01weather"),
     ]
+
+
+def test_completion_through_the_responses_bridge_honors_a_string_allowlist(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_allowlist",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_allowlist",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+    litellm.completion(
+        model="openai/responses/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[{"role": "user", "content": "hi"}],
+        presence_penalty=0.1,
+        allowed_openai_params="presence_penalty",
+    )
+
+    assert route.call_count == 1
 
 
 def _openai_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
@@ -6901,6 +6997,90 @@ async def test_an_invalid_stream_chunk_size_is_rejected_before_any_prompt_hook_r
     on_prompt.assert_not_called()
 
 
+_PROMPT_SETTINGS_API_BASE: Final = "https://prompt-settings.test/v1"
+_LANGFUSE_PROMPT_HOST: Final = "https://langfuse-prompts.test"
+
+
+@pytest.fixture
+def langfuse_prompt_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-prompt-settings")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-prompt-settings")
+    monkeypatch.setenv("LANGFUSE_HOST", _LANGFUSE_PROMPT_HOST)
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    langfuse_client_init.cache_clear()
+    yield
+    langfuse_client_init.cache_clear()
+
+
+def _serve_langfuse_text_prompt(
+    respx_mock: respx.MockRouter, name: str, text: str, config: Mapping[str, object]
+) -> None:
+    respx_mock.get(host="langfuse-prompts.test", path=f"/api/public/v2/prompts/{name}").respond(
+        json={
+            "type": "text",
+            "name": name,
+            "version": 1,
+            "config": dict(config),
+            "labels": ["production"],
+            "tags": [],
+            "prompt": text,
+        }
+    )
+
+
+def _serve_chat_completion(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(f"{_PROMPT_SETTINGS_API_BASE}/chat/completions").respond(
+        json={
+            "id": "chatcmpl-prompt-settings",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "prompt-settings-test",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("langfuse_prompt_env")
+@pytest.mark.parametrize("integration", ["dotprompt", "langfuse"])
+async def test_acompletion_sends_the_selected_prompts_generation_settings(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, integration: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    template_settings: Final = {"temperature": 0.42, "max_tokens": 31}
+    if integration == "dotprompt":
+        monkeypatch.setattr(
+            litellm,
+            "callbacks",
+            [
+                DotpromptManager(
+                    prompt_data={"pinned": {"content": "System: Pinned prompt.", "metadata": template_settings}}
+                )
+            ],
+        )
+    else:
+        _serve_langfuse_text_prompt(respx_mock, "pinned", "Pinned prompt.", template_settings)
+    endpoint: Final = _serve_chat_completion(respx_mock)
+
+    await litellm.acompletion(
+        model=f"{'langfuse/' if integration == 'langfuse' else ''}openai/prompt-settings-test",
+        messages=[{"role": "user", "content": "hi"}],
+        prompt_id="pinned",
+        temperature=0,
+        top_p=0,
+        api_base=_PROMPT_SETTINGS_API_BASE,
+        api_key="test-key",
+    )
+
+    assert endpoint.call_count == 1
+    sent: Final = json.loads(endpoint.calls[0].request.content)
+    assert sent["model"] == "prompt-settings-test"
+    assert sent["messages"][0] == {"role": "system", "content": "Pinned prompt."}
+    assert sent["messages"][-1] == {"role": "user", "content": "hi"}
+    assert (sent["temperature"], sent["max_tokens"], sent["top_p"]) == (0.42, 31, 0)
+
+
 def _completion_logging_obj(call_id: str) -> LiteLLMLogging:
     return LiteLLMLogging(
         model="gpt-4.1-mini",
@@ -10612,12 +10792,30 @@ def test_azure_ai_forwards_reasoning_effort_once_the_deployment_declares_levels(
     ] == "none"
 
 
-def test_a_model_map_declaration_alone_leaves_reasoning_effort_to_drop_params(
-    local_model_cost_map: None, respx_mock: respx.MockRouter
-) -> None:
-    assert "reasoning_effort" not in _chat_body_sent(
-        respx_mock, "azure_ai/FW-Kimi-K3", "medium", {"id": "kimi-azure-1"}, drop_params=True
+@pytest.fixture
+def foundry_reasoner_row(monkeypatch: pytest.MonkeyPatch) -> str:
+    from litellm.litellm_core_utils.get_model_cost_map import (
+        GetModelCostMap,
+        ModelCostMapReloaded,
+        install_model_cost_map,
     )
+
+    model: Final = "azure_ai/FW-Reasoner"
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    catalog: Final = {
+        **GetModelCostMap.load_local_model_cost_map(),
+        model: {"litellm_provider": "azure_ai", "mode": "chat", "reasoning_effort_levels": ["low", "high", "max"]},
+    }
+    assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
+    return model
+
+
+def test_a_model_map_declaration_alone_forwards_reasoning_effort_without_rounding_it(
+    foundry_reasoner_row: str, respx_mock: respx.MockRouter
+) -> None:
+    assert _chat_body_sent(respx_mock, foundry_reasoner_row, "medium", {"id": "reasoner-1"}, drop_params=True)[
+        "reasoning_effort"
+    ] == "medium"
 
 
 @pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])
@@ -12016,3 +12214,57 @@ def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pyt
         )
 
     assert captured["logging_obj"].litellm_params.get("data_residency") is None
+
+
+_ALEPH_ALPHA_COMPLETE_URL: Final = "https://api.aleph-alpha.com/complete"
+
+
+def _aleph_alpha_completion() -> object:
+    return litellm.completion(
+        model="luminous-base",
+        custom_llm_provider="aleph_alpha",
+        messages=[{"role": "user", "content": "Capital of France?"}],
+        api_key="aleph-test-key",
+    )
+
+
+def test_aleph_alpha_completion_returns_each_upstream_completion_as_a_choice(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200,
+        json={
+            "model_version": "2022-04",
+            "completions": [
+                {"completion": " Paris", "finish_reason": "maximum_tokens"},
+                {"completion": " Lyon", "finish_reason": "end_of_text"},
+            ],
+        },
+    )
+
+    response: Final = _aleph_alpha_completion()
+
+    assert [choice.message.content for choice in response.choices] == [" Paris", " Lyon"]
+
+
+def test_aleph_alpha_error_in_a_successful_body_fails_the_call_with_the_upstream_message(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200, json={"error": "Prompt rejected by the content filter", "code": "PROMPT_REJECTED"}
+    )
+
+    with pytest.raises(APIError) as raised:
+        _aleph_alpha_completion()
+
+    assert "Prompt rejected by the content filter" in raised.value.message
+
+
+@pytest.mark.parametrize("completion", [42, None])
+def test_aleph_alpha_completion_that_is_not_text_fails_the_call(
+    respx_mock: respx.MockRouter, completion: object
+) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200, json={"completions": [{"completion": completion, "finish_reason": "end_of_text"}]}
+    )
+
+    with pytest.raises(APIError):
+        _aleph_alpha_completion()

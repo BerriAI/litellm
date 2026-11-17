@@ -6,6 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
@@ -464,6 +465,7 @@ def image_generation(
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
+            litellm.LlmProviders.REPLICATE,
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
@@ -495,6 +497,7 @@ def image_generation(
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 client=client,
+                _is_async=aimg_generation is True and custom_llm_provider == litellm.LlmProviders.REPLICATE,
             )
         elif custom_llm_provider == "black_forest_labs":
             # Route to BFL-specific handler (polling required)
@@ -698,7 +701,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
-                init_response = ImageResponse(**init_response)
+                init_response = _image_response_from_fields(init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
@@ -715,6 +718,14 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+class _ImageResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _image_response_from_fields(fields: Mapping[str, object]) -> ImageResponse:
+    return ImageResponse(**_ImageResponseFields(**fields))
 
 
 @client

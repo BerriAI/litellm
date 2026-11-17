@@ -264,7 +264,9 @@ SAGEMAKER_SESSION_POLICY: Final = _policy(
 
 POLLY_SESSION_POLICY: Final = _policy(_allow("PollyLiteLLM", ("polly:SynthesizeSpeech",)))
 
-OPENSEARCH_SESSION_POLICY: Final = _policy(_allow("OpenSearchLiteLLM", ("es:ESHttpPost", "aoss:APIAccessAll")))
+OPENSEARCH_SESSION_POLICY: Final = _policy(
+    _allow("OpenSearchLiteLLM", ("es:ESHttpGet", "es:ESHttpPost", "aoss:APIAccessAll"))
+)
 
 OPENSEARCH_INDEX_SESSION_POLICY: Final = _policy(
     _allow(

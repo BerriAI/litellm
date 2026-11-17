@@ -570,6 +570,34 @@ class TestModelManagementAuthChecks:
         assert (getattr(exc_info.value, "param", None), getattr(exc_info.value, "code", None)) == ("api_key", "400")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_info", "team_admin", "refusal"),
+        [
+            ({}, True, "User does not have permission to make this model call"),
+            ({"team_id": "test_team"}, False, "Team ID=test_team does not match the API key's team"),
+        ],
+        ids=["proxy-level model", "team model, caller not team admin"],
+    )
+    async def test_a_refused_write_carrying_a_reference_keeps_its_original_refusal(
+        self, model_info: dict, team_admin: bool, refusal: str
+    ) -> None:
+        model_params: Final = Deployment(
+            model_name="test_model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", api_key="os.environ/OTHER_VALUE"),
+            model_info=model_info,
+        )
+
+        with pytest.raises(HTTPException, match=refusal) as refused:
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=self.normal_user,
+                prisma_client=MockPrismaClient(team_exists=True, user_admin=team_admin),
+                premium_user=True,
+                incoming_params={"model": "openai/gpt-4o-mini", "api_key": "os.environ/OTHER_VALUE"},
+            )
+        assert refused.value.status_code == 403
+
+    @pytest.mark.asyncio
     async def test_can_user_make_model_call_normal_user_fails(self):
         """Test that normal users cannot make model calls"""
         model_params = Deployment(
@@ -1113,7 +1141,7 @@ class TestClearCache:
     @pytest.mark.asyncio
     async def test_clear_cache_preserve_config_models(self):
         """
-        clear_cache resets DB-backed auto-router entries and delegates every deployment
+        clear_cache preserves DB-backed auto-router entries and delegates every deployment
         change to the reload, leaving config models untouched. It must not wipe
         deployments itself -- see the delete_deployment assertion below.
         """
@@ -1122,8 +1150,7 @@ class TestClearCache:
         )
 
         # Create mock router with mixed DB and config router deployments. The two DB
-        # entries are auto_router/* deployments (so their router-map entries should be
-        # cleared for reload); the config-defined router is preserved.
+        # entries and the config-defined router must remain available during reload.
         mock_router = MagicMock()
         plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
@@ -1165,20 +1192,9 @@ class TestClearCache:
         ):
             await clear_cache()
 
-            # clear_cache must wipe ONLY the db auto-router deployments -- the ones whose
-            # strategy entries are popped below and can only be rebuilt via the add path.
-            # Ordinary db models are left alone: wiping them un-served every db model for
-            # the width of the reload, and the reconcile converges without it.
-            assert mock_router.apply.call_count == 2
-            mock_router.apply.assert_any_call(ChangeSet(delete=["db-model-1"]))
-            mock_router.apply.assert_any_call(ChangeSet(delete=["db-model-2"]))
-
-            # DB-backed router entries are cleared so they can be re-populated by the
-            # reload below; the config-backed router must survive, since add_deployment()
-            # only reloads DB models and would otherwise leave it permanently unroutable
-            # (see TestClearCachePreservesConfigRouters).
-            assert "db-auto-router" not in plugins["auto"]
-            assert "db-complexity-router" not in plugins["complexity"]
+            mock_router.apply.assert_not_called()
+            assert "db-auto-router" in plugins["auto"]
+            assert "db-complexity-router" in plugins["complexity"]
             assert "config-router" in plugins["auto"]
             assert "config-router" in plugins["complexity"]
 
@@ -1188,22 +1204,8 @@ class TestClearCache:
             )
 
     @pytest.mark.asyncio
-    async def test_clear_cache_wipes_auto_routers_but_leaves_ordinary_db_models(self):
-        """An ordinary db model must survive clear_cache; a db auto-router must not.
-
-        Two separate hazards meet here, and fixing one naively breaks the other:
-
-        - Wiping ordinary db models un-serves EVERY db model for the width of the
-          reload. The reconcile converges without that, so the wipe is a pure
-          data-plane hole.
-        - NOT wiping a db auto-router strands it. Its strategy registries are keyed by
-          model_name and are popped here, but Router.upsert_deployment returns early
-          for an unchanged deployment and never reaches the add path that rebuilds
-          them. Any unrelated model write would then leave every db-backed auto,
-          complexity, adaptive and quality router unroutable until a restart.
-
-        So the wipe is scoped to exactly the auto-router deployments.
-        """
+    async def test_clear_cache_preserves_auto_routers_and_ordinary_db_models(self):
+        """Deployments and their strategies remain available while the reload runs."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             clear_cache,
         )
@@ -1242,10 +1244,8 @@ class TestClearCache:
         ):
             await clear_cache()
 
-        # The auto-router deployment is wiped so the reload takes the add path and
-        # rebuilds its strategy entry; the ordinary db model is never touched.
-        mock_router.apply.assert_called_once_with(ChangeSet(delete=["db-auto-1"]))
-        assert "db-auto-router" not in plugins["auto"]
+        mock_router.apply.assert_not_called()
+        assert "db-auto-router" in plugins["auto"]
 
 
 class TestClearCachePreservesConfigRouters:
@@ -1299,9 +1299,7 @@ class TestClearCachePreservesConfigRouters:
         ):
             await clear_cache()
 
-        # The DB-backed router for the model that was actually updated is cleared
-        # so the reload below can re-populate it.
-        assert "team-a-db-router" not in plugins["complexity"]
+        assert "team-a-db-router" in plugins["complexity"]
         # Config-defined routers for unrelated tenants must survive untouched.
         assert "config-defined-complexity-router" in plugins["complexity"]
         assert "config-semantic-router" in plugins["auto"]
@@ -1346,11 +1344,8 @@ class TestClearCachePreservesConfigRouters:
         assert "shared-name" in plugins["complexity"]
 
     @pytest.mark.asyncio
-    async def test_db_quality_adaptive_and_switchyard_routers_are_evicted(self):
-        """The auto_router/ prefix also covers quality_router/, adaptive_router/ and switchyard. Their
-        registry entries must be popped too, or reload's init raises 'already exists'
-        (quality) or leaves a stale entry (adaptive).
-        """
+    async def test_db_quality_adaptive_and_switchyard_routers_are_preserved(self):
+        """Every strategy remains available until the deployment reconcile replaces it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
         mock_router = MagicMock()
@@ -1393,9 +1388,9 @@ class TestClearCachePreservesConfigRouters:
         ):
             await clear_cache()
 
-        assert "q1" not in plugins["quality"]
-        assert "a1" not in plugins["adaptive"]
-        assert "s1" not in plugins["switchyard"]
+        assert "q1" in plugins["quality"]
+        assert "a1" in plugins["adaptive"]
+        assert "s1" in plugins["switchyard"]
 
 
 class TestDeleteModelClearsRouterRegistry:
@@ -6136,8 +6131,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
 
     @pytest.mark.asyncio
     async def test_clear_cache_reloads_under_the_lock_without_deadlocking(self, monkeypatch):
-        """clear_cache un-serves every db model before reloading, so it has to hold the
-        lock across the pair -- and therefore must call the already-locked reload.
+        """clear_cache holds the reconcile lock and must call the already-locked reload.
 
         asyncio.Lock is not reentrant: routing this back through the public
         add_deployment would block forever on a lock this coroutine already owns, taking
@@ -9141,6 +9135,195 @@ class TestTeamMemberAutoRouterWrites:
             self._classifier_config({**connection, "timeout_ms": 8100}, False) if change_config else stored_config
         )
 
+    @staticmethod
+    def _plain_row(stored: Mapping[str, object]) -> LiteLLM_ProxyModelTable:
+        return TestTeamMemberAutoRouterWrites._row().model_copy(
+            update={"litellm_params": {"model": "openai/gpt-4o-mini", **stored}}
+        )
+
+    @staticmethod
+    def _team_admin_setup(row: LiteLLM_ProxyModelTable) -> tuple[MagicMock, UserAPIKeyAuth]:
+        team: Final = TestTeamMemberAutoRouterWrites._team().model_copy(
+            update={"members_with_roles": [Member(user_id="owner", role="admin")]}
+        )
+        return (
+            TestTeamMemberAutoRouterWrites._database(team, row),
+            UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["create", "patch", "legacy"])
+    @pytest.mark.parametrize("field", ["api_key", "api_base"])
+    async def test_team_admin_model_writes_reject_new_environment_references(self, endpoint: str, field: str) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        row: Final = self._plain_row({"api_key": "sk-stored", "api_base": "https://provider.test/v1"})
+        database, actor = self._team_admin_setup(row)
+        written: Final = {"model": "openai/gpt-4o-mini", field: "os.environ/OTHER_VALUE"}
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(written),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        operation: Final = (
+            add_new_model(
+                Deployment(
+                    model_name="team-model",
+                    litellm_params=LiteLLM_Params(**written),
+                    model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+                ),
+                actor,
+            )
+            if endpoint == "create"
+            else patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+        )
+        with self._environment(database, row), pytest.raises(ProxyException) as denied:
+            await operation
+
+        assert (denied.value.code, denied.value.param) == ("403", field)
+        database.db.litellm_proxymodeltable.create.assert_not_awaited()
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    async def test_team_admin_edits_resend_a_stored_environment_reference(self, endpoint: str) -> None:
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+        stored: Final = {"api_key": "os.environ/TEAM_VALUE", "api_base": "os.environ/TEAM_BASE"}
+        row: Final = self._plain_row(stored)
+        database, actor = self._team_admin_setup(row)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate({**stored, "rpm": 10}),
+            model_info=ModelInfo(id=row.model_id),
+        )
+        with self._environment(database, row):
+            await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
+
+        written: Final = json.loads(database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
+        saved: Final = {name: decrypt_value_helper(value=written[name], key=name) for name in stored}
+        assert (saved, written["rpm"]) == (stored, 10)
+
+    @pytest.mark.asyncio
+    async def test_team_admin_edit_keeps_a_nested_reference_beside_a_masked_value(self) -> None:
+        stored: Final = {
+            "dataSources": [
+                {
+                    "type": "azure_search",
+                    "parameters": {"endpoint": "os.environ/SEARCH_ENDPOINT", "key": "os.environ/SEARCH_KEY"},
+                }
+            ]
+        }
+        row: Final = self._plain_row(stored)
+        database, actor = self._team_admin_setup(row)
+        resent: Final = {
+            "dataSources": [
+                {"type": "azure_search", "parameters": {"endpoint": "os.environ/SEARCH_ENDPOINT", "key": "os.e****_KEY"}}
+            ],
+            "tpm": 100,
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(resent), model_info=ModelInfo(id=row.model_id)
+        )
+        with self._environment(database, row):
+            await patch_model(row.model_id, request, actor)
+
+        written: Final = json.loads(database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
+        assert (written["dataSources"][0]["parameters"]["endpoint"], written["tpm"]) == ("os.environ/SEARCH_ENDPOINT", 100)
+
+    @pytest.mark.asyncio
+    async def test_team_admin_cannot_copy_a_stored_reference_into_another_data_source(self) -> None:
+        row: Final = self._plain_row(
+            {"dataSources": [{"parameters": {"key": "sk-plain"}}, {"parameters": {"key": "os.environ/SEARCH_KEY"}}]}
+        )
+        database, actor = self._team_admin_setup(row)
+        copied: Final = {"parameters": {"key": "os.environ/SEARCH_KEY"}}
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate({"dataSources": [copied, copied]}),
+            model_info=ModelInfo(id=row.model_id),
+        )
+        with self._environment(database, row), pytest.raises(ProxyException) as denied:
+            await patch_model(row.model_id, request, actor)
+
+        assert (denied.value.code, denied.value.param) == ("403", "dataSources")
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_team_admin_can_save_a_value_that_only_mentions_the_reference_prefix(self) -> None:
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+        row: Final = self._plain_row({"api_key": "sk-stored"})
+        database, actor = self._team_admin_setup(row)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(api_key="sk-os.environ/text"), model_info=ModelInfo(id=row.model_id)
+        )
+        with self._environment(database, row):
+            await patch_model(row.model_id, request, actor)
+
+        written: Final = json.loads(database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
+        assert decrypt_value_helper(value=written["api_key"], key="api_key") == "sk-os.environ/text"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("written", "field"),
+        [
+            ({"api_key": "os.environ/OTHER_VALUE"}, "api_key"),
+            ({"api_base": "os.environ/TEAM_VALUE"}, "api_base"),
+            ({"dataSources": [{"type": "azure_search", "parameters": {"key": "os.environ/OTHER_VALUE"}}]}, "dataSources"),
+        ],
+        ids=["another reference", "stored reference in another field", "nested reference"],
+    )
+    async def test_team_admin_cannot_write_a_reference_other_than_the_stored_one(
+        self, written: Mapping[str, object], field: str
+    ) -> None:
+        row: Final = self._plain_row({"api_key": "os.environ/TEAM_VALUE"})
+        database, actor = self._team_admin_setup(row)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(written), model_info=ModelInfo(id=row.model_id)
+        )
+        with self._environment(database, row), pytest.raises(ProxyException) as denied:
+            await patch_model(row.model_id, request, actor)
+
+        assert (denied.value.code, denied.value.param) == ("403", field)
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["create", "patch", "legacy"])
+    async def test_proxy_admin_model_writes_keep_environment_references(self, endpoint: str) -> None:
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        row: Final = self._plain_row({"api_key": "sk-stored"})
+        database: Final = self._database(self._team(), row)
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        written: Final = {"model": "openai/gpt-4o-mini", "api_key": "os.environ/TEAM_VALUE"}
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(written),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        with (
+            self._environment(database, row),
+            patch("litellm.proxy.proxy_server.proxy_config.add_deployment", new=AsyncMock(return_value=ReconcileOutcome(  # test-quality-ok: [TQ008] model reload I/O boundary
+                still_desired=frozenset((row.model_id,)), live_after=frozenset((row.model_id,))
+            ))),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.append_team_models", new=AsyncMock()),  # test-quality-ok: [TQ008] team allowlist persistence boundary
+        ):
+            await (
+                add_new_model(
+                    Deployment(
+                        model_name="team-model",
+                        litellm_params=LiteLLM_Params(**written),
+                        model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+                    ),
+                    actor,
+                )
+                if endpoint == "create"
+                else patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            )
+
+        table: Final = database.db.litellm_proxymodeltable
+        write: Final = table.create if endpoint == "create" else table.update
+        saved: Final = json.loads(write.await_args.kwargs["data"]["litellm_params"])
+        assert decrypt_value_helper(value=saved["api_key"], key="api_key") == "os.environ/TEAM_VALUE"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "stored_params,removed,denied_param",
@@ -11359,6 +11542,7 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
                     user_api_key_dict=non_admin,
                 )
             assert "proxy admin" in str(exc_info.value.message).lower()
+            assert "GitHub Copilot authentication" in str(exc_info.value.message)
             assert exc_info.value.param == "github_copilot_auth_type"
             mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
 

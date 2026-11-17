@@ -1276,6 +1276,35 @@ class TestVertexEmbeddingsBatchInputTranslation:
             },
         }
 
+    def test_should_nest_embed_content_config_params_inside_the_request(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": "hello world",
+                        "dimensions": 768,
+                        "document_ocr": True,
+                        "audio_track_extraction": True,
+                        "auto_truncate": False,
+                    }
+                )
+            ]
+        )
+
+        assert row == {
+            "key": "request-1",
+            "request": {
+                "content": {"parts": [{"text": "hello world"}]},
+                "output_dimensionality": 768,
+                "embed_content_config": {
+                    "document_ocr": True,
+                    "audio_track_extraction": True,
+                    "auto_truncate": False,
+                },
+            },
+        }
+
     def test_should_omit_config_fields_when_no_params_given(self):
         (row,) = _wrap_entries([_embeddings_entry()])
 
@@ -1667,6 +1696,52 @@ class TestVertexBatchIntegerEnums:
         properties: Final = row["request"]["tools"][0]["function_declarations"][0]["parameters"]["properties"]
         assert "enum" not in properties["level"]
         assert properties["mode"]["enum"] == ["fast", "slow"]
+
+
+_FLAT_TOOL_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+def _chat_entry_with_tool(custom_id: str, name: str, parameters: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Look it up"}],
+            "tools": [{"type": "function", "function": {"name": name, "parameters": parameters}}],
+        },
+    }
+
+
+class TestVertexBatchToolParameters:
+    @pytest.mark.parametrize(
+        "root_schema",
+        [
+            {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+            },
+            {"type": ["object", "null"], "properties": {"a": {"type": "string"}}},
+        ],
+        ids=["anyof-root", "type-list-root"],
+    )
+    def test_rows_never_send_parameters_json_schema_since_vertex_batch_merges_keys_across_rows(
+        self, root_schema: Mapping[str, object]
+    ):
+        rows: Final = _wrap_entries(
+            [
+                _chat_entry_with_tool("root-1", "lookup", root_schema),
+                _chat_entry_with_tool("flat-1", "get_weather", _FLAT_TOOL_SCHEMA),
+            ]
+        )
+
+        declarations: Final = [row["request"]["tools"][0]["function_declarations"][0] for row in rows]
+        assert [
+            (declaration["name"], "parameters" in declaration, "parametersJsonSchema" in declaration)
+            for declaration in declarations
+        ] == [("lookup", True, False), ("get_weather", True, False)]
 
 
 class TestVertexEmbeddingsBatchOutputTranslation:

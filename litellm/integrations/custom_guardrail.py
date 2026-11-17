@@ -386,6 +386,10 @@ def _guardrails_listed_in(metadata: object) -> list[str | dict[str, DynamicGuard
     return metadata.get("guardrails") or []
 
 
+class GuardrailSetupError(Exception):
+    pass
+
+
 class CustomGuardrail(CustomLogger):
     mcp_block_behavior: Literal["tool_result", "raise"] | None = None
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.

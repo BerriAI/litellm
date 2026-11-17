@@ -112,6 +112,7 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "DeepinfraRerankConfig": (".llms.deepinfra.rerank.transformation", "DeepinfraRerankConfig"),
         "HostedVLLMRerankConfig": (".llms.hosted_vllm.rerank.transformation", "HostedVLLMRerankConfig"),
         "PerplexityDecisionsConfig": (".llms.perplexity.decisions.transformation", "PerplexityDecisionsConfig"),
+        "GeminiDecisionsConfig": (".llms.gemini.decisions.transformation", "GeminiDecisionsConfig"),
         "NaceDecisionsConfig": (".llms.nace.decisions.transformation", "NaceDecisionsConfig"),
         "TypeSafeDecisionsConfig": (".llms.typesafe.decisions.transformation", "TypeSafeDecisionsConfig"),
         "ParallelAIDecisionsConfig": (".llms.parallel_ai.decisions.transformation", "ParallelAIDecisionsConfig"),
@@ -134,6 +135,10 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
         "AzureDecisionsConfig": (".llms.azure.decisions.transformation", "AzureDecisionsConfig"),
         "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
+        "VercelAIGatewayDecisionsConfig": (
+            ".llms.vercel_ai_gateway.decisions.transformation",
+            "VercelAIGatewayDecisionsConfig",
+        ),
         "NvidiaNimRerankConfig": (".llms.nvidia_nim.rerank.transformation", "NvidiaNimRerankConfig"),
         "NvidiaNimRankingConfig": (".llms.nvidia_nim.rerank.ranking_transformation", "NvidiaNimRankingConfig"),
         "VertexAIRerankConfig": (".llms.vertex_ai.rerank.transformation", "VertexAIRerankConfig"),

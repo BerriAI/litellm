@@ -1,0 +1,485 @@
+{
+  "pydantic": "2.13.4",
+  "rows": [
+    {
+      "input": "null",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "true",
+      "bool": true,
+      "int": "1"
+    },
+    {
+      "input": "false",
+      "bool": false,
+      "int": "0"
+    },
+    {
+      "input": "0",
+      "bool": false,
+      "int": "0"
+    },
+    {
+      "input": "1",
+      "bool": true,
+      "int": "1"
+    },
+    {
+      "input": "2",
+      "bool": null,
+      "int": "2"
+    },
+    {
+      "input": "-1",
+      "bool": null,
+      "int": "-1"
+    },
+    {
+      "input": "9223372036854775807",
+      "bool": null,
+      "int": "9223372036854775807"
+    },
+    {
+      "input": "9223372036854775808",
+      "bool": null,
+      "int": "9223372036854775808"
+    },
+    {
+      "input": "18446744073709551616",
+      "bool": null,
+      "int": "18446744073709551616"
+    },
+    {
+      "input": "-9223372036854775808",
+      "bool": null,
+      "int": "-9223372036854775808"
+    },
+    {
+      "input": "0.0",
+      "bool": false,
+      "int": "0"
+    },
+    {
+      "input": "-0.0",
+      "bool": false,
+      "int": "0"
+    },
+    {
+      "input": "1.0",
+      "bool": true,
+      "int": "1"
+    },
+    {
+      "input": "0.5",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "1.5",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "2.0",
+      "bool": null,
+      "int": "2"
+    },
+    {
+      "input": "-3.0",
+      "bool": null,
+      "int": "-3"
+    },
+    {
+      "input": "1000000000000000.0",
+      "bool": null,
+      "int": "1000000000000000"
+    },
+    {
+      "input": "1e+20",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "1e+300",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "4.611686018427388e+18",
+      "bool": null,
+      "int": "4611686018427387904"
+    },
+    {
+      "input": "9.223372036854776e+18",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "-9.223372036854776e+18",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "9007199254740992.0",
+      "bool": null,
+      "int": "9007199254740992"
+    },
+    {
+      "input": "Infinity",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "-Infinity",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "NaN",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "[]",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "[1]",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "{}",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "{\"a\": 1}",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\" \"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"0\"",
+      "bool": false,
+      "int": "0"
+    },
+    {
+      "input": "\"1\"",
+      "bool": true,
+      "int": "1"
+    },
+    {
+      "input": "\"2\"",
+      "bool": null,
+      "int": "2"
+    },
+    {
+      "input": "\"-1\"",
+      "bool": null,
+      "int": "-1"
+    },
+    {
+      "input": "\"+1\"",
+      "bool": null,
+      "int": "1"
+    },
+    {
+      "input": "\"-0\"",
+      "bool": null,
+      "int": "0"
+    },
+    {
+      "input": "\"00\"",
+      "bool": null,
+      "int": "0"
+    },
+    {
+      "input": "\"007\"",
+      "bool": null,
+      "int": "7"
+    },
+    {
+      "input": "\"1_000\"",
+      "bool": null,
+      "int": "1000"
+    },
+    {
+      "input": "\"1__000\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"_1\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"1_\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"1.\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\".5\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"1.0\"",
+      "bool": null,
+      "int": "1"
+    },
+    {
+      "input": "\"1.00\"",
+      "bool": null,
+      "int": "1"
+    },
+    {
+      "input": "\"1.5\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"-1.0\"",
+      "bool": null,
+      "int": "-1"
+    },
+    {
+      "input": "\"1e3\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"1E3\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"0x10\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"0b1\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"0o7\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\" 5 \"",
+      "bool": null,
+      "int": "5"
+    },
+    {
+      "input": "\"\\t5\\n\"",
+      "bool": null,
+      "int": "5"
+    },
+    {
+      "input": "\"5 0\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"\\u0661\\u0662\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"inf\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"nan\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"99999999999999999999\"",
+      "bool": null,
+      "int": "99999999999999999999"
+    },
+    {
+      "input": "\"-99999999999999999999\"",
+      "bool": null,
+      "int": "-99999999999999999999"
+    },
+    {
+      "input": "\"true\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"True\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"TRUE\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\" true \"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"false\"",
+      "bool": false,
+      "int": null
+    },
+    {
+      "input": "\"False\"",
+      "bool": false,
+      "int": null
+    },
+    {
+      "input": "\"t\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"f\"",
+      "bool": false,
+      "int": null
+    },
+    {
+      "input": "\"T\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"y\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"n\"",
+      "bool": false,
+      "int": null
+    },
+    {
+      "input": "\"yes\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"Yes\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"no\"",
+      "bool": false,
+      "int": null
+    },
+    {
+      "input": "\"on\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"On\"",
+      "bool": true,
+      "int": null
+    },
+    {
+      "input": "\"off\"",
+      "bool": false,
+      "int": null
+    },
+    {
+      "input": "\"OFF\"",
+      "bool": false,
+      "int": null
+    },
+    {
+      "input": "\"maybe\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"truthy\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"nul\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"+\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"-\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"+1.0\"",
+      "bool": null,
+      "int": "1"
+    },
+    {
+      "input": "\"-0.0\"",
+      "bool": null,
+      "int": "0"
+    },
+    {
+      "input": "\"1_0.0\"",
+      "bool": null,
+      "int": "10"
+    },
+    {
+      "input": "\"1.0_0\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"1.0.0\"",
+      "bool": null,
+      "int": null
+    },
+    {
+      "input": "\"1 \"",
+      "bool": null,
+      "int": "1"
+    },
+    {
+      "input": "\"\\u00a05\"",
+      "bool": null,
+      "int": "5"
+    },
+    {
+      "input": "\"\\u20035\"",
+      "bool": null,
+      "int": "5"
+    }
+  ]
+}

@@ -13,6 +13,12 @@ from litellm.anthropic_beta_headers_manager import get_header_only_betas
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    is_vertex_labels_header,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -25,12 +31,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
-_VERTEX_LABELS_HEADER: Final = "X-Vertex-AI-Labels"
 _LABELS: Final = TypeAdapter(Mapping[object, object])
 
 
 def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
-    if not isinstance(labels, dict) or any(name.lower() == _VERTEX_LABELS_HEADER.lower() for name in header_names):
+    if not isinstance(labels, dict) or any(map(is_vertex_labels_header, header_names)):
         return None
     string_labels: Final = {
         key: value
@@ -148,11 +153,27 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         headers: dict,
     ) -> dict:
         params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
-        labels_header: Final = _vertex_labels_header(params.get("labels"), _NON_DEFAULT_PARAMS.validate_python(headers))
+        outbound_headers: Final = _NON_DEFAULT_PARAMS.validate_python(headers)
+        allowed_fields: Final = vertex_request_label_fields()
+        labels_header, replaced_headers = (
+            (
+                vertex_partner_labels_header(
+                    allowed_fields,
+                    params.get("labels"),
+                    outbound_headers,
+                    _NON_DEFAULT_PARAMS.validate_python(litellm_params),
+                ),
+                tuple(filter(is_vertex_labels_header, outbound_headers)),
+            )
+            if allowed_fields
+            else (_vertex_labels_header(params.get("labels"), outbound_headers), ())
+        )
         if "labels" in params:
             del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+        for name in replaced_headers:
+            del headers[name]  # rebind-ok: the resolved identity labels replace a caller-set labels header
         if labels_header is not None:
-            headers[_VERTEX_LABELS_HEADER] = labels_header  # rebind-ok: outbound headers are returned by mutation
+            headers[VERTEX_LABELS_HEADER] = labels_header  # rebind-ok: outbound headers are returned by mutation
         data: Final = super().transform_request(
             model=model,
             messages=messages,
