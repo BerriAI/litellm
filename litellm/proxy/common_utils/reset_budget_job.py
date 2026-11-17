@@ -91,8 +91,8 @@ from litellm.repositories.table_repositories import (
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
-    TagRepository,
 )
+from litellm.repositories.tag_repository import TagRepository
 from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (

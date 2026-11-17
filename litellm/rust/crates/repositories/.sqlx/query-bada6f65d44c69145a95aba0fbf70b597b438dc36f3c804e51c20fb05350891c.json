@@ -1,0 +1,126 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.tag_name AS \"tag_name!\",\n       t.description,\n       COALESCE(t.models, '{}') AS \"models!\",\n       t.model_info AS \"model_info: RawJson\",\n       t.spend AS \"spend!\",\n       t.budget_id,\n       t.created_at AS \"created_at!\",\n       t.created_by,\n       t.updated_at AS \"updated_at!\",\n       to_jsonb(b) AS \"litellm_budget_table?: Json<Budget>\"\nFROM \"LiteLLM_TagTable\" AS t\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = t.budget_id\nWHERE t.tag_name = ANY($1)\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tag_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "tag_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "models!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "model_info: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "model_info"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "spend!",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at!",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at!",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TagTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "litellm_budget_table?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "bada6f65d44c69145a95aba0fbf70b597b438dc36f3c804e51c20fb05350891c"
+}

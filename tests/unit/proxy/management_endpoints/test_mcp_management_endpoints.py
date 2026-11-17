@@ -10136,6 +10136,7 @@ class TestMCPServerResolutionCharacterization:
 
     async def _detail_grant_case(
         self,
+        stores: RustAuthStores,
         source: str,
         grant_route: str,
         server_id: str,
@@ -10203,6 +10204,10 @@ class TestMCPServerResolutionCharacterization:
             access_group=access_group,
             object_permission=route_permission if user is not None or organization is not None else None,
         )
+        if access_group is not None:
+            stores.access_group.seed(access_group.access_group_id, access_group)
+        if user is not None or organization is not None:
+            stores.object_permission.seed(route_permission.object_permission_id, route_permission)
         if source != "db_runtime":
             prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
             prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
@@ -10241,10 +10246,14 @@ class TestMCPServerResolutionCharacterization:
         ],
     )
     async def test_grants_do_not_cross_caller_identities(
-        self, grant_route: str, identity_field: str, foreign_identity: str | list[str]
+        self,
+        rust_auth_stores: RustAuthStores,
+        grant_route: str,
+        identity_field: str,
+        foreign_identity: str | list[str],
     ) -> None:
         server_id: Final = "lit3974_identity_isolation"
-        prisma, manager, auth = await self._detail_grant_case("config", grant_route, server_id)
+        prisma, manager, auth = await self._detail_grant_case(rust_auth_stores, "config", grant_route, server_id)
         foreign_auth: Final = auth.model_copy(update={identity_field: foreign_identity})
         with (
             patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
@@ -11321,10 +11330,12 @@ class TestMCPServerResolutionCharacterization:
             pytest.param("config", "access-group", id="config-access-group"),
         ],
     )
-    async def test_fetch_mcp_server_widening_grant_routes(self, source: str, grant_route: str) -> None:
+    async def test_fetch_mcp_server_widening_grant_routes(
+        self, rust_auth_stores: RustAuthStores, source: str, grant_route: str
+    ) -> None:
         effects: Final = _ResolutionEffects()
         server_id: Final = f"lit3974_{source}_{grant_route.replace(' ', '_')}"
-        prisma, manager, auth = await self._detail_grant_case(source, grant_route, server_id)
+        prisma, manager, auth = await self._detail_grant_case(rust_auth_stores, source, grant_route, server_id)
         add_server: Final = AsyncMock()
         health_check: Final = AsyncMock(
             return_value=generate_mock_mcp_server_db_record(server_id=server_id, alias="lit3974_grant")

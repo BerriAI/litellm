@@ -245,13 +245,15 @@ def test_effective_tag_token_caps_cannot_be_bypassed_by_opaque_requests(
 
 @pytest.mark.parametrize("lookup", ["absent", "error", "no-database"])
 def test_opaque_tag_lookup_distinguishes_absent_tags_from_unverifiable_limits(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, lookup: str
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    rust_auth_stores: RustAuthStores,
+    lookup: str,
 ) -> None:
-    database: Final = prisma_with_empty_config()
-    database.db.litellm_tagtable.find_many = AsyncMock(
-        return_value=[], side_effect=ConnectionError("tag database unavailable") if lookup == "error" else None
-    )
-    monkeypatch.setattr(proxy_server, "prisma_client", None if lookup == "no-database" else database)
+    if lookup == "error":
+        rust_auth_stores.tag.seed("unregistered-tag", ConnectionError("tag database unavailable"))
+    monkeypatch.setattr(proxy_server, "prisma_client", None if lookup == "no-database" else prisma_with_empty_config())
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     response: Final = client.post(
         f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-tags": "unregistered-tag"}, content=b"\xff"

@@ -887,8 +887,8 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     client: Final = MagicMock()
     users.writer = {"human": human.model_dump(mode="json")}
     stores.team.writer = {"team": team}
-    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
-    client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
+    stores.object_permission.writer["grant"] = permission
+    stores.access_group.writer["group"] = group
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await verified_human_agent_grants("human", "team") == frozenset({"target"})
@@ -903,17 +903,15 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
         if revoked == "team-grant"
         else team
     )
-    client.writer_db.litellm_objectpermissiontable.find_unique.return_value = (
+    stores.object_permission.writer["grant"] = (
         permission.model_copy(update={"agents": []}) if direct or revoked == "team-permission" else permission
     )
-    client.writer_db.litellm_accessgrouptable.find_unique.return_value = (
-        group.model_copy(update={"access_agent_ids": []}) if grouped else group
-    )
+    stores.access_group.writer["group"] = group.model_copy(update={"access_agent_ids": []}) if grouped else group
     assert await verified_human_agent_grants("human", "team") == frozenset()
     assert all(writer for _, writer in users.sign_ins)
     assert all(use_writer for _, use_writer in stores.team.lookups)
-    client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
-    client.db.litellm_accessgrouptable.find_unique.assert_not_called()
+    assert not [lookup for lookup in stores.object_permission.lookups if not lookup[1]]
+    assert not [lookup for lookup in stores.access_group.lookups if not lookup[1]]
 
 
 @pytest.mark.asyncio
@@ -1073,9 +1071,10 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
     )
     client: Final = MagicMock()
     client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
-    keys: Final = install_rust_auth_stores(monkeypatch).key
+    stores: Final = install_rust_auth_stores(monkeypatch)
+    keys: Final = stores.key
     keys.rows["a" * 64] = _key_row(warm)
-    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
+    stores.object_permission.writer["grant"] = permission
     cache: Final = UserApiKeyCache()
     cache.set_cache("a" * 64, warm)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
@@ -1093,14 +1092,14 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
             }
         )
     )
-    client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission.model_copy(
+    stores.object_permission.writer["grant"] = stores.object_permission.writer["replacement"] = permission.model_copy(
         update={"agents": []}
     )
     if change == "team":
         from litellm.proxy._types import LiteLLM_TeamTable
         from litellm.proxy.auth import auth_checks
 
-        client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission
+        stores.object_permission.writer["grant"] = stores.object_permission.writer["replacement"] = permission
         monkeypatch.setattr(
             auth_checks,
             "get_team_object",
@@ -1190,15 +1189,14 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
         ),
     )
     database: Final = MagicMock()
-    keys: Final = install_rust_auth_stores(
+    stores: Final = install_rust_auth_stores(
         monkeypatch, RustAuthStores(team=FakeTeamStore(writer={"caller-team": team}))
-    ).key
-    keys.rows["a" * 64] = _key_row(persisted)
-    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
-    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: permission if where["object_permission_id"] == "key-grant" else team.object_permission
     )
-    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
+    stores.key.rows["a" * 64] = _key_row(persisted)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    stores.object_permission.writer["key-grant"] = permission
+    stores.object_permission.writer["caller-grant"] = team.object_permission
+    stores.access_group.writer["actor-group"] = group
     cache: Final = UserApiKeyCache()
     cache.set_cache("access_group_id:actor-group", group.model_copy(update={"access_agent_ids": ["target"]}))
     cache.set_cache("team_id:caller-team", team.model_copy(update={"object_permission": permission}))
@@ -1209,7 +1207,7 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
     assert await AgentRequestHandler.is_agent_allowed("target", auth) is (
         permitted and ceiling != "group-without-grant"
     )
-    assert len(keys.lookups) == 1
+    assert len(stores.key.lookups) == 1
     assert auth.agent_caller == (AgentCaller(team_id="caller-team") if ceiling == "caller-team" else None)
 
 

@@ -5,7 +5,7 @@ logs every lookup, and raises a row that is an exception. Threads porting more a
 another field of ``RustAuthStores``.
 """
 
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -21,12 +21,16 @@ from litellm.proxy._types import (
 )
 from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
+    RustAccessGroupRepository,
     RustBudgetRepository,
     RustEndUserRepository,
     RustJwtKeyMappingRepository,
     RustKeyRepository,
     RustModelAccessGroupRepository,
+    RustObjectPermissionRepository,
     RustOrganizationRepository,
+    RustProjectRepository,
+    RustTagRepository,
     RustTeamMembershipRepository,
     RustTeamRepository,
     RustUserRepository,
@@ -327,6 +331,87 @@ class FakeOrganizationStore:
         return _answers_by_alias(rows, "organization_alias", alias, LiteLLM_OrganizationTable)
 
 
+Row = BaseModel | BaseException
+
+
+@dataclass
+class RustStoreRows:
+    """Rows one fake store serves, with the reader and writer sides apart like the Prisma ``db`` and
+    ``writer_db`` clients."""
+
+    reader: MutableMapping[str, Row] = field(default_factory=dict)
+    writer: MutableMapping[str, Row] = field(default_factory=dict)
+    lookups: list[tuple[str, bool]] = field(default_factory=list)
+
+    def seed(self, key: str, row: Row) -> None:
+        """Serve ``row`` for ``key`` on both sides."""
+        self.reader[key] = row
+        self.writer[key] = row
+
+    def side(self, use_writer: bool) -> MutableMapping[str, Row]:
+        return self.writer if use_writer else self.reader
+
+
+@dataclass
+class TagRows(RustStoreRows):
+    """Tag rows, which are read from the reader only. ``batches`` logs each ``find_many_with_budgets`` call and
+    ``name_listings`` each registry listing's limit; ``names_error`` makes the listing fail."""
+
+    batches: list[tuple[str, ...]] = field(default_factory=list)
+    name_listings: list[int] = field(default_factory=list)
+    names_error: BaseException | None = None
+
+
+def _encoded(row: Row | None) -> str | None:
+    if isinstance(row, BaseException):
+        raise row
+    return None if row is None else row.model_dump_json()
+
+
+class FakeFindStore:
+    def __init__(self, rows: RustStoreRows) -> None:
+        self._rows: Final = rows
+
+    async def _find(self, key: str, *, use_writer: bool = False) -> str | None:
+        self._rows.lookups.append((key, use_writer))
+        return _encoded(self._rows.side(use_writer).get(key))
+
+
+class FakeAccessGroupStore(FakeFindStore):
+    async def find_by_access_group_id(self, access_group_id: str, *, use_writer: bool = False) -> str | None:
+        return await self._find(access_group_id, use_writer=use_writer)
+
+
+class FakeObjectPermissionStore(FakeFindStore):
+    async def find_by_object_permission_id(self, object_permission_id: str, *, use_writer: bool = False) -> str | None:
+        return await self._find(object_permission_id, use_writer=use_writer)
+
+
+class FakeProjectStore:
+    def __init__(self, rows: RustStoreRows) -> None:
+        self._rows: Final = rows
+
+    async def find_with_budget(self, project_id: str) -> str | None:
+        self._rows.lookups.append((project_id, False))
+        return _encoded(self._rows.reader.get(project_id))
+
+
+class FakeTagStore:
+    def __init__(self, rows: TagRows) -> None:
+        self._rows: Final = rows
+
+    async def find_many_with_budgets(self, tag_names: Iterable[str]) -> list[str]:
+        names: Final = tuple(tag_names)
+        self._rows.batches.append(names)
+        return [encoded for name in names if (encoded := _encoded(self._rows.reader.get(name))) is not None]
+
+    async def names(self, limit: int) -> list[str]:
+        self._rows.name_listings.append(limit)
+        if self._rows.names_error is not None:
+            raise self._rows.names_error
+        return list(self._rows.reader)[:limit]
+
+
 @dataclass
 class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
@@ -338,6 +423,10 @@ class RustAuthStores:
     team: FakeTeamStore = field(default_factory=FakeTeamStore)
     team_membership: FakeTeamMembershipStore = field(default_factory=FakeTeamMembershipStore)
     organization: FakeOrganizationStore = field(default_factory=FakeOrganizationStore)
+    project: RustStoreRows = field(default_factory=RustStoreRows)
+    tag: TagRows = field(default_factory=TagRows)
+    access_group: RustStoreRows = field(default_factory=RustStoreRows)
+    object_permission: RustStoreRows = field(default_factory=RustStoreRows)
 
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
@@ -350,6 +439,10 @@ class RustAuthStores:
             RustTeamRepository: self.team,
             RustTeamMembershipRepository: self.team_membership,
             RustOrganizationRepository: self.organization,
+            RustProjectRepository: FakeProjectStore(self.project),
+            RustTagRepository: FakeTagStore(self.tag),
+            RustAccessGroupRepository: FakeAccessGroupStore(self.access_group),
+            RustObjectPermissionRepository: FakeObjectPermissionStore(self.object_permission),
         }
 
 

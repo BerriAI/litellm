@@ -11610,12 +11610,12 @@ class TestAccessGroupToolOwnershipAndFaults:
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("srv", auth) == ["read"]
 
-    async def test_duplicate_agent_group_ids_do_not_deny(self):
+    async def test_duplicate_agent_group_ids_do_not_deny(self, rust_auth_stores: RustAuthStores):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         groups = [_access_group("g", ["srv"], {"srv": ["read"]})]
         agent = MagicMock(access_group_ids=["g", "g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read", "write"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read", "write"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
@@ -11663,11 +11663,13 @@ class TestAccessGroupToolOwnershipAndFaults:
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("srv", auth) == []
 
-    async def test_agent_group_fault_denies_rather_than_shedding_the_agents_own_allowlist(self):
+    async def test_agent_group_fault_denies_rather_than_shedding_the_agents_own_allowlist(
+        self, rust_auth_stores: RustAuthStores
+    ):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         agent = MagicMock(access_group_ids=["g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
@@ -11693,21 +11695,18 @@ class TestAccessGroupToolOwnershipAndFaults:
         assert sorted(capped) == ["read"]
 
     @staticmethod
-    def _agent_prisma_with_own_tools(tools: Sequence[str]) -> MagicMock:
-        prisma_client = _agent_prisma(object_permission_id="op-agent")
-        prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-            return_value=LiteLLM_ObjectPermissionTable(
-                object_permission_id="op-agent", mcp_servers=["srv"], mcp_tool_permissions={"srv": tools}
-            )
+    def _agent_prisma_with_own_tools(stores: RustAuthStores, tools: Sequence[str]) -> MagicMock:
+        stores.object_permission.reader["op-agent"] = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-agent", mcp_servers=["srv"], mcp_tool_permissions={"srv": tools}
         )
-        return prisma_client
+        return _agent_prisma(object_permission_id="op-agent")
 
-    async def test_agent_group_ceiling_caps_the_agents_own_tools(self):
+    async def test_agent_group_ceiling_caps_the_agents_own_tools(self, rust_auth_stores: RustAuthStores):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         groups = [_access_group("g", ["srv"], {"srv": ["read"]})]
         agent = MagicMock(access_group_ids=["g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read", "write"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read", "write"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
@@ -11716,12 +11715,12 @@ class TestAccessGroupToolOwnershipAndFaults:
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("srv", auth) == ["read"]
 
-    async def test_agent_group_tools_outside_the_agents_own_grant_are_denied(self):
+    async def test_agent_group_tools_outside_the_agents_own_grant_are_denied(self, rust_auth_stores: RustAuthStores):
         auth = _key_auth_reaching("srv", agent_id="agent-1")
         groups = [_access_group("g", ["srv"], {"srv": ["write"]})]
         agent = MagicMock(access_group_ids=["g"])
         with (
-            _entitlement_fault_globals(self._agent_prisma_with_own_tools(["read"])),
+            _entitlement_fault_globals(self._agent_prisma_with_own_tools(rust_auth_stores, ["read"])),
             patch(
                 "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
                 AsyncMock(return_value=agent),
