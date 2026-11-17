@@ -458,14 +458,15 @@ def logged_content_fingerprint(model_call_details: Mapping[str, object], result:
 
 
 def logs_without_prompt_fields_once_masked(
-    content_before_hook: bytes | None, model_call_details: _CallDetails, result: object
-) -> tuple[_CallDetails | dict[str, object], object]:  # mutable-ok: logging hooks hand every logger a plain dict
+    masked_earlier: bool, content_before_hook: bytes | None, model_call_details: _CallDetails, result: object
+) -> tuple[bool, _CallDetails | dict[str, object], object]:  # mutable-ok: logging hooks hand every logger a plain dict
     if (
-        content_before_hook is not None
+        not masked_earlier
+        and content_before_hook is not None
         and logged_content_fingerprint(model_call_details, result) == content_before_hook
     ):
-        return model_call_details, result
-    return _logs_without_prompt_derived_fields(model_call_details, result)
+        return False, model_call_details, result
+    return True, *_logs_without_prompt_derived_fields(model_call_details, result)
 
 
 def _logs_without_prompt_derived_fields(

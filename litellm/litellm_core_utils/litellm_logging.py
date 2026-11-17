@@ -1189,6 +1189,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
+        self.logging_only_guardrail_masked: bool = False
 
     def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
         """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
@@ -4303,10 +4304,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 result=prepared.result,
                 call_type=self.call_type,
             )
-            prepared.details, prepared.result = logs_without_prompt_fields_once_masked(
-                content_before_hook,
-                hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
-                hooked_result,
+            self.logging_only_guardrail_masked, prepared.details, prepared.result = (
+                logs_without_prompt_fields_once_masked(
+                    self.logging_only_guardrail_masked,
+                    content_before_hook,
+                    hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
+                    hooked_result,
+                )
             )
         elif isinstance(callback, CustomLogger):
             prepared.details, prepared.result = callback.logging_hook(  # pyright: ignore[reportUnknownMemberType]  # logging_hook is typed with a bare dict
@@ -4966,10 +4970,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     result=prepared.result,
                     call_type=self.call_type,
                 )
-                self.model_call_details, prepared.result = logs_without_prompt_fields_once_masked(
-                    content_before_hook,
-                    hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # async_logging_hook is typed with a bare dict
-                    hooked_result,
+                self.logging_only_guardrail_masked, self.model_call_details, prepared.result = (
+                    logs_without_prompt_fields_once_masked(
+                        self.logging_only_guardrail_masked,
+                        content_before_hook,
+                        hooked_details,  # pyright: ignore[reportUnknownArgumentType]  # async_logging_hook is typed with a bare dict
+                        hooked_result,
+                    )
                 )
             else:
                 prepared.result = redact_message_input_output_from_custom_logger(
