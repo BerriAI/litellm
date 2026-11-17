@@ -19,7 +19,10 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
 )
+from litellm.litellm_core_utils.llm_cost_calc.typed_token_rates import token_rates
+from litellm.litellm_core_utils.typed_model_config import resolved_model_config
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.types.cost_map_configs import OffPeakPricing, TokenPricing
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -580,6 +583,22 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
         if _is_within_off_peak_window(rule_windows, reference_utc):
             return True
     return False
+
+
+def off_peak_window_is_open(off_peak: OffPeakPricing, current_time: datetime) -> bool:
+    reference_utc: Final = (
+        current_time.astimezone(timezone.utc)
+        if current_time.tzinfo is not None
+        else current_time.replace(tzinfo=timezone.utc)
+    )
+    if off_peak.hours_utc and _is_within_off_peak_window(off_peak.hours_utc, reference_utc):
+        return True
+    return any(
+        window.hours_utc
+        and _matches_weekdays(reference_utc, window.weekdays, off_peak.weekday_timezone)
+        and _is_within_off_peak_window(window.hours_utc, reference_utc)
+        for window in off_peak.windows or ()
+    )
 
 
 def resolve_explicit_cache_read_cost_rate(
@@ -1566,49 +1585,7 @@ def _resolve_billed_reasoning_rate(
     )
 
 
-def generic_cost_per_token(
-    model: str,
-    usage: Usage,
-    custom_llm_provider: str,
-    service_tier: str | None = None,
-    data_residency: str | None = None,
-    model_info: ModelInfo | None = None,
-    vertex_location: str | None = None,
-    current_time: datetime | None = None,
-) -> tuple[float, float]:
-    """
-    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
-
-    Handles context caching as well.
-
-    Input:
-        - model: str, the model name without provider prefix
-        - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us") or
-          "fedramp", used to apply the per-model regional-processing or FedRAMP uplift multiplier.
-        - vertex_location: optional Vertex AI location the request was served from
-          (e.g. "us-east5", "global"), used to apply the per-model
-          regional-endpoint uplift multiplier when non-global.
-        - current_time: the moment the request is billed at, for off_peak_pricing; defaults to now, UTC
-
-    Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
-    """
-
-    ## GET MODEL INFO
-    # A caller that already resolved the deployment's effective rates passes them in
-    # rather than handing back a name for this to re-resolve. A name cannot express a
-    # per-deployment override: those are registered under the deployment id and kept off
-    # the shared model-name key, so resolving from the name here reads the public rate.
-    resolved_model_info: Final = apply_provider_cache_read_default(
-        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info,
-        custom_llm_provider,
-    )
-
-    ## CALCULATE INPUT COST
-    ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
-    prompt_cost = 0.0
-    ### PROCESSING COST
+def billable_prompt_tokens(usage: Usage) -> PromptTokensDetailsResult:
     prompt_tokens_details = PromptTokensDetailsResult(
         cache_hit_tokens=0,
         cache_hit_audio_tokens=0,
@@ -1664,38 +1641,20 @@ def generic_cost_per_token(
             usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
         )
 
-    billing_time: Final = current_time if current_time is not None else current_billing_time()
-    base_costs: Final = _get_token_base_cost(
-        model_info=resolved_model_info,
-        usage=usage,
-        service_tier=service_tier,
-        current_time=billing_time,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
-    )
-    completion_base_cost: Final = base_costs.output_rate
-    resolved_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
-        model_info=resolved_model_info,
-        usage=usage,
-        current_time=billing_time,
-        service_tier=service_tier,
-    )
-    effective_cache_read_cost: Final = (
-        base_costs.cache_read_rate if resolved_cache_read_cost is None else resolved_cache_read_cost
-    )
+    return prompt_tokens_details
 
-    prompt_cost = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=resolved_model_info,
-        prompt_base_cost=base_costs.input_rate,
-        cache_read_cost=effective_cache_read_cost,
-        cache_creation_cost=base_costs.cache_creation_rate,
-        cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
-        service_tier=service_tier,
-        prompt_tokens=usage.prompt_tokens,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
-    )
 
-    ## CALCULATE OUTPUT COST
+@dataclass(frozen=True, slots=True)
+class BillableCompletionTokens:
+    text: int
+    audio: int
+    reasoning: int
+    image: int
+    video: int
+    text_is_total: bool
+
+
+def billable_completion_tokens(usage: Usage) -> BillableCompletionTokens:
     text_tokens = 0
     audio_tokens = 0
     reasoning_tokens = 0
@@ -1727,6 +1686,95 @@ def generic_cost_per_token(
             # No breakdown at all, all tokens are text tokens
             text_tokens = usage.completion_tokens
             is_text_tokens_total = True
+    return BillableCompletionTokens(
+        text=text_tokens,
+        audio=audio_tokens,
+        reasoning=reasoning_tokens,
+        image=image_tokens,
+        video=video_tokens,
+        text_is_total=is_text_tokens_total,
+    )
+
+
+def generic_cost_per_token(
+    model: str,
+    usage: Usage,
+    custom_llm_provider: str,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
+    current_time: datetime | None = None,
+) -> tuple[float, float]:
+    """
+    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
+
+    Handles context caching as well.
+
+    Input:
+        - model: str, the model name without provider prefix
+        - usage: LiteLLM Usage block, containing anthropic caching information
+        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us") or
+          "fedramp", used to apply the per-model regional-processing or FedRAMP uplift multiplier.
+        - vertex_location: optional Vertex AI location the request was served from
+          (e.g. "us-east5", "global"), used to apply the per-model
+          regional-endpoint uplift multiplier when non-global.
+        - current_time: the moment the request is billed at, for off_peak_pricing; defaults to now, UTC
+
+    Returns:
+        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+    """
+
+    ## GET MODEL INFO
+    # A caller that already resolved the deployment's effective rates passes them in
+    # rather than handing back a name for this to re-resolve. A name cannot express a
+    # per-deployment override: those are registered under the deployment id and kept off
+    # the shared model-name key, so resolving from the name here reads the public rate.
+    resolved_model_info: Final = apply_provider_cache_read_default(
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info,
+        custom_llm_provider,
+    )
+
+    prompt_tokens_details: Final = billable_prompt_tokens(usage)
+
+    billing_time: Final = current_time if current_time is not None else current_billing_time()
+    base_costs: Final = _get_token_base_cost(
+        model_info=resolved_model_info,
+        usage=usage,
+        service_tier=service_tier,
+        current_time=billing_time,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
+    completion_base_cost: Final = base_costs.output_rate
+    resolved_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
+        model_info=resolved_model_info,
+        usage=usage,
+        current_time=billing_time,
+        service_tier=service_tier,
+    )
+    effective_cache_read_cost: Final = (
+        base_costs.cache_read_rate if resolved_cache_read_cost is None else resolved_cache_read_cost
+    )
+
+    prompt_cost = _calculate_input_cost(
+        prompt_tokens_details=prompt_tokens_details,
+        model_info=resolved_model_info,
+        prompt_base_cost=base_costs.input_rate,
+        cache_read_cost=effective_cache_read_cost,
+        cache_creation_cost=base_costs.cache_creation_rate,
+        cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
+        service_tier=service_tier,
+        prompt_tokens=usage.prompt_tokens,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
+
+    completion_tokens: Final = billable_completion_tokens(usage)
+    text_tokens: Final = completion_tokens.text
+    audio_tokens: Final = completion_tokens.audio
+    reasoning_tokens: Final = completion_tokens.reasoning
+    image_tokens: Final = completion_tokens.image
+    video_tokens: Final = completion_tokens.video
+    is_text_tokens_total: Final = completion_tokens.text_is_total
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
@@ -1930,6 +1978,53 @@ def _cost_map_billed_rates(
     ).scaled(multiplier)
 
 
+def usage_text(usage: Usage, field: Literal["inference_geo", "speed"]) -> str | None:
+    value: Final[object] = getattr(usage, field, None)
+    return value if isinstance(value, str) else None
+
+
+def typed_token_pricing(
+    model: str,
+    custom_llm_provider: str | None,
+    usage: Usage,
+    service_tier: str | None,
+    data_residency: str | None,
+    model_info: ModelInfo | None,
+) -> TokenPricing | None:
+    if custom_llm_provider == "openai":
+        return resolved_model_config(model, "openai", model_info).token_pricing(service_tier, data_residency)
+    if custom_llm_provider == "anthropic":
+        return resolved_model_config(model, "anthropic", model_info).token_pricing(
+            service_tier, usage_text(usage, "inference_geo"), usage_text(usage, "speed")
+        )
+    return None
+
+
+def _typed_billed_rates(pricing: TokenPricing, usage: Usage, current_time: datetime | None) -> BilledTokenRates:
+    rates: Final = token_rates(
+        pricing,
+        usage.prompt_tokens,
+        off_peak_is_open=pricing.off_peak is not None
+        and off_peak_window_is_open(pricing.off_peak, current_time or current_billing_time()),
+    )
+    return BilledTokenRates(
+        input_cost_per_token=rates.input,
+        output_cost_per_token=rates.output,
+        cache_read_input_token_cost=rates.cache_read,
+        cache_read_input_audio_token_cost=(
+            rates.cache_read
+            if pricing.modality.cache_read_audio_token is None
+            else pricing.modality.cache_read_audio_token
+        ),
+        cache_creation_input_token_cost=rates.cache_write,
+        cache_creation_input_token_cost_by_ttl=MappingProxyType(
+            {"1hr": rates.cache_write_1h, "12hr": rates.cache_write_12h}
+        ),
+        output_cost_per_reasoning_token=rates.reasoning,
+        cache_read_input_image_token_cost=pricing.modality.cache_read_image_token,
+    ).scaled(pricing.multiplier)
+
+
 def get_billed_token_rates(
     model: str,
     custom_llm_provider: str | None,
@@ -1945,6 +2040,14 @@ def get_billed_token_rates(
     breakdown resolve them. None when the model's pricing cannot be resolved."""
     if custom_cost_per_token is not None:
         return _custom_pricing_rates(custom_cost_per_token)
+    try:
+        typed_pricing: Final = typed_token_pricing(
+            model, custom_llm_provider, usage, service_tier, data_residency, model_info
+        )
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
+        return None
+    if typed_pricing is not None:
+        return _typed_billed_rates(typed_pricing, usage, current_time)
     try:
         resolved_model_info: Final = apply_provider_cache_read_default(
             model_info

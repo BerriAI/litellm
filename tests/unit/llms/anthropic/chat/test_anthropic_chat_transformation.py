@@ -5135,86 +5135,37 @@ def test_fast_mode_usage_calculation():
     assert usage.speed == "fast"
 
 
-def test_fast_mode_cost_calculation():
-    """
-    Test that fast mode applies the 'fast' multiplier from provider_specific_entry
-    on top of the base model cost (1.1x for claude-opus-4-6).
-    """
-
+@pytest.mark.parametrize(
+    ("usage_fields", "expected_multiplier"),
+    [
+        ({"speed": "fast"}, 6.0),
+        ({"inference_geo": "us"}, 1.1),
+        ({"speed": "fast", "inference_geo": "us"}, 6.0 * 1.1),
+        ({"speed": "standard", "inference_geo": "global"}, 1.0),
+    ],
+)
+def test_fast_mode_and_inference_geo_multiply_every_token_cost(usage_fields, expected_multiplier):
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
-    base_prompt = 0.005
-    base_completion = 0.025
+    model_info = {
+        "input_cost_per_token": 5e-6,
+        "output_cost_per_token": 25e-6,
+        "provider_specific_entry": {"fast": 6.0, "us": 1.1},
+    }
+    base_prompt, base_completion = cost_per_token(
+        model="claude-fast-mode-test", usage=Usage(prompt_tokens=1000, completion_tokens=1000), model_info=model_info
+    )
 
-    with (
-        patch("litellm.llms.anthropic.cost_calculation.generic_cost_per_token") as mock_cost,
-        patch("litellm.get_model_info") as mock_info,
-    ):
-        mock_cost.return_value = (base_prompt, base_completion)
-        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
+    prompt_cost, completion_cost = cost_per_token(
+        model="claude-fast-mode-test",
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, **usage_fields),
+        model_info=model_info,
+    )
 
-        usage_fast = Usage(
-            prompt_tokens=1000,
-            completion_tokens=1000,
-            speed="fast",
-        )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="claude-opus-4-6",
-            usage=usage_fast,
-        )
-
-        # generic_cost_per_token called with the plain base model name
-        mock_cost.assert_called_once()
-        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
-        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
-
-        # 1.1x multiplier applied
-        assert abs(prompt_cost - base_prompt * 1.1) < 1e-10
-        assert abs(completion_cost - base_completion * 1.1) < 1e-10
-
-
-def test_fast_mode_with_inference_geo():
-    """
-    Test that fast mode + inference_geo both apply their multipliers from
-    provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
-    """
-
-    from litellm.llms.anthropic.cost_calculation import cost_per_token
-    from litellm.types.utils import Usage
-
-    base_prompt = 0.005
-    base_completion = 0.025
-
-    with (
-        patch("litellm.llms.anthropic.cost_calculation.generic_cost_per_token") as mock_cost,
-        patch("litellm.get_model_info") as mock_info,
-    ):
-        mock_cost.return_value = (base_prompt, base_completion)
-        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
-
-        usage = Usage(
-            prompt_tokens=1000,
-            completion_tokens=1000,
-            speed="fast",
-            inference_geo="us",
-        )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="claude-opus-4-6",
-            usage=usage,
-        )
-
-        # generic_cost_per_token called with the plain base model name
-        mock_cost.assert_called_once()
-        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
-        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
-
-        # 1.1 (fast) * 1.1 (us) = 1.21x multiplier applied
-        expected_multiplier = 1.1 * 1.1
-        assert abs(prompt_cost - base_prompt * expected_multiplier) < 1e-10
-        assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
+    assert (base_prompt, base_completion) == pytest.approx((1000 * 5e-6, 1000 * 25e-6))
+    assert prompt_cost == pytest.approx(base_prompt * expected_multiplier)
+    assert completion_cost == pytest.approx(base_completion * expected_multiplier)
 
 
 def test_calculate_usage_captures_service_tier():

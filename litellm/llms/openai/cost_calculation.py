@@ -10,7 +10,8 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.typed_token_cost import typed_cost_per_token
+from litellm.litellm_core_utils.typed_model_config import resolved_model_config
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -27,6 +28,7 @@ def cost_per_token(
     usage: Usage,
     service_tier: str | None = None,
     data_residency: str | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -37,17 +39,13 @@ def cost_per_token(
         - data_residency: optional OpenAI data-residency mode (e.g. "eu", "us", "fedramp"),
           inferred from api_base, including gov.api.openai.com. Applies the
           model's regional-processing uplift multiplier when set.
+        - model_info: effective deployment prices, when they override public rates
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    return generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="openai",
-        service_tier=service_tier,
-        data_residency=data_residency,
-    )
+    config: Final = resolved_model_config(model, "openai", model_info)
+    return typed_cost_per_token(config.token_pricing(service_tier, data_residency), usage)
 
 
 def cost_per_second(model: str, custom_llm_provider: str | None, duration: float = 0.0) -> tuple[float, float]:

@@ -19,7 +19,9 @@ def test_every_field_a_catalog_row_sets_reaches_the_typed_config(model, provider
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         config = typed_model_config(model, provider)
     assert not caplog.records
-    assert config.model_dump(mode="json", exclude_unset=True).keys() == row.keys()
+    assert config.model_dump(mode="json", exclude_none=True).keys() == {
+        key for key, value in row.items() if value is not None
+    }
 
 
 @pytest.mark.parametrize(

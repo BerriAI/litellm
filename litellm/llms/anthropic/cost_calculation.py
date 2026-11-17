@@ -7,17 +7,13 @@ from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import ValidationError
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    generic_cost_per_token,
-    get_provider_specific_geo_multiplier,
-    get_provider_specific_speed_multiplier,
-    get_web_search_requests_from_usage,
-)
+from litellm.litellm_core_utils.llm_cost_calc.typed_token_cost import typed_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage, usage_text
+from litellm.litellm_core_utils.typed_model_config import resolved_model_config
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
-import litellm
 
 
 def cost_per_token(
@@ -36,35 +32,10 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="anthropic",
-        service_tier=service_tier,
-        model_info=model_info,
+    config: Final = resolved_model_config(model, "anthropic", model_info)
+    return typed_cost_per_token(
+        config.token_pricing(service_tier, usage_text(usage, "inference_geo"), usage_text(usage, "speed")), usage
     )
-
-    # Apply provider_specific_entry multipliers for geo/speed routing
-    try:
-        effective_info: Final = (
-            model_info
-            if model_info is not None
-            else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-        )
-        geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
-        speed_multiplier: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
-
-        if speed_multiplier != 1.0:
-            prompt_cost *= speed_multiplier
-            completion_cost *= speed_multiplier
-
-        if geo_multiplier != 1.0:
-            prompt_cost *= geo_multiplier
-            completion_cost *= geo_multiplier
-    except Exception:
-        pass
-
-    return prompt_cost, completion_cost
 
 
 class _AnthropicServerToolUseProbe(LiteLLMBaseModel):

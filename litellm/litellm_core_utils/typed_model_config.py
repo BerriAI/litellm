@@ -31,6 +31,10 @@ def _is_cost_map_field(key: str) -> bool:
     return key in _COST_MAP_FIELDS or key.startswith("supports_")
 
 
+def _is_unbilled_price(config: type[SharedModelConfig], key: str) -> bool:
+    return key not in config.model_fields and ("_cost" in key or key.endswith(("_pricing", "_multiplier")))
+
+
 @lru_cache(maxsize=1024)
 def _warn_once(message: str, config: str, model: str, fields: tuple[str, ...]) -> None:
     verbose_logger.warning(message, config, model, ", ".join(fields))
@@ -72,7 +76,45 @@ def typed_model_config(
 ) -> SharedModelConfig:
     config: Final = _CONFIGS[custom_llm_provider]
     row: Final = {**_catalog_row(model, custom_llm_provider), **(model_info or {})}
-    unused: Final = tuple(sorted(key for key in row if key not in config.model_fields and _is_cost_map_field(key)))
+    unused: Final = tuple(
+        sorted(
+            key
+            for key, value in row.items()
+            if value is not None and key not in config.model_fields and _is_cost_map_field(key)
+        )
+    )
     if unused:
         _warn_once("%s: model=%s sets %s, which this provider does not use", config.__name__, model, unused)
+    return _parse(config, model, row)
+
+
+@overload
+def resolved_model_config(
+    model: str, custom_llm_provider: Literal["openai"], model_info: Mapping[str, object] | None = None
+) -> OpenAIModelOnOpenAIProvider: ...
+
+
+@overload
+def resolved_model_config(
+    model: str, custom_llm_provider: Literal["anthropic"], model_info: Mapping[str, object] | None = None
+) -> AnthropicModelOnAnthropicProvider: ...
+
+
+def resolved_model_config(
+    model: str, custom_llm_provider: Literal["openai", "anthropic"], model_info: Mapping[str, object] | None = None
+) -> SharedModelConfig:
+    """The config billing reads: the model's effective rates, or a deployment's when it overrides them."""
+    import litellm
+
+    config: Final = _CONFIGS[custom_llm_provider]
+    row: Final = (
+        _ROW.validate_python(litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider))
+        if model_info is None
+        else model_info
+    )
+    unbilled: Final = tuple(
+        sorted(key for key, value in row.items() if value is not None and _is_unbilled_price(config, key))
+    )
+    if unbilled:
+        _warn_once("%s: model=%s sets %s, which this provider does not bill", config.__name__, model, unbilled)
     return _parse(config, model, row)

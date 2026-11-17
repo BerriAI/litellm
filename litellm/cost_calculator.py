@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
+    BatchCostRates,
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
@@ -65,6 +66,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.litellm_core_utils.typed_model_config import resolved_model_config
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -463,6 +465,30 @@ def _per_second_pricing_cost_from_info(
     return resolved_cost_per_second * seconds, 0.0
 
 
+def _token_cost(
+    model: str,
+    usage: Usage,
+    custom_llm_provider: str,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None = None,
+    model_info: ModelInfo | None = None,
+) -> tuple[float, float]:
+    if custom_llm_provider == "openai":
+        return openai_cost_per_token(
+            model=model, usage=usage, service_tier=service_tier, data_residency=data_residency, model_info=model_info
+        )
+    return generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        model_info=model_info,
+    )
+
+
 def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
@@ -601,7 +627,7 @@ def cost_per_token(
             return anthropic_cost_per_token(
                 model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
             )
-        return generic_cost_per_token(
+        return _token_cost(
             model=model,
             usage=usage_block,
             custom_llm_provider=custom_llm_provider or "",
@@ -681,7 +707,7 @@ def cost_per_token(
         if request_price is not None:
             return request_price, 0.0
         if decisions_overrides:
-            return generic_cost_per_token(
+            return _token_cost(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
@@ -727,7 +753,7 @@ def cost_per_token(
             prompt_cost = _prompt_cost
             completion_cost = _completion_cost
         elif cost_metric == "cost_per_token":
-            prompt_cost, completion_cost = generic_cost_per_token(
+            prompt_cost, completion_cost = _token_cost(
                 model=model_without_prefix,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
@@ -770,7 +796,7 @@ def cost_per_token(
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_uses_token_pricing(model_without_prefix, custom_llm_provider, usage_block):
-            return generic_cost_per_token(
+            return _token_cost(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
@@ -3303,6 +3329,28 @@ def _completion_image_tokens(usage: Usage) -> int:
     return min(image_tokens, usage.completion_tokens)
 
 
+def _batch_cost_rates(
+    model: str, model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None
+) -> BatchCostRates:
+    if custom_llm_provider != "openai" and custom_llm_provider != "anthropic":
+        return get_batch_cost_rates(model_info, usage, custom_llm_provider)
+    prices: Final = resolved_model_config(model, custom_llm_provider, model_info).batch_prices(usage.prompt_tokens)
+    return BatchCostRates(
+        input=prices.input,
+        output=prices.output,
+        cache_read=prices.cache_read,
+        cache_creation=prices.cache_write,
+        cache_creation_rates_by_ttl=MappingProxyType(
+            {
+                ttl: rate
+                for ttl, rate in (("1hr", prices.cache_write_1h), ("12hr", prices.cache_write_12h))
+                if rate is not None
+            }
+        ),
+        cache_read_image=prices.cache_read_image,
+    )
+
+
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -3358,7 +3406,7 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    batch_rates: Final = get_batch_cost_rates(model_info, usage, custom_llm_provider)
+    batch_rates: Final = _batch_cost_rates(model, model_info, usage, custom_llm_provider)
     input_cost_per_token: Final = model_info.get("input_cost_per_token")
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
