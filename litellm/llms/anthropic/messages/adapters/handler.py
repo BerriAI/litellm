@@ -828,9 +828,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 *empty_user_turn_for_model_turn_end(
                     messages[-1] if messages else None,
                     openai_request["messages"],
-                    bool(provider_kwargs.get("ensure_alternating_roles")),
                     model,
                     target_provider,
+                    provider_kwargs,
                 ),
             ],
         }

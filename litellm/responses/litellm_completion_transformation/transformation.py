@@ -1403,9 +1403,9 @@ class LiteLLMCompletionResponsesConfig:
             *empty_user_turn_for_model_turn_end(
                 input[-1] if isinstance(input, list) and input else None,
                 converted_messages,
-                bool(request_kwargs.get("ensure_alternating_roles")),
                 model,
                 custom_llm_provider,
+                request_kwargs,
             ),
         ]
 

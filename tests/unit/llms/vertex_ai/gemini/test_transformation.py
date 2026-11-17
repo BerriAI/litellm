@@ -17,7 +17,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms import openai
 from litellm.types import completion
-from litellm.types.llms.vertex_ai import RequestBody
+from litellm.types.llms.vertex_ai import ContentType, RequestBody
 
 
 @pytest.mark.asyncio
@@ -534,29 +534,6 @@ def test_a_trailing_user_message_with_malformed_content_gets_no_blank_user_turn(
     ]
 
 
-@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-def test_an_empty_user_message_between_assistant_turns_keeps_the_roles_alternating(
-    empty_user_message: openai.AllMessageValues,
-) -> None:
-    contents: Final = transformation.gemini_convert_messages_with_history(
-        [
-            {"role": "user", "content": "Hi"},
-            {"role": "assistant", "content": "Hello!"},
-            empty_user_message,
-            {"role": "assistant", "content": "Still there?"},
-            {"role": "user", "content": "Yes"},
-        ]
-    )
-
-    assert [(c["role"], c["parts"]) for c in contents] == [
-        ("user", [{"text": "Hi"}]),
-        ("model", [{"text": "Hello!"}]),
-        ("user", [{"text": " "}]),
-        ("model", [{"text": "Still there?"}]),
-        ("user", [{"text": "Yes"}]),
-    ]
-
-
 _WEATHER_TOOL_CALL: Final = {
     "role": "assistant",
     "content": None,
@@ -568,35 +545,44 @@ _WEATHER_TOOL_CALL: Final = {
         }
     ],
 }
+_WEATHER_TOOL_RESULT: Final = {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"}
+
+
+def _all_parts(contents: list[ContentType]) -> list[object]:
+    return [part for content in contents for part in content["parts"]]
+
+
+@pytest.mark.parametrize(
+    "later_turns",
+    [
+        pytest.param(
+            [{"role": "assistant", "content": "Still there?"}, {"role": "user", "content": "Yes"}],
+            id="assistant_reply",
+        ),
+        pytest.param([_WEATHER_TOOL_CALL, _WEATHER_TOOL_RESULT], id="function_call"),
+    ],
+)
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_user_message_before_later_turns_gets_no_blank_user_turn(
+    empty_user_message: openai.AllMessageValues, later_turns: list[openai.AllMessageValues]
+) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message, *later_turns]
+    )
+
+    assert {"text": " "} not in _all_parts(contents)
 
 
 @pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-def test_an_empty_first_user_message_still_comes_before_the_function_call(
+def test_an_empty_user_message_after_tool_results_gets_no_blank_user_turn(
     empty_user_message: openai.AllMessageValues,
 ) -> None:
     contents: Final = transformation.gemini_convert_messages_with_history(
-        [empty_user_message, _WEATHER_TOOL_CALL, {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"}]
+        [{"role": "user", "content": "Weather in Paris?"}, _WEATHER_TOOL_CALL, _WEATHER_TOOL_RESULT, empty_user_message]
     )
 
-    assert [c["role"] for c in contents] == ["user", "model", "user"]
-    assert contents[0]["parts"] == [{"text": " "}]
-
-
-@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-def test_an_empty_user_message_after_tool_results_adds_no_second_user_turn(
-    empty_user_message: openai.AllMessageValues,
-) -> None:
-    contents: Final = transformation.gemini_convert_messages_with_history(
-        [
-            {"role": "user", "content": "Weather in Paris?"},
-            _WEATHER_TOOL_CALL,
-            {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"},
-            empty_user_message,
-        ]
-    )
-
-    assert [c["role"] for c in contents] == ["user", "model", "user"]
-    assert [tuple(part) for part in contents[-1]["parts"]] == [("function_response",)]
+    assert [tuple(part) for part in contents[2]["parts"]] == [("function_response",)]
+    assert {"text": " "} not in _all_parts(contents)
 
 
 @pytest.mark.parametrize("custom_llm_provider, expected_provider", [("gemini", "gemini"), (None, "vertex_ai")])
