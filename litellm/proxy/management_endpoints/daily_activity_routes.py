@@ -494,6 +494,9 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
         prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
         export_type: Annotated[ExportType, Query()] = ExportType.DAILY,
         file_format: Annotated[Literal["csv", "json"], Query(alias="format")] = "csv",
+        include_metadata: Annotated[
+            bool, Query(description="Fill key_metadata and user_metadata for admin callers. Off leaves them '{}'.")
+        ] = False,
     ) -> StreamingResponse:
         try:
             resolved: ResolvedScope = await _resolved_scope(
@@ -506,7 +509,7 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
             rows: Final = repository.export_rows(
                 resolved.scope,
                 export_type=export_type,
-                include_metadata=user_api_key_has_admin_view(user_api_key_dict),
+                include_metadata=include_metadata and user_api_key_has_admin_view(user_api_key_dict),
             )
             first_row: Final = await anext(rows, None)
             return StreamingResponse(

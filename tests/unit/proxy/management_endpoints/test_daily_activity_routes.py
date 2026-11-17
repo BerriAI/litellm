@@ -1171,7 +1171,9 @@ def _aggregated_entity_metadata(
     prefix: str, query_name: str, entity_id: str, prisma_client: object
 ) -> tuple[httpx.Response, tuple[Mapping[str, object], ...]]:
     with _daily_activity_test_client(_FakeRepository(_seeded_activity()), prisma_client) as client:
-        response: Final = client.get(f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id))
+        response: Final = client.get(
+            f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id)
+        )
     if response.status_code != 200:
         return response, ()
     entities: Final = chain.from_iterable(
@@ -1430,7 +1432,11 @@ def test_export_routes_stream_csv_and_preserve_row_counts(
     client, _ = daily_activity_client
     response: Final = client.get(
         f"{prefix}/daily/activity/export",
-        params={**_entity_params(query_name, entity_id), "export_type": ExportType.DAILY.value},
+        params={
+            **_entity_params(query_name, entity_id),
+            "export_type": ExportType.DAILY.value,
+            "include_metadata": "true",
+        },
     )
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
@@ -1455,7 +1461,7 @@ def test_export_routes_stream_json_arrays(
     client, _ = daily_activity_client
     response: Final = client.get(
         f"{prefix}/daily/activity/export",
-        params={**_entity_params(query_name, entity_id), "format": "json"},
+        params={**_entity_params(query_name, entity_id), "format": "json", "include_metadata": "true"},
     )
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("application/json")
@@ -1468,25 +1474,30 @@ def test_export_routes_stream_json_arrays(
 
 
 @pytest.mark.parametrize(
-    ("role", "expects_metadata"),
+    ("role", "include_metadata", "expects_metadata"),
     [
-        (LitellmUserRoles.PROXY_ADMIN, True),
-        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, True),
-        (LitellmUserRoles.INTERNAL_USER, False),
+        (LitellmUserRoles.PROXY_ADMIN, "true", True),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, "true", True),
+        (LitellmUserRoles.INTERNAL_USER, "true", False),
+        (LitellmUserRoles.PROXY_ADMIN, "false", False),
+        (LitellmUserRoles.PROXY_ADMIN, None, False),
     ],
 )
-def test_export_metadata_objects_only_for_callers_with_admin_view(
+def test_export_metadata_objects_only_when_an_admin_view_caller_opts_in(
     daily_activity_client: tuple[TestClient, _FakeRepository],
     role: LitellmUserRoles,
+    include_metadata: str | None,
     expects_metadata: bool,
 ) -> None:
     client, repository = daily_activity_client
+    opt_in: Final = {} if include_metadata is None else {"include_metadata": include_metadata}
     response: Final = client.get(
         "/user/daily/activity/export",
         params={
             **_entity_params("user_id", "user-a"),
             "export_type": ExportType.DAILY_WITH_KEYS.value,
             "format": "json",
+            **opt_in,
         },
         headers={"x-user-role": role.value, "x-user-id": "user-a"},
     )

@@ -35,7 +35,7 @@ describe("EntityUsageExportModal", () => {
     expect(screen.getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Export CSV/i }));
 
-    expect(baseProps.onExport).toHaveBeenCalledWith("daily", "csv");
+    expect(baseProps.onExport).toHaveBeenCalledWith("daily", "csv", false);
     expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "tag_usage_daily_2025-10-01_2025-10-14.csv");
     expect(baseProps.onClose).toHaveBeenCalled();
   });
@@ -48,8 +48,21 @@ describe("EntityUsageExportModal", () => {
     await user.click(screen.getByRole("radio", { name: /Day-by-day breakdown by tag and key/i }));
     await user.click(screen.getByRole("button", { name: /Export CSV/i }));
 
-    expect(baseProps.onExport).toHaveBeenCalledWith("daily_with_keys", "csv");
+    expect(baseProps.onExport).toHaveBeenCalledWith("daily_with_keys", "csv", false);
     expect(baseProps.onClose).toHaveBeenCalled();
+  });
+
+  it("asks for key and user metadata only when the checkbox is ticked", async () => {
+    const user = userEvent.setup();
+
+    renderWithProviders(<EntityUsageExportModal {...baseProps} />);
+
+    const checkbox = screen.getByRole("checkbox", { name: /Include key and user metadata/i });
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
+
+    expect(baseProps.onExport).toHaveBeenCalledWith("daily", "csv", true);
   });
 
   it("keeps the modal open and reports the error when onExport rejects", async () => {

@@ -717,9 +717,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <UsageExportHeader
           dateValue={dateValue}
           entityType={entityType}
-          onExport={(exportType, format) =>
+          onExport={(exportType, format, includeMetadata) =>
             request
-              ? api.exportRows(request, exportType, format)
+              ? api.exportRows(request, exportType, format, includeMetadata)
               : Promise.reject(new Error("Select a date range to export"))
           }
           showFilters={filterSlot === undefined && entityList !== null}

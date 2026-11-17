@@ -16028,7 +16028,8 @@
         "failed": "Failed to export data",
         "cancel": "Cancel",
         "exporting": "Exporting...",
-        "exportFormat": "Export {{format}}"
+        "exportFormat": "Export {{format}}",
+        "includeMetadata": "Include key and user metadata"
       },
       "format": {
         "label": "Format",

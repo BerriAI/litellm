@@ -23,7 +23,7 @@ import type { Team } from "@/components/key_team_helpers/key_list";
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
   entityType: EntityType;
-  onExport: (exportType: ExportType, format: ExportFormat) => Promise<Blob>;
+  onExport: (exportType: ExportType, format: ExportFormat, includeMetadata: boolean) => Promise<Blob>;
   // Optional filter props
   showFilters?: boolean;
   filterLabel?: string;
