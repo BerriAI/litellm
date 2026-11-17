@@ -6,7 +6,6 @@ gate, and the backward-compatibility guarantees that let legacy XSalsa20-Poly130
 (nacl) ciphertext and new AES values coexist and decrypt correctly.
 """
 
-import _hashlib
 import base64
 import hmac
 import re
@@ -272,13 +271,6 @@ def test_bearer_token_uses_only_header_safe_characters(length: int):
     assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length
 
 
-_needs_shared_openssl: Final = pytest.mark.skipif(
-    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
-)
-
-
-@_needs_shared_openssl
-@pytest.mark.usefixtures("fips_openssl")
 @pytest.mark.parametrize("salt_key", ["sk-" + bytes(range(32)).hex(), bytes(range(32)).hex().upper()])
 def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
     monkeypatch: pytest.MonkeyPatch, salt_key: str
@@ -290,9 +282,73 @@ def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
     assert derive_key_from_salt_key(label, context) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()
 
 
-@_needs_shared_openssl
-@pytest.mark.skipif(_hashlib.get_fips_mode() == 1, reason="this OpenSSL runs a FIPS provider")
-def test_derive_key_from_salt_key_refuses_an_openssl_without_a_fips_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
-    with pytest.raises(ValueError, match="OpenSSL could not run KBKDF"):
-        derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+@pytest.mark.parametrize(
+    ("salt_key", "label", "context", "issued_key"),
+    [
+        (
+            "sk-" + bytes(range(32)).hex(),
+            b"litellm-test:label:",
+            b"sk-test-master-key",
+            "8984eed36332e32c815b17a7b7af615c12a39689069999b8002b1e126e8205a1",
+        ),
+        (
+            bytes(range(32)).hex().upper(),
+            b"litellm-test:label:",
+            b"sk-test-master-key",
+            "8984eed36332e32c815b17a7b7af615c12a39689069999b8002b1e126e8205a1",
+        ),
+        (
+            "sk-" + bytes(range(32)).hex(),
+            b"litellm-test:label:",
+            b"",
+            "6e5325ba09ebcba77ad8ebda431cbfb4f07132f79de05558f62d6dc7df4cb856",
+        ),
+        (
+            "sk-" + bytes(range(32)).hex(),
+            b"",
+            b"sk-test-master-key",
+            "64d895aba9f82a9601af527f0d54333e629af122011a8f979bd1306a1b4eaa2e",
+        ),
+        (
+            "sk-" + bytes(range(32)).hex(),
+            b"litellm-test:label:",
+            bytes(range(256)),
+            "ec14e121031c15fdc0e0c9a1fe5865d721ee0aecb566d35f895d93a6d310d2d2",
+        ),
+        (
+            "sk-" + "5a" * 32,
+            b"litellm-mcp-bridge:envelope-signing:",
+            b"sk-test-master-key",
+            "f79c523d3eb85f1c76e690f5952f64fd2f4bd8974316c284e4588ca6a45b5a32",
+        ),
+        (
+            "sk-" + "5a" * 32,
+            b"litellm-mcp-bridge:envelope-encryption:",
+            b"sk-test-master-key",
+            "3a5a1c0d6869e879ff6b8ac216a1391640ee6cd23d73fcc9b684e9995db22f7c",
+        ),
+        (
+            "sk-" + "5a" * 32,
+            b"litellm-mcp-gateway:session-signing:",
+            b"sk-test-master-key",
+            "96bf0dfc44b74e843737e6eb2f00cf263eb9c1a2a1da5f8478d0020f246cf0f6",
+        ),
+        (
+            "sk-" + "5a" * 32,
+            b"litellm-plugin:session-claim:",
+            b"chat-ui",
+            "137c07f867c139b131bb4beb86dc3de5612d856c4c40a8461ca371f02743bb37",
+        ),
+        (
+            bytes(range(100)).hex(),
+            b"litellm-mcp-gateway:session-signing:",
+            b"sk-" + b"m" * 64,
+            "ea8946893757df506a43285c984aa1810e8c8603a035d5b296a3cdfae468cadf",
+        ),
+    ],
+)
+def test_derive_key_from_salt_key_keeps_the_keys_fips_mode_deployments_already_issued(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str, label: bytes, context: bytes, issued_key: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    assert derive_key_from_salt_key(label, context) == issued_key
