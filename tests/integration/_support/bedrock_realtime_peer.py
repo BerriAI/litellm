@@ -14,6 +14,12 @@ text message (the injected trigger-audio block is USER/AUDIO, so it never trips 
 ``tool_result`` fires on the Nth inbound ``toolResult`` event, which the proxy sends inside
 a TOOL contentStart/toolResult/contentEnd triple whose ``toolResultInputConfiguration``
 ``toolUseId`` names the call being answered.
+
+A ``Refusal`` peer withholds each stream's initial response until that stream's opening arrived
+(its SYSTEM prompt block or its first USER text block closed), then answers the HTTP error Bedrock
+sends for an unknown model id. A ``StreamFailure`` peer accepts the stream, plays its turns, and
+then sends an event-stream exception frame and ends the stream, as Bedrock does for a mid-call
+model error. ``streams()`` groups the inbound events per opened stream.
 """
 
 from __future__ import annotations
@@ -26,22 +32,24 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, count
 from pathlib import Path
 from queue import SimpleQueue
-from typing import Final, Literal
+from typing import Final, Literal, TypeVar
 
 import h2.config
 import h2.connection
 import h2.events
 import h2.exceptions
 from integration._support.async_server import Handler, LoopbackServer
-from integration._support.process import _free_port
+from integration._support.ports import allocate_port
 from integration._support.tls import server_context
 from integration._support.upstream import aws_event_stream_frame
 from pydantic import JsonValue, TypeAdapter
 
 BedrockEvent = Mapping[str, JsonValue]
+OpeningEnd = Literal["system_prompt", "user_input"]
+Recorded = TypeVar("Recorded")
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -177,6 +185,20 @@ class Turn:
     events: tuple[BedrockEvent, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class Refusal:
+    after: OpeningEnd
+    status: int = 400
+    error_type: str = "ValidationException"
+    message: str = "The provided model identifier is invalid."
+
+
+@dataclass(frozen=True, slots=True)
+class StreamFailure:
+    exception_type: str = "modelStreamErrorException"
+    message: str = "The system encountered an unexpected error during processing. Try your request again."
+
+
 def _event_body(event: BedrockEvent) -> tuple[str, Mapping[str, JsonValue]]:
     body: Final = event["event"]
     assert isinstance(body, Mapping) and len(body) == 1, event
@@ -214,6 +236,17 @@ def _frame_payload(raw: bytes) -> bytes:
     return raw[12 + header_length : -4]
 
 
+def _exception_frame(failure: StreamFailure) -> bytes:
+    return aws_event_stream_frame(
+        {
+            ":message-type": "exception",
+            ":exception-type": failure.exception_type,
+            ":content-type": "application/json",
+        },
+        json.dumps({"message": failure.message}).encode(),
+    )
+
+
 def _decode_inbound(chunk_payload: bytes) -> BedrockEvent | None:
     """One signed chunk frame's payload -> the inner chunk's {"bytes": ...} event."""
     inner_payload: Final = _frame_payload(chunk_payload)
@@ -239,6 +272,7 @@ class _Inbound:
         self.tool_use_ids: Final[dict[str, str]] = {}
         self.tool_results_seen = 0
         self.user_text_closed = False
+        self.system_text_closed = False
 
     def record(self, event: BedrockEvent) -> None:
         self.events.put(event)
@@ -253,6 +287,8 @@ class _Inbound:
             role_type: Final = self.open_blocks.pop(content_name, ("", ""))
             if role_type == ("USER", "TEXT"):
                 self.user_text_closed = True
+            elif role_type == ("SYSTEM", "TEXT"):
+                self.system_text_closed = True
         elif name == "toolResult":
             self.tool_results_seen += 1
 
@@ -283,10 +319,35 @@ class _Script:
         return turn.events
 
 
+def _opening_arrived(after: OpeningEnd, inbound: _Inbound) -> bool:
+    match after:
+        case "system_prompt":
+            return inbound.system_text_closed
+        case "user_input":
+            return inbound.user_text_closed
+
+
 class _PeerState:
-    def __init__(self, turns: tuple[Turn, ...]) -> None:
+    def __init__(self, turns: tuple[Turn, ...], refusal: Refusal | None, failure: StreamFailure | None) -> None:
         self.inbound: Final = _Inbound()
         self.script: Final = _Script(turns)
+        self.refusal: Final = refusal
+        self.failure: Final = failure
+        self.ordinals: Final = count()
+        self.opened: Final = SimpleQueue[int]()
+        self.stream_events: Final = SimpleQueue[tuple[int, BedrockEvent]]()
+
+
+def _drain(queue: SimpleQueue[Recorded], log: list[Recorded]) -> tuple[Recorded, ...]:
+    while not queue.empty():
+        log.append(queue.get())  # drained log, not a built value
+    return tuple(log)
+
+
+@dataclass(frozen=True, slots=True)
+class _Stream:
+    ordinal: int
+    inbound: _Inbound
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,11 +355,16 @@ class BedrockRealtimePeer:
     api_base: str
     _state: _PeerState
     _drained: list[BedrockEvent]
+    _opened: list[int]
+    _stream_events: list[tuple[int, BedrockEvent]]
 
     def received(self) -> tuple[BedrockEvent, ...]:
-        while not self._state.inbound.events.empty():
-            self._drained.append(self._state.inbound.events.get())  # drained log, not a built value
-        return tuple(self._drained)
+        return _drain(self._state.inbound.events, self._drained)
+
+    def streams(self) -> tuple[tuple[BedrockEvent, ...], ...]:
+        opened: Final = _drain(self._state.opened, self._opened)
+        recorded: Final = _drain(self._state.stream_events, self._stream_events)
+        return tuple(tuple(event for ordinal, event in recorded if ordinal == stream) for stream in opened)
 
     def tool_specs(self) -> tuple[Mapping[str, JsonValue], ...]:
         return tuple(chain.from_iterable(_tool_specs(event) for event in self.received()))
@@ -344,6 +410,7 @@ class _H2Session:
         self._writer: Final = writer
         self._h2: Final = h2.connection.H2Connection(config=h2.config.H2Configuration(client_side=False))
         self._buffers: Final[dict[int, bytes]] = {}
+        self._streams: Final[dict[int, _Stream]] = {}
         self._ended: set[int] = set()
         self._closed = False
 
@@ -367,10 +434,14 @@ class _H2Session:
 
     def _apply(self, event: h2.events.Event) -> None:
         if isinstance(event, h2.events.RequestReceived):
-            self._h2.send_headers(
-                event.stream_id,
-                [(":status", "200"), ("content-type", "application/vnd.amazon.eventstream")],
-            )
+            ordinal: Final = next(self._state.ordinals)
+            self._streams[event.stream_id] = _Stream(ordinal, _Inbound())
+            self._state.opened.put(ordinal)
+            if self._state.refusal is None:
+                self._h2.send_headers(
+                    event.stream_id,
+                    [(":status", "200"), ("content-type", "application/vnd.amazon.eventstream")],
+                )
         elif isinstance(event, h2.events.DataReceived):
             self._h2.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
             self._buffers[event.stream_id] = self._buffers.get(event.stream_id, b"") + event.data
@@ -380,14 +451,43 @@ class _H2Session:
                 decoded: Final = _decode_inbound(payload)
                 if decoded is None:
                     continue
-                self._state.inbound.record(decoded)
-                if event.stream_id not in self._ended:
-                    for outbound in self._state.script.ready_events(self._state.inbound, decoded):
-                        self._h2.send_data(event.stream_id, _outbound_chunk(outbound))
+                self._record(event.stream_id, decoded)
         elif isinstance(event, (h2.events.StreamEnded, h2.events.StreamReset)):
             self._close_stream(event.stream_id)
         elif isinstance(event, h2.events.ConnectionTerminated):
             self._writer.close()
+
+    def _record(self, stream_id: int, decoded: BedrockEvent) -> None:
+        stream: Final = self._streams[stream_id]
+        self._state.inbound.record(decoded)
+        stream.inbound.record(decoded)
+        self._state.stream_events.put((stream.ordinal, decoded))
+        if stream_id in self._ended:
+            return
+        refusal: Final = self._state.refusal
+        if refusal is not None:
+            if _opening_arrived(refusal.after, stream.inbound):
+                self._refuse(stream_id, refusal)
+            return
+        outbound_events: Final = self._state.script.ready_events(self._state.inbound, decoded)
+        for outbound in outbound_events:
+            self._h2.send_data(stream_id, _outbound_chunk(outbound))
+        failure: Final = self._state.failure
+        if outbound_events and failure is not None and self._state.script.exhausted:
+            self._h2.send_data(stream_id, _exception_frame(failure))
+            self._end_stream(stream_id)
+
+    def _refuse(self, stream_id: int, refusal: Refusal) -> None:
+        self._h2.send_headers(
+            stream_id,
+            [
+                (":status", str(refusal.status)),
+                ("content-type", "application/json"),
+                ("x-amzn-errortype", refusal.error_type),
+            ],
+        )
+        self._h2.send_data(stream_id, json.dumps({"message": refusal.message}).encode())
+        self._end_stream(stream_id)
 
     def _close_stream(self, stream_id: int) -> None:
         self._end_stream(stream_id)
@@ -411,19 +511,27 @@ def _session_handler(state: _PeerState) -> Handler:
 
 
 @contextmanager
-def bedrock_realtime_peer(turns: tuple[Turn, ...], cert: tuple[Path, Path]) -> Iterator[BedrockRealtimePeer]:
+def bedrock_realtime_peer(
+    turns: tuple[Turn, ...],
+    cert: tuple[Path, Path],
+    *,
+    refusal: Refusal | None = None,
+    failure: StreamFailure | None = None,
+) -> Iterator[BedrockRealtimePeer]:
     """Serve scripted `turns` on a loopback TLS h2 endpoint; yield the peer.
 
     `cert` is the self-signed pair the owned proxy already trusts via SSL_CERT_FILE.
     SigV4 headers are ignored; the stream closes cleanly when the client ends it.
     """
-    port: Final = _free_port()
+    port: Final = allocate_port()
     context: Final = server_context(cert[0], cert[1])
     context.set_alpn_protocols(["h2"])
-    state: Final = _PeerState(turns)
+    state: Final = _PeerState(turns, refusal, failure)
     server: Final = LoopbackServer(port, _session_handler(state), ssl_context=context)
     server.start()
     try:
-        yield BedrockRealtimePeer(api_base=f"https://localhost:{port}", _state=state, _drained=[])
+        yield BedrockRealtimePeer(
+            api_base=f"https://localhost:{port}", _state=state, _drained=[], _opened=[], _stream_events=[]
+        )
     finally:
         server.stop()

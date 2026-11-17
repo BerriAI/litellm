@@ -21,7 +21,7 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark = pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120))
+pytestmark: Final = [pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120)), pytest.mark.shares_worker_state]
 
 _BACKEND: Final = "deepseek-ai/DeepSeek-V4-Flash"
 _VENDOR_KEY: Final = "synthetic-inferenceapis-key"

@@ -95,7 +95,7 @@ async def test_success_hook_fires_the_expected_number_of_times(
             "async_post_call_failure_deployment_hook", True, 1, id="async-async_post_call_failure_deployment_hook"
         ),
         pytest.param("log_model_group_rate_limit_error", True, 1, id="async-log_model_group_rate_limit_error"),
-        pytest.param("log_failure_event", True, 0, id="async-log_failure_event", marks=SYNC_HANDLERS_ON_ASYNC_CALLS),
+        pytest.param("log_failure_event", True, 0, id="async-log_failure_event"),
         pytest.param("log_failure_event", False, 1, id="sync-log_failure_event"),
     ),
 )

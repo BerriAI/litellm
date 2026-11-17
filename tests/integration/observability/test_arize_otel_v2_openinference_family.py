@@ -23,7 +23,7 @@ from integration._support.client import Gateway
 from integration._support.wire import Reply, Request
 from pydantic import JsonValue
 
-_GENAI_B3_KEYS_WITHOUT_BAGGAGE: Final = frozenset(
+_GENAI_B3_KEYS: Final = frozenset(
     {
         "gen_ai.input.messages",
         "gen_ai.operation.name",
@@ -43,6 +43,7 @@ _GENAI_B3_KEYS_WITHOUT_BAGGAGE: Final = frozenset(
         "gen_ai.usage.prompt_tokens",
         "gen_ai.usage.total_tokens",
         "litellm.api_key.hash",
+        "litellm.cache_hit",
         "litellm.call_id",
         "litellm.call_type",
         "litellm.cost.discount_amount",
@@ -55,6 +56,7 @@ _GENAI_B3_KEYS_WITHOUT_BAGGAGE: Final = frozenset(
         "litellm.cost.output",
         "litellm.cost.tool_usage",
         "litellm.cost.total",
+        "litellm.metadata.trace_marker",
         "litellm.provider.model",
         "litellm.request.route",
         "litellm.request.tools.declared",
@@ -65,7 +67,6 @@ _GENAI_B3_KEYS_WITHOUT_BAGGAGE: Final = frozenset(
         "server.port",
     }
 )
-_GENAI_B3_KEYS_WITH_BAGGAGE: Final = _GENAI_B3_KEYS_WITHOUT_BAGGAGE | frozenset({"litellm.metadata.trace_marker"})
 _LANGFUSE_B3_KEYS: Final = frozenset(
     {
         "gen_ai.input.messages",
@@ -85,6 +86,7 @@ _LANGFUSE_B3_KEYS: Final = frozenset(
         "gen_ai.usage.output_tokens",
         "gen_ai.usage.prompt_tokens",
         "gen_ai.usage.total_tokens",
+        "langfuse.observation.completion_start_time",
         "langfuse.observation.cost_details",
         "langfuse.observation.id",
         "langfuse.observation.input",
@@ -94,6 +96,7 @@ _LANGFUSE_B3_KEYS: Final = frozenset(
         "langfuse.observation.type",
         "langfuse.observation.usage_details",
         "litellm.api_key.hash",
+        "litellm.cache_hit",
         "litellm.call_id",
         "litellm.call_type",
         "litellm.cost.discount_amount",
@@ -106,6 +109,7 @@ _LANGFUSE_B3_KEYS: Final = frozenset(
         "litellm.cost.output",
         "litellm.cost.tool_usage",
         "litellm.cost.total",
+        "litellm.metadata.trace_marker",
         "litellm.provider.model",
         "litellm.request.route",
         "litellm.request.tools.declared",
@@ -119,15 +123,14 @@ _LANGFUSE_B3_KEYS: Final = frozenset(
 _B3_ATTRIBUTE_KEYS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "langfuse_otel": _LANGFUSE_B3_KEYS,
-        "langtrace": _GENAI_B3_KEYS_WITHOUT_BAGGAGE,
-        "signoz": _GENAI_B3_KEYS_WITH_BAGGAGE,
-        "newrelic": _GENAI_B3_KEYS_WITH_BAGGAGE,
-        "levo": _GENAI_B3_KEYS_WITH_BAGGAGE,
-        "agentops": _GENAI_B3_KEYS_WITH_BAGGAGE,
-        "otel": _GENAI_B3_KEYS_WITH_BAGGAGE,
+        "langtrace": _GENAI_B3_KEYS,
+        "signoz": _GENAI_B3_KEYS,
+        "newrelic": _GENAI_B3_KEYS,
+        "levo": _GENAI_B3_KEYS,
+        "agentops": _GENAI_B3_KEYS,
+        "otel": _GENAI_B3_KEYS,
     }
 )
-_B3_BAGGAGE_CALLBACKS: Final = frozenset({"signoz", "newrelic", "levo", "agentops", "otel"})
 _B4_ATTRIBUTE_KEYS: Final = frozenset(
     {
         "input.value",
@@ -296,19 +299,16 @@ def test_arize_otel_v2_b3_non_openinference_callback_family(callback: str, gatew
         assert _json_object(response.content) == _chat_caller_response(_chat_response(marker), rig.model), response.text
         attributes: Final = _matching_genai_marker_span(rig.destination, marker)
         assert frozenset(attributes) == _B3_ATTRIBUTE_KEYS[callback], attributes
+        assert attributes["litellm.cache_hit"] == "False", attributes
         assert "metadata" not in attributes, attributes
         assert not any(".tool_calls." in key for key in attributes), attributes
         baggage: Final = tuple(
             sorted((key, value) for key, value in attributes.items() if key.startswith("litellm.metadata."))
         )
-        expected_baggage: Final = (
-            (("litellm.metadata.trace_marker", marker),) if callback in _B3_BAGGAGE_CALLBACKS else ()
-        )
-        assert baggage == expected_baggage, attributes
+        assert baggage == (("litellm.metadata.trace_marker", marker),), attributes
 
 
 def test_arize_otel_v2_b3_langfuse_carries_metadata_baggage(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip("BUG: LIT-9128 Langfuse OTel v2 preset omits request-metadata baggage")
     marker: Final = "b3-langfuse-" + uuid.uuid4().hex
 
     def upstream(request: Request) -> Reply:

@@ -8,11 +8,11 @@ from unittest.mock import ANY
 from uuid import uuid4
 
 import pytest
-from integration._support.client import Gateway, eventually, list_value, object_value, string_value
+from integration._support.client import Gateway, list_value, object_value, string_value
 from integration._support.process import graceful_stop_seconds
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply
-from integration.caching.response_cache_case import CACHE_KEY, redis_store
+from integration.caching.response_cache_case import await_entry, redis_store
 from integration.translation.case import SSEFrame, TranslationTestCase
 from integration.translation.chat_completions.bases.gemini import GEMINI_3_8_FLASH_TEST_CASE
 from integration.translation.chat_completions.bases.vertex_ai import (
@@ -41,7 +41,7 @@ from pydantic import JsonValue
 
 __all__ = ("thoughts_off",)
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 GEMINI_3_8_FLASH_THINKING_SHOWN_THOUGHT: Final = "**My Inspection Strategy: Validation First**\n\nOkay, here's how I'm approaching this project review. The instruction specifically mentions considering zero, negative, and non-integer quantities. To efficiently address that, I'm going to start with `shop/validation.py`. My reasoning is simple: the validation logic is the first line of defense. Understanding how the system *expects* to handle these edge cases will inform everything else. It's the logical place to begin my investigation to understand the code. I'll use the `read_file` tool to examine that file. I am **not** changing any files. I will call the `chat_completions` client for this project review. I am now proceeding with reading `shop/validation.py`.\n\n\n"
 
@@ -699,6 +699,120 @@ VERTEX_GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE: Final = replace(
     },
 )
 
+GEMINI_4_HYDROGEN_XHIGH_THOUGHT: Final = (
+    "**Initial Project Review and File Selection**\n\nOkay, let's break this down. First, I need to mak"
+    "e sure I'm following the instructions and user's request precisely. The instructions are clear: "
+    "I'm maintaining a synthetic Python project, so I need to carefully review the files before makin"
+    "g any suggestions. I'm using the `chat_completions` client for this review, and importantly, I'm"
+    " never changing files - read-only only. The emphasis on considering zero, negative, and non-inte"
+    "ger quantities is a key parameter for this process.\n\nThe user's direct request is to \"Read the v"
+    'alidation file first so we can understand how zero and negative quantities are handled." Right, '
+    "so the user wants me to start with the validation file. That simplifies the initial decision.\n\nT"
+    "herefore, the next step is straightforward: I need to explain which file I need next, which is `"
+    "shop/validation.py`, and then call `read_file` on that same file. Before I call it, I need to ch"
+    "eck the parameters of `read_file`. It looks like it takes `path`, `start_line`, and `end_line` a"
+    "s inputs. I'll plan to read the first 100 or 50 lines of `shop/validation.py`. I'll confirm that"
+    " the `read_file` tool accepts those parameters - `end_line` and `start_line` are positive intege"
+    "rs, and `path` is a string.\n\nOkay, let's articulate this clearly. My explanation will be: \"I wil"
+    "l read `shop/validation.py` next to inspect the `validate_quantity` function and determine how z"
+    "ero, negative, and non-integer quantities are handled. Then I'll call the `read_file` tool.\" Tha"
+    "t seems logical.\n\n\n"
+)
+
+GEMINI_4_HYDROGEN_XHIGH_THOUGHT_SIGNATURE: Final = (
+    "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"
+)
+
+GEMINI_4_HYDROGEN_XHIGH_TEST_CASE: Final = replace(
+    GEMINI_3_8_FLASH_TEST_CASE,
+    scenario="xhigh_reasoning_effort",
+    litellm_request={**THINKING_REQUEST, "model": "gemini/gemini-4-hydrogen", "reasoning_effort": "xhigh"},
+    expected_provider_endpoint="/models/gemini-4-hydrogen:generateContent",
+    expected_provider_request=with_thinking_config(
+        GEMINI_3_8_FLASH_TEST_CASE.expected_provider_request, {"thinkingLevel": "xhigh", "includeThoughts": True}
+    ),
+    mock_provider_response={
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": GEMINI_4_HYDROGEN_XHIGH_THOUGHT, "thought": True},
+                        {
+                            "text": "I need to read `shop/validation.py` next to inspect `validate_quantity` and see how it handles zero, negative, and non-integer quantities."
+                        },
+                        {
+                            "functionCall": {
+                                "name": "read_file",
+                                "args": {"start_line": 1, "path": "shop/validation.py", "end_line": 100},
+                                "id": "call_5567188554998993723",
+                            },
+                            "thoughtSignature": GEMINI_4_HYDROGEN_XHIGH_THOUGHT_SIGNATURE,
+                        },
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+                "index": 0,
+                "finishMessage": "Model generated function call(s).",
+            },
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 414,
+            "candidatesTokenCount": 74,
+            "totalTokenCount": 833,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 414}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 74}],
+            "thoughtsTokenCount": 345,
+            "serviceTier": "standard",
+        },
+        "modelVersion": "gemini-4-hydrogen",
+        "responseId": "e0D7asXVF42GqtsP2LnWqAM",
+    },
+    expected_litellm_response={
+        **gemini_chat_response(
+            content="I need to read `shop/validation.py` next to inspect `validate_quantity` and see how it handles zero, negative, and non-integer quantities.",
+            tool_call=signed_tool_call(
+                "call_5567188554998993723",
+                '{"start_line": 1, "path": "shop/validation.py", "end_line": 100}',
+                GEMINI_4_HYDROGEN_XHIGH_THOUGHT_SIGNATURE,
+            ),
+            message_fields={
+                "reasoning_content": GEMINI_4_HYDROGEN_XHIGH_THOUGHT,
+                "thinking_blocks": [{"type": "thinking", "thinking": GEMINI_4_HYDROGEN_XHIGH_THOUGHT}],
+                "provider_specific_fields": {"thought_signatures": [GEMINI_4_HYDROGEN_XHIGH_THOUGHT_SIGNATURE]},
+            },
+            usage={
+                "completion_tokens": 419,
+                "prompt_tokens": 414,
+                "total_tokens": 833,
+                "completion_tokens_details": {"reasoning_tokens": 345, "text_tokens": 74},
+                "prompt_tokens_details": {"text_tokens": 414},
+            },
+        ),
+        "model": "gemini/gemini-4-hydrogen",
+    },
+)
+
 GEMINI_3_8_FLASH_THINKING_OMITTED_TEST_CASE: Final = replace(
     GEMINI_3_8_FLASH_TEST_CASE,
     scenario="thinking_omitted",
@@ -840,7 +954,7 @@ def without_closed_schema(tool: JsonValue) -> JsonValue:
     return {**object_value(tool), "function": {**function, "parameters": open_parameters}}
 
 
-def cacheable_run(case: TranslationTestCase, marker: str) -> TranslationTestCase:
+def cacheable_run(case: TranslationTestCase, marker: str, reply_id: str) -> TranslationTestCase:
     messages: Final = list_value(case.litellm_request["messages"])
     system: Final = object_value(messages[0])
     instruction: Final = object_value(case.expected_provider_request["system_instruction"])
@@ -853,6 +967,7 @@ def cacheable_run(case: TranslationTestCase, marker: str) -> TranslationTestCase
             "messages": [{**system, "content": text}, messages[1]],
             "tools": [without_closed_schema(tool) for tool in list_value(case.litellm_request["tools"])],
         },
+        mock_provider_response={**case.mock_provider_response, "responseId": reply_id},
         expected_provider_request={
             **case.expected_provider_request,
             "contents": [list_value(case.expected_provider_request["contents"])[0]],
@@ -861,14 +976,10 @@ def cacheable_run(case: TranslationTestCase, marker: str) -> TranslationTestCase
     )
 
 
-def response_cache_keys() -> frozenset[str]:
-    keys: Final = (raw.decode() for raw in redis_store().scan_iter())
-    return frozenset(key for key in keys if CACHE_KEY.match(key))
-
-
-def stored_reply_key(before: frozenset[str]) -> str:
-    (key,) = eventually(lambda: response_cache_keys() - before, lambda added: len(added) == 1)
-    return key
+def stored_reply_key(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> str:
+    reply: Final = assert_translation(case, gateway, provider)
+    with redis_store() as store:
+        return await_entry(store, string_value(reply["id"]))
 
 
 GEMINI_3_8_FLASH_SUMMARY_ALIAS_TEST_CASE: Final = with_request(
@@ -888,12 +999,11 @@ def test_a_summary_alias_ask_and_a_plain_request_never_share_a_cached_reply(
     first: TranslationTestCase, second: TranslationTestCase, thoughts_off: Gateway, provider: SharedProvider
 ) -> None:
     marker: Final = uuid4().hex
-    before: Final = response_cache_keys()
-    assert_translation(cacheable_run(first, marker), thoughts_off, provider)
-    first_key: Final = stored_reply_key(before)
-    assert_translation(cacheable_run(second, marker), thoughts_off, provider)
-    second_key: Final = stored_reply_key(before | {first_key})
-    repeat: Final = thoughts_off.request("POST", second.litellm_endpoint, cacheable_run(second, marker).litellm_request)
+    second_run: Final = cacheable_run(second, marker, uuid4().hex)
+    first_key: Final = stored_reply_key(cacheable_run(first, marker, uuid4().hex), thoughts_off, provider)
+    second_key: Final = stored_reply_key(second_run, thoughts_off, provider)
+    assert second_key != first_key
+    repeat: Final = thoughts_off.request("POST", second.litellm_endpoint, second_run.litellm_request)
     assert repeat.status_code == 200, repeat.text
     assert repeat.headers.get("x-litellm-cache-key") == second_key, sorted(repeat.headers)
     assert provider.received() == ()
@@ -1039,3 +1149,9 @@ def test_every_worker_honors_the_flag_on_every_endpoint_under_a_burst_and_after_
         _assert_each_request_follows_its_own_ask(owned.gateway, provider)
         owned.kill_worker(min(owned.worker_pids()))
         _assert_each_request_follows_its_own_ask(owned.gateway, provider)
+
+
+def test_gemini_4_hydrogen_sends_xhigh_reasoning_effort_as_the_xhigh_thinking_level(
+    gateway: Gateway, provider: SharedProvider
+) -> None:
+    assert_translation(GEMINI_4_HYDROGEN_XHIGH_TEST_CASE, gateway, provider)

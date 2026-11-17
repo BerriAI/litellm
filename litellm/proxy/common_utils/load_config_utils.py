@@ -3,18 +3,25 @@ import os
 import posixpath
 from collections.abc import Awaitable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import S3_OBJECT_READ_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.proxy.common_utils.config_includes import resolve_includes
 
 if TYPE_CHECKING:
     from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 
 _BUCKET_CONFIG_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_YAML: Final = TypeAdapter(object)
+
+
+class _ConfigBucketAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = S3_OBJECT_READ_SESSION_POLICY
 
 
 class BucketObjectFetcher(Protocol):
@@ -31,7 +38,7 @@ class SyncBucketObjectReader(Protocol):
 
 def _parsed_config(object_key: str, file_contents: str) -> object | None:
     try:
-        parsed: Final = yaml.safe_load(file_contents)
+        parsed: Final = _DECODED_YAML.validate_python(yaml.safe_load(file_contents))
     except yaml.YAMLError as e:
         verbose_proxy_logger.error("Config object %s is not valid YAML: %s", object_key, e)
         return None
@@ -47,9 +54,7 @@ def s3_object_reader(bucket_name: str) -> SyncBucketObjectReader:
         import boto3
         from botocore.credentials import Credentials
 
-        from litellm.main import bedrock_converse_chat_completion
-
-        credentials: Final[Credentials] = bedrock_converse_chat_completion.get_credentials()
+        credentials: Final[Credentials] = _ConfigBucketAWS().get_credentials()
         s3_client: Final = boto3.client(
             "s3",
             aws_access_key_id=credentials.access_key,
@@ -218,11 +223,7 @@ def download_python_file_from_s3(
         import boto3
         from botocore.credentials import Credentials
 
-        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-
-        base_aws_llm: Final = BaseAWSLLM()
-
-        credentials: Final[Credentials] = base_aws_llm.get_credentials()
+        credentials: Final[Credentials] = _ConfigBucketAWS().get_credentials()
         s3_client: Final = boto3.client(
             "s3",
             aws_access_key_id=credentials.access_key,
