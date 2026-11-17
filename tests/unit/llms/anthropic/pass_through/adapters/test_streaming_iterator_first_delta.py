@@ -21,13 +21,13 @@ into an open ``thinking`` block, crashing Anthropic SDK clients (Claude Code)
 with "Content block is not a text block".
 """
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, List, Mapping, Optional, Sequence, Tuple
+from typing import Final, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
-
 
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
@@ -1549,4 +1549,74 @@ async def test_each_thinking_run_streams_its_text_once_and_keeps_every_signature
     assert "".join(block.thinking for block in _thinking_blocks_as_accumulated(events)) == expected.thinking
     assert tuple(_signature_deltas(events)) == expected.signatures
     assert "".join(_text_deltas(events)) == expected.answer
+    _assert_deltas_match_their_block_type(events)
+
+_UNSIGNED_REASONING_STREAMS: Final[Mapping[str, Tuple[MagicMock, ...]]] = MappingProxyType(
+    {
+        "then-text": (
+            _reasoning_content_chunk("The user "),
+            _reasoning_content_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+        "then-tool-call": (
+            _reasoning_content_chunk("The user wants 2+2."),
+            _tool_chunk("call_add", "add", '{"a": 2, "b": 2}'),
+            _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+        ),
+        "thought-ends-with-finish": (
+            _reasoning_content_chunk("The user "),
+            _make_chunk(Delta(content=None, reasoning_content="wants 2+2."), finish_reason="stop"),
+        ),
+    }
+)
+
+
+def _event_before_stop(events: Sequence[Mapping[str, object]], index: int) -> Mapping[str, object]:
+    stop_position: Final = next(
+        position
+        for position, event in enumerate(events)
+        if event.get("type") == "content_block_stop" and event["index"] == index
+    )
+    return events[stop_position - 1]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("stream", list(_UNSIGNED_REASONING_STREAMS), ids=list(_UNSIGNED_REASONING_STREAMS))
+@pytest.mark.asyncio
+async def test_unsigned_thinking_block_closes_with_an_empty_signature_delta(is_async: bool, stream: str):
+    events: Final = await _events_for(_UNSIGNED_REASONING_STREAMS[stream], is_async)
+
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="The user wants 2+2.", signature=""),
+    )
+    assert [_event_before_stop(events, index) for index in _thinking_starts(events)] == [
+        {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": ""}}
+        for index in _thinking_starts(events)
+    ]
+    assert _signature_deltas(events) == [""]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_unsigned_thinking_blocks_close_with_an_empty_signature_delta(is_async: bool):
+    events: Final = await _events_for(
+        (
+            _thinking_chunk("The user "),
+            _thinking_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+        is_async,
+    )
+
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="The user wants 2+2.", signature=""),
+    )
+    assert [_event_before_stop(events, index) for index in _thinking_starts(events)] == [
+        {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": ""}}
+        for index in _thinking_starts(events)
+    ]
+    assert _signature_deltas(events) == [""]
     _assert_deltas_match_their_block_type(events)

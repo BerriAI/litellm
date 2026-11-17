@@ -243,16 +243,11 @@ def _anthropic_content_block_start_and_deltas(
             )
         case "thinking":
             signature: Final = block.get("signature")
-            signature_deltas: Final = (
-                ({"signature": signature, "type": "signature_delta"},)
-                if isinstance(signature, str) and signature
-                else ()
-            )
             return (
                 {"thinking": "", "signature": "", "type": "thinking"},
                 (
                     {"thinking": block.get("thinking") or "", "type": "thinking_delta"},
-                    *signature_deltas,
+                    {"signature": signature if isinstance(signature, str) else "", "type": "signature_delta"},
                 ),
             )
         case "redacted_thinking":
