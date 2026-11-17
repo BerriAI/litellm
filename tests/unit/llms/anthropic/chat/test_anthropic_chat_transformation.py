@@ -11715,7 +11715,7 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
 @pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
 def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
-    local_model_cost_map, model: str
+    local_model_cost_map: None, model: str
 ):
     """What get_supported_openai_params says about temperature/top_p must match what
     map_openai_params keeps for a value the model accepts. A model that removed sampling
@@ -11756,7 +11756,7 @@ def _mock_completion(model: str, temperature: float) -> ModelResponse:
 
 @pytest.mark.parametrize("model", _FIXED_SAMPLING_ROUTES)
 def test_completion_accepts_temperature_one_on_models_that_removed_sampling_params(
-    local_model_cost_map, model: str
+    local_model_cost_map: None, model: str
 ) -> None:
     assert _mock_completion(model, temperature=1).choices[0].message.content == "ok"
 
