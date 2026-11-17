@@ -4454,6 +4454,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._queued_web_search_call_ids = set()
         iterator._tool_search_requested = False
         iterator._tool_search_call_ids = set()
+        iterator._streams_tool_arguments = True
         return iterator
 
     def _make_text_chunk(self):
@@ -5838,6 +5839,23 @@ def _web_search_turn(
             "length",
             (("message", "completed"), ("web_search_call", "in_progress")),
             id="cut_on_pending_web_search",
+        ),
+        pytest.param(
+            Message(
+                content=None,
+                role="assistant",
+                reasoning_content="The user wants today's weather, so I should search.",
+                provider_specific_fields={
+                    "web_search_calls": [
+                        build_web_search_call(
+                            tool_id="srvtoolu_weather", tool_input={}, result=None, status="in_progress"
+                        )
+                    ]
+                },
+            ),
+            "length",
+            (("reasoning", "incomplete"),),
+            id="reasoning_cut_before_its_pending_search_shows",
         ),
         pytest.param(
             Message(

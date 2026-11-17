@@ -11,6 +11,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
+import time
 from collections.abc import Callable, Iterable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -18,9 +19,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from openai.types.responses import ResponseOutputMessage
 
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
@@ -31,7 +36,11 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import GenericResponseOutputItem, build_web_search_call
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
     Delta,
+    Function,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -1687,6 +1696,75 @@ async def test_a_cut_custom_tool_call_keeps_its_partial_input_in_the_done_event(
     assert done_items == final_items
     assert [(item_type, status) for item_type, status, _ in done_items] == [("custom_tool_call", "incomplete")]
     assert done_items[0][2] == '{"content": "*** Begin Patch\\n*** Add File: a.py'
+
+
+def _cut_write_file_response() -> ModelResponse:
+    return ModelResponse(
+        id=CHAT_COMPLETION_ID,
+        model="claude-haiku-5-5",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="length",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_write",
+                            type="function",
+                            function=Function(name="write_file", arguments='{"path": "numbers.txt"}'),
+                        )
+                    ],
+                ),
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_replayed_cut_response_marks_its_items_as_the_unstreamed_response_does(sync_mode: bool) -> None:
+    unstreamed: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Write the file.",
+        responses_api_request={},
+        chat_completion_response=_cut_write_file_response(),
+    )
+    replay: Final = CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=_cut_write_file_response()),
+        model="claude-haiku-5-5",
+        custom_llm_provider="anthropic",
+        logging_obj=Logging(
+            model="claude-haiku-5-5",
+            messages=[{"role": "user", "content": "Write the file."}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="replayed-cut",
+            function_id="replayed-cut",
+        ),
+    )
+
+    events: Final = await _collect_events(
+        LiteLLMCompletionStreamingIterator(
+            model="claude-haiku-5-5",
+            litellm_custom_stream_wrapper=replay,
+            request_input="Write the file.",
+            responses_api_request={},
+            custom_llm_provider="anthropic",
+            litellm_metadata={},
+        ),
+        sync_mode,
+    )
+
+    expected: Final = [(item.type, item.status) for item in unstreamed.output]
+    assert expected == [("function_call", "incomplete")]
+    assert [
+        (event.item.type, event.item.status)
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    ] == expected
+    assert [(item.type, item.status) for item in events[-1].response.output] == expected
 
 
 def _serialized_sequence_numbers(events: Iterable[BaseLiteLLMOpenAIResponseObject]) -> list[int]:

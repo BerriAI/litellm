@@ -2894,8 +2894,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _cut_output_item(choice: Choices) -> OutputItemRef | None:
         message: Final = choice.message
-        web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_of_choice(choice)
-        if any(call.status == "in_progress" for call in web_search_calls):
+        if LiteLLMCompletionResponsesConfig._carries_pending_web_search(choice):
             return None
         answered_server_tool_ids: Final = LiteLLMCompletionResponsesConfig._answered_server_tool_ids(choice)
         unanswered_tool_calls: Final = tuple(
@@ -2909,6 +2908,14 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
         )
         return "reasoning" if has_reasoning else "message"
+
+    @staticmethod
+    def _carries_pending_web_search(choice: Choices) -> bool:
+        carried_call_ids: Final = frozenset(call.id for call in choice.message.tool_calls or ())
+        return any(
+            call.status == "in_progress" and call.id.removeprefix("ws_") in carried_call_ids
+            for call in LiteLLMCompletionResponsesConfig._web_search_calls_of_choice(choice)
+        )
 
     @staticmethod
     def _incomplete_details_for_finish_reason(
