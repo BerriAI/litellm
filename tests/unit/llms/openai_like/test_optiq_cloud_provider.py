@@ -9,6 +9,7 @@ from openai import OpenAI
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy.auth.model_checks import get_provider_models
 
 OPTIQ_CLOUD_API_BASE: Final = "https://cloud.mlx-optiq.com/api/v1"
@@ -179,6 +180,7 @@ def test_missing_optiq_cloud_key_fails_locally_instead_of_sending_the_openai_key
 
     assert route.calls.call_count == 0
 
+
 def test_optiq_cloud_wildcard_lists_every_optiq_cloud_catalog_model():
     catalog_models: Final = sorted(
         key for key, row in litellm.model_cost.items() if row.get("litellm_provider") == "optiq_cloud"
@@ -186,3 +188,73 @@ def test_optiq_cloud_wildcard_lists_every_optiq_cloud_catalog_model():
 
     assert catalog_models
     assert sorted(get_provider_models("optiq_cloud") or []) == catalog_models
+
+
+@pytest.fixture
+def openai_key_but_no_optiq_cloud_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPTIQ_CLOUD_API_KEY", raising=False)
+    monkeypatch.delenv("OPTIQ_CLOUD_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-global-key")
+
+
+@pytest.mark.usefixtures("openai_key_but_no_optiq_cloud_key")
+def test_missing_optiq_cloud_key_fails_speech_locally_instead_of_sending_the_openai_key():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{OPTIQ_CLOUD_API_BASE}/audio/speech").respond(200, content=b"audio")
+        with pytest.raises(litellm.AuthenticationError, match="OPTIQ_CLOUD_API_KEY"):
+            litellm.speech(model="optiq_cloud/glm-5.3-flash", input="hello", voice="alloy")
+
+    assert route.calls.call_count == 0
+
+
+def test_optiq_cloud_speech_sends_the_optiq_cloud_key_not_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("OPTIQ_CLOUD_API_KEY", "optiq-cloud-env-key")
+    monkeypatch.delenv("OPTIQ_CLOUD_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-global-key")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{OPTIQ_CLOUD_API_BASE}/audio/speech").respond(200, content=b"audio")
+        litellm.speech(model="optiq_cloud/glm-5.3-flash", input="hello", voice="alloy")
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer optiq-cloud-env-key"
+
+
+@pytest.mark.usefixtures("openai_key_but_no_optiq_cloud_key")
+def test_missing_optiq_cloud_key_fails_transcription_locally_instead_of_sending_the_openai_key():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{OPTIQ_CLOUD_API_BASE}/audio/transcriptions").respond(200, json={"text": "hi"})
+        with pytest.raises(litellm.AuthenticationError, match="OPTIQ_CLOUD_API_KEY"):
+            litellm.transcription(model="optiq_cloud/glm-5.3-flash", file=("a.wav", b"RIFF0000WAVE", "audio/wav"))
+
+    assert route.calls.call_count == 0
+
+
+@pytest.mark.usefixtures("openai_key_but_no_optiq_cloud_key")
+async def test_missing_optiq_cloud_key_fails_moderation_locally_instead_of_sending_the_openai_key():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{OPTIQ_CLOUD_API_BASE}/moderations").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="OPTIQ_CLOUD_API_KEY"):
+            await litellm.amoderation(model="optiq_cloud/glm-5.3-flash", input="hello")
+
+    assert route.calls.call_count == 0
+
+
+@pytest.mark.parametrize("base_llm_http_handler", ["true", "false"])
+@pytest.mark.usefixtures("openai_key_but_no_optiq_cloud_key")
+def test_missing_optiq_cloud_key_fails_locally_with_a_bare_transport_client(
+    monkeypatch: pytest.MonkeyPatch, base_llm_http_handler: str
+):
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", base_llm_http_handler)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{OPTIQ_CLOUD_API_BASE}/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="OPTIQ_CLOUD_API_KEY"):
+            litellm.completion(
+                model="optiq_cloud/glm-5.3-flash",
+                messages=[{"role": "user", "content": "hello"}],
+                client=HTTPHandler(),
+            )
+
+    assert route.calls.call_count == 0
