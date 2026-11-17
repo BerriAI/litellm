@@ -2,7 +2,7 @@ import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Generator, Iterable, Mapping, Sequence
 from enum import Enum, auto
-from itertools import chain, repeat
+from itertools import accumulate, chain, repeat
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 import httpx
@@ -76,14 +76,21 @@ def _first_difference(original: Iterable[str], redacted: Iterable[str], default:
     return next((index for index, (line, other) in enumerate(zip(original, redacted)) if line != other), default)
 
 
-def _changed_line_indexes(original: Sequence[str], redacted: Sequence[str]) -> Iterable[int]:
-    if len(original) == len(redacted):
-        return (index for index, (line, other) in enumerate(zip(original, redacted)) if line != other)
+def _changed_line_indexes(original: Sequence[str], redacted: Sequence[str]) -> range:
     prefix: Final = _first_difference(original, redacted, min(len(original), len(redacted)))
     suffix: Final = _first_difference(
         reversed(original[prefix:]), reversed(redacted[prefix:]), min(len(original), len(redacted)) - prefix
     )
     return range(prefix, len(original) - suffix)
+
+
+def _redaction_by_text(texts: Sequence[str], redaction: str) -> Mapping[str, str] | None:
+    lines: Final = redaction.split("\n")
+    counts: Final = tuple(text.count("\n") + 1 for text in texts)
+    if len(lines) != sum(counts):
+        return None
+    starts: Final = accumulate(counts, initial=0)
+    return {text: "\n".join(lines[start : start + count]) for text, start, count in zip(texts, starts, counts)}
 
 
 def _texts_changed_by(texts: Sequence[str], redacted: str) -> frozenset[str]:
@@ -1423,6 +1430,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         async def sanitized(text: str) -> str:
             return self._get_sanitized_content(await scanned(text, rescan=True)) or text
+
+        sliced: Final = _redaction_by_text(unique_texts, redaction)
+        if sliced is not None:
+            return {**inputs, "texts": [sliced.get(text, text) for text in inputs.get("texts") or ()]}
 
         rescanned: Final = _texts_changed_by(unique_texts, redaction)
         try:
