@@ -193,6 +193,11 @@ def _usage_of(kwargs: Mapping[str, object], response_obj: object) -> Usage | Non
     return socket_usage if socket_usage is not None else get_usage_object(response_obj)
 
 
+def _cache_read_tokens(usage: Usage) -> int:
+    details: Final = usage.prompt_tokens_details
+    return (details.cached_tokens or 0) if details is not None else 0
+
+
 def _settled_tokens(usage: Usage | None, rate_limit_type: str) -> int:
     if usage is None:
         return 0
@@ -200,9 +205,9 @@ def _settled_tokens(usage: Usage | None, rate_limit_type: str) -> int:
         case "output":
             return usage.completion_tokens
         case "input":
-            return usage.prompt_tokens
+            return max(0, usage.prompt_tokens - _cache_read_tokens(usage))
         case _:
-            return usage.total_tokens
+            return max(0, usage.total_tokens - _cache_read_tokens(usage))
 
 
 def model_limit_at_saturation(kind: BorrowerKind) -> str:
