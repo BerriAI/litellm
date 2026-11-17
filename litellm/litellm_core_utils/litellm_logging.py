@@ -1410,6 +1410,12 @@ class Logging(LiteLLMLoggingBaseClass):
         Checks both litellm_metadata and metadata for model_info.id.
         Used by cost calculators to look up custom pricing registered
         under the deployment's model_info.id in litellm.model_cost.
+
+        A request-scoped deployment created for forwarded client credentials
+        keeps the configured deployment's id in ``original_model_id`` and gets
+        a new ``id`` that the router never registers. When the new id has no
+        cost-map entry, return the original id so the configured pricing is
+        still found.
         """
         if not hasattr(self, "litellm_params"):
             return None
@@ -1418,6 +1424,11 @@ class Logging(LiteLLMLoggingBaseClass):
             info = meta.get("model_info", {}) or {}
             model_id = info.get("id")
             if model_id is not None:
+                if model_id in litellm.model_cost:
+                    return model_id
+                original_model_id: Final = info.get("original_model_id")
+                if isinstance(original_model_id, str) and original_model_id in litellm.model_cost:
+                    return original_model_id
                 return model_id
         return None
 
