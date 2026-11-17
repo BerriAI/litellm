@@ -231,9 +231,7 @@ async def test_sampling_callbacks_isolate_callers_and_cancellation():
         _create_sampling_callback(UserAPIKeyAuth(user_id=label), raw_headers={"x-caller": label})
         for label in ("alpha", "bravo", "cancelled")
     )
-    with patch(
-        "litellm.proxy.mcp_server.sampling_handler.handle_sampling_create_message", record_sampling
-    ):
+    with patch("litellm.proxy.mcp_server.sampling_handler.handle_sampling_create_message", record_sampling):
         tasks = tuple(asyncio.create_task(callback(None, None)) for callback in callbacks)
         await asyncio.wait_for(started.wait(), timeout=2)
         tasks[2].cancel()
@@ -6610,9 +6608,7 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tool_name,denied", [("tool1", False), ("tool2", True), ("tool3", True)])
-    async def test_pre_call_tool_check_disallowed_tools_takes_precedence(
-        self, tool_name: str, denied: bool
-    ) -> None:
+    async def test_pre_call_tool_check_disallowed_tools_takes_precedence(self, tool_name: str, denied: bool) -> None:
         manager: Final = MCPServerManager()
         server: Final = MCPServer(
             server_id="test-server",
@@ -8290,7 +8286,9 @@ class TestMCPServerManager:
         user = UserAPIKeyAuth(api_key="sk-litellm", user_id="byok-cold-user")
         manager.create_mcp_client = AsyncMock(return_value=_listing_client())
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=ListToolsResult(tools=[MCPTool(name="turn", description="listed while db down", inputSchema={})])
+            return_value=ListToolsResult(
+                tools=[MCPTool(name="turn", description="listed while db down", inputSchema={})]
+            )
         )
 
         with (
@@ -8342,7 +8340,9 @@ class TestMCPServerManager:
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
         manager.create_mcp_client = AsyncMock(return_value=mock_client)
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=ListToolsResult(tools=[MCPTool(name="turn", description="stored cred catalog", inputSchema={})])
+            return_value=ListToolsResult(
+                tools=[MCPTool(name="turn", description="stored cred catalog", inputSchema={})]
+            )
         )
         proxy_logging_obj = _mock_proxy_logging()
         proxy_logging_obj.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
@@ -8665,7 +8665,9 @@ class TestMCPServerManager:
         mock_client: Final = _listing_client()
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
         manager.create_mcp_client = AsyncMock(return_value=mock_client)
-        manager._fetch_tools_with_timeout = AsyncMock(side_effect=lambda client, name: ListToolsResult(tools=catalogs[client.workspace]))
+        manager._fetch_tools_with_timeout = AsyncMock(
+            side_effect=lambda client, name: ListToolsResult(tools=catalogs[client.workspace])
+        )
         for workspace in ("A", "B"):
             manager.create_mcp_client.return_value.workspace = workspace
             await manager._get_tools_from_server(
@@ -17448,11 +17450,11 @@ async def test_tools_list_keeps_the_server_key_in_authorization_when_the_jwt_sig
     assert {auth for method, auth in upstream.requests if method == "tools/list"} == {expected_authorization}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("auth_type", "key", "token_header", "expected_authorization"), _SERVER_KEY_CASES)
-async def test_tools_call_keeps_the_server_key_in_authorization_when_the_jwt_signer_is_on(
-    auth_type: MCPAuth, key: str | None, token_header: str | None, expected_authorization: str
-) -> None:
+async def _tools_call_authorizations(
+    server: MCPServer,
+    mcp_auth_header: str | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+) -> list[str]:
     from mcp.types import JSONRPCRequest
 
     tool_call_authorizations: list[str] = []  # mutable-ok: the mock upstream appends what each tools/call carried
@@ -17485,24 +17487,52 @@ async def test_tools_call_keeps_the_server_key_in_authorization_when_the_jwt_sig
 
     manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
     await manager._call_regular_mcp_tool(
-        mcp_server=_keyed_server(
-            MCPServer(server_id="keyed", name="keyed", url="https://keyed.example/mcp", transport=MCPTransport.http),
-            auth_type,
-            key,
-            token_header,
-        ),
+        mcp_server=server,
         original_tool_name="example",
         arguments={},
         tasks=[],
-        mcp_auth_header=None,
-        mcp_server_auth_headers=None,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=None,
         raw_headers=None,
         proxy_logging_obj=None,
         hook_extra_headers={"Authorization": _GATEWAY_JWT},
         user_api_key_auth=UserAPIKeyAuth(api_key="hashed-caller", user_id="caller"),
     )
-    assert tool_call_authorizations == [expected_authorization]
+    return tool_call_authorizations
+
+
+_KEYED_BASE: Final = MCPServer(
+    server_id="keyed", name="keyed", alias="keyed", url="https://keyed.example/mcp", transport=MCPTransport.http
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("auth_type", "key", "token_header", "expected_authorization"), _SERVER_KEY_CASES)
+async def test_tools_call_keeps_the_server_key_in_authorization_when_the_jwt_signer_is_on(
+    auth_type: MCPAuth, key: str | None, token_header: str | None, expected_authorization: str
+) -> None:
+    server: Final = _keyed_server(_KEYED_BASE, auth_type, key, token_header)
+
+    assert await _tools_call_authorizations(server) == [expected_authorization]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_type", "caller_auth", "caller_server_headers"),
+    [
+        pytest.param(MCPAuth.api_key, "caller-key", None, id="api_key-caller-key-goes-to-x-api-key"),
+        pytest.param(
+            MCPAuth.bearer_token, None, {"keyed": {"X-Custom": "caller"}}, id="caller-headers-without-authorization"
+        ),
+    ],
+)
+async def test_tools_call_keeps_the_signer_when_the_caller_auth_displaces_the_server_key(
+    auth_type: MCPAuth, caller_auth: str | None, caller_server_headers: dict[str, dict[str, str]] | None
+) -> None:
+    server: Final = _keyed_server(_KEYED_BASE, auth_type, "server-key", "Authorization")
+
+    assert await _tools_call_authorizations(server, caller_auth, caller_server_headers) == [_GATEWAY_JWT]
 
 
 @pytest.mark.asyncio
@@ -22138,7 +22168,7 @@ async def test_catalog_page_registers_bare_routes_only_for_complete_initial_disc
     manager._create_prefixed_tools([LIST_NOTES], other)
     manager.create_mcp_client.return_value = SimpleNamespace(
         discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"),
-        list_tools_page=AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES], next_cursor=next_cursor))
+        list_tools_page=AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES], next_cursor=next_cursor)),
     )
 
     result = await manager.get_tools_page(server, params=PaginatedRequestParams(cursor=request_cursor))
@@ -22755,9 +22785,7 @@ class TestMCPUpstreamRateLimitRetry:
     async def test_fetch_tools_with_timeout_reports_429_when_backoff_would_pass_listing_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "litellm.proxy.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.5
-        )
+        monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.5)
         manager: Final = MCPServerManager()
         client: Final = MagicMock()
         client.list_tools_result = AsyncMock(side_effect=_upstream_http_status_error(429, {"Retry-After": "5"}))
@@ -22799,9 +22827,7 @@ class TestMCPUpstreamRateLimitRetry:
     async def test_get_tools_page_retry_attempt_is_bounded_by_listing_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "litellm.proxy.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.05
-        )
+        monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.05)
         manager: Final = MCPServerManager()
         server: Final = MCPServer(server_id="notes", name="notes", transport=MCPTransport.http)
         manager.registry = {server.server_id: server}
