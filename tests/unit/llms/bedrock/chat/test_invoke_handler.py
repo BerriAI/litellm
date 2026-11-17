@@ -12,10 +12,13 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import AmazonInvokeConfig
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -2242,6 +2245,38 @@ def _converse_serving(served_tier: str) -> httpx.MockTransport:
     return httpx.MockTransport(reply)
 
 
+class _LoggedCost(TypedDict):
+    call_type: ReadOnly[str]
+    response_cost: ReadOnly[float]
+
+
+class _AsyncStreamCostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_cost: Final = asyncio.get_running_loop().create_future()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        logged: Final = TypeAdapter(_LoggedCost).validate_python(kwargs["standard_logging_object"])
+        if logged["call_type"] == "acompletion" and not self.logged_cost.done():
+            self.logged_cost.set_result(logged["response_cost"])
+
+
+def _tiers_after_the_finish_chunk(chunks: Sequence[ModelResponseStream]) -> tuple[object, ...]:
+    finish_index: Final = next(
+        index for index, chunk in enumerate(chunks) if chunk.choices and chunk.choices[0].finish_reason
+    )
+    return tuple(getattr(chunk, "service_tier", None) for chunk in chunks[finish_index + 1 :])
+
+
+@pytest.mark.parametrize(
+    ("usage_option", "usage_chunks"),
+    [
+        pytest.param({}, 0, id="no-stream-usage"),
+        pytest.param({"stream_options": {"include_usage": True}}, 1, id="include-usage"),
+    ],
+)
 @pytest.mark.parametrize(
     ("requested_tier", "served_tier"),
     [
@@ -2251,8 +2286,13 @@ def _converse_serving(served_tier: str) -> httpx.MockTransport:
     ],
 )
 @pytest.mark.asyncio
-async def test_a_converse_stream_reports_and_bills_the_tier_its_metadata_event_names_like_a_non_streaming_call(
-    _aws_test_credentials: None, requested_tier: Mapping[str, object], served_tier: str
+async def test_a_converse_stream_bills_the_tier_its_metadata_event_names_without_sending_an_extra_chunk(
+    _aws_test_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+    requested_tier: Mapping[str, object],
+    served_tier: str,
+    usage_option: Mapping[str, object],
+    usage_chunks: int,
 ) -> None:
     model: Final = "bedrock/converse/mistral.mistral-large-3-675b-instruct"
     messages: Final = [{"role": "user", "content": "hi"}]
@@ -2269,25 +2309,29 @@ async def test_a_converse_stream_reports_and_bills_the_tier_its_metadata_event_n
             stream=True,
             client=HTTPHandler(client=httpx.Client(transport=_converse_serving(served_tier))),
             **requested_tier,
+            **usage_option,
         )
     )
+    recorder: Final = _AsyncStreamCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
     async_stream: Final = await litellm.acompletion(
         model=model,
         messages=messages,
         stream=True,
         client=AsyncHTTPHandler(transport=_converse_serving(served_tier)),
         **requested_tier,
+        **usage_option,
     )
     async_chunks: Final = tuple([chunk async for chunk in async_stream])
-    sync_streamed: Final = litellm.stream_chunk_builder(list(sync_chunks))
-    async_streamed: Final = litellm.stream_chunk_builder(list(async_chunks))
+    logged_cost: Final = await asyncio.wait_for(recorder.logged_cost, timeout=10)
 
     assert isinstance(non_streaming, litellm.ModelResponse)
-    assert sync_streamed.service_tier == async_streamed.service_tier == non_streaming.service_tier == served_tier
+    assert non_streaming.service_tier == served_tier
+    assert logged_cost == non_streaming._hidden_params["response_cost"]
     assert (
-        litellm.completion_cost(sync_streamed)
-        == litellm.completion_cost(async_streamed)
-        == non_streaming._hidden_params["response_cost"]
+        _tiers_after_the_finish_chunk(sync_chunks)
+        == _tiers_after_the_finish_chunk(async_chunks)
+        == (served_tier,) * usage_chunks
     )
 
 
