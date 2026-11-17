@@ -210,8 +210,8 @@ def test_encode_tool_call_id_with_signature(thought_signature, expected):
             "function-signature",
         ),
         (
-            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
-            "embedded-signature",
+            {"id": encode_tool_call_id_with_signature("call_123", "ZW1iZWRkZWQtc2lnbmF0dXJl")},
+            "ZW1iZWRkZWQtc2lnbmF0dXJl",
         ),
         ({}, None),
     ],
