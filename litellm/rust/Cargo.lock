@@ -3601,7 +3601,7 @@ dependencies = [
  "shlex",
  "strum",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
