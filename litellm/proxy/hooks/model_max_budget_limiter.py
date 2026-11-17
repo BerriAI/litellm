@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.batch_utils import (
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_budget_shared_windows import (
@@ -188,8 +189,10 @@ def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedMode
         router.settings().default_deployment is not None
         or router.settings().router_general_settings.pass_through_all_models
     )
-    served_names: Final = frozenset(router.registry().names(kind="group_set")) | (
-        frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
+    served_names: Final = (
+        frozenset(router.registry().names(kind="group_set"))
+        | frozenset(router.registry().aliases())
+        | (frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset())
     )
     team_members: Final = _team_public_names_by_group(router=router, team_id=team_id)
     return RoutedModels(
@@ -595,8 +598,23 @@ def _budget_model_candidates(model: str) -> tuple[str, ...]:
     the Bedrock base model (``anthropic.claude-opus-4-8`` governs the
     cross-region ``us.anthropic.claude-opus-4-8``), or on the bare family name
     that Bedrock id shares with its direct-provider twin (``claude-opus-4-8``).
+    A ``router_settings.model_group_alias`` name is also governed by every name
+    that budgets the model group it routes to, after the names of its own.
     """
-    return tuple(dict.fromkeys((model, model.split("/")[-1], *_bedrock_candidates(model))))
+    names: Final = (model, *_aliased_model_group(model))
+    return tuple(dict.fromkeys(itertools.chain.from_iterable(_own_name_candidates(name) for name in names)))
+
+
+def _own_name_candidates(model: str) -> tuple[str, ...]:
+    return (model, model.split("/")[-1], *_bedrock_candidates(model))
+
+
+def _aliased_model_group(model: str) -> tuple[str, ...]:
+    router: Final = _proxy_router()
+    if router is None:
+        return ()
+    target: Final = resolve_model_group_alias(router.registry().aliases(), model)
+    return () if target is None else (target,)
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:

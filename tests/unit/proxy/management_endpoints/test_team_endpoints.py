@@ -18046,6 +18046,31 @@ def test_team_admin_can_add_entries_beside_a_bedrock_vendor_cap_no_route_serves(
     )
 
 
+def test_team_admin_cannot_lift_a_pattern_cap_off_a_global_alias_with_a_model_group_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aliased_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-opus",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={"fast-opus": "bedrock-opus"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", aliased_router)
+    existing: Final = {"fast*": {"max_budget": 10.0, "budget_duration": "1d"}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=existing,
+            requested={**existing, "bedrock-opus": {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=routed_models_of(router=aliased_router, team_id="t1"),
+        )
+    assert exc.value.status_code == 403
+    assert "'fast*'" in exc.value.detail["error"]
+
+
 def test_team_admin_cannot_outrank_a_group_cap_through_a_team_model_both_groups_serve() -> None:
     from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
 
