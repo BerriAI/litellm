@@ -208,13 +208,19 @@ impl VertexMessagesAuth {
     ) -> Result<Arc<Login>, GoogleLoginFailure> {
         let (source, credential_project) = match credentials {
             Some(text) => {
-                // The source may be a file to read, which must not block the runtime.
-                let json =
-                    tokio::task::spawn_blocking(move || load_vertex_credentials_source(&text))
-                        .await
-                        .map_err(|_| {
-                            value_failure("The `vertex_credentials` file read did not finish")
-                        })??;
+                // The source may be a file to read, which must not block the runtime. The blocking
+                // thread logs the file's path and problem through this call's logger and span.
+                let dispatch = tracing::dispatcher::get_default(Clone::clone);
+                let span = tracing::Span::current();
+                let json = tokio::task::spawn_blocking(move || {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        span.in_scope(|| load_vertex_credentials_source(&text))
+                    })
+                })
+                .await
+                .map_err(|_| {
+                    value_failure("The `vertex_credentials` file read did not finish")
+                })??;
                 (self.explicit_source(&json)?, json.credentials.project())
             }
             None => {
@@ -514,6 +520,44 @@ mod tests {
                 path: file.path().to_str().unwrap().into(),
                 problem: "holds credentials that cannot be used: The service account key is missing client_email, token_uri.".into(),
             })
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct Errors(Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl litellm_tracing::Sink for Errors {
+        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+            *metadata.level() == litellm_tracing::Level::ERROR
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.lock().unwrap().push(record.message.clone());
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_credentials_file_read_off_the_runtime_still_logs_its_path_and_problem() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "not json").unwrap();
+        let path = file.path().to_str().unwrap().to_owned();
+        let errors = Errors::default();
+        let error = litellm_tracing::Logger::new(errors.clone())
+            .instrument(auth(FakeEnvironment::default()).login(
+                MODEL,
+                Some(path.clone()),
+                Some("project".into()),
+            ))
+            .await
+            .unwrap_err();
+        assert!(failure(error).file.is_some());
+        let logged = errors.0.lock().unwrap().clone();
+        assert!(
+            logged.iter().any(|line| line.starts_with(&format!(
+                "Vertex: the credentials file at '{path}' is not valid JSON"
+            ))),
+            "{logged:?}"
         );
     }
 
