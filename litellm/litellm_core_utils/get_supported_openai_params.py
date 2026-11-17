@@ -266,13 +266,6 @@ def get_supported_openai_params(
             )
 
             return OVHCloudAudioTranscriptionConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "scaleway":
-        if request_type == "transcription":
-            from litellm.llms.scaleway.audio_transcription.transformation import (
-                ScalewayAudioTranscriptionConfig,
-            )
-
-            return ScalewayAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "elevenlabs":
         if request_type == "transcription":
             from litellm.llms.elevenlabs.audio_transcription.transformation import (

@@ -28,7 +28,8 @@
   },
   "scaleway": {
     "base_url": "https://api.scaleway.ai/v1",
-    "api_key_env": "SCW_SECRET_KEY"
+    "api_key_env": "SCW_SECRET_KEY",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"]
   },
   "synthetic": {
     "base_url": "https://api.synthetic.new/openai/v1",
