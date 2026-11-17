@@ -2,13 +2,59 @@
 Unit tests for multi-budget-window enforcement on API keys.
 """
 
+import re
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, patch
+from typing import Final
 
 import pytest
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+from litellm.proxy.auth import auth_checks
+from litellm.proxy import proxy_server
+from litellm.models.user import LiteLLM_UserTable
+from litellm.redis.stores.spend_counters import user_counter, user_window_counter
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spend, blocked_by",
+    [
+        ({user_window_counter("u", "1h"): 4.0, user_window_counter("u", "30d"): 99.0}, None),
+        (
+            {user_window_counter("u", "1h"): 5.0, user_window_counter("u", "30d"): 1.0},
+            "over 1h budget. Spend=$5.0000, Limit=$5.00",
+        ),
+        (
+            {user_window_counter("u", "1h"): 1.0, user_window_counter("u", "30d"): 100.0},
+            "over 30d budget. Spend=$100.0000, Limit=$100.00",
+        ),
+        ({user_counter("u:window:1h"): 50.0, user_counter("u:window:30d"): 500.0}, None),
+    ],
+    ids=["both_open", "hour_full", "month_full", "lookalike_user_spend"],
+)
+async def test_user_is_blocked_by_either_window(
+    monkeypatch: pytest.MonkeyPatch, spend: Mapping[str, float], blocked_by: str | None
+) -> None:
+    counters: Final = FakeSpendCounters(redis=dict(spend))
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    user: Final = LiteLLM_UserTable(
+        user_id="u",
+        budget_limits=[
+            {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+            {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+        ],
+    )
+    if blocked_by is not None:
+        with pytest.raises(litellm.BudgetExceededError, match=re.escape(blocked_by)):
+            await auth_checks._user_multi_budget_check(user)
+        return
+    await auth_checks._user_multi_budget_check(user)
+    assert {key: counters.redis[key] for key in spend} == spend
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:

@@ -236,7 +236,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "dict[str, str]", {**copilot_headers, **headers}
             )
             if user_session is not None:
-                pin_session_authorization(merged_headers, user_session.token)
+                pin_session_authorization(merged_headers, user_session.token, user_session.integration_id)
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)

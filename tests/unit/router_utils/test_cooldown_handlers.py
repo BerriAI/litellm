@@ -3,6 +3,7 @@ import copy
 import datetime
 import importlib
 import itertools
+import json
 import random
 import time
 import uuid
@@ -37,6 +38,7 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     cast_exception_status_to_int,
     get_cooldown_deployments,
+    is_failure_outside_selected_deployment,
     is_response_lookup_not_found,
     mark_advisor_orchestration_failure,
     set_cooldown_deployments,
@@ -1937,6 +1939,48 @@ async def test_should_cooldown_deployment(testing_litellm_router):
         _should_cooldown_deployment(RoutingContext(testing_litellm_router), deployment_id, 500, Exception("Test"))
         is True
     )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_role_less_requests_do_not_count_toward_the_deployments_failure_rate():
+    """A caller's role-less message is not the deployment failing, so it must not push a healthy one into cooldown."""
+    litellm_params: Final = {"model": "house-model", "custom_llm_provider": "openai", "mock_response": "ok"}
+    router: Final = Router(
+        model_list=[
+            {"model_name": "house", "litellm_params": litellm_params, "model_info": {"id": "d1"}},
+            {"model_name": "house", "litellm_params": litellm_params, "model_info": {"id": "d2"}},
+        ]
+    )
+    for _ in range(6):
+        with pytest.raises(litellm.MalformedRequestFieldError):
+            await router.acompletion(model="d1", messages=json.loads('[{"content": "hi"}]'))
+    await asyncio.sleep(1)
+
+    assert _should_cooldown_deployment(router, "d1", 500, Exception("Test")) is False
+
+
+@pytest.mark.parametrize(
+    ("exception", "outside_deployment"),
+    [
+        (
+            litellm.MissingMessageRoleError(
+                message="Missing required parameter: 'messages[0].role'.", model="m", llm_provider="openai"
+            ),
+            True,
+        ),
+        (
+            litellm.MalformedRequestFieldError(
+                message="tools: Input should be a valid list", model="m", llm_provider="openai"
+            ),
+            False,
+        ),
+    ],
+)
+def test_only_a_role_less_request_is_a_failure_outside_the_deployment(
+    exception: Exception, outside_deployment: bool
+) -> None:
+    assert is_failure_outside_selected_deployment(exception) is outside_deployment
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
