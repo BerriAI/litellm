@@ -2004,10 +2004,11 @@ async def test_authenticated_browser_identity_checks_embedded_session(
 class _SharedStore:
     """Stands in for redis_usage_cache: one store every worker sees."""
 
-    def __init__(self, fail_increment: bool = False) -> None:
+    def __init__(self, fail_increment: bool = False, fail_window: bool = False) -> None:
         self.values: dict[str, Any] = {}
         self.counts: dict[str, int] = {}
         self.fail_increment = fail_increment
+        self.fail_window = fail_window
 
     async def async_set_cache(self, key: str, value: Any, **_: Any) -> None:
         self.values[key] = value
@@ -2020,6 +2021,8 @@ class _SharedStore:
 
     async def async_increment(self, key: str, value: int, **_: Any) -> int:
         if self.fail_increment and key.startswith("mcp_byok_auth_code_claim:"):
+            raise ConnectionError("redis down")
+        if self.fail_window and key.startswith("mcp_byok_auth_code_window:"):
             raise ConnectionError("redis down")
         self.counts[key] = self.counts.get(key, 0) + value
         return self.counts[key]
@@ -2116,26 +2119,41 @@ async def test_a_shared_code_is_not_redeemed_when_the_single_use_claim_cannot_be
     store_credential.assert_not_awaited()
 
 
-def test_the_pending_code_cap_holds_with_the_shared_store(client, monkeypatch):
-    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODE_WINDOW_KEY, _AUTH_CODES_MAX_SIZE
+def _authorize_as(user_id: str) -> Any:
+    _test_app.dependency_overrides[_byok_session_auth] = lambda: UserAPIKeyAuth(api_key="hashed", user_id=user_id)
+    return TestClient(_test_app, raise_server_exceptions=False).post(
+        "/v1/mcp/oauth/authorize",
+        data={
+            "redirect_uri": "http://127.0.0.1:3000/callback",
+            "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
+            "code_challenge_method": "S256",
+            "server_id": "server-xyz",
+            "api_key": "sk-supersecretkey",
+        },
+        follow_redirects=False,
+    )
+
+
+def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(client, monkeypatch):
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
-    shared = _SharedStore()
-    shared.counts[_AUTH_CODE_WINDOW_KEY] = _AUTH_CODES_MAX_SIZE
+    shared: Final = _SharedStore()
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
-        resp = client.post(
-            "/v1/mcp/oauth/authorize",
-            data={
-                "client_id": "user-123",
-                "redirect_uri": "http://127.0.0.1:3000/callback",
-                "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
-                "code_challenge_method": "S256",
-                "state": "st",
-                "server_id": "server-xyz",
-                "api_key": "sk-supersecretkey",
-            },
-            follow_redirects=False,
-        )
+        issued: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        refused: Final = _authorize_as("busy-user")
+        other: Final = _authorize_as("other-user")
+    assert issued == [302] * _AUTH_CODES_PER_USER_MAX
+    assert refused.status_code == 429
+    assert len(shared.values) == _AUTH_CODES_PER_USER_MAX + 1
+    assert other.status_code == 302
+
+
+def test_no_shared_code_is_issued_when_the_pending_code_counter_is_unavailable(client, monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    shared: Final = _SharedStore(fail_window=True)
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        resp: Final = _authorize_as("user-123")
     assert resp.status_code == 503
     assert shared.values == {}
 

@@ -18,12 +18,13 @@ import html as _html_module
 import json
 import time
 import uuid
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 from urllib.parse import urlencode, urlparse
 
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -38,6 +39,9 @@ from litellm.proxy.mcp_server.oauth_utils import (
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import get_server_root_paths
 
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
+
 # ---------------------------------------------------------------------------
 # Pending authorization codes.
 # Each entry: {code: {api_key, server_id, code_challenge, redirect_uri, user_id, expires_at}}
@@ -50,14 +54,15 @@ from litellm.proxy.middleware.per_request_root_path_middleware import get_server
 _byok_auth_codes: Final[dict[str, dict]] = {}
 _AUTH_CODE_CACHE_PREFIX: Final = "mcp_byok_auth_code:"
 _AUTH_CODE_CLAIM_PREFIX: Final = "mcp_byok_auth_code_claim:"
-# Codes issued in the current TTL window, counted in the shared store; bounds pending codes
-# there the way len(_byok_auth_codes) bounds them in memory.
-_AUTH_CODE_WINDOW_KEY: Final = "mcp_byok_auth_code_window"
+# Per-user count of codes issued in the current TTL window. The shared store is bounded per user
+# rather than fleet-wide, so one user's abandoned flows cannot block sign-in for everyone else.
+_AUTH_CODE_USER_WINDOW_PREFIX: Final = "mcp_byok_auth_code_window:"
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS: Final = 300
 # Hard cap to prevent memory exhaustion from incomplete OAuth flows.
 _AUTH_CODES_MAX_SIZE: Final = 1000
+_AUTH_CODES_PER_USER_MAX: Final = 20
 # Upper bound for a submitted API key, so a pending code cannot carry an arbitrarily large value.
 _MAX_API_KEY_LENGTH: Final = 8192
 
@@ -88,7 +93,7 @@ def _purge_expired_codes() -> None:
         del _byok_auth_codes[k]
 
 
-def _shared_code_store():
+def _shared_code_store() -> "RedisCache | None":
     """The cross-worker store for authorization codes, or None on a single-process proxy."""
     from litellm.proxy.proxy_server import redis_usage_cache
 
@@ -138,19 +143,21 @@ async def _discard_auth_code(code: str) -> None:
         await shared.async_delete_cache(_AUTH_CODE_CACHE_PREFIX + code)
 
 
-async def _reserve_auth_code_slot() -> bool:
-    """Whether another pending code may be issued. In memory this is the dict size; with the
-    shared store it is an atomic per-window counter, since the dict stays empty there. A shared
-    store that cannot count refuses (fail closed)."""
+async def _reserve_auth_code_slot(user_id: str) -> Literal["ok", "user_limit", "unavailable"]:
+    """Whether ``user_id`` may be issued another pending code. In memory the whole dict is capped;
+    with the shared store each user gets an atomic per-window counter, and a store that cannot
+    count refuses (fail closed)."""
     shared: Final = _shared_code_store()
     if shared is None:
-        return len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE
+        return "ok" if len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE else "unavailable"
     try:
-        issued: Final = await shared.async_increment(_AUTH_CODE_WINDOW_KEY, 1, ttl=_AUTH_CODE_TTL_SECONDS)
+        issued: Final = await shared.async_increment(
+            _AUTH_CODE_USER_WINDOW_PREFIX + user_id, 1, ttl=_AUTH_CODE_TTL_SECONDS
+        )
     except Exception as e:  # noqa: BLE001  # any shared-store fault refuses the new code
         verbose_proxy_logger.warning("byok authorize: pending-code counter unavailable: %s", e)
-        return False
-    return issued <= _AUTH_CODES_MAX_SIZE
+        return "unavailable"
+    return "ok" if issued <= _AUTH_CODES_PER_USER_MAX else "user_limit"
 
 
 async def _claim_auth_code(code: str) -> bool:
@@ -922,12 +929,8 @@ async def byok_authorize_post(
 
     validate_loopback_redirect_uri(redirect_uri)
 
-    # Reject new codes if the store is at capacity (prevents memory exhaustion
-    # from a burst of abandoned OAuth flows).
     if len(api_key) > _MAX_API_KEY_LENGTH:
         raise HTTPException(status_code=400, detail="api_key is too long")
-    if not await _reserve_auth_code_slot():
-        raise HTTPException(status_code=503, detail="Too many pending authorization flows")
 
     if code_challenge_method != "S256":
         raise HTTPException(status_code=400, detail="Only S256 code_challenge_method is supported")
@@ -939,6 +942,16 @@ async def byok_authorize_post(
     user_id: Final = user_api_key_dict.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="login_required")
+
+    match await _reserve_auth_code_slot(user_id):
+        case "ok":
+            pass
+        case "user_limit":
+            raise HTTPException(status_code=429, detail="Too many pending authorization flows for this user")
+        case "unavailable":
+            raise HTTPException(status_code=503, detail="Too many pending authorization flows")
+        case unreachable:
+            assert_never(unreachable)
 
     auth_code: Final = str(uuid.uuid4())
     await _store_auth_code(
