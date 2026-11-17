@@ -250,27 +250,35 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return _batch_create_routing_model(_BATCH_BODY_ADAPTER.validate_python(data))
 
-    def _routing_alias_by_row_model(self, routing_alias: str | None) -> Mapping[str, str]:
+    def _routing_alias_by_row_model(self, routing_alias: str | None, hinted_file_id: str | None) -> Mapping[str, str]:
         """Map the model a model-routed upload writes into its rows back to the alias it routed by.
 
         A key's allowlist and project quotas name the proxy alias, while the uploaded
         rows name the deployment's model. A row that maps here runs on the alias's own
         deployment, so the alias is what the key has to be granted. Its project quota is
         charged to the alias and to the model the row names, since the uploaded file no
-        longer says which of the two the caller wrote.
+        longer says which of the two the caller wrote. The deployment is the one the batch
+        runs on, the same one the upload rewrote the rows for.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
+            batch_deployment_id,
             batch_row_model_for_deployment,
             get_credentials_for_model,
+            hinted_batch_deployment_id,
         )
         from litellm.proxy.proxy_server import llm_router
 
         if routing_alias is None or llm_router is None:
             return MappingProxyType({})
+        deployment_id: Final = (
+            hinted_batch_deployment_id(llm_router, routing_alias, hinted_file_id)
+            if hinted_file_id is not None
+            else batch_deployment_id(llm_router, routing_alias)
+        )
         try:
             credentials: Final = get_credentials_for_model(
                 llm_router=llm_router,
-                model_id=routing_alias,
+                model_id=deployment_id or routing_alias,
                 operation_context="batch input file read (rate limiting)",
             )
         except HTTPException:
@@ -1054,11 +1062,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
             target_model_names: Final = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
+            file_bound_model: Final = self._get_file_bound_batch_model(data) if data else None
             routing_alias_by_row_model: Final = (
                 MappingProxyType({})
                 if is_managed_file
                 else self._routing_alias_by_row_model(
-                    (self._get_file_bound_batch_model(data) or _batch_create_routing_model(data)) if data else None
+                    file_bound_model or (_batch_create_routing_model(data) if data else None),
+                    hinted_file_id=file_id if file_bound_model else None,
                 )
             )
             if is_managed_file and user_api_key_dict is not None:

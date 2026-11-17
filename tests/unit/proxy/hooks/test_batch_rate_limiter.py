@@ -923,6 +923,76 @@ async def test_key_granted_only_the_alias_can_batch_rows_naming_its_deployment_m
     assert usage.per_model_usage[(_BATCH_ALIAS, _DEPLOYMENT_MODEL)]["request_count"] == 1
 
 
+_MIXED_GROUP: Final = "mixed-chat-and-batch"
+_BATCH_RESOURCE_FILE_URL: Final = "https://batch-resource.openai.azure.com/openai/files/file-abc123/content"
+
+
+def _mixed_azure_group_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _MIXED_GROUP,
+                "litellm_params": {
+                    "model": "azure/chat-deployment",
+                    "api_base": "https://chat-resource.openai.azure.com",
+                    "api_key": "chat-key",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "chat-deployment-id", "mode": "chat"},
+            },
+            {
+                "model_name": _MIXED_GROUP,
+                "litellm_params": {
+                    "model": "azure/batch-deployment",
+                    "api_base": "https://batch-resource.openai.azure.com",
+                    "api_key": "batch-key",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "batch-deployment-id", "mode": "batch"},
+            },
+        ]
+    )
+
+
+def _serve_file_to_the_batch_resource_key(rows: Sequence[_BatchLine]) -> Callable[[httpx.Request], httpx.Response]:
+    jsonl: Final = "\n".join(json.dumps(row) for row in rows).encode()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("api-key") != "batch-key":
+            return httpx.Response(401, json={"error": {"message": "Access denied due to invalid subscription key"}})
+        return httpx.Response(200, content=jsonl)
+
+    return respond
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["file id", "body"])
+async def test_key_granted_only_a_mixed_group_can_batch_rows_naming_its_batch_deployment_model(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, route: Literal["file id", "body"]
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    monkeypatch.setattr(proxy_server, "llm_router", _mixed_azure_group_router())
+    openai_files.get(url__startswith=_BATCH_RESOURCE_FILE_URL).mock(
+        side_effect=_serve_file_to_the_batch_resource_key((_row_naming("batch-deployment"),))
+    )
+    data: Final = (
+        {"input_file_id": encode_file_id_with_model("file-abc123", _MIXED_GROUP, deployment_id="batch-deployment-id")}
+        if route == "file id"
+        else {"input_file_id": "file-abc123", "model": _MIXED_GROUP}
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=data["input_file_id"],
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_MIXED_GROUP]),
+        data=dict(data),
+    )
+
+    assert usage.per_model_usage[(_MIXED_GROUP, "batch-deployment")]["request_count"] == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limited_model", [_BATCH_ALIAS, _DEPLOYMENT_MODEL], ids=["alias", "deployment model"])
 async def test_alias_routed_rows_naming_the_deployment_model_are_held_to_both_project_quotas(
