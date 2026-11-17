@@ -12189,6 +12189,38 @@ async def test_db_config_sync_unregisters_a_generic_api_callback_rotated_between
     assert still_registered == ()
 
 
+@pytest.mark.asyncio
+async def test_db_config_sync_keeps_a_file_callback_that_rotated_while_the_database_registered_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    litellm.logging_callback_manager.add_litellm_success_callback("sink_logger")
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc: Final = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["sink_logger"]}})
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+
+    still_registered: Final = tuple(
+        callback.headers["Authorization"]
+        for callback in itertools.chain(litellm.success_callback, litellm._async_success_callback)
+        if isinstance(callback, GenericAPILogger)
+    )
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert still_registered == ("Bearer new",)
+
+
 def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as ps
     from litellm.utils import add_custom_logger_callback_to_specific_event

@@ -6203,7 +6203,7 @@ def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
             _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), entry, require_self=False
         )
-    for list_name, entry in _current_entries(registration.displaced):
+    for list_name, entry in registration.displaced:
         _restore_displaced_callback(list_name, entry)
 
 
@@ -8491,7 +8491,7 @@ class ProxyConfig:
         after: Final = _registered_callback_entries()
         return _DbCallbackRegistration(
             added=_current_entries(previous.added) + _entries_missing_from(after, before),
-            displaced=_current_entries(previous.displaced) + _entries_missing_from(before, after),
+            displaced=previous.displaced + _entries_missing_from(before, after),
         )
 
     def encrypt_env_variables(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
