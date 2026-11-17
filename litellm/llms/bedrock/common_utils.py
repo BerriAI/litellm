@@ -1727,7 +1727,9 @@ def _explicit_cache_point_support(model: str, model_info: Mapping[str, object] |
         (entry.get(_CACHE_POINT_FLAG) is True for entry in entries if entry.get(_CACHE_POINT_FLAG) is not None),
         None,
     )
-    if declared is None and any(entry.get(_LEGACY_BREAKPOINT_FLAG) is not None for entry in entries):
+    if any(
+        entry.get(_LEGACY_BREAKPOINT_FLAG) is not None and entry.get(_CACHE_POINT_FLAG) is None for entry in entries
+    ):
         _warn_legacy_cache_point_flag(model)
     return declared
 

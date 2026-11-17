@@ -850,20 +850,41 @@ def fresh_migration_warnings() -> Iterator[None]:
     _warn_legacy_cache_point_flag.cache_clear()
 
 
+_MIGRATING_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/migrating"
+
+
 @pytest.mark.parametrize(
-    ("model_info", "warnings"),
+    ("model", "model_info", "accepts", "warnings"),
     [
-        pytest.param({"supports_prompt_cache_breakpoint": False}, 1, id="openai-breakpoint-flag-alone"),
         pytest.param(
+            _MIGRATING_ARN, {"supports_prompt_cache_breakpoint": False}, True, 1, id="openai-breakpoint-flag-alone"
+        ),
+        pytest.param(
+            _MIGRATING_ARN,
             {"supports_prompt_cache_breakpoint": False, "supports_bedrock_converse_cache_point": True},
+            True,
             0,
             id="cache-point-flag-settles-it",
         ),
-        pytest.param({}, 0, id="no-flags"),
+        pytest.param(_MIGRATING_ARN, {}, True, 0, id="no-flags"),
+        pytest.param(
+            "moonshotai.kimi-k3",
+            {"supports_prompt_cache_breakpoint": True},
+            False,
+            1,
+            id="old-opt-in-under-a-catalog-opt-out",
+        ),
+        pytest.param("moonshotai.kimi-k3", {}, False, 0, id="catalog-opt-out-alone"),
     ],
 )
 def test_a_bedrock_deployment_still_on_the_openai_breakpoint_flag_is_warned_once_to_migrate(
-    model_info: dict[str, object], warnings: int, caplog: pytest.LogCaptureFixture, fresh_migration_warnings: None
+    model: str,
+    model_info: dict[str, object],
+    accepts: bool,
+    warnings: int,
+    caplog: pytest.LogCaptureFixture,
+    local_model_cost_map: None,
+    fresh_migration_warnings: None,
 ) -> None:
     import logging
 
@@ -871,17 +892,16 @@ def test_a_bedrock_deployment_still_on_the_openai_breakpoint_flag_is_warned_once
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
 
     caplog.set_level(logging.WARNING, logger=verbose_logger.name)
-    arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/migrating"
     deployment: Final = {"id": "qa-deployment", **model_info}
 
-    assert [bedrock_model_accepts_cache_points(arn, model_info=deployment) for _ in range(2)] == [True, True]
+    assert [bedrock_model_accepts_cache_points(model, model_info=deployment) for _ in range(2)] == [accepts, accepts]
     migration_warnings: Final = [
         record.getMessage()
         for record in caplog.records
         if "supports_bedrock_converse_cache_point" in record.getMessage()
     ]
     assert len(migration_warnings) == warnings
-    assert all(arn in message for message in migration_warnings)
+    assert all(model in message for message in migration_warnings)
 
 
 @pytest.mark.parametrize(
