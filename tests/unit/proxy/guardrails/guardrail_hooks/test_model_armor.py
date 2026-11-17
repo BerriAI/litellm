@@ -5430,6 +5430,88 @@ async def test_apply_guardrail_masks_each_text_from_one_scan_and_keeps_count_and
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("data", [{}, {"data": {"text": ""}}])
+async def test_apply_guardrail_withholds_a_deidentify_match_without_a_rewrite_when_failing_on_error(data):
+    no_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND", **data}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([no_rewrite], fail_on_error=True)
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(ModelArmorAPIError) as withheld:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data=request_data, input_type="response"
+        )
+
+    assert "078-05-1120" not in str(withheld.value)
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[-1]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_a_rescan_matches_without_a_rewrite_even_when_failing_open():
+    rescan_without_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("card [REDACTED] end"), rescan_without_rewrite, rescan_without_rewrite],
+        fail_on_error=False,
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["card 4111", "1111 end"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_in_logging_only_mode_logs_a_deidentify_match_without_a_rewrite_as_flagged():
+    no_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([no_rewrite], event_hook=GuardrailEventHooks.logging_only)
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["ssn 078-05-1120"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_flagged"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_text_for_a_deidentify_match_without_a_rewrite_when_failing_open():
+    no_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([no_rewrite], fail_on_error=False)
+    request_data: Final[dict] = {"metadata": {}}
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120"]}, request_data=request_data, input_type="response"
+    )
+
+    assert result["texts"] == ["ssn 078-05-1120"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[-1]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_masks_a_value_the_full_scan_found_only_with_its_neighbouring_text():
     guardrail = _post_mcp_call_guardrail(
         [_deidentified_armor_response("email:\n[EMAIL_ADDRESS]"), {"sanitizationResult": {}}]

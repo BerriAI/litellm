@@ -548,6 +548,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _skipped_a_filter(self, armor_response: _ModelArmorResponse) -> bool:
         return any(map(self._execution_skipped, self._filter_result_items(armor_response)))
 
+    def _incomplete_scan_error(
+        self, scan: _ModelArmorResponse, *, skipped_filter_fails: bool, owes_a_rewrite: bool
+    ) -> ModelArmorAPIError | None:
+        if self._should_block_content(scan, allow_sanitization=True):
+            return None
+        if skipped_filter_fails and self._skipped_a_filter(scan):
+            return ModelArmorAPIError("Model Armor skipped a filter, so the content was not fully scanned")
+        if owes_a_rewrite and not self._get_sanitized_content(scan) and self._has_deidentify_match(scan):
+            return ModelArmorAPIError("Model Armor matched sensitive data but returned no rewrite")
+        return None
+
     def _has_deidentify_match(self, armor_response: _ModelArmorResponse) -> bool:
         """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
         for filter_entry in self._filter_result_items(armor_response):
@@ -1379,16 +1390,20 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             GuardrailEventHooks.post_mcp_call
         )
 
+        logging_only: Final = self._event_hook_is_event_type(GuardrailEventHooks.logging_only)
+        mask: Final = input_type == "response" and self.mask_response_content and not logging_only
+
         async def scanned(text: str, *, rescan: bool = False) -> _ModelArmorResponse:
             scan: Final = await self.make_model_armor_request(content=text, source=source, request_data=request_data)
-            if (
-                fails_on_a_skipped_filter
-                and self._skipped_a_filter(scan)
-                and not self._should_block_content(scan, allow_sanitization=True)
-                and not (fails_open_on_error and (rescan or self._has_deidentify_match(scan)))
-            ):
-                verbose_proxy_logger.error("Model Armor skipped a filter, so the content was not fully scanned")
-                raise ModelArmorAPIError("Model Armor skipped a filter, so the content was not fully scanned")
+            incomplete: Final = self._incomplete_scan_error(
+                scan,
+                skipped_filter_fails=fails_on_a_skipped_filter
+                and not (fails_open_on_error and (rescan or self._has_deidentify_match(scan))),
+                owes_a_rewrite=mask and not rescan,
+            )
+            if incomplete is not None:
+                verbose_proxy_logger.error(str(incomplete))
+                raise incomplete
             return scan
 
         try:
@@ -1398,8 +1413,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 raise
             return inputs
 
-        logging_only: Final = self._event_hook_is_event_type(GuardrailEventHooks.logging_only)
-        mask: Final = input_type == "response" and self.mask_response_content and not logging_only
         flagged: Final = self._should_block_content(armor_response, allow_sanitization=mask)
         partly_scanned: Final = fails_on_a_skipped_filter and self._skipped_a_filter(armor_response)
         end_time: Final = time.time()

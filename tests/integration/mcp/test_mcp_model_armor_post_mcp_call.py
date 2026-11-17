@@ -35,6 +35,7 @@ STRICT: Final = "model-armor-mcp-strict"
 FAIL_OPEN: Final = "model-armor-mcp-fail-open"
 BLOCK_MARK: Final = "SYNTHETIC-ARMOR-INSPECT-MATCH"
 SKIP_MARK: Final = "SYNTHETIC-ARMOR-FILTER-SKIPPED"
+NO_REWRITE_MARK: Final = "SYNTHETIC-ARMOR-DEIDENTIFY-WITHOUT-REWRITE"
 OUTAGE_MARK: Final = "SYNTHETIC-ARMOR-OUTAGE"
 SENSITIVE: Final = "synthetic-ssn-078-05-1120"
 REDACTED: Final = "[SYNTHETIC_REDACTED]"
@@ -66,6 +67,8 @@ def _model_armor(request: Request) -> Reply:
         return Reply(status=500, body=json.dumps({"error": "synthetic Model Armor outage"}).encode())
     if BLOCK_MARK in text:
         return _sdp({"inspectResult": {"matchState": "MATCH_FOUND"}}, skipped)
+    if NO_REWRITE_MARK in text:
+        return _sdp({"deidentifyResult": {"matchState": "MATCH_FOUND"}}, skipped)
     if SENSITIVE in text:
         return _sdp(
             {"deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": text.replace(SENSITIVE, REDACTED)}}},
@@ -457,3 +460,27 @@ def test_the_apply_guardrail_endpoint_masks_a_response_and_fails_closed_on_an_ou
     assert (masked.status_code, masked.json()["response_text"]) == (200, f"account {REDACTED} {marker}"), masked.text
     assert closed.status_code == 500 and marker not in closed.text, closed.text
     assert (opened.status_code, opened.json()["response_text"]) == (200, f"{OUTAGE_MARK} {marker}"), opened.text
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_deidentify_match_without_a_rewrite_is_withheld_when_fail_on_error_is_true(
+    rig: Rig, entry: EntryPoint
+) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+
+    outcome: Final = rig.call_blocks(entry, (f"{NO_REWRITE_MARK} {SENSITIVE} {marker}",), (STRICT,))
+
+    assert outcome.error is not None and marker not in outcome.raw and SENSITIVE not in outcome.raw, outcome.raw
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_deidentify_match_without_a_rewrite_passes_the_raw_text_when_failing_open(
+    rig: Rig, entry: EntryPoint
+) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+    text: Final = f"{NO_REWRITE_MARK} {SENSITIVE} {marker}"
+
+    outcome: Final = rig.call_blocks(entry, (text,), (FAIL_OPEN,))
+
+    assert outcome.error is None, outcome.raw
+    assert [block["text"] for block in _tool_result(outcome)["content"]] == [text]
