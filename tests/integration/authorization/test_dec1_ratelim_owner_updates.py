@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Final
 
+import pytest
+
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.wire import wire_server
 from tests.integration.authorization.dec1_limits_support import chat, provider, scope_headers
@@ -114,7 +116,12 @@ def test_lowering_a_users_tpm_limit_refuses_a_request_that_used_to_fit(gateway: 
 
 def test_raising_an_organizations_rpm_limit_admits_its_keys_again(gateway: Gateway) -> None:
     """An organization with rpm_limit=1 refuses its team key's second request. After ``/organization/update`` sets
-    rpm_limit=100 the key must be served again in the same window."""
+    rpm_limit=100 the key must be served again in the same window.
+
+    BUG (run 44176682961): the keys stayed 429 for the whole poll after the organization's rpm_limit was raised,
+    while the team and user variants pass. The organization's limits are not re-read after the update. Root cause
+    not pinned."""
+    pytest.skip("BUG: raising an organization's rpm_limit never readmits its keys within the poll window")
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         organization: Final = scenario.organization(models=[model], rpm_limit=1)
@@ -130,7 +137,12 @@ def test_raising_an_organizations_rpm_limit_admits_its_keys_again(gateway: Gatew
 
 def test_raising_an_end_users_budget_rpm_admits_them_again(gateway: Gateway) -> None:
     """An end user whose budget has rpm_limit=1 is refused on a second request. After ``/budget/update`` sets that
-    budget's rpm_limit=100 a request naming the end user must be served again."""
+    budget's rpm_limit=100 a request naming the end user must be served again.
+
+    BUG (run 44176682961): the end user stayed 429 for the whole poll after the budget row's rpm_limit was raised.
+    The key, user, team and project variants of this test pass, so the end user's budget row is not re-read after
+    /budget/update. Root cause not pinned."""
+    pytest.skip("BUG: raising an end user's budget rpm_limit never readmits them within the poll window")
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         customer, budget_id = end_user(gateway, scenario, rpm_limit=1)

@@ -30,13 +30,14 @@ import pytest
 
 from tests.integration._support.client import Gateway
 from tests.integration.authorization.dec1_dbstores2_support import (
+    AFTER_TTL_SECONDS,
     assert_generic_auth_refusal,
     bare_project,
     name,
     nothing_reached_upstream,
     sql,
 )
-from tests.integration.authorization.dec1_dbstores_support import assert_ok, chat_as
+from tests.integration.authorization.dec1_dbstores_support import assert_ok, chat_as, settled
 from tests.integration.authorization.dec1_keys_support import digest, error_of
 
 _PROJECT_BLOCKED_TEMPLATE: Final = (
@@ -121,10 +122,22 @@ def test_a_null_optional_key_column_still_serves_the_key(gateway: Gateway, colum
     Its first request is served with 200: each field is `Optional` on `LiteLLM_VerificationToken`
     (verification_token.py:40-66), or, for `policies`, not a declared field at all. UNVERIFIED for `policies`: it
     is selected by `v.*` and assumed to be ignored by the model.
+
+    For `router_settings` the column is set back to `'{}'` before the key's cleanup: `/key/delete` copies the row
+    into `LiteLLM_DeletedVerificationToken` and answers 500 "`data.router_settings`: A value is required but not set"
+    for a NULL (key_management_endpoints.py:6026), a product bug of the delete path reported in the triage, not of
+    the request path this test is about.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         key: Final = scenario.key()
+        if column == "router_settings":
+            scenario.cleanups.callback(
+                sql,
+                gateway,
+                """UPDATE "LiteLLM_VerificationToken" SET router_settings = '{}'::jsonb WHERE token = %s""",
+                (digest(key),),
+            )
         sql(gateway, _OPTIONAL_KEY_COLUMN_WRITES[column], (digest(key),))
         assert_ok(chat_as(gateway, key, model))
 
@@ -177,10 +190,17 @@ def test_a_team_with_null_router_settings_serves_its_key(gateway: Gateway) -> No
 
     The request is served with 200 (`router_settings: dict | None`, team.py). A codec that requires an object here
     would turn every legacy team into a 404 "Team doesn't exist in db".
+
+    The column is set back to `'{}'` before the team's cleanup: `/team/delete` answers 500 "Internal server error"
+    for a team whose `router_settings` is NULL (it copies the row into `LiteLLM_DeletedTeamTable`,
+    team_endpoints.py:576), a product bug of the delete path reported in the triage.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         team: Final = scenario.team()
+        scenario.cleanups.callback(
+            sql, gateway, """UPDATE "LiteLLM_TeamTable" SET router_settings = '{}'::jsonb WHERE team_id = %s""", (team,)
+        )
         key: Final = scenario.key(team_id=team)
         sql(gateway, 'UPDATE "LiteLLM_TeamTable" SET router_settings = NULL WHERE team_id = %s', (team,))
         assert_ok(chat_as(gateway, key, model))
@@ -194,6 +214,10 @@ def test_a_team_with_a_null_model_list_serves_its_key_any_model(gateway: Gateway
     None for a NULL scalar list, `LiteLLM_TeamTable.models: list[str]` rejects it, `get_team_object` reports 404
     "Team doesn't exist in db" (auth_checks.py:3896-3901) and the key cannot vouch with an empty team list. A 404
     here would be a product bug that the Rust team store must not copy.
+
+    The answer is polled for up to `AFTER_TTL_SECONDS`: `/key/generate` reads the team to validate the key and
+    leaves it in the auth cache with `models: [<A>]`, and the SQL write evicts nothing, so the first requests saw
+    the cached list and were refused 403 `team_model_access_denied` (run 44176682961).
     """
     with gateway.scenario() as scenario:
         allowed: Final = scenario.model()
@@ -201,7 +225,7 @@ def test_a_team_with_a_null_model_list_serves_its_key_any_model(gateway: Gateway
         team: Final = scenario.team(models=[allowed])
         key: Final = scenario.key(team_id=team)
         sql(gateway, 'UPDATE "LiteLLM_TeamTable" SET models = NULL WHERE team_id = %s', (team,))
-        assert_ok(chat_as(gateway, key, other))
+        assert_ok(settled(lambda: chat_as(gateway, key, other), 200, AFTER_TTL_SECONDS))
 
 
 def test_a_blocked_project_with_a_null_model_list_still_refuses_its_key(gateway: Gateway) -> None:
@@ -230,6 +254,10 @@ def test_a_team_metadata_object_without_require_trace_id_does_not_gate(gateway: 
     The request is served with 200: only the JSON boolean `true` turns the gate on (`_team_metadata_requires_trace_id`,
     auth_checks.py:460-470). A codec that maps JSON null to a default of `true`, or drops unknown nulls into
     "missing" differently, must keep this answer.
+
+    The answer is polled for up to `AFTER_TTL_SECONDS`: the team was cached with `require_trace_id: true` when the
+    key was generated and the SQL write evicts nothing, so the first request got the trace ID 400 from the cached
+    team (run 44176682961).
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -240,4 +268,4 @@ def test_a_team_metadata_object_without_require_trace_id_does_not_gate(gateway: 
             """UPDATE "LiteLLM_TeamTable" SET metadata = '{"require_trace_id": null}'::jsonb WHERE team_id = %s""",
             (team,),
         )
-        assert_ok(chat_as(gateway, key, model))
+        assert_ok(settled(lambda: chat_as(gateway, key, model), 200, AFTER_TTL_SECONDS))

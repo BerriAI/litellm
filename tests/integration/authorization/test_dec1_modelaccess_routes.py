@@ -114,10 +114,13 @@ def test_an_allowed_model_on_v1_messages_is_served(gateway: Gateway) -> None:
     """A key limited to model A posts `/v1/messages` for A (an OpenAI shaped deployment on the scripted upstream).
 
     The answer must be 200 with an Anthropic `message` body (`type: "message"`), proving the denial above is
-    about the model and not the route.
+    about the model and not the route. The deployment is `hosted_vllm`, not `openai`: `/v1/messages` sends an
+    `openai` deployment to the Responses API (`_should_route_to_responses_api`,
+    litellm/llms/anthropic/messages/native/handler.py:881-885), and the scripted upstream has no `/v1/responses`
+    scenario, while `hosted_vllm` is bridged to `/v1/chat/completions`, which it answers.
     """
     with gateway.scenario() as scenario:
-        allowed: Final = scenario.model()
+        allowed: Final = scenario.model(model="hosted_vllm/gpt-4o-mini")
         key: Final = scenario.key(models=[allowed])
         served: Final = post_as(gateway, key, "/v1/messages", _messages_body(allowed))
         assert served.status_code == 200, served.text

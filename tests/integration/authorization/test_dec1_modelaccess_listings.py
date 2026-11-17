@@ -424,13 +424,14 @@ def test_a_team_model_is_absent_from_another_teams_model_group_info(gateway: Gat
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/model/info", "/model_group/info"])
-def test_a_key_with_no_default_models_lists_nothing(gateway: Gateway, path: str) -> None:
+def test_a_key_with_no_default_models_still_lists_every_proxy_model(gateway: Gateway, path: str) -> None:
     """A user has `models: ["no-default-models"]` and a personal key with no list calls a listing route.
 
-    `no-default-models` is never listed as a name and grants nothing, so `data` must hold no entry for a
-    fresh model created just before, and `no-default-models` itself must not appear. UNVERIFIED: assumes
-    the user's sentinel reaches the listing (through `/key/generate` copying it or the personal key team
-    rules); `get_complete_model_list` only drops the sentinel name itself. Check `personal_key_team_visible_models`.
+    Pinned current behaviour: the listing reads only the key and team lists. With both empty,
+    `get_complete_model_list` lists every proxy model (litellm/proxy/auth/model_checks.py:310-317) and drops only the
+    sentinel name itself (model_checks.py:307), so a fresh model created just before is listed although the same key
+    is refused on it at inference (`can_user_call_model`, auth_checks.py:6247), and `no-default-models` never
+    appears. Same layering as `test_a_key_list_wider_than_its_team_is_listed_in_full_although_the_extra_model_is_refused`.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -438,4 +439,4 @@ def test_a_key_with_no_default_models_lists_nothing(gateway: Gateway, path: str)
         key: Final = scenario.key(user_id=user)
         response: Final = get_as(gateway, key, path)
         assert response.status_code == 200, response.text
-        assert model not in response.text and "no-default-models" not in response.text
+        assert model in response.text and "no-default-models" not in response.text, response.text

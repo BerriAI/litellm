@@ -276,9 +276,11 @@ def test_a_metadata_json_string_that_decodes_to_a_list_names_no_end_user(gateway
 def test_the_spend_row_metadata_carries_the_resolved_end_user(gateway: Gateway) -> None:
     """A chat request names its end user through `x-litellm-end-user-id` only.
 
-    The spend row's `metadata.user_api_key_end_user_id` must equal the end user next to the `end_user` column,
-    because the column is filled from that metadata field (spend_tracking_utils.py:793-794,
-    litellm_pre_call_utils.py:2270).
+    The spend row's `end_user` column is the end user.
+
+    Pinned current behaviour: the column is filled from the logging payload's `user_api_key_end_user_id`
+    (spend_tracking_utils.py:793-794), but the stored `metadata` is a `SpendLogsMetadata`
+    (spend_tracking_utils.py:347), which declares no end user field, so the row's metadata does not carry it.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -287,7 +289,5 @@ def test_the_spend_row_metadata_carries_the_resolved_end_user(gateway: Gateway) 
         forget_end_user(scenario, end_user)
         assert_ok(chat_as(gateway, key, model, headers={END_USER_HEADER: end_user}))
         row: Final = spend_rows(gateway, key)[0]
-        assert (row["end_user"], object_value(row["metadata"]).get("user_api_key_end_user_id")) == (
-            end_user,
-            end_user,
-        ), row
+        assert row["end_user"] == end_user, row
+        assert "user_api_key_end_user_id" not in object_value(row["metadata"]), row

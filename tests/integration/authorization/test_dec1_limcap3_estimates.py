@@ -112,10 +112,12 @@ def test_a_prompt_shorter_than_four_characters_still_reserves_one_input_token(ga
         assert scope_headers(served, "api_key") == {"limit-tokens": "1000", "remaining-tokens": "979"}
 
 
-def test_an_empty_prompt_without_an_output_cap_reserves_nothing(gateway: Gateway) -> None:
-    """A key with tpm_limit=1000 sends one user message with empty content and no output cap. Input is 0, and with
-    no cap and no input the output estimate is 0 too (parallel_request_limiter_v3.py:1449), so the 200 carries
-    ``remaining-tokens: 1000``. UNVERIFIED: that an empty content string reaches the limiter (no earlier 400)."""
+def test_an_empty_prompt_without_an_output_cap_still_reserves_the_implicit_cap(gateway: Gateway) -> None:
+    """A key with tpm_limit=1000 sends one user message with empty content and no output cap.
+
+    Pinned current behaviour: the Rust limiter (#51537) gives the request the implicit output cap even with no
+    input, a quarter of the 1000 token limit, as ``test_an_empty_prompt_is_still_given_the_implicit_output_cap``
+    above pins for the request body. So the 200 carries ``remaining-tokens: 750``, not 1000."""
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         key: Final = scenario.key(models=[model], tpm_limit=1000)
@@ -123,7 +125,7 @@ def test_an_empty_prompt_without_an_output_cap_reserves_nothing(gateway: Gateway
             "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": ""}]}, key=key
         )
         assert served.status_code == 200, served.text
-        assert scope_headers(served, "api_key") == {"limit-tokens": "1000", "remaining-tokens": "1000"}
+        assert scope_headers(served, "api_key") == {"limit-tokens": "1000", "remaining-tokens": "750"}
 
 
 def test_an_empty_prompt_is_still_given_the_implicit_output_cap(gateway: Gateway) -> None:

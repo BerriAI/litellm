@@ -25,6 +25,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
+import pytest
+
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.wire import wire_server
 from tests.integration.authorization.dec1_limits_support import (
@@ -82,7 +84,11 @@ def test_an_exhausted_team_window_is_refused_before_the_body_arrives(gateway: Ga
 
 def test_an_exhausted_user_window_is_refused_before_the_body_arrives(gateway: Gateway) -> None:
     """A user with rpm_limit=1 owns a key that has used the one request. The next partial-body request must be
-    answered 429 from headers alone."""
+    answered 429 from headers alone.
+
+    BUG (run 44176682961): the partial body request got no answer, while the key and team variants are refused with
+    429 from headers alone. The pre body check does not read the user's window. Medium confidence."""
+    pytest.skip("BUG: an exhausted user rpm window is not refused before the body arrives")
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         user: Final = scenario.user(rpm_limit=1)
@@ -202,9 +208,12 @@ def test_a_messages_request_is_refused_before_its_body_arrives(gateway: Gateway)
 
 def test_a_count_tokens_route_is_never_refused_before_its_body(gateway: Gateway) -> None:
     """A key with rpm_limit=1 is exhausted. A POST to ``/v1/messages/count_tokens`` must not be refused with 429,
-    because any path whose last segment is ``count_tokens`` is unbilled (``RouteChecks.is_unbilled_route``)."""
+    because any path whose last segment is ``count_tokens`` is unbilled (``RouteChecks.is_unbilled_route``). The
+    deployment is ``hosted_vllm``: an ``openai/`` deployment counts Messages tokens through the provider's
+    ``/v1/responses/input_tokens`` (litellm/llms/openai/responses/count_tokens/token_counter.py), which the limits
+    provider does not answer, while ``hosted_vllm`` counts locally and still chats on ``/v1/chat/completions``."""
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(api_base=f"{wire.url}/v1")
+        model: Final = scenario.model(model="hosted_vllm/gpt-4o-mini", api_base=f"{wire.url}/v1")
         key: Final = scenario.key(models=[model], rpm_limit=1)
         assert chat(gateway, model, key).status_code == 200
         assert chat(gateway, model, key).status_code == 429

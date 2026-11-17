@@ -258,12 +258,16 @@ def test_a_customer_linked_to_a_zero_budget_row_is_refused(gateway: Gateway) -> 
 
     The customer's first request is refused with 422 `budget_exceeded`. The budget comes from the
     `LiteLLM_BudgetTable` row joined to the end user row, not from the customer row itself.
+
+    The customer is created with `spend: 1`: the end user check refuses only when spend is above the budget
+    (`spend <= max_budget` passes, litellm/rust/crates/callbacks-budgets/src/checks.rs:432), so a customer with no
+    spend is served under a zero budget.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         key: Final = scenario.key()
         budget: Final = scenario.budget(max_budget=0)
-        end_user: Final = customer(scenario, budget_id=budget)
+        end_user: Final = customer(scenario, budget_id=budget, spend=1)
         assert_budget_refused(chat_as(gateway, key, model, user=end_user))
 
 
@@ -346,12 +350,16 @@ def test_a_keys_end_user_budget_applies_to_a_known_customer_without_a_budget(gat
     budget of its own.
 
     The customer's request through that key is refused with 422 `budget_exceeded`.
+
+    The customer is created with `spend: 1`: the end user check refuses only when spend is above the budget
+    (`spend <= max_budget` passes, litellm/rust/crates/callbacks-budgets/src/checks.rs:432), so a customer with no
+    spend is served under a zero budget.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         budget: Final = scenario.budget(max_budget=0)
         key: Final = scenario.key(metadata={"end_user_budget_id": budget})
-        end_user: Final = customer(scenario)
+        end_user: Final = customer(scenario, spend=1)
         assert_budget_refused(chat_as(gateway, key, model, user=end_user))
 
 
@@ -361,13 +369,17 @@ def test_a_keys_end_user_budget_does_not_follow_the_customer_to_another_key(gate
 
     The second request is served with 200. The cached end user row carries at most the proxy wide default,
     never a key's (`_apply_default_budget_to_end_user` sets the key default on a copy).
+
+    The customer is created with `spend: 1`: the end user check refuses only when spend is above the budget
+    (`spend <= max_budget` passes, litellm/rust/crates/callbacks-budgets/src/checks.rs:432), so a customer with no
+    spend is served under a zero budget.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         budget: Final = scenario.budget(max_budget=0)
         limiting: Final = scenario.key(metadata={"end_user_budget_id": budget})
         plain: Final = scenario.key()
-        end_user: Final = customer(scenario)
+        end_user: Final = customer(scenario, spend=1)
         assert_budget_refused(chat_as(gateway, limiting, model, user=end_user))
         assert_ok(chat_as(gateway, plain, model, user=end_user))
 

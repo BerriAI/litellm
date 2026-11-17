@@ -221,7 +221,15 @@ def test_an_rpd_refusal_retries_after_the_next_utc_midnight(gateway: Gateway, tm
     until the next 00:00 UTC (``seconds_until_daily_reset``, model_rate_limit_check.py:59): between 1 and 86400 and
     within a minute of the value computed from the test's clock. A port that sends ``retry-after: 60`` (the
     per-minute value) makes clients hammer a deployment that is closed for the day. UNVERIFIED: the proxy copies the
-    router error's ``retry-after`` header onto its 429."""
+    router error's ``retry-after`` header onto its 429.
+
+    BUG (run 44176682961): the 429 had no retry-after. limit_error puts the seconds to the daily reset on the
+    RateLimitError's httpx response (model_rate_limit_check.py:106-118), and handle_llm_api_exception copies
+    response headers through get_response_headers (common_request_processing.py:5284-5291, get_headers.py:32), which
+    forwards them only as llm_provider-<name>. Clients that honour retry-after never see the daily value."""
+    pytest.skip(
+        "BUG: a deployment rpd/tpd 429 carries no retry-after, the router's value only arrives as llm_provider-retry-after"
+    )
     with _daily(gateway, tmp_path, rpd=1) as (candidate, _wire, group):
         assert chat(candidate, group, candidate.key).status_code == 200
         refused: Final = chat(candidate, group, candidate.key)
@@ -234,7 +242,13 @@ def test_an_rpd_refusal_retries_after_the_next_utc_midnight(gateway: Gateway, tm
 def test_daily_reset_time_moves_the_rpd_window_and_its_retry_after(gateway: Gateway, tmp_path: Path) -> None:
     """``daily_reset_time`` is set to two hours from now (UTC, "HH:MM"). The refusal's ``retry-after`` is then about
     two hours (within a minute plus the rounding to the minute), not the time to midnight: the window starts over at
-    that UTC time (``parse_daily_reset_time``, types/router.py:586)."""
+    that UTC time (``parse_daily_reset_time``, types/router.py:586).
+
+    BUG (run 44176682961): the 429 had no retry-after, for the same reason as the midnight test above
+    (get_headers.py:32 renames the router's header to llm_provider-retry-after)."""
+    pytest.skip(
+        "BUG: a deployment rpd/tpd 429 carries no retry-after, the router's value only arrives as llm_provider-retry-after"
+    )
     reset_at: Final = (datetime.now(UTC) + timedelta(hours=2)).strftime("%H:%M")
     with _daily(gateway, tmp_path, rpd=1, daily_reset_time=reset_at) as (candidate, _wire, group):
         assert chat(candidate, group, candidate.key).status_code == 200

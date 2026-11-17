@@ -241,8 +241,10 @@ def test_a_responses_parallel_refusal_names_max_parallel_requests(gateway: Gatew
 
 
 def test_a_streamed_responses_call_settles_the_token_window_to_the_completed_usage(gateway: Gateway) -> None:
-    """A key with ``tpm_limit: 1000`` streams ``/v1/responses`` with ``max_output_tokens: 100``. The first
-    response reports 1000 - (11 + 100) = 889 remaining tokens; the next call (``max_output_tokens: 16``) reports
+    """A key with ``tpm_limit: 1000`` streams ``/v1/responses`` with ``max_output_tokens: 100``. The streamed
+    answer carries no ``x-ratelimit-api_key-*`` headers (pinned current: the limiter writes them after a stream's
+    headers are sent, as ``test_a_streaming_response_carries_no_key_rate_limit_headers_but_still_counts`` in
+    test_dec1_limits_key_rpm.py pins for chat). The next call (``max_output_tokens: 16``) reports
     1000 - 13 - (11 + 16) = 960 remaining, because the stream's window settled to the 9 input + 4 output tokens of
     ``response.completed``. The test waits for ``{api_key:<hash>}:tokens`` to read 13 before the second call."""
     with surface_provider() as provider, gateway.scenario() as scenario, shared_redis() as redis:
@@ -250,7 +252,7 @@ def test_a_streamed_responses_call_settles_the_token_window_to_the_completed_usa
         key: Final = scenario.key(models=[model], tpm_limit=1000)
         first: Final = responses(gateway, model, key, max_output_tokens=100, stream=True)
         assert first.status_code == 200, first.text
-        assert scope_headers(first, "api_key")["remaining-tokens"] == str(1000 - PROMPT_TOKENS - 100)
+        assert scope_headers(first, "api_key") == {}, dict(first.headers)
         eventually(
             lambda: redis_integer(redis, counter_key("api_key", hashed(key), "tokens")),
             lambda value: value == 13,

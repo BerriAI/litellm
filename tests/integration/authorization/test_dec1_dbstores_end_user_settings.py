@@ -190,12 +190,16 @@ def test_the_default_end_user_budget_refuses_a_known_customer_without_a_budget(d
     without a budget.
 
     The customer's request is refused with 422 `budget_exceeded`.
+
+    The customer is created with `spend: 1`: the end user check refuses only when spend is above the budget
+    (`spend <= max_budget` passes, litellm/rust/crates/callbacks-budgets/src/checks.rs:432), so a customer with no
+    spend is served under a zero budget.
     """
     with defaulting.scenario() as scenario:
         _ensure_default_budget(defaulting)
         model: Final = scenario.model()
         key: Final = scenario.key()
-        end_user: Final = customer(scenario)
+        end_user: Final = customer(scenario, spend=1)
         assert_budget_refused(chat_as(defaulting, key, model, user=end_user))
 
 

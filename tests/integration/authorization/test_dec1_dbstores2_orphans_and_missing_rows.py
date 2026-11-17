@@ -30,6 +30,7 @@ from typing import Final
 
 from tests.integration._support.client import Gateway, held, string_value
 from tests.integration.authorization.dec1_dbstores2_support import (
+    AFTER_TTL_SECONDS,
     CACHED_HOLD_SECONDS,
     bare_budget,
     bare_organization,
@@ -127,6 +128,12 @@ def test_a_team_key_whose_organization_row_was_deleted_by_sql_is_served_without_
     is served with 200. Had the team kept the id, `get_org_object` would raise `OrganizationNotFoundError` and
     `organization_max_budget_check` returns without a check (auth_checks.py:8006-8016): a gone organization is
     "no organization", never an error.
+
+    The answer is polled for up to `AFTER_TTL_SECONDS`: `/team/new` and `/key/generate` leave the team (with its
+    `organization_id`) and the organization in the auth cache, and the SQL delete evicts nothing, so the first
+    request was refused 422 "Budget has been exceeded! Organization=<id> Current cost: 0.0, Max budget: 0.0" from
+    the cached rows (run 44176682961). A key bound directly to the organization is not cached that way and is served
+    at once (test_a_never_used_key_whose_organization_row_was_deleted_by_sql_is_served).
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -135,7 +142,7 @@ def test_a_team_key_whose_organization_row_was_deleted_by_sql_is_served_without_
         team: Final = scenario.team(organization_id=organization)
         key: Final = scenario.key(team_id=team)
         sql(gateway, 'DELETE FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s', (organization,))
-        assert_ok(chat_as(gateway, key, model))
+        assert_ok(settled(lambda: chat_as(gateway, key, model), 200, AFTER_TTL_SECONDS))
 
 
 def test_a_key_bound_directly_to_an_organization_with_a_zero_budget_is_refused(gateway: Gateway) -> None:

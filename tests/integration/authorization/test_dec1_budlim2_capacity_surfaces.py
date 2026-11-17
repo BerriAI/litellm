@@ -89,7 +89,11 @@ def test_a_full_model_window_refuses_the_openai_surfaces_with_the_capacity_text(
     """A group with ``rpm: 1`` (an OpenAI chat, embedding or text completion deployment) is called twice on
     ``/v1/responses``, ``/v1/embeddings`` or ``/v1/completions``. The second call is HTTP 429 in the OpenAI
     envelope whose message is exactly the capacity text, and the provider sees one call. The window is per
-    model group, not per route, so a port must apply it on every inference route."""
+    model group, not per route, so a port must apply it on every inference route.
+
+    Pinned current behaviour for ``/v1/completions``: the route answers a non provider error through
+    ``route_failure_proxy_exception`` with the exception's ``message`` (litellm/proxy/proxy_server.py:13857-13863),
+    so the capacity text carries the ``litellm.RateLimitError: `` prefix there and nowhere else."""
     group: Final = group_name(f"budlim2-{surface}")
     model_by_surface: Final = {
         "responses": "openai/gpt-4o-mini",
@@ -113,7 +117,8 @@ def test_a_full_model_window_refuses_the_openai_surfaces_with_the_capacity_text(
 
         assert send().status_code == 200
         error: Final = openai_error(send(), 429)
-        assert message_of(error) == capacity_message(group, None, "requests", rpm=1)
+        prefix: Final = "litellm.RateLimitError: " if surface == "completions" else ""
+        assert message_of(error) == prefix + capacity_message(group, None, "requests", rpm=1)
         assert len(provider.posts()) == 1
 
 
@@ -135,15 +140,26 @@ def test_a_streamed_messages_answer_settles_input_plus_output_tokens_on_the_mode
 
 
 def test_a_text_completion_settles_prompt_plus_completion_tokens_on_the_model(gateway: Gateway, tmp_path: Path) -> None:
-    """A text completion group has ``tpm: 10000``. One ``/v1/completions`` answer reporting 6 prompt and 2
-    completion tokens leaves the model's tokens counter at 8 and its requests counter at 1."""
+    """A text completion group has ``tpm: 10000`` and ``rpm: 10000``. One ``/v1/completions`` answer reporting 6
+    prompt and 2 completion tokens leaves the model's tokens counter at 8 and its requests counter at 1. The
+    ``rpm`` is set because the model descriptor carries no request limit without it
+    (``requests_per_unit`` is None, litellm/proxy/hooks/dynamic_rate_limiter_v3.py:1193), so no requests counter is
+    written."""
     group: Final = group_name("budlim2-text")
     with (
         surface_provider() as provider,
         _rig(
             gateway,
             tmp_path,
-            [entry(group, provider.url, tpm=10_000, model="text-completion-openai/gpt-3.5-turbo-instruct")],
+            [
+                entry(
+                    group,
+                    provider.url,
+                    tpm=10_000,
+                    rpm=10_000,
+                    model="text-completion-openai/gpt-3.5-turbo-instruct",
+                )
+            ],
         ) as (owned, redis),
     ):
         assert text_completion(owned, group, owned.key, max_tokens=5).status_code == 200

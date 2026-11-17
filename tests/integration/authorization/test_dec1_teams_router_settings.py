@@ -90,19 +90,22 @@ def test_a_requests_num_retries_wins_over_the_teams(gateway: Gateway) -> None:
 
 
 def test_a_key_of_another_team_keeps_the_default_retries(gateway: Gateway) -> None:
-    """Team one has `num_retries: 0`; a key of team two (no router settings) calls a deployment scripted 500 then 200.
+    """Team one has `num_retries: 1`; a key of team two (no router settings) calls a deployment scripted 500 then 200.
 
-    The request is served with 200 after a retry: a team's router settings are per request, never written onto the
-    shared Router. Same default retry assumption as the first test.
+    The request answers 500 after one attempt: a team's router settings are per request, never written onto the
+    shared Router. The suite's session proxy runs with `num_retries: 0` (tests/integration/_support/process.py:472),
+    so team one's retry must not reach team two. The earlier version assumed a default of 2 retries and set team one
+    to 0, which this proxy cannot tell apart from no leak.
     """
     text: Final = marker()
     with gateway.scenario() as scenario:
         model: Final = scripted_model(scenario, [500, 200])
-        scenario.team(router_settings={"num_retries": 0})
+        scenario.team(router_settings={"num_retries": 1})
         other: Final = scenario.team()
         key: Final = scenario.key(team_id=other)
-        assert answer_text(chat_as(gateway, key, model, text=text)) == UPSTREAM_CONTENT
-        assert len(upstream_bodies(gateway, text)) == 2
+        refused: Final = chat_as(gateway, key, model, text=text)
+        assert refused.status_code == 500, refused.text
+        assert len(upstream_bodies(gateway, text)) == 1
 
 
 def test_team_fallbacks_serve_a_failing_chat_model_and_report_one_attempted_fallback(gateway: Gateway) -> None:

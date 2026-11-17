@@ -50,6 +50,15 @@ def _project_blocked_message(project_id: str) -> str:
     return f"Authentication Error, Project={project_id} is blocked. Update via `/project/update` if you're an admin."
 
 
+def _overspent(gateway: Gateway, name: str) -> str:
+    """Give the tag `spend: 1` through `/tag/update`, which also seeds its spend counter
+    (tag_management_endpoints.py:466,478-479). The tag check refuses only when spend is above the budget
+    (`spend <= max_budget` passes, litellm/rust/crates/callbacks-budgets/src/checks.rs:333), so a `max_budget: 0` tag
+    nobody spent on is served."""
+    gateway.post("/tag/update", {"name": name, "spend": 1})
+    return name
+
+
 def _tagged(gateway: Gateway, key: str, model: str, *tags: str) -> httpx.Response:
     return chat_as(gateway, key, model, metadata={"tags": list(tags)})
 
@@ -137,27 +146,27 @@ def test_adding_a_model_to_a_warmed_project_serves_it_on_both_proxies(gateway: G
 
 
 def test_a_tag_with_a_zero_budget_refuses_requests_that_carry_it(gateway: Gateway) -> None:
-    """A tag is created with `max_budget: 0`; a key sends `metadata.tags: [<tag>]`.
+    """A tag is created with `max_budget: 0` and `spend: 1`; a key sends `metadata.tags: [<tag>]`.
 
     The request is refused with 422 `budget_exceeded`; the same key without the tag is served.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         key: Final = scenario.key()
-        name: Final = tag(scenario, max_budget=0)
+        name: Final = _overspent(gateway, tag(scenario, max_budget=0))
         assert_budget_refused(_tagged(gateway, key, model, name))
         assert_ok(chat_as(gateway, key, model))
 
 
 def test_a_tag_on_the_key_metadata_is_held_to_the_tag_budget(gateway: Gateway) -> None:
-    """A key carries `metadata: {"tags": [<tag with max_budget 0>]}` and sends no tags itself.
+    """A key carries `metadata: {"tags": [<tag with max_budget 0 and spend 1>]}` and sends no tags itself.
 
     The request is refused with 422: the key's tags are merged into the request before the tag budget lookup
     (`apply_key_tags_pre_auth`).
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
-        name: Final = tag(scenario, max_budget=0)
+        name: Final = _overspent(gateway, tag(scenario, max_budget=0))
         key: Final = scenario.key(metadata={"tags": [name]})
         assert_budget_refused(chat_as(gateway, key, model))
 
@@ -193,7 +202,7 @@ def test_a_tag_created_after_its_name_was_used_is_enforced_on_both_proxies(gatew
 
 
 def test_deleting_a_zero_budget_tag_lifts_the_refusal_on_both_proxies(gateway: Gateway, peer: Gateway) -> None:
-    """A tag with `max_budget: 0` is refused on both proxies, then `/tag/delete` removes it.
+    """A tag with `max_budget: 0` and `spend: 1` is refused on both proxies, then `/tag/delete` removes it.
 
     The tagged request must be served on the writer within 5 seconds and on the peer within 10.
     """
@@ -202,6 +211,7 @@ def test_deleting_a_zero_budget_tag_lifts_the_refusal_on_both_proxies(gateway: G
         key: Final = scenario.key()
         name: Final = f"dec1-dbstores-tag-{uuid.uuid4().hex[:12]}"
         gateway.post("/tag/new", {"name": name, "max_budget": 0})
+        _overspent(gateway, name)
         for proxy in (gateway, peer):
             assert_budget_refused(_tagged(proxy, key, model, name))
         gateway.post("/tag/delete", {"name": name})
@@ -210,7 +220,7 @@ def test_deleting_a_zero_budget_tag_lifts_the_refusal_on_both_proxies(gateway: G
 
 
 def test_raising_a_tag_budget_readmits_it_on_both_proxies(gateway: Gateway, peer: Gateway) -> None:
-    """A tag with `max_budget: 0` is refused on both proxies, then `/tag/update` sets `max_budget: 100`.
+    """A tag with `max_budget: 0` and `spend: 1` is refused on both proxies, then `/tag/update` sets `max_budget: 100`.
 
     The tagged request must be served on the writer within 5 seconds and on the peer within 10. `/tag/update`
     writes through the linked budget row (`handle_budget_for_entity`), so the cached tag must be re-read with its
@@ -219,7 +229,7 @@ def test_raising_a_tag_budget_readmits_it_on_both_proxies(gateway: Gateway, peer
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         key: Final = scenario.key()
-        name: Final = tag(scenario, max_budget=0)
+        name: Final = _overspent(gateway, tag(scenario, max_budget=0))
         for proxy in (gateway, peer):
             assert_budget_refused(_tagged(proxy, key, model, name))
         gateway.post("/tag/update", {"name": name, "max_budget": 100})
@@ -238,11 +248,13 @@ def test_a_user_created_after_their_key_was_used_is_enforced_on_both_proxies(gat
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         user_id: Final = f"dec1-dbstores-late-user-{uuid.uuid4().hex}"
+        # Registered before the key so it runs after the key's own cleanup: /user/delete also deletes the user's
+        # keys, and the later /key/delete would then answer 404 "No keys found".
+        scenario.cleanups.callback(gateway.request, "POST", "/user/delete", {"user_ids": [user_id]})
         key: Final = scenario.key(user_id=user_id)
         for proxy in (gateway, peer):
             assert_ok(chat_as(proxy, key, model))
         gateway.post("/user/new", {"user_id": user_id, "max_budget": 0, "auto_create_key": False})
-        scenario.cleanups.callback(gateway.request, "POST", "/user/delete", {"user_ids": [user_id]})
         assert_budget_refused(settled(lambda: chat_as(gateway, key, model), 422, WRITER_SECONDS))
         assert_budget_refused(settled(lambda: chat_as(peer, key, model), 422, PEER_SECONDS))
 

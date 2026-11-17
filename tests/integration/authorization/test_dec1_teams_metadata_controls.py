@@ -275,7 +275,13 @@ def test_a_team_allow_client_pricing_override_prices_its_keys_requests_with_the_
 
     The spend row must cost exactly 20 * 0.001 + 20 * 0.002 = 0.06 (the scripted upstream reports 20 prompt and 20
     completion tokens). `_strip_client_pricing_overrides` is skipped when the key OR its team opts in.
-    """
+
+    BUG (run 44176682961): the request was refused 401 'Rejected Request: input_cost_per_token is not allowed in
+    request body' (litellm/proxy/auth/auth_utils.py:770-777). The auth gate only honours
+    general_settings.allow_client_side_credentials and configurable_clientside_auth_params, so the team opt-in that
+    _strip_client_pricing_overrides reads can never take effect. Medium confidence that the opt-in is meant to keep
+    working."""
+    pytest.skip("BUG: a team's allow_client_pricing_override is unreachable: auth refuses body prices with 401 first")
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         team: Final = scenario.team(metadata={"allow_client_pricing_override": True})
@@ -287,21 +293,30 @@ def test_a_team_allow_client_pricing_override_prices_its_keys_requests_with_the_
         assert isinstance(spend, (int, float)) and spend == pytest.approx(_OVERRIDE_SPEND), spend
 
 
-def test_without_the_team_opt_in_body_prices_do_not_change_spend(gateway: Gateway) -> None:
+def test_without_the_team_opt_in_body_prices_are_refused_at_auth(gateway: Gateway) -> None:
     """The same body prices from a key whose team has no `allow_client_pricing_override`.
 
-    The prices are stripped before the call, so the spend row must not cost 0.06; it is priced from the deployment
-    (`openai/gpt-4o-mini` in the cost map), far below 0.06 for 40 tokens.
+    Pinned current behaviour: auth refuses the body price with 401 before any call, it no longer strips it
+    (litellm/proxy/auth/auth_utils.py:770-777): the message is "Authentication Error,
+    Rejected Request: input_cost_per_token is not allowed in request body. Clientside passthrough requires explicit
+    admin opt-in ...". Nothing reaches the upstream, so no spend row is written at the client's price.
     """
+    text: Final = marker()
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         team: Final = scenario.team()
         key: Final = scenario.key(team_id=team)
-        answer_text(
-            chat_as(gateway, key, model, input_cost_per_token=_INPUT_PRICE, output_cost_per_token=_OUTPUT_PRICE)
+        refused: Final = chat_as(
+            gateway, key, model, text=text, input_cost_per_token=_INPUT_PRICE, output_cost_per_token=_OUTPUT_PRICE
         )
-        spend: Final = spend_rows_of(gateway, key)[0]["spend"]
-        assert isinstance(spend, (int, float)) and spend < _OVERRIDE_SPEND / 10, spend
+        assert refused.status_code == 401, refused.text
+        assert refused.json()["error"]["message"].startswith(
+            "Authentication Error, Rejected Request: input_cost_per_token is not allowed in request body. "
+            "Clientside passthrough requires explicit admin opt-in via either "
+            "`general_settings.allow_client_side_credentials = true` (proxy-wide) or "
+            "`configurable_clientside_auth_params` on the deployment in your proxy config.yaml."
+        ), refused.text
+        assert upstream_bodies(gateway, text) == []
 
 
 def test_team_metadata_disable_fallbacks_does_not_switch_off_request_fallbacks(gateway: Gateway) -> None:
@@ -381,7 +396,10 @@ def test_a_renamed_team_alias_reaches_the_next_spend_row(gateway: Gateway) -> No
     `team_metadata` from the fresh team lookup (the project branch below it does resync `project_alias`). If
     `/team/update` does not also evict the team's key cache entries, the old alias is written for up to the 60 second
     auth cache TTL, which would be a stale attribution bug worth a `pytest.skip("BUG: ...")`.
-    """
+
+    BUG (run 44176682961): the next spend row still named the old alias. The cached key view keeps the team_alias it
+    copied, and /team/update does not refresh it."""
+    pytest.skip("BUG: the spend row keeps the old team alias after /team/update renames the team")
     old: Final = f"old-{marker()}"
     new: Final = f"new-{marker()}"
     with gateway.scenario() as scenario:

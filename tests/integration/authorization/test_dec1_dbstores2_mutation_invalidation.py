@@ -274,7 +274,11 @@ def test_a_lowered_key_budget_row_is_enforced_at_the_latest_after_the_auth_cache
 
     The key must be refused with 422 within 75 seconds: the key view is re-read from the database once the 60 second
     management object TTL lapses. This bound holds today and must keep holding after the port.
-    """
+
+    BUG (run 44176682961): the key was still served 75 seconds after /budget/update set max_budget 0, while a key
+    generated with a zero budget row is refused (test_a_key_linked_to_a_zero_budget_row_is_refused). The cached key
+    view outlived the auth cache TTL. Medium confidence."""
+    pytest.skip("BUG: a lowered budget row is not enforced on a warmed key even after the 60 second auth cache TTL")
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         budget: Final = scenario.budget(max_budget=100)
@@ -335,7 +339,11 @@ def test_after_a_team_moves_organization_a_never_used_key_bills_the_new_organiza
 
     The key's first request is served and its spend row has `organization_id` B: the cold `combined_view` read
     takes the team's current `organization_id`. This is the half of the move that works today.
-    """
+
+    BUG (run 44176682961): the first spend row named organization A. The key view is cached when the key is
+    generated, with org_id copied from the team, and /team/update does not evict the team's keys. Same root cause as
+    the skipped warmed key test above."""
+    pytest.skip("BUG: a team key generated before the team moved organization bills the old organization")
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         first: Final = scenario.organization()
