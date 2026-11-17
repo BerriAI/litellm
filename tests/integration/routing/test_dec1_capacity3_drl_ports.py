@@ -195,15 +195,16 @@ def test_an_idle_slice_whose_tokens_ran_out_keeps_counting_requests(gateway: Gat
 def test_tracking_a_priority_pool_adds_requests_but_never_tokens(gateway: Gateway, tmp_path: Path) -> None:
     """#52081 tracks ``{"requests": 1, "tokens": 0}`` on a pool (:1426). A ``premium`` key on an idle ``tpm: 10000,
     rpm: 100`` model gets a provider 500, so nothing settles: ``{priority_model:<m>:premium}:requests`` holds 1 and
-    ``{priority_model:<m>:premium}:tokens`` is never written. A port that reserved an estimate on the pool at
-    admission would leave tokens behind for a failed call."""
+    ``{priority_model:<m>:premium}:tokens`` holds 0 (the tracked increment of 0 creates the key; run 44176682961
+    read 0). A port that reserved an estimate on the pool at admission would leave tokens behind for a failed
+    call."""
     with _rig(
         gateway, tmp_path, entities=[], reservation={"premium": 0.5}, threshold=0.9, rpm=100, tpm=10_000, status=500
     ) as (candidate, _wire, group, scenario):
         key: Final = scenario.key(metadata={"priority": "premium"})
         assert chat(candidate, group, key).status_code >= 500
         assert counter_settles(PRIORITY_SCOPE, f"{group}:premium", "requests", 1) == 1
-        assert counter(PRIORITY_SCOPE, f"{group}:premium", "tokens") is None
+        assert counter(PRIORITY_SCOPE, f"{group}:premium", "tokens") in (None, 0)
 
 
 def test_a_team_key_stays_on_its_teams_slice_when_it_names_a_customer_organization(

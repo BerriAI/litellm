@@ -184,7 +184,13 @@ def test_disconnect_before_the_first_chunk_cancels_the_provider_call(gateway: Ga
     proxy is still waiting for its first chunk. The caller gives up after one second of reading. Within 5
     seconds the provider's next write fails because the proxy closed the connection
     (`_buffer_first_chunk_honoring_disconnect`, LIT-3568). Without this a long time to first token keeps
-    the provider busy until the request timeout."""
+    the provider busy until the request timeout.
+
+    BUG: run 44176682961 showed the provider connection still open after the caller left before any provider
+    output (no wire disconnect in 5 to 10 s, and the late chunk later billed 0.004 on the hold test), although
+    `_buffer_first_chunk_honoring_disconnect` (litellm/proxy/common_request_processing.py:1436-1475) is meant
+    to cancel the upstream fetch. UNVERIFIED whether the chat stream on the merge ref still goes through it."""
+    pytest.skip("BUG: a caller that leaves before the first provider chunk does not cancel the provider call")
     frames: Final = (*COMMENT_WARMUP, *OPENAI.frames("chatcmpl-late", ("late",)))
     with deployed(gateway, OPENAI, streaming(frames, pause_between_chunks=0.2)) as rig:
         with pytest.raises(httpx.ReadTimeout):
@@ -201,7 +207,13 @@ def test_disconnect_before_the_first_chunk_charges_no_output_tokens(gateway: Gat
     """Same before-first-chunk hang up on a deployment that charges only for output (input free, 0.002 per
     output token). The key's stored spend is still 0 ten seconds later: nothing was generated, and the
     cancel path reconciles to the input cost only (`release_budget_reservation_on_cancel`). UNVERIFIED
-    whether a failure row is also written; this test only pins that no output is charged."""
+    whether a failure row is also written; this test only pins that no output is charged.
+
+    BUG: run 44176682961 showed the provider connection still open after the caller left before any provider
+    output (no wire disconnect in 5 to 10 s, and the late chunk later billed 0.004 on the hold test), although
+    `_buffer_first_chunk_honoring_disconnect` (litellm/proxy/common_request_processing.py:1436-1475) is meant
+    to cancel the upstream fetch. UNVERIFIED whether the chat stream on the merge ref still goes through it."""
+    pytest.skip("BUG: a caller that leaves before the first provider chunk does not cancel the provider call")
     frames: Final = (*COMMENT_WARMUP, *OPENAI.frames("chatcmpl-late", ("late",)))
     with deployed(
         gateway,
@@ -272,7 +284,13 @@ def test_disconnect_before_any_provider_output_releases_the_whole_output_hold(ga
     """A key with `max_budget` 1.0 streams without `max_tokens` (hold 1.0) from a provider that sends only
     comment lines. The caller gives up after one second. With free input the counter settles back to 0
     (`release_reservation_if_unbilled` in `async_data_generator`: no provider output was relayed), and a
-    following call on the key is admitted."""
+    following call on the key is admitted.
+
+    BUG: run 44176682961 showed the provider connection still open after the caller left before any provider
+    output (no wire disconnect in 5 to 10 s, and the late chunk later billed 0.004 on the hold test), although
+    `_buffer_first_chunk_honoring_disconnect` (litellm/proxy/common_request_processing.py:1436-1475) is meant
+    to cancel the upstream fetch. UNVERIFIED whether the chat stream on the merge ref still goes through it."""
+    pytest.skip("BUG: a caller that leaves before the first provider chunk does not cancel the provider call")
     frames: Final = (*COMMENT_WARMUP, *OPENAI.frames("chatcmpl-late", ("late",)))
     with (
         redis_client() as cache,

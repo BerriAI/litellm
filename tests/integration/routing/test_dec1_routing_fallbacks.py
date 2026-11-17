@@ -22,7 +22,6 @@ import pytest
 from integration.routing.dec1_routing_support import (
     CONTEXT_MESSAGE,
     MESSAGE_PREFIX,
-    POLICY_MESSAGE,
     UNREACHABLE_API_BASE,
     Rig,
     chat,
@@ -258,18 +257,20 @@ def test_a_content_policy_error_uses_content_policy_fallbacks_before_the_regular
     assert rig.upstream.count("ok-fbgeneral") == before
 
 
-def test_a_content_policy_error_without_a_content_policy_entry_is_returned_without_a_fallback(rig: Rig) -> None:
+def test_a_content_policy_error_without_a_content_policy_entry_takes_the_regular_fallback(rig: Rig) -> None:
     """`fb-policy-nomatch` answers the 400 content policy body; `content_policy_fallbacks` exists but has no
     entry for it, while `fallbacks` maps it to `fb-general-policy`.
 
-    Unlike a context window error, this one does not fall through to the regular list: the caller gets HTTP
-    400 whose message contains the upstream's refusal text, and the regular fallback's model is never called.
+    Like a context window error, an unmatched content policy list falls through to the regular fallbacks
+    (#52132, `error_specific_list` in litellm/rust/crates/router-core/src/call.rs:789-798): the caller gets 200
+    with `fb-general-policy`'s content after one call to the refusing model.
     """
+    before: Final = rig.upstream.count("ok-fbgeneralpolicy")
     response: Final = chat(rig.gateway, "fb-policy-nomatch")
-    assert response.status_code == 400, response.text
-    assert POLICY_MESSAGE in error_message(response), response.text
+    assert response.status_code == 200, response.text
+    assert content_of(response) == "served ok-fbgeneralpolicy"
     assert rig.upstream.count("policy-fbnomatch") == 1
-    assert rig.upstream.count("ok-fbgeneralpolicy") == 0
+    assert rig.upstream.count("ok-fbgeneralpolicy") == before + 1
 
 
 def test_a_pre_call_context_window_refusal_goes_to_context_window_fallbacks_without_an_upstream_call(

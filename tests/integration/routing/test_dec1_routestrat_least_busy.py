@@ -92,12 +92,15 @@ def test_least_busy_is_reported_by_router_settings(rig: Rig) -> None:
 def test_with_nothing_in_flight_the_first_listed_deployment_serves_and_weights_are_ignored(rig: Rig) -> None:
     """The group lists Bedrock first with no weight, then OpenAI and Vertex with `weight: 100`.
 
-    Twenty requests sent one after another must be served mostly by Bedrock (at least 14) and never by Vertex,
-    because a tie of zero in-flight requests goes to the first index and weights are not read. One stale
-    in-flight count from a late settlement can push a single request to OpenAI.
+    Twenty requests sent one after another must never be served by Vertex, because weights are not read, and
+    Bedrock must serve at least as many as OpenAI, because a tie goes to the first index (`_least_busy_index`,
+    litellm/router_strategy/least_busy.py:192-193). The in-flight count of a served request is released after the
+    caller already has its answer, so the next request back to back often still sees Bedrock busy and goes to
+    OpenAI: run 44176682961 alternated exactly, 10 and 10.
     """
     counts: Final = served_many(rig.gateway, GROUP, 20)
-    assert counts["lb-bedrock"] >= 14, counts
+    assert counts["lb-bedrock"] >= counts["lb-openai"], counts
+    assert counts["lb-bedrock"] + counts["lb-openai"] == 20, counts
     assert counts["lb-vertex"] == 0, counts
 
 

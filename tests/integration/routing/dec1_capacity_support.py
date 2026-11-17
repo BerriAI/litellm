@@ -163,6 +163,7 @@ def capacity_config(
         "litellm_settings": {**inherited, **capacity_settings, **(litellm_settings or {})},
         "router_settings": {**object_value(base["router_settings"]), "num_retries": 0, **(router_settings or {})},
     }
+    directory.mkdir(parents=True, exist_ok=True)
     path: Final = directory / f"dec1-capacity-{uuid.uuid4().hex[:8]}.yaml"
     path.write_text(yaml.safe_dump(config))
     return path

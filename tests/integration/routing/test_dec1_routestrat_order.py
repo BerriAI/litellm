@@ -190,19 +190,21 @@ def test_order_levels_are_walked_before_the_configured_fallback_group(rig: Rig) 
     )
 
 
-def test_a_content_policy_refusal_does_not_walk_to_the_next_order_level(rig: Rig) -> None:
+def test_a_content_policy_refusal_walks_to_the_next_order_level(rig: Rig) -> None:
     """OpenAI (`order: 1`) answers with OpenAI's 400 `content_policy_violation`; Bedrock is at `order: 2`.
 
-    The caller must get HTTP 400 and Bedrock must receive nothing: a content policy error skips the order walk
-    (`call.rs:789`), because another deployment of the same model would refuse the same content.
+    With no `content_policy_fallbacks` entry for the group, a content policy error walks the order tiers like
+    any other error (#52132, litellm/rust/crates/router-core/src/call.rs:789-798): the caller gets 200 served by
+    Bedrock, which receives exactly one call.
     """
     rig.peer.plan(
         "op-openai",
         openai_error(400, "Your request was rejected by the safety system.", code="content_policy_violation"),
     )
+    before: Final = rig.peer.count("op-bedrock")
     response: Final = chat(rig.gateway, "ord-policy")
-    assert response.status_code == 400, response.text
-    assert rig.peer.count("op-bedrock") == 0
+    assert response.status_code == 200, response.text
+    assert rig.peer.count("op-bedrock") == before + 1
 
 
 def test_the_first_level_serves_again_once_it_recovers(rig: Rig) -> None:

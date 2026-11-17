@@ -118,6 +118,7 @@ def test_a_prompt_over_every_tpm_is_refused_with_a_message_naming_its_size(rig: 
     this model group, so retrying cannot help. Send a smaller request or raise the deployment's tpm`, with n above
     50. Anthropic receives nothing. This wording landed in #51838; before it the refusal named no size.
     """
+    before: Final = rig.peer.count("usg-anthropic")
     response: Final = chat(rig.gateway, "usage-single", messages=LONG)
     assert response.status_code == 429, response.text
     found: Final = OVER_TPM.search(error_message(response))
@@ -125,7 +126,7 @@ def test_a_prompt_over_every_tpm_is_refused_with_a_message_naming_its_size(rig: 
     assert found["group"] == "usage-single"
     assert found["limit"] == "50"
     assert int(found["tokens"]) > 50
-    assert rig.peer.count("usg-anthropic") == 0
+    assert rig.peer.count("usg-anthropic") == before
 
 
 def test_the_over_tpm_refusal_carries_no_retry_after_header(rig: Rig) -> None:

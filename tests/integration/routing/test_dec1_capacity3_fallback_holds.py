@@ -101,16 +101,16 @@ def test_a_fallback_to_a_model_the_team_has_no_limit_on_charges_nothing_to_its_s
         assert counter(borrower_scope("team"), borrower_value(team, primary), "tokens") == 0
 
 
-def test_the_failed_models_share_keeps_the_one_admitted_request_after_a_fallback(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    """Same rig. The empty hold returns tokens only: ``{model_per_team_saturated:<team_id>:<primary>}:requests`` still
-    holds the 1 request admission counted (:1287), so the failed attempt keeps using the team's request share."""
+def test_the_failed_models_share_counts_no_requests_without_a_team_rpm_limit(gateway: Gateway, tmp_path: Path) -> None:
+    """Same rig. The team's share descriptor carries only the limits the team set (``_team_share_descriptor``,
+    litellm/proxy/hooks/dynamic_rate_limiter_v3.py:806-815), here ``tpm`` and no ``rpm``, so
+    ``{model_per_team_saturated:<team_id>:<primary>}:requests`` is never written while its ``:tokens`` twin is (run
+    44176682961). UNVERIFIED: the line in the limiter that skips a counter whose limit is null."""
     with _fallback_rig(gateway, tmp_path, borrow=["team"], threshold=0.0) as (candidate, scenario, primary, spare):
         team, key = _team_key(scenario, {primary: 1000})
         assert chat(candidate, primary, key).status_code == 200
         _spare_settled(spare)
-        assert counter(borrower_scope("team"), borrower_value(team, primary), "requests") == 1
+        assert counter(borrower_scope("team"), borrower_value(team, primary), "requests") is None
 
 
 def test_a_fallback_target_without_a_team_limit_is_not_counted_on_its_model_window(
@@ -172,13 +172,14 @@ def test_a_fallback_to_a_model_the_team_has_a_limit_on_settles_on_the_targets_sh
         assert counter(borrower_scope("team"), borrower_value(team, primary), "tokens") == 0
 
 
-def test_a_fallback_to_a_model_the_team_has_a_limit_on_is_counted_on_the_targets_share_requests(
+def test_a_fallback_to_a_model_the_team_has_only_a_tpm_limit_on_counts_no_requests_on_the_targets_share(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    """Same contrast. The committed hold on ``spare`` adds one request to the team's share there:
-    ``{model_per_team_saturated:<team_id>:<spare>}:requests`` = 1 (:1550-1556)."""
+    """Same contrast. The team set ``model_tpm_limit`` only, so its share descriptor on ``spare`` has no request limit
+    (dynamic_rate_limiter_v3.py:806-815) and ``{model_per_team_saturated:<team_id>:<spare>}:requests`` is never
+    written, although the committed hold tracks ``{"requests": 1}`` (:1569)."""
     with _fallback_rig(gateway, tmp_path, borrow=["team"], threshold=0.0) as (candidate, scenario, primary, spare):
         team, key = _team_key(scenario, {primary: 1000, spare: 1000})
         assert chat(candidate, primary, key).status_code == 200
         _spare_settled(spare)
-        assert counter(borrower_scope("team"), borrower_value(team, spare), "requests") == 1
+        assert counter(borrower_scope("team"), borrower_value(team, spare), "requests") is None

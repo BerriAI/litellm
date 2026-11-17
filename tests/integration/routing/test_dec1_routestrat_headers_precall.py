@@ -82,6 +82,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         "num_retries": 1,
         "disable_cooldowns": True,
         "enable_pre_call_checks": True,
+        "enable_weighted_failover": True,
     }
     with strat_rig(tmp_path_factory.mktemp("dec1-routestrat-headers"), _models, settings) as value:
         yield value
@@ -146,20 +147,24 @@ def test_messages_answers_name_the_serving_deployment(rig: Rig, provider: str) -
 
 
 def test_after_a_retry_the_header_names_the_deployment_that_served_not_the_one_that_failed(rig: Rig) -> None:
-    """`hdr-failover` has OpenAI (`weight: 1`, so it is picked first) and Bedrock; `num_retries: 1`. OpenAI answers
-    its next request with a 500.
+    """`hdr-failover` has OpenAI (`weight: 1`) and Bedrock (no weight, so 0); `num_retries: 1` and
+    `enable_weighted_failover`. OpenAI answers its next two requests with a 500.
 
-    The request must return 200 with text `served hf-bedrock`, `x-litellm-model-id: dec1-routestrat-hf-bedrock` and
-    an `x-litellm-model-name` of the Bedrock model, after the peer saw OpenAI then Bedrock.
+    A retry re-picks the group by weight, so it lands on OpenAI again (`simple_shuffle`,
+    litellm/rust/crates/router-core/src/select.rs:127-178); only weighted failover, once the retries are spent,
+    excludes the failed deployment (call.rs:665-724). The request must return 200 with text `served hf-bedrock`,
+    `x-litellm-model-id: dec1-routestrat-hf-bedrock` and an `x-litellm-model-name` of the Bedrock model, after the
+    peer saw OpenAI twice, then Bedrock.
     """
-    rig.peer.plan("hf-openai", openai_error(500, "scripted header failover", kind="server_error"))
+    failure: Final = openai_error(500, "scripted header failover", kind="server_error")
+    rig.peer.plan("hf-openai", failure, failure)
     before: Final = len(rig.peer.order("hf-openai", "hf-bedrock"))
     response: Final = chat(rig.gateway, "hdr-failover")
     assert response.status_code == 200, response.text
     assert content_of(response) == "served hf-bedrock"
     assert response.headers["x-litellm-model-id"] == ident("hf-bedrock")
     assert response.headers["x-litellm-model-name"] == f"bedrock/converse/{BEDROCK_MODEL}"
-    assert rig.peer.order("hf-openai", "hf-bedrock")[before:] == ("hf-openai", "hf-bedrock")
+    assert rig.peer.order("hf-openai", "hf-bedrock")[before:] == ("hf-openai", "hf-openai", "hf-bedrock")
 
 
 def test_an_upstream_error_still_names_the_deployment_that_failed(rig: Rig) -> None:
@@ -228,12 +233,14 @@ def test_a_deployment_with_no_known_window_is_kept_for_any_prompt(rig: Rig) -> N
 
 
 def test_enforce_model_rate_limits_moves_traffic_to_the_sibling_once_a_deployment_used_its_rpm(tmp_path: Path) -> None:
-    """A proxy with `optional_pre_call_checks: ["enforce_model_rate_limits"]` and `num_retries: 2`. In `pc-rpm`
-    Bedrock has `rpm: 2` and `weight: 1`, so the shuffle always picks it first, and Vertex has no limit.
+    """A proxy with `optional_pre_call_checks: ["enforce_model_rate_limits"]`, `num_retries: 0` and
+    `enable_weighted_failover`. In `pc-rpm` Bedrock has `rpm: 2` and `weight: 1`, so the shuffle always picks it
+    first, and Vertex has no limit and no weight.
 
-    Starting early in a minute, eight sequential requests must all return 200. Bedrock serves exactly two of them;
-    on the others its attempt is refused by the check (`Model rate limit exceeded. RPM limit=2`) without an
-    upstream call, and the retry is served by Vertex.
+    A plain retry re-picks Bedrock by weight (select.rs:127-178) and is refused again, so the move to the sibling
+    is weighted failover's (call.rs:665-724). Starting early in a minute, eight sequential requests must all
+    return 200. Bedrock serves exactly two of them; on the others its attempt is refused by the check
+    (`Model rate limit exceeded. RPM limit=2`) without an upstream call, and the failover is served by Vertex.
     """
 
     def models(base: str) -> Sequence[dict[str, JsonValue]]:
@@ -244,8 +251,9 @@ def test_enforce_model_rate_limits_moves_traffic_to_the_sibling_once_a_deploymen
 
     settings: Final[dict[str, JsonValue]] = {
         "routing_strategy": "simple-shuffle",
-        "num_retries": 2,
+        "num_retries": 0,
         "disable_cooldowns": True,
+        "enable_weighted_failover": True,
         "optional_pre_call_checks": ["enforce_model_rate_limits"],
     }
     with strat_rig(tmp_path, models, settings) as own:

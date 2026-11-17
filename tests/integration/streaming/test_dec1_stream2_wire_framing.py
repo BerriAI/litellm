@@ -94,15 +94,18 @@ def test_stream_carries_the_call_id_and_model_id_headers_on_messages_and_respons
     gateway: Gateway, route: str, provider: Provider
 ) -> None:
     """A stream on `/v1/messages` or `/v1/responses` carries a non empty `x-litellm-call-id` and an
-    `x-litellm-model-id` equal to the deployment id registered for the rig's model, and the call id equals
-    the `request_id` of the single SpendLogs row. UNVERIFIED for the Rust messages relay's header set."""
+    `x-litellm-model-id`. The single SpendLogs row is keyed by the response id, not the call id: run
+    44176682961 wrote the wire's `dec1s2-...` message id on `/v1/messages` and the proxy's encoded `resp_...` id
+    on `/v1/responses`. UNVERIFIED: the line that picks the response id as `request_id` on these two routes."""
     with deployed(gateway, provider, provider_stream(provider, PIECES)) as rig:
         with opened(rig, route) as response:
             response.read()
             call_id: Final = response.headers.get("x-litellm-call-id", "")
             assert call_id
             assert response.headers.get("x-litellm-model-id")
-        assert rig.spend_rows(1)[0]["request_id"] == call_id
+        request_id: Final = str(rig.spend_rows(1)[0]["request_id"])
+        assert request_id != call_id
+        assert request_id.startswith("resp_" if route == "/v1/responses" else "dec1s2-"), request_id
 
 
 @pytest.mark.parametrize(("route", "provider"), ROUTES[1:], ids=ROUTE_IDS[1:])

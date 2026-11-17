@@ -28,7 +28,7 @@ from typing import Final
 import pytest
 
 from tests.integration._support.client import Gateway, eventually
-from tests.integration._support.wire import wire_server
+from tests.integration._support.wire import Reply, Request, wire_server
 from tests.integration.authorization.dec1_limcap2_support import (
     STREAM_INPUT_TOKENS,
     STREAM_OUTPUT_TOKENS,
@@ -56,6 +56,7 @@ from tests.integration.routing.dec1_capacity_support import (
 )
 
 PROVIDER_TOTAL: Final = 18
+HELD_REPLY_SECONDS: Final = 150
 
 
 def test_an_alias_and_its_group_share_one_capacity_window(gateway: Gateway, tmp_path: Path) -> None:
@@ -314,11 +315,20 @@ def test_a_hold_settled_after_its_window_ended_does_not_touch_the_next_window(ga
     ``{model_per_team_saturated:<team>:<m>}:tokens``, then releases the answer. Settlement is window guarded
     (``WindowGuardedIncrement``), so neither the 18 used nor the refund of the estimate lands in the new window: a
     fresh request afterwards leaves the counter at exactly its own 18. A port without the guard writes 18 plus or
-    minus the stale hold. Takes up to one window (60 s)."""
+    minus the stale hold. Takes up to one window (60 s), so the held reply waits up to ``HELD_REPLY_SECONDS`` and the
+    held request has its own client timeout: the shared ``provider(hold=)`` gives up after 30 s and the gateway
+    client after 15 s, which is what failed run 44176682961."""
     group: Final = group_name("window")
     release: Final = threading.Event()
+    answer: Final = provider()
+
+    def held_answer(request: Request) -> Reply:
+        if request.method == "POST":
+            assert release.wait(timeout=HELD_REPLY_SECONDS), "The held provider reply was never released"
+        return answer(request)
+
     with (
-        wire_server(provider(hold=release)) as wire,
+        wire_server(held_answer) as wire,
         capacity_proxy(
             gateway,
             tmp_path,
@@ -336,7 +346,13 @@ def test_a_hold_settled_after_its_window_ended_does_not_touch_the_next_window(ga
         team: Final = scenario.team(metadata={"model_tpm_limit": {group: 1000}})
         key: Final = scenario.key(team_id=team)
         share: Final = counter_key("model_per_team_saturated", f"{team}:{group}", "tokens")
-        held: Final = pool.submit(chat, candidate, group, key)
+        held: Final = pool.submit(
+            candidate.client.post,
+            "/v1/chat/completions",
+            json={"model": group, "messages": [{"role": "user", "content": "limcap2 held across a window"}]},
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=HELD_REPLY_SECONDS,
+        )
         try:
             eventually(lambda: redis_integer(redis, share), lambda value: (value or 0) > 0, seconds=20)
             eventually(lambda: redis.exists(share), lambda present: present == 0, seconds=90)

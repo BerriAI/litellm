@@ -179,16 +179,19 @@ def test_every_served_route_reports_the_limiter_version_priority_and_model_windo
         assert scope_headers(served, MODEL_SCOPE) == {"limit-requests": "10", "remaining-requests": "9"}
 
 
-def test_a_streamed_chat_completion_reports_the_model_window_headers(gateway: Gateway, tmp_path: Path) -> None:
-    """A first ``stream: true`` chat completion on an ``rpm: 10`` model is answered with
-    ``x-ratelimit-model_saturation_check-remaining-requests: 9`` and ``x-litellm-rate-limiter-version: v3``.
-    UNVERIFIED: streaming responses build their headers before the post-call success hook; the stash's
-    ``rate_limit_response`` is assumed to be merged there too."""
+def test_a_streamed_chat_completion_carries_no_model_window_headers(gateway: Gateway, tmp_path: Path) -> None:
+    """A first ``stream: true`` chat completion on an ``rpm: 10`` model is answered 200 without any
+    ``x-ratelimit-model_saturation_check-*`` header. The limiter adds its headers in ``async_post_call_success_hook``
+    (litellm/proxy/hooks/dynamic_rate_limiter_v3.py:1769-1795), which a streamed answer's headers are sent before;
+    run 44176682961 saw none. The served request is still counted, so a second non-streamed request reports
+    ``remaining-requests: 8``."""
     with _rig(gateway, tmp_path, limits={"rpm": 10}, reservation={"premium": 0.5}) as (candidate, group, _scenario):
         streamed: Final = chat(candidate, group, candidate.key, stream=True)
         assert streamed.status_code == 200, streamed.text
-        assert scope_headers(streamed, MODEL_SCOPE).get("remaining-requests") == "9", dict(streamed.headers)
-        assert streamed.headers.get("x-litellm-rate-limiter-version") == "v3", dict(streamed.headers)
+        assert scope_headers(streamed, MODEL_SCOPE) == {}, dict(streamed.headers)
+        unary: Final = chat(candidate, group, candidate.key)
+        assert unary.status_code == 200, unary.text
+        assert scope_headers(unary, MODEL_SCOPE) == {"limit-requests": "10", "remaining-requests": "8"}
 
 
 @contextmanager

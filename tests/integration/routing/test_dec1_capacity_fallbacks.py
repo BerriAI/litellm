@@ -360,7 +360,8 @@ def test_a_client_cannot_opt_into_fallback_on_saturation_through_the_request_bod
 ) -> None:
     """The config has ``fallbacks: [{preferred: [spare]}]`` and ``preferred`` (``rpm: 4``) is at 50%. The master key,
     whose saved router settings do not opt in, sends ``router_settings_override: {"fallback_on_saturation": true}``.
-    The field is dropped, so the request is served by ``preferred`` with no fallback headers."""
+    The field is dropped, so the request is served by ``preferred`` with no ``x-litellm-fallback-reason`` and
+    ``x-litellm-attempted-fallbacks: 0`` (every answer now carries the attempt count, run 44176682961)."""
     preferred, spare = group_name("preferred"), group_name("spare")
     with (
         wire_server(provider()) as first,
@@ -378,7 +379,8 @@ def test_a_client_cannot_opt_into_fallback_on_saturation_through_the_request_bod
             candidate, preferred, candidate.key, router_settings_override={"fallback_on_saturation": True}
         )
         assert kept.status_code == 200, kept.text
-        assert REASON not in kept.headers and ATTEMPTED not in kept.headers
+        assert REASON not in kept.headers, dict(kept.headers)
+        assert kept.headers.get(ATTEMPTED) == "0", dict(kept.headers)
         assert (len(posts(first)), len(posts(second))) == (1, 0)
 
 

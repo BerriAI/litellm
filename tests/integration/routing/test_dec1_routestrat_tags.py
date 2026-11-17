@@ -128,11 +128,11 @@ def test_a_tagged_request_to_an_untagged_group_is_refused_with_401(rig: Rig) -> 
     peer receives nothing. UNVERIFIED: that no fail-open applies here; `_resolve_or_fail_open` only opens for a
     group with `model_info.allow_fail_open`.
     """
+    before: Final = (rig.peer.count("tu-vertex"), rig.peer.count("tu-openai"))
     response: Final = chat(rig.gateway, "tag-untagged", **_tags("premium"))
     assert response.status_code == 401, response.text
     assert TAGS_REFUSED in error_message(response), response.text
-    assert rig.peer.count("tu-vertex") == 0
-    assert rig.peer.count("tu-openai") == 0
+    assert (rig.peer.count("tu-vertex"), rig.peer.count("tu-openai")) == before
 
 
 def test_an_untagged_request_to_an_untagged_group_uses_every_deployment(rig: Rig) -> None:
