@@ -1328,7 +1328,7 @@ def wrap_anthropic_stream(
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         aclose_if_supported,
         aclose_superseded_attempt,
-        is_anthropic_content_delta_chunk,
+        anthropic_content_delta_detector,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
     )
@@ -1356,7 +1356,7 @@ def wrap_anthropic_stream(
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
         try:
             items: Final = (
-                _until_first_output(source_iterator, deadline, is_anthropic_content_delta_chunk, expired)
+                _until_first_output(source_iterator, deadline, anthropic_content_delta_detector(), expired)
                 if deadline is not None and expired is not None
                 else source_iterator
             )

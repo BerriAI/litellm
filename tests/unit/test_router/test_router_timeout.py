@@ -1101,6 +1101,32 @@ def _ttft_anthropic_frame(kind: str, **fields: object) -> bytes:
 
 
 @pytest.mark.asyncio
+async def test_stream_ttft_messages_split_delta_disarms_deadline(
+    stream_clock: _ManualClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+) -> None:
+    start: Final = _ttft_anthropic_frame("message_start", message={"id": "msg-ttft"})
+    delta: Final = _ttft_anthropic_frame(
+        "content_block_delta", index=0, delta={"type": "text_delta", "text": "answer"}
+    )
+    stop: Final = _ttft_anthropic_frame("message_stop")
+    respx_mock.post("https://ttft.invalid/v1/messages").respond(
+        200,
+        stream=_TTFTByteStream(
+            stream_clock,
+            ((0.0, start), (0.0, delta[:17]), (0.0, delta[17:]), (0.3, stop)),
+        ),
+    )
+    router: Final = _ttft_router(messages=True, fallback=False)
+    response: Final = await router.aanthropic_messages(
+        model="primary", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True
+    )
+    assert b"".join([chunk async for chunk in response]) == start + delta + stop
+    assert router.health().failures_this_minute("ttft-primary") == 0
+
+
+@pytest.mark.asyncio
 async def test_stream_ttft_messages_forwards_pings_then_falls_back_without_duplicate_start(
     stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
