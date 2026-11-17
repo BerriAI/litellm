@@ -4,6 +4,7 @@ from typing import Final
 
 import pytest
 
+from litellm import register_model
 from litellm.cost_calculator import cost_per_token
 
 REPO_ROOT: Final = Path(__file__).parents[2]
@@ -60,6 +61,7 @@ def test_snowflake_entries_are_identical_in_the_backup_file() -> None:
 @pytest.mark.parametrize("model", CACHE_WRITE_MODELS)
 def test_snowflake_cache_writes_are_billed_at_the_cache_write_rate(model: str, local_model_cost_map: None) -> None:
     entry: Final = _snowflake_entries(MAIN_PATH)[model]
+    register_model({model: entry})
     prompt_cost, _ = cost_per_token(
         model=model,
         custom_llm_provider="snowflake",
