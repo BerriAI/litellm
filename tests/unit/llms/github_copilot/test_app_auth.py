@@ -899,6 +899,8 @@ def test_uploaded_key_is_accepted_with_blank_key_ref(private_key: str, blank_key
         {"github_copilot_app_private_key": 12345},
         {"github_copilot_app_private_key": False},
         {"github_copilot_app_private_key_ref": 12345},
+        {"github_copilot_app_private_key_ref": False},
+        {"github_copilot_app_private_key_ref": 0},
     ],
 )
 def test_non_string_key_source_fails_closed(private_key: str, override: Mapping[str, object]) -> None:
