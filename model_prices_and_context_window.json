@@ -87488,6 +87488,11 @@
         "max_output_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
