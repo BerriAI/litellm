@@ -11,6 +11,7 @@ from typing import (
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
@@ -30,12 +31,15 @@ from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
+    assert_vector_store_index_access,
     get_litellm_managed_vector_store,
+    resolve_vector_store_fallback_plan,
     with_managed_search_file_ids,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.fallbacks import vector_store_fallback_context
 from litellm.vector_stores.search_query import store_search_params, with_caller_query_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
@@ -103,6 +107,17 @@ def reject_caller_opensearch_store_params(
         )
 
 
+def reject_caller_fallback_selection(payload: Mapping[str, object], *, enabled: bool) -> None:
+    from litellm.litellm_core_utils.clientside_credential_handler import UPSTREAM_BOUND_PARAMS
+
+    always: Final = frozenset({"fallbacks", "_vector_store_fallback_plan"})
+    owned: Final = UPSTREAM_BOUND_PARAMS | frozenset({"model", "custom_llm_provider", "client", "extra_query"})
+    blocked: Final = always | owned if enabled else always
+    found: Final = next((key for key in payload if key in blocked), None)
+    if found is not None:
+        raise HTTPException(status_code=400, detail=f"'{found}' is owned by the vector store registration")
+
+
 ########################################################
 # OpenAI Compatible Endpoints
 ########################################################
@@ -151,6 +166,30 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     return {**data, **build_request_data_from_managed_vector_store(vector_store_to_run)}
 
 
+async def resolve_vector_store_search_target(
+    vector_store_id: str, user_api_key_dict: UserAPIKeyAuth
+) -> tuple[LiteLLM_ManagedVectorStore | None, str | None]:
+    direct: Final = await get_litellm_managed_vector_store(vector_store_id)
+    if direct is not None:
+        await assert_user_can_access_vector_store(direct, user_api_key_dict)
+        return direct, None
+    indexes: Final = litellm.vector_store_index_registry
+    index: Final = indexes.get_vector_store_index_by_name(vector_store_id) if indexes is not None else None
+    if index is None:
+        return None, None
+    assert_vector_store_index_access(user_api_key_dict, vector_store_id, "read")
+    registry: Final = litellm.vector_store_registry
+    store: Final = (
+        registry.get_litellm_managed_vector_store_from_registry_by_name(index.litellm_params.vector_store_name)
+        if registry is not None
+        else None
+    )
+    if store is None:
+        raise HTTPException(status_code=400, detail="The vector store for this index is not registered")
+    await assert_user_can_access_vector_store(store, user_api_key_dict)
+    return store, index.litellm_params.vector_store_index
+
+
 @router.post(
     "/v1/vector_stores/{vector_store_id:path}/search",
     dependencies=[Depends(user_api_key_auth)],
@@ -190,13 +229,26 @@ async def vector_store_search(
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
     caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
+    registered_store, physical_index = await resolve_vector_store_search_target(vector_store_id, user_api_key_dict)
+    fallback_plan: Final = (
+        await resolve_vector_store_fallback_plan(registered_store, user_api_key_dict, physical_index=physical_index)
+        if registered_store is not None
+        else None
+    )
+    reject_caller_fallback_selection(caller_body, enabled=fallback_plan is not None)
 
     # Check for legacy vector store registry (non-managed vector stores)
     data = dict(  # rebind-ok: pre-existing rebinding of the request body
         with_caller_query_params(
-            await _update_request_data_with_litellm_managed_vector_store_registry(
-                data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
-            ),
+            {
+                **caller_body,
+                **(
+                    build_request_data_from_managed_vector_store(registered_store)
+                    if registered_store is not None
+                    else {}
+                ),
+                **({"vector_store_id": physical_index} if physical_index is not None else {}),
+            },
             caller_body.get("extra_body"),
         )
     )
@@ -214,24 +266,25 @@ async def vector_store_search(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        search_response: Final = await processor.base_process_llm_request(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            route_type="avector_store_search",
-            proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=None,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            version=version,
-        )
+        with vector_store_fallback_context(fallback_plan):
+            search_response: Final = await processor.base_process_llm_request(
+                request=request,
+                fastapi_response=fastapi_response,
+                user_api_key_dict=user_api_key_dict,
+                route_type="avector_store_search",
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=llm_router,
+                general_settings=general_settings,
+                proxy_config=proxy_config,
+                select_data_generator=select_data_generator,
+                model=None,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                version=version,
+            )
         search_page: Final = as_str_mapping(search_response)
         if search_page is None:
             return search_response

@@ -26,6 +26,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import managed_file_ids_f
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
+from litellm.vector_stores.fallbacks import (
+    VectorStoreFallbackPlan,
+    fallback_ids,
+    targets_for_store,
+)
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
@@ -672,3 +677,63 @@ async def with_managed_search_file_ids(
     if not id_map:
         return search_page
     return {**search_page, "data": [_with_managed_search_file_id(hit, id_map) for hit in hits]}
+
+
+async def resolve_vector_store_fallback_plan(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+    physical_index: str | None = None,
+    passthrough_provider: str | None = None,
+) -> VectorStoreFallbackPlan | None:
+    from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
+    from litellm.proxy.proxy_server import llm_router
+
+    primary: Final = normalize_litellm_params(vector_store)
+    await assert_user_can_access_vector_store(primary, user_api_key_dict)
+    try:
+        ids: Final = fallback_ids(primary.get("litellm_params") or {})
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if not ids:
+        return None
+    resolved: Final = tuple([await get_litellm_managed_vector_store(store_id) for store_id in ids])
+    if any(store is None for store in resolved):
+        raise HTTPException(status_code=400, detail="A configured vector store fallback does not exist")
+    stores: Final = (primary, *(store for store in resolved if store is not None))
+    try:
+        candidates: Final = targets_for_store(primary, stores)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if (
+        passthrough_provider is not None
+        and candidates[0].provider.split("/", 1)[0] != passthrough_provider.split("/", 1)[0]
+    ):
+        raise HTTPException(status_code=400, detail="Vector store provider does not match the passthrough route")
+    selected: Final = tuple(
+        target
+        for target in candidates
+        if passthrough_provider is None or target.provider.split("/", 1)[0] == passthrough_provider.split("/", 1)[0]
+    )
+    if len(selected) < 2:
+        return None
+    selected_ids: Final = frozenset(target.store_id for target in selected)
+    for store in stores[1:]:
+        if store.get("vector_store_id") in selected_ids:
+            await assert_user_can_access_vector_store(store, user_api_key_dict)
+    configured_ttl: Final = llm_router.settings().cooldown_time if llm_router is not None else None
+    return VectorStoreFallbackPlan(
+        targets=selected,
+        physical_index=physical_index,
+        cooldown_time=DEFAULT_COOLDOWN_TIME_SECONDS if configured_ttl is None else configured_ttl,
+    )
+
+
+async def validate_vector_store_fallback_registration(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    params: Final = normalize_litellm_params(vector_store).get("litellm_params") or {}
+    if "fallbacks" not in params:
+        return
+    assert_proxy_admin_for_vector_store_index_management(user_api_key_dict, operation="update")
+    await resolve_vector_store_fallback_plan(vector_store, user_api_key_dict)
