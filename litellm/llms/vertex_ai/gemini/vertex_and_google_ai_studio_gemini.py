@@ -1633,8 +1633,31 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
+    def _thinking_levels_for_model(model: str | None) -> frozenset[str] | None:
+        """
+        Thinking levels the model card allows, or None when the model has no exact contract.
+
+        Source: Google model cards for gemini-nano-banana-2.1 and gemini-3.1-flash-image,
+        reviewed 2026-11-17. Unknown models keep the generic Gemini 3 behavior.
+        """
+        if not model:
+            return None
+        lowered: Final = model.lower()
+        if "nano-banana" in lowered:
+            return frozenset({"minimal", "medium", "high"})
+        if "flash-image" in lowered:
+            return frozenset({"minimal", "high"})
+        return None
+
+    @staticmethod
+    def _is_nano_banana_image_model(model: str) -> bool:
+        return "nano-banana" in model.lower()
+
+    @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
         lowered: Final = model.lower()
+        if (levels := VertexGeminiConfig._thinking_levels_for_model(model)) is not None:
+            return "minimal" in levels
         is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in lowered
         return is_gemini3_or_newer_flash and not is_explicitly_disabled_factory(
             model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
@@ -1664,6 +1687,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
         sends_thoughts: Final = VertexGeminiConfig._include_thoughts(include_thoughts)
+        allowed_levels: Final = VertexGeminiConfig._thinking_levels_for_model(model)
+        if allowed_levels is not None:
+            if reasoning_effort in allowed_levels:
+                return {
+                    "thinkingLevel": cast(Literal["minimal", "medium", "high"], reasoning_effort),
+                    "includeThoughts": sends_thoughts,
+                }
+            if reasoning_effort in ("disable", "none"):
+                return {
+                    "thinkingLevel": "minimal" if "minimal" in allowed_levels else "low",
+                    "includeThoughts": False,
+                }
+            raise _unsupported_reasoning_effort(reasoning_effort)
         if reasoning_effort == "minimal":
             if supports_minimal:
                 return {"thinkingLevel": "minimal", "includeThoughts": sends_thoughts}
@@ -1929,6 +1965,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
                 continue
+            if param in ("temperature", "top_p", "top_k", "seed", "logprobs") and (
+                VertexGeminiConfig._is_nano_banana_image_model(model)
+            ):
+                if litellm.drop_params or drop_params:
+                    continue
+                raise UnsupportedParamsError(
+                    message=(
+                        f"{model} does not support {param}: the model card documents no sampling "
+                        "controls for this image model. "
+                        "To drop unsupported params, set `litellm.drop_params = True`."
+                    ),
+                    status_code=400,
+                )
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
                     if value is not None and value < 1.0:
