@@ -126,7 +126,11 @@ def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows
 
 
 @pytest.mark.parametrize("model", ("anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5"))
-def test_claude_5_5_costs_the_same_on_both_bedrock_mantle_prefixes(model: str, local_model_cost_map: None) -> None:
+def test_claude_5_5_costs_the_same_on_both_bedrock_mantle_prefixes(
+    model: str, local_model_cost_map: None, prices: dict
+) -> None:
+    litellm.register_model({f"bedrock/mantle/{model}": prices[f"bedrock/mantle/{model}"]})
+    litellm.register_model({f"bedrock_mantle/{model}": prices[f"bedrock_mantle/{model}"]})
     tokens: Final = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
     assert litellm.cost_per_token(model=f"bedrock/mantle/{model}", **tokens) == litellm.cost_per_token(
         model=f"bedrock_mantle/{model}", **tokens
