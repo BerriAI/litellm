@@ -3034,10 +3034,12 @@ if MCP_AVAILABLE:
             if not is_set:
                 missing_count += 1
             required.append(
-                MCPUserEnvVarSpec(
-                    name=name,
-                    description=spec.get("description"),
-                    is_set=is_set,
+                MCPUserEnvVarSpec.model_validate(
+                    {
+                        "name": name,
+                        "description": spec.get("description"),
+                        "is_set": is_set,
+                    }
                 )
             )
 

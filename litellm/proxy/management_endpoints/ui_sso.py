@@ -65,7 +65,7 @@ from litellm.constants import (
     MICROSOFT_USER_ID_ATTRIBUTE,
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -1531,8 +1531,10 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         import ast
 
         try:
-            generic_user_role_mappings_data: dict[LitellmUserRoles, list[str]] = ast.literal_eval(generic_role_mappings)
-            if isinstance(generic_user_role_mappings_data, dict):
+            generic_user_role_mappings_data: Final = as_str_mapping(
+                _DECODED_JSON.validate_python(ast.literal_eval(generic_role_mappings))
+            )
+            if generic_user_role_mappings_data is not None:
                 role_mappings_data = {
                     "provider": "generic",
                     "group_claim": generic_role_mappings_group_claim,
@@ -5046,8 +5048,9 @@ class MicrosoftSSOHandler:
 
         while next_link is not None and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
             response = await async_client.get(next_link, headers=headers)
-            response_json: _ServicePrincipalPage = response.json()
-            verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_json)
+            response_payload = _DECODED_JSON.validate_python(response.json())
+            verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_payload)
+            response_json = require_attributes(response_payload, _ServicePrincipalPage, "get")
 
             for _object in response_json.get("value", []):
                 if _object.get("principalType") == "Group":

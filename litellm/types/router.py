@@ -967,9 +967,9 @@ class Deployment(LiteLLMBaseModel):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes

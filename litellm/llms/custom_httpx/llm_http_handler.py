@@ -16,6 +16,8 @@ from typing import (
     NamedTuple,
     Optional,
     Protocol,
+    SupportsFloat,
+    SupportsIndex,
     TypedDict,
     TypeVar,
     Union,
@@ -31,7 +33,7 @@ from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import Buffer, ReadOnly
 
 import litellm
 import litellm.litellm_core_utils
@@ -664,6 +666,13 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 _DECODED_JSON: Final = TypeAdapter(object)
 _AGENTIC_HOOK_RESULT: Final = TypeAdapter(object)
+
+
+def _timeout_param(params: Mapping[str, object]) -> float:
+    value: Final = params.get("timeout", 0)
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -3203,7 +3212,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
+                    timeout=timeout or _timeout_param(response_api_optional_request_params),
                     stream=stream,
                     **body_kwargs,
                 )
@@ -3230,7 +3239,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
+                    timeout=timeout or _timeout_param(response_api_optional_request_params),
                     **body_kwargs,
                 )
         except Exception as e:

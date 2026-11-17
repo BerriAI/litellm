@@ -20,11 +20,15 @@ from litellm.integrations.langfuse.langfuse_mock_client import (
     should_use_langfuse_mock,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    KeywordArguments,
     as_str_mapping,
     filter_exceptions_from_params,
+    has_attributes,
     json_contains,
     reconstruct_model_name,
+    require_attributes,
     safe_deep_copy,
+    subscript,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
@@ -65,6 +69,21 @@ _REDACTED_PROXY_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "co
 def _object_mapping(value: object) -> Mapping[str, object] | None:
     """Return ``value`` as an opaque mapping when it is a dict."""
     return value if isinstance(value, dict) else None
+
+
+class _DumpsToMapping(Protocol):
+    def json(self) -> Mapping[str, object]: ...
+
+
+def _first_message_dump(response_obj: object) -> Mapping[str, object]:
+    message: Final = subscript(subscript(subscript(response_obj, "choices"), 0), "message")
+    return require_attributes(message, _DumpsToMapping, "json").json()
+
+
+def _splattable_metadata(metadata: object) -> KeywordArguments:
+    if has_attributes(metadata, KeywordArguments, "keys"):
+        return metadata
+    raise TypeError(f"'{type(metadata).__name__}' object is not a mapping")
 
 
 def _widened_items(mapping: Mapping[str, object]) -> Iterable[tuple[object, object]]:
@@ -589,7 +608,7 @@ class LangFuseLogger:
         prompt: dict,
         level: str,
         status_message: str | None,
-    ) -> tuple[dict | None, str | dict | Sequence[object] | None]:
+    ) -> tuple[dict | None, str | Mapping[str, object] | Sequence[object] | None]:
         """
         Get the input and output content for Langfuse logging
 
@@ -605,7 +624,7 @@ class LangFuseLogger:
             output: The output content for Langfuse logging
         """
         input = None
-        output: str | dict | Sequence[object] | None = None
+        output: str | Mapping[str, object] | Sequence[object] | None = None
         if level == "ERROR" and status_message is not None and isinstance(status_message, str):
             input = prompt
             output = status_message
@@ -665,7 +684,7 @@ class LangFuseLogger:
         user_id: str | None,
         metadata: dict[str, object],
         litellm_params: dict,
-        output: str | dict | Sequence[object] | None,
+        output: str | Mapping[str, object] | Sequence[object] | None,
         start_time: datetime | None,
         end_time: datetime | None,
         kwargs: dict,
@@ -765,7 +784,7 @@ class LangFuseLogger:
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             if existing_trace_id is not None:
-                trace_params: dict[str, Any] = {"id": existing_trace_id}
+                trace_params: dict[str, object] = {"id": existing_trace_id}
 
                 # Update the following keys for this trace
                 for metadata_param_key in update_trace_keys:
@@ -805,7 +824,7 @@ class LangFuseLogger:
                     key: value for key, value in metadata.items() if isinstance(value, (str, int, float, bool))
                 }
                 trace_params["metadata"] = {
-                    **(trace_params.get("metadata") or _NO_METADATA),
+                    **_splattable_metadata(trace_params.get("metadata") or _NO_METADATA),
                     "metadata_passed_to_litellm": debug_metadata,
                 }
 
@@ -1016,13 +1035,12 @@ class LangFuseLogger:
     @staticmethod
     def _get_chat_content_for_langfuse(
         response_obj: ModelResponse,
-    ) -> str | None:
+    ) -> Mapping[str, object] | None:
         """
         Get the chat content for Langfuse logging
         """
         if response_obj.choices and len(response_obj.choices) > 0:
-            output: Final = response_obj["choices"][0]["message"].json()
-            return output
+            return _first_message_dump(response_obj)
         else:
             return None
 

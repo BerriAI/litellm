@@ -1207,6 +1207,13 @@ class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+_NO_HIDDEN_VALUE: Final = object()
+
+
 def _get_response_model(completion_response: object) -> str | None:
     """
     Extract the model name from a completion response object.
@@ -2055,7 +2062,11 @@ def completion_cost(
                         custom_llm_provider = pricing_provider or hidden_params.get(
                             "custom_llm_provider", custom_llm_provider or None
                         )
-                        region_name = hidden_params.get("region_name", region_name)
+                        hidden_region_name = require_attributes(
+                            _ATTRIBUTE_VALUE.validate_python(hidden_params), _SupportsGetWithDefault, "get"
+                        ).get("region_name", _NO_HIDDEN_VALUE)
+                        if hidden_region_name is not _NO_HIDDEN_VALUE:
+                            region_name = hidden_region_name
 
                 else:
                     if model is None:

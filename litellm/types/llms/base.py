@@ -33,8 +33,8 @@ class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
 class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
-    def __getitem__(self, key):
-        return self.__dict__[key]
+    def __getitem__(self, key) -> object:
+        return _ATTRIBUTE_VALUE.validate_python(self.__dict__[key])
 
     def get(self, key, default=None):
         return self.__dict__.get(key, default)

@@ -1053,12 +1053,25 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-async def _async_streaming(response, model, custom_llm_provider, litellm_params: Mapping[str, object]):
+class _AsyncLineSource(Protocol):
+    def __aiter__(self) -> AsyncIterator[object]: ...
+
+
+async def _awaited_stream(pending: Awaitable[object]) -> object:
+    return await pending
+
+
+def _async_line_source(value: object) -> _AsyncLineSource:
+    if has_attributes(value, _AsyncLineSource, "__aiter__"):
+        return value
+    raise TypeError(f"'async for' requires an object with __aiter__ method, got {type(value).__name__}")
+
+
+async def _async_streaming(response: object, model, custom_llm_provider, litellm_params: Mapping[str, object]):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
-        if asyncio.iscoroutine(response):
-            response = await response
-        async for line in response:
+        resolved: Final = await _awaited_stream(response) if asyncio.iscoroutine(response) else response
+        async for line in _async_line_source(resolved):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:

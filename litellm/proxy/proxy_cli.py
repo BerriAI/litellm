@@ -273,6 +273,16 @@ _LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object]
 _DECODED_JSON: Final = TypeAdapter[object](object)
 
 
+class _GunicornSettings(Protocol):
+    def __getattr__(self, name: str, /) -> object: ...
+
+
+def _gunicorn_settings() -> _GunicornSettings:
+    from gunicorn.config import Config as GunicornConfig
+
+    return GunicornConfig()
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def echo_litellm_version():
@@ -890,9 +900,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def gunicorn_keepalive_and_trusted_proxies() -> tuple[int, str]:
         """Loaded only when gunicorn is the server, because gunicorn imports ``fcntl``, which Windows lacks."""
-        from gunicorn.config import Config as GunicornConfig
-
-        config: Final = GunicornConfig()
+        config: Final = _gunicorn_settings()
         return (
             TypeAdapter(int).validate_python(config.keepalive),
             ",".join(TypeAdapter(list[str]).validate_python(config.forwarded_allow_ips)),

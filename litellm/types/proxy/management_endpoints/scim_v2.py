@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal, Optional, Union
+from typing import Final, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import (
@@ -219,7 +219,7 @@ class SCIMServiceProviderConfig(LiteLLMBaseModel):
     sort: SCIMFeature = SCIMFeature(supported=False)
     etag: SCIMFeature = SCIMFeature(supported=False)
     authenticationSchemes: list[dict[str, object]] | None = None
-    meta: dict[str, Any] | None = None
+    meta: dict[str, object] | None = None
 
 
 # SCIM ResourceType Models (RFC 7643 Section 6)

@@ -20,6 +20,8 @@ from typing import (
     Literal,
     NoReturn,
     Protocol,
+    SupportsIndex,
+    SupportsInt,
     TypeAlias,
     cast,
     overload,
@@ -29,7 +31,7 @@ from typing import (
 import httpx
 from openai._streaming import SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import TypeIs
+from typing_extensions import Buffer, TypeIs
 
 import litellm
 from litellm.constants import (
@@ -188,9 +190,16 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
+def _raise_missing_get(value: object) -> NoReturn:
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
+
+
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
     """Parse a JSON payload that the caller consumes as an object."""
-    return json.loads(payload)
+    decoded: Final = _load_json_value(payload)
+    if _is_json_object(decoded):
+        return decoded
+    _raise_missing_get(decoded)
 
 
 def _load_json_value(payload: str | bytes) -> object:
@@ -374,6 +383,19 @@ def _error_event_error_object(event: object) -> object:
     if nested_error is not None:
         return nested_error
     return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _int_status_code(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -802,14 +824,14 @@ class BaseResponsesAPIStreamingIterator:
         mapped_exception: Final = self._map_error_event_exception(error_obj)
         if not _mid_stream_fallback_eligible(mapped_exception):
             raise mapped_exception
-        mapped_status: Final = getattr(mapped_exception, "status_code", None)
+        mapped_status: Final[object] = getattr(mapped_exception, "status_code", None)
         raise MidStreamFallbackError(
             message=str(mapped_exception),
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
             original_exception=mapped_exception,
             response=httpx.Response(
-                status_code=int(mapped_status) if mapped_status is not None else 503,
+                status_code=_int_status_code(mapped_status) if mapped_status is not None else 503,
                 headers=provider_request_id_headers(self._raw_response_headers),
                 request=httpx.Request(method="POST", url=f"https://{self.custom_llm_provider or ''}.com/v1/"),
             ),
@@ -3523,7 +3545,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
         call_kwargs["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> _MutableJsonObject | None:
+    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> object:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
@@ -3531,7 +3553,7 @@ class ManagedResponsesWebSocketHandler:
         directly (before serialization) to avoid a redundant JSON round-trip on every chunk. Returns the terminal
         event dict, or ``None``.
         """
-        terminal_event: _MutableJsonObject | None = None
+        terminal_event: object = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
             if chunk is None:
@@ -3543,7 +3565,7 @@ class ManagedResponsesWebSocketHandler:
                 continue
             if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
                 try:
-                    terminal_event = _load_json_object(serialized)
+                    terminal_event = _load_json_value(serialized)
                 except Exception:
                     pass
             try:
@@ -3562,13 +3584,15 @@ class ManagedResponsesWebSocketHandler:
 
     def _save_turn_history(
         self,
-        terminal_event: _MutableJsonObject | None,
+        terminal_event: object,
         prior_history: list[dict[str, object]],
         current_messages: list[dict[str, object]],
     ) -> None:
         """Store this terminal (``response.completed`` or ``response.incomplete``) event for future history lookups."""
         if terminal_event is None:
             return
+        if not _is_json_object(terminal_event):
+            _raise_missing_get(terminal_event)
         new_response_id: Final = self._extract_response_id(terminal_event)
         if not new_response_id:
             return

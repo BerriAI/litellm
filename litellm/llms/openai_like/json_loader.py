@@ -10,11 +10,20 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, subscript
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _provider_entries(data: object) -> Mapping[str, object]:
+    entries: Final = as_str_mapping(data)
+    if entries is not None:
+        return entries
+    raise AttributeError(f"'{type(data).__name__}' object has no attribute 'items'", name="items", obj=data)
 
 
 class SimpleProviderConfig:
@@ -40,6 +49,14 @@ class SimpleProviderConfig:
         )
 
 
+def _provider_config(slug: str, config: object) -> SimpleProviderConfig:
+    mapping: Final = as_str_mapping(config)
+    if isinstance(mapping, dict):
+        return SimpleProviderConfig(slug, mapping)
+    subscript(config, "base_url")
+    raise TypeError(f"provider config must be a JSON object, not {type(config).__name__}")
+
+
 class JSONProviderRegistry:
     """Load providers from JSON once on import"""
 
@@ -61,10 +78,10 @@ class JSONProviderRegistry:
 
         try:
             with open(json_path) as f:
-                data: Final = json.load(f)
+                data: Final = _DECODED_JSON.validate_python(json.load(f))
 
-            for slug, config in data.items():
-                cls._providers[slug] = SimpleProviderConfig(slug, config)
+            for slug, config in _provider_entries(data).items():
+                cls._providers[slug] = _provider_config(slug, config)
 
             cls._loaded = True
         except Exception as e:

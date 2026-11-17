@@ -141,7 +141,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         model: str,
         request_data: dict[str, Any],
         litellm_params: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle token counting request for a Vertex AI partner model.
 

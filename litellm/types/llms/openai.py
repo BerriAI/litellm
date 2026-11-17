@@ -73,6 +73,7 @@ from pydantic import (
     PrivateAttr,
     SerializeAsAny,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
     field_serializer,
     field_validator,
     model_serializer,
@@ -390,6 +391,12 @@ class BatchGuardrailReport(LiteLLMBaseModel):
 _JsonValue: TypeAlias = object
 """Alias for ``object``, usable inside model bodies that declare a field named ``object``."""
 
+_ATTRIBUTE_VALUE: Final = TypeAdapter(_JsonValue)
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> builtins.object: ...
+
 
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
 LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD: Final = "litellm_details_fallback"
@@ -493,9 +500,9 @@ class OpenAIFileObject(LiteLLMBaseModel):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> _JsonValue:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -1647,13 +1654,15 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("reasoning", mode="before")
     @classmethod
-    def validate_reasoning_to_dict(cls, value: Any) -> builtins.object:
+    def validate_reasoning_to_dict(cls, value: builtins.object) -> builtins.object:
         """Accept API reasoning dict (including effort 'none'/'xhigh'); always store as dict."""
         if value is None:
             return None
         if isinstance(value, dict):
             return value
-        if hasattr(value, "model_dump"):
+        from litellm.litellm_core_utils.core_helpers import has_attributes
+
+        if has_attributes(value, _ModelDumpable, "model_dump"):
             return value.model_dump()
         return value
 
@@ -2849,7 +2858,7 @@ class OpenAIVideoObject(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key) -> _JsonValue:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
