@@ -17,7 +17,7 @@ pub use authorization::{
     NoAdditionalPolicy, Permissions, UiAction,
 };
 pub use error::Error;
-pub use http::{Bearer, CredentialExtractor, RequireMasterKey, authenticate};
+pub use http::{Bearer, BearerOrXApiKey, CredentialExtractor, RequireMasterKey, authenticate};
 pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,
     ResolvedIdentity, SharedCaller, VerifiedIdentity,

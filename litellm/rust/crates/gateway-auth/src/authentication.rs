@@ -115,7 +115,9 @@ impl Auth {
 
     pub async fn authenticate_parts(&self, request: &Parts) -> Result<AuthenticatedRequest, Error> {
         let credential = self.extractor.extract(request)?;
-        self.authenticate_request(&credential, request).await
+        self.authenticate_request(&credential, request)
+            .await
+            .map_err(|error| self.extractor.reject(request, error))
     }
 
     pub async fn validate(&self) -> Result<(), Error> {
