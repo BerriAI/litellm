@@ -1154,6 +1154,26 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
     assert additional.get("output_config") == {"effort": "high"}
 
 
+def test_reasoning_effort_reaches_the_request_on_the_canada_inference_profile():
+    def request_fields(model: str) -> object:
+        optional_params: Final = litellm.utils.get_optional_params(
+            model=model, custom_llm_provider="bedrock", reasoning_effort="max", max_tokens=4000, drop_params=True
+        )
+        request: Final = AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+        return request.get("additionalModelRequestFields")
+
+    canada_fields: Final = request_fields("ca.anthropic.claude-haiku-5-5")
+
+    assert canada_fields == request_fields("us.anthropic.claude-haiku-5-5")
+    assert canada_fields["output_config"] == {"effort": "max"}
+
+
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
 _ARTIFACT_DATA_INPUT_SCHEMA: Final = {
     "type": "object",
