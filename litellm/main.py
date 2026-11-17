@@ -6095,7 +6095,7 @@ def completion(
             return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 bridged, replay_as_stream
             )
-        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_openai_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
