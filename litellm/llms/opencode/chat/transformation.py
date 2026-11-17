@@ -79,6 +79,14 @@ class OpenCodeGoChatConfig(_GoReportedCostMixin, OpenAILikeChatConfig):
     ) -> tuple[str, str | None]:
         return go_api_base(api_base), go_api_key(api_key)
 
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: matches OpenAIGPTConfig's list return
+        supports_reasoning: Final = litellm.supports_reasoning(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        )
+        inherited: Final[list[str]] = super().get_supported_openai_params(model)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent returns a bare list  # mutable-ok: same
+        extra: Final = ("reasoning_effort",) if supports_reasoning else ()
+        return [*inherited, *extra]
+
     def validate_environment(
         self,
         headers: Mapping[str, object],
