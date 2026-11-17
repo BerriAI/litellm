@@ -82,6 +82,7 @@ from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -12858,10 +12859,7 @@ class Router:
 
     @staticmethod
     def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
-        declared: Final = params.get("allowed_openai_params")
-        if not isinstance(declared, (list, tuple, set, frozenset)):
-            return frozenset()
-        return frozenset(entry for entry in declared if isinstance(entry, str))
+        return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
     @staticmethod
     def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:

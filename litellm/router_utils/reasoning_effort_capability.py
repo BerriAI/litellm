@@ -1,7 +1,7 @@
 """Resolve which reasoning_effort values a deployment, and by intersection a model group, accepts.
 
 An entry that states its levels outright in reasoning_effort_levels wins whole, for a model whose set
-the per-level flags cannot express (Kimi K3 takes low, high and max, and no flag can drop medium).
+the per-level flags cannot express (DeepSeek V4 on Foundry takes none, high and max, and no flag can drop medium).
 Every other entry answers through its supports_*_reasoning_effort flags, read with the polarity the
 chat gate uses: medium and high are unconditional, minimal and low are opt-out (refused only on an
 explicit false), xhigh is opt-in, and none is opt-out except on the azure gpt-5 family, whose chat
