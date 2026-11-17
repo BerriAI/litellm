@@ -103,6 +103,36 @@ def test_github_copilot_rows_derive_mode_from_their_endpoints(path: Path) -> Non
     }
 
 
+def _mantle_route_rows_priced_apart_from_their_provider_row(
+    prices: Mapping[str, Mapping[str, object]],
+) -> tuple[str, ...]:
+    route: Final = "bedrock/mantle/"
+    provider_rows: Final = {
+        key: prices.get(f"bedrock_mantle/{key.removeprefix(route)}") for key in prices if key.startswith(route)
+    }
+    return tuple(
+        key
+        for key, provider_row in provider_rows.items()
+        if provider_row is not None and _price_fields(prices[key]) != _price_fields(provider_row)
+    )
+
+
+def _price_fields(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {field: value for field, value in row.items() if "cost" in field}
+
+
+def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows(prices: dict) -> None:
+    assert _mantle_route_rows_priced_apart_from_their_provider_row(prices) == ()
+
+
+@pytest.mark.parametrize("model", ("anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5"))
+def test_claude_5_5_costs_the_same_on_both_bedrock_mantle_prefixes(model: str, local_model_cost_map: None) -> None:
+    tokens: Final = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
+    assert litellm.cost_per_token(model=f"bedrock/mantle/{model}", **tokens) == litellm.cost_per_token(
+        model=f"bedrock_mantle/{model}", **tokens
+    )
+
+
 def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
     return tuple(key for key, row in prices.items() if "max_tokens" in row)
 
