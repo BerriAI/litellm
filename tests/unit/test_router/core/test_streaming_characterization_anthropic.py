@@ -783,3 +783,16 @@ async def test_a_fallback_groups_stream_retry_failing_before_content_carries_the
     assert [called for called in host.deployments_called() if called != "a"] in (["b1", "b2"], ["b2", "b1"])
     assert raised.value.message.startswith(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
     assert "boom" in raised.value.message.removeprefix(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
+
+
+async def test_a_fallback_stream_raising_inside_its_message_start_carries_the_primarys_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START[:30], error=server_error()))
+    core = with_router_debug(make_core, host)
+    seen: list[object] = []
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await drain_into(await open_stream(core), seen)
+    assert seen == [MESSAGE_START[:30]]
+    assert raised.value.message == f"{PRIMARY_RATE_LIMITED}{OUTCOME}litellm.InternalServerError: boom"

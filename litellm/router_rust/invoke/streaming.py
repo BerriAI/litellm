@@ -1252,7 +1252,6 @@ def _is_anthropic_preamble_chunk(chunk: object) -> bool:
         bool(event_lines)
         and all(line in _ANTHROPIC_PREAMBLE_EVENT_LINES for line in event_lines)
         and chunk.startswith(b"event:")
-        and chunk.endswith((b"\n\n", b"\r\n\r\n"))
     )
 
 
