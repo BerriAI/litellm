@@ -4567,6 +4567,88 @@ def test_gemini_flash_minimal_thinking_support(
     assert result["includeThoughts"] is include_thoughts
 
 
+@pytest.mark.parametrize(
+    ("model", "reasoning_effort", "expected_level"),
+    [
+        ("gemini-nano-banana-2.1", "minimal", "minimal"),
+        ("gemini-nano-banana-2.1", "medium", "medium"),
+        ("gemini-nano-banana-2.1", "high", "high"),
+        ("gemini-3.1-flash-image", "minimal", "minimal"),
+        ("gemini-3.1-flash-image", "high", "high"),
+    ],
+)
+def test_vertex_image_models_keep_documented_thinking_levels(
+    local_model_cost_map, model, reasoning_effort, expected_level
+):
+    result = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {"thinkingLevel": expected_level, "includeThoughts": True}
+
+
+@pytest.mark.parametrize(
+    ("model", "reasoning_effort"),
+    [
+        ("gemini-nano-banana-2.1", "low"),
+        ("gemini-3.1-flash-image", "low"),
+        ("gemini-3.1-flash-image", "medium"),
+    ],
+)
+def test_vertex_image_models_reject_undocumented_thinking_levels(local_model_cost_map, model, reasoning_effort):
+    with pytest.raises(litellm.UnsupportedParamsError):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("param", "value"),
+    [
+        ("temperature", 1.0),
+        ("top_p", 0.9),
+        ("top_k", 10),
+        ("seed", 42),
+        ("logprobs", True),
+    ],
+)
+def test_nano_banana_rejects_unsupported_sampling_params(local_model_cost_map, param, value):
+    with pytest.raises(litellm.UnsupportedParamsError):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="gemini-nano-banana-2.1",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("param", "value"),
+    [
+        ("temperature", 1.0),
+        ("top_p", 0.9),
+        ("top_k", 10),
+        ("seed", 42),
+        ("logprobs", True),
+    ],
+)
+def test_nano_banana_drops_unsupported_sampling_params_with_drop_params(local_model_cost_map, param, value):
+    result = VertexGeminiConfig().map_openai_params(
+        non_default_params={param: value},
+        optional_params={},
+        model="gemini-nano-banana-2.1",
+        drop_params=True,
+    )
+
+    assert result == {}
+
+
 def test_gemini_38_flash_feature_flag_uses_low_thinking_level(local_model_cost_map, monkeypatch):
     monkeypatch.setattr(litellm, "enable_gemini_default_thinking_level_low", True)
     thinking_param = {"type": "enabled", "budget_tokens": 1024}
