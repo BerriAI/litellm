@@ -29,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported, aiter_bytes_then_close
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
@@ -288,7 +289,7 @@ async def make_call(
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+                aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
             )
 
         # LOGGING
@@ -890,6 +891,8 @@ class AWSEventStreamDecoder:
             for held in self._held_chunks():
                 yield held
             raise
+        finally:
+            await aclose_if_supported(iterator)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         for held in self._held_chunks():
             yield held
