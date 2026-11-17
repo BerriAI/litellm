@@ -361,7 +361,7 @@ jobs:
     name: smoke passed
     needs: [dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
     steps:

@@ -116,7 +116,7 @@ jobs:
   flag:
     needs: classify
     if: needs.classify.outputs.verdict != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read
