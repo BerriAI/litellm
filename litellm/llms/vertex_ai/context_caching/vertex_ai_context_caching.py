@@ -22,6 +22,7 @@ from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     cached_messages_end_on_supported_turn,
+    reject_unusable_tool_call_arguments,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -315,6 +316,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        drop_params: bool = False,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -356,6 +358,7 @@ class ContextCachingEndpoints(VertexBase):
                 MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
             )
             return messages, optional_params, None
+        reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -419,6 +422,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            drop_params=drop_params,
         )
 
         cached_content_request_body["tools"] = tools
@@ -473,6 +477,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        drop_params: bool = False,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -514,6 +519,7 @@ class ContextCachingEndpoints(VertexBase):
                 MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
             )
             return messages, optional_params, None
+        reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -573,6 +579,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            drop_params=drop_params,
         )
 
         cached_content_request_body["tools"] = tools
