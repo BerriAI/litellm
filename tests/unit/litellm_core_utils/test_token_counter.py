@@ -2616,16 +2616,23 @@ def test_token_counter_counts_anthropic_tool_readable_content(block: Mapping[str
     assert _count_content_list(len, [block], False, None) == len(expected)
 
 
-def test_token_counter_bounds_nested_server_results_and_honors_the_fallback() -> None:
+@pytest.mark.parametrize("shape", ("mapping", "list", "mixed"))
+@pytest.mark.parametrize("block_type", ("web_fetch_result", "mcp_tool_result"))
+def test_token_counter_bounds_nested_server_results_and_honors_the_fallback(shape: str, block_type: str) -> None:
     from functools import reduce
 
     from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
     from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
 
-    def wrap(content: Mapping[str, object], _: int) -> Mapping[str, object]:
-        return {"type": "web_fetch_result", "content": content}
+    def wrap(content: Mapping[str, object], level: int) -> Mapping[str, object]:
+        return {
+            "type": block_type,
+            "content": [content] if shape == "list" or (shape == "mixed" and level % 2) else content,
+        }
 
-    leaf: Final[Mapping[str, object]] = {"type": "web_fetch_result", "url": "https://example.invalid"}
+    leaf: Final[Mapping[str, object]] = {"type": "text", "text": "result"}
+    shallow: Final = reduce(wrap, range(3), leaf)
+    assert _count_content_list(len, [shallow], False, None) == len("result")
     block: Final = reduce(wrap, range(DEFAULT_MAX_RECURSE_DEPTH + 1), leaf)
 
     with pytest.raises(UnsupportedContentTypeError, match="nesting exceeds the token counter limit"):

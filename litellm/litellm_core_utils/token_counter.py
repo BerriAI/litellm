@@ -1864,6 +1864,7 @@ def _count_anthropic_content(
                     use_default_image_token_count,
                     default_token_count,
                     pdf_pricing,
+                    _content_depth=_content_depth + 1,
                 )
             elif isinstance(field_value, dict):
                 if (
