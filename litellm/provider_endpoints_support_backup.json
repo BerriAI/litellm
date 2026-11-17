@@ -1424,7 +1424,7 @@
         "embeddings": false,
         "image_generations": false,
         "image_edits": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "rerank": false,
         "ocr": false,

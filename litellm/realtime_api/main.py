@@ -33,7 +33,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
-from ..litellm_core_utils.core_helpers import normalize_drop_params
+from ..litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -172,8 +172,9 @@ async def acreate_realtime_client_secret(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    caller_extra_headers: Final = as_str_mapping(kwargs.get("extra_headers"))
     if missing_key_error := missing_json_provider_key_error(
-        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False
+        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False, caller_extra_headers
     ):
         raise missing_key_error
     (
@@ -247,8 +248,9 @@ async def acreate_realtime_transcription_session(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    caller_extra_headers: Final = as_str_mapping(kwargs.get("extra_headers"))
     if missing_key_error := missing_json_provider_key_error(
-        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False
+        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False, caller_extra_headers
     ):
         raise missing_key_error
     (
