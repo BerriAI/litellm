@@ -41,6 +41,7 @@ let themeResponse: unknown = { values: {} };
 
 describe("Chat layout product navigation", () => {
   beforeEach(() => {
+    vi.stubGlobal("innerWidth", 390);
     themeResponse = { values: {} };
     route.pathname = "/ui/chat";
     localStorage.clear();
@@ -106,7 +107,7 @@ describe("Chat layout product navigation", () => {
         </ChatLayout>,
       );
 
-      await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
+      await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
       const logo = await screen.findByRole("link", { name: "Chat home" });
       const light = within(logo).getByAltText("LiteLLM");
       const dark = within(logo).getByAltText("");
@@ -126,8 +127,8 @@ describe("Chat layout product navigation", () => {
       </ChatLayout>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
-    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+    expect(await screen.findByRole("dialog", { name: "Sidebar" })).toBeInTheDocument();
     expect(screen.getByAltText("LiteLLM")).toHaveAttribute("src", `${getProxyBaseUrl()}/get_image`);
   });
 
@@ -147,7 +148,7 @@ describe("Chat layout product navigation", () => {
       );
 
       expect(screen.getByRole("heading", { name: "Chat content" })).toBeVisible();
-      await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
+      await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
       await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
       expect(await screen.findByRole("menuitem", { name: "Observability" })).toBeInTheDocument();
       expect(localStorage.getItem("litellm_plugin_mode")).toBe(plugin.name);
@@ -181,7 +182,7 @@ describe("Chat layout product navigation", () => {
       );
 
       expect(screen.getByRole("heading", { name: "Chat content" })).toBeVisible();
-      await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
+      await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
       await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
       expect(await screen.findByRole("menuitem", { name: "Observability" })).toBeInTheDocument();
       await user.click(screen.getByRole("menuitem", { name: "AI Gateway", exact: true }));

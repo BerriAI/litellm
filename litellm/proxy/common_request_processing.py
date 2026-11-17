@@ -182,7 +182,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
+    ParallelRequestLimiterHook,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
@@ -2615,7 +2615,7 @@ async def _release_pre_call_hold(
         PROXY_DynamicRateLimitHandlerV3
     )
     for holder in (limiter, *dynamic_limiters):
-        if not isinstance(holder, (PROXY_MaxParallelRequestsHandler_v3, PROXY_DynamicRateLimitHandlerV3)):
+        if not isinstance(holder, (ParallelRequestLimiterHook, PROXY_DynamicRateLimitHandlerV3)):
             continue
         await holder.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hooks take the proxy's bare request dict
             request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict

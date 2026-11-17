@@ -10,7 +10,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
-import { useSidebar } from "@/components/shared/Sidebar";
 import BetaBadge from "@/components/BetaBadge";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -51,15 +50,15 @@ interface ViewSwitcherItem {
 interface ViewSwitcherProps {
   className?: string;
   contentClassName?: string;
+  collapsed?: boolean;
 }
 
 const pluginLabel = (mode: string, plugins: readonly { name: string; display_name: string }[], portalLabel: string) =>
   mode === CUSTOMER_PORTAL ? portalLabel : plugins.find((p) => p.name === mode)?.display_name;
 
-export default function ViewSwitcher({ className, contentClassName }: ViewSwitcherProps) {
+export default function ViewSwitcher({ className, contentClassName, collapsed = false }: ViewSwitcherProps) {
   const { t } = useTranslation();
   const term = useTerminology();
-  const { collapsed } = useSidebar();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
