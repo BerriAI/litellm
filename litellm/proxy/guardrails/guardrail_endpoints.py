@@ -87,6 +87,11 @@ from litellm.types.guardrails import (
     with_tolerated_stream_scope,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import (
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+    ChatCompletionUserMessage,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
     HideSecretsGuardrailConfigModel,
 )
@@ -2512,9 +2517,19 @@ def _patch_logging_obj_for_guardrail(litellm_logging_obj: _GuardrailLoggingObj, 
     """Configure the logging object so Langfuse/OTEL extract input and output correctly."""
     litellm_logging_obj.call_type = "pass_through_endpoint"
     litellm_logging_obj.model_call_details["call_type"] = "pass_through_endpoint"
-    litellm_logging_obj.update_messages(
-        request.messages if request.messages else [{"role": "user", "content": request.text}]
+    litellm_logging_obj.update_messages(request.messages if request.messages else [_logged_user_message(request)])
+
+
+def _logged_user_message(request: ApplyGuardrailRequest) -> ChatCompletionUserMessage:
+    if not request.images:
+        return {"role": "user", "content": request.text}
+    text_parts: Final[tuple[ChatCompletionTextObject, ...]] = (
+        ({"type": "text", "text": request.text},) if request.text else ()
     )
+    image_parts: Final[tuple[ChatCompletionImageObject, ...]] = tuple(
+        {"type": "image_url", "image_url": {"url": image}} for image in request.images
+    )
+    return {"role": "user", "content": [*text_parts, *image_parts]}
 
 
 async def _guardrail_response_after_success_hook(

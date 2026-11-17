@@ -162,7 +162,8 @@ _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
 
 
 class BedrockGuardrailAPIError(HTTPException):
-    pass
+    logged_error_class: Final = "HTTPException"
+    prometheus_exception_class_name: Final = "HTTPException"
 
 
 class QualifiedTextBlock(NamedTuple):

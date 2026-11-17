@@ -21,7 +21,8 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.exceptions import ModifyResponseException
+from litellm.exceptions import ModifyResponseException, logged_class_name
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
@@ -8267,3 +8268,31 @@ async def test_verdict_is_recorded_on_a_request_dict_that_starts_empty(
 
     recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [record["guardrail_status"] for record in recorded] == [recorded_status]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_config", "bedrock"),
+    [
+        pytest.param(_APPLY_GUARDRAIL_API, _answering(503, {"message": "unavailable"}), id="apply_guardrail-error"),
+        pytest.param(_GUARDRAIL_CHECKS_API, _answering(500, {"message": "internal failure"}), id="guardrail_checks-error"),
+    ],
+)
+async def test_a_failed_bedrock_call_keeps_reporting_as_http_exception_to_metrics_and_logs(
+    guardrail_config: Mapping[str, object],
+    bedrock: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-guard",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        **guardrail_config,
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert logged_class_name(raised.value) == "HTTPException"
+    assert PrometheusLogger._get_exception_class_name(raised.value) == "HTTPException"

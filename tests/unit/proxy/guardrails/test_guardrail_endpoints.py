@@ -4470,6 +4470,8 @@ async def test_apply_guardrail_scans_an_image_sent_without_text(mocker: MockerFi
     assert _scanned_content(call) == [["image"]]
     assert _logged_verdicts(call) == [("bedrock-guard", "success")]
     assert _PNG_BASE64 not in json.dumps(call.logged, default=str)
+    assert [[part["type"] for part in message["content"]] for message in call.logged["messages"]] == [["image_url"]]
+    assert call.logged["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 @pytest.mark.asyncio
@@ -4480,6 +4482,8 @@ async def test_apply_guardrail_scans_an_image_and_its_text_separately(mocker: Mo
 
     assert call.response.json() == {"response_text": "hello"}
     assert _scanned_content(call) == [["image"], ["text"]]
+    assert call.logged["messages"][0]["content"][0] == {"type": "text", "text": "hello"}
+    assert [part["type"] for part in call.logged["messages"][0]["content"]] == ["text", "image_url"]
 
 
 @pytest.mark.asyncio
