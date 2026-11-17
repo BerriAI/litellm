@@ -52,3 +52,25 @@ curl -i http://localhost:4000/v1/chat/completions \
 The first request should be blocked before the mock receives it. It also checks case-insensitive matching. The second should reach the mock once. Repeat these requests with the same policy and model when the candidate port is selected. Compare the denial status and body, the provider call counts (zero for the blocked request, one for the allowed request), and the allowed request payload. Record which callback handled each request and whether the gateway forwarded it to Python.
 
 A first port could move just the regex matcher behind the existing filter. Before expanding coverage, check Python regex syntax and Unicode behavior, pattern order, and offsets used for masking. Keep a Python path for patterns whose semantics the Rust implementation cannot preserve. A full native filter also needs to preserve which fields and turns are inspected, how matches are recorded, and how streamed content is handled.
+
+## Local Messages forwarding parity
+
+Built the Rust gateway and Python extension from LiteLLM main at
+`d7ab7255e2926ac1724da74ad3e43ec3ec7aa0dc`. Sent the same non-streaming
+`POST /v1/messages` requests directly to the Python proxy and through the
+Rust gateway in forwarding mode. Both routes used the same Python worker,
+configured Python pre-call callback, and loopback Anthropic-compatible HTTP mock.
+
+| Entry point | Python callback entries per request | Block | Allow |
+| --- | ---: | --- | --- |
+| Python proxy | 1 | HTTP 400, 0 provider calls | HTTP 200, 1 provider call |
+| Rust gateway → Python proxy | 1 | HTTP 400, 0 provider calls | HTTP 200, 1 provider call |
+
+The full denial JSON matched. For the allowed requests, the mock received
+the same path and JSON body, including the rewritten message, and exactly
+one `x-parity-trace: from-python` header. The callback recorded the same
+Python worker PID for all four requests.
+
+This establishes a baseline for forwarding mode, where Python handles all
+requests on this commit. Selective native admission and streaming are
+outside this test's scope.
