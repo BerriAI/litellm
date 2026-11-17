@@ -107,12 +107,21 @@ class _FallbackPlan:
     logging_obj: object
 
 
+def routes_through_a_prompt_manager(model: str | None) -> bool:
+    return model is not None and model.split("/", 1)[0] in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the prompt manager lookup reads this same list
+
+
+def _without_prompt_manager_prefix(model: str) -> str:
+    prompt_manager, _, routed_model = model.partition("/")
+    return routed_model if routed_model and routes_through_a_prompt_manager(prompt_manager) else model
+
+
 def _provider_of(model: str, custom_llm_provider: object) -> str | None:
     from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 
     try:
         return resolve_model_and_provider_for_metadata(
-            model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+            _without_prompt_manager_prefix(model), custom_llm_provider if isinstance(custom_llm_provider, str) else None
         )[1]
     except litellm.exceptions.BadRequestError:
         return None

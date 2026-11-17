@@ -250,6 +250,7 @@ from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
     resolve_fallbacks,
+    routes_through_a_prompt_manager,
     without_global_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
@@ -412,10 +413,6 @@ ovhcloud_transformation: Final = OVHCloudChatConfig()
 lemonade_transformation: Final = LemonadeChatConfig()
 
 MOCK_RESPONSE_TYPE = str | Exception | dict | ModelResponse | ModelResponseStream
-
-
-def _routes_through_a_prompt_manager(model: str | None) -> bool:
-    return model is not None and model.split("/", 1)[0] in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the prompt manager lookup reads this same list
 
 
 def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> ControlOptions:
@@ -801,8 +798,8 @@ async def acompletion(
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
-    routes_through_a_prompt_manager: Final = _routes_through_a_prompt_manager(model)
-    each_fallback_applies_its_own_prompt: Final = fallbacks is not None and not routes_through_a_prompt_manager
+    model_routes_through_a_prompt_manager: Final = routes_through_a_prompt_manager(model)
+    each_fallback_applies_its_own_prompt: Final = fallbacks is not None and not model_routes_through_a_prompt_manager
     prompt_management_logger: Final = (
         litellm_logging_obj.get_custom_logger_for_prompt_management(
             model=model,
@@ -863,7 +860,7 @@ async def acompletion(
     prompt_management_marker: Final[Mapping[str, object]] = (
         PROMPT_MANAGEMENT_APPLIED
         if prompt_hook_result is not None
-        and not routes_through_a_prompt_manager
+        and not model_routes_through_a_prompt_manager
         and (
             prompt_hook_result[0] != model
             or tuple(prompt_hook_result[1]) != messages_before_the_prompt_hook
@@ -5916,10 +5913,10 @@ def completion(
         model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
     )
 
+    prompt_applied_elsewhere: Final = prompt_management_applied(routing_kwargs) or fallbacks is not None
     if (
         isinstance(litellm_logging_obj, LiteLLMLoggingObj)
-        and not prompt_management_applied(routing_kwargs)
-        and fallbacks is None
+        and not prompt_applied_elsewhere
         and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
         )
