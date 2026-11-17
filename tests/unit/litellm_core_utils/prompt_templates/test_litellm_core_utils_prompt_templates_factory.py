@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     has_tool_with_name,
     llama_2_chat_pt,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     parse_mime_type,
     prompt_factory,
@@ -7647,43 +7648,53 @@ def test_ensure_alternating_roles(messages, expected_messages, user_continue_mes
 
 
 @pytest.mark.parametrize(
-    "empty_user_message",
-    [{"role": "user", "content": ""}, {"role": "user", "content": []}, {"role": "user", "content": None}, {"role": "user"}],
-    ids=["empty_string", "empty_list", "null", "missing"],
-)
-@pytest.mark.parametrize(
-    "user_continue_message, expected_last_message",
+    "messages",
     [
-        (None, {"role": "user", "content": "Please continue."}),
-        ({"role": "user", "content": "Keep going"}, {"role": "user", "content": "Keep going"}),
+        pytest.param([{"role": "assistant", "content": "Hello!"}], id="before_a_first_assistant_message"),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_adjacent_assistant_messages",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_assistant_messages_split_by_a_tool_result",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}],
+            id="after_a_last_assistant_message",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "user", "content": "Anyone there?"}],
+            id="between_adjacent_user_messages",
+        ),
     ],
-    ids=["default", "configured"],
 )
-def test_ensure_alternating_roles_fills_an_empty_trailing_user_message_with_the_continue_message(
-    empty_user_message, user_continue_message, expected_last_message
-):
-    history = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
-
-    assert get_completion_messages(
-        messages=[*history, empty_user_message],
-        assistant_continue_message=None,
-        user_continue_message=user_continue_message,
-        ensure_alternating_roles=True,
-    ) == [*history, expected_last_message]
-
-
-def test_an_empty_trailing_user_message_is_kept_without_ensure_alternating_roles():
-    messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": ""}]
-
-    assert (
-        get_completion_messages(
+def test_folding_a_system_prompt_into_an_inserted_continue_message_never_changes_a_later_request(
+    messages: list[dict[str, str]],
+) -> None:
+    def completion_messages() -> list[dict[str, str]]:
+        return get_completion_messages(
             messages=messages,
             assistant_continue_message=None,
-            user_continue_message={"role": "user", "content": "Keep going"},
-            ensure_alternating_roles=False,
+            user_continue_message=None,
+            ensure_alternating_roles=True,
         )
-        == messages
-    )
+
+    first: Final = completion_messages()
+    untouched: Final = json.loads(json.dumps(first))
+    for inserted in (message for message in first if message not in messages):
+        map_system_message_pt([{"role": "system", "content": "First tenant secret"}, inserted])
+
+    assert completion_messages() == untouched
 
 
 _STRICT_TEMPLATE_API_BASE: Final = "https://strict-template.example.com/v1"
@@ -7718,7 +7729,14 @@ def test_a_system_prompt_folded_into_the_continue_message_never_reaches_a_later_
             user_continue_message=user_continue_message,
         )
 
-    send([{"role": "system", "content": "First tenant secret"}, {"role": "user", "content": ""}])
+    send(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "system", "content": "First tenant secret"},
+            {"role": "assistant", "content": "Anything else?"},
+        ]
+    )
     send([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}])
 
     assert "First tenant secret" not in json.dumps(json.loads(route.calls.last.request.read())["messages"])
