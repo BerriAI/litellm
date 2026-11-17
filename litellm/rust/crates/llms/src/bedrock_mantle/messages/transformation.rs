@@ -713,6 +713,31 @@ mod tests {
     }
 
     #[rstest]
+    #[case::plain("US-EAST-1", "'US-EAST-1'")]
+    #[case::newline("us-east-1\nx", "'us-east-1\\nx'")]
+    fn an_invalid_region_is_quoted_with_control_characters_escaped(
+        #[case] region: &str,
+        #[case] quoted: &str,
+    ) {
+        let refused = BEDROCK_MANTLE_MESSAGES_CONFIG.get_complete_url(
+            None,
+            "claude-test",
+            &params(None, Some(region)),
+            false,
+            &|_: &str| None,
+        );
+        let Err(Error::InvalidRequest(detail)) = &refused else {
+            panic!("expected an invalid region, got {refused:?}");
+        };
+        assert_eq!(
+            detail.to_string(),
+            format!(
+                "Invalid AWS region format: {quoted}. Region names must contain only lowercase letters, digits, and hyphens."
+            )
+        );
+    }
+
+    #[rstest]
     #[case::explicit(Some("explicit"), "Bearer explicit")]
     #[case::mantle_key(None, "Bearer mantle")]
     fn bearer_prefers_the_mantle_key(#[case] api_key: Option<&str>, #[case] expected: &str) {
