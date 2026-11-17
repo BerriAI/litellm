@@ -45,7 +45,7 @@ CASE: Final = PerformanceTestCase(
     ),
     limits=(
         Limit("unexpected_status_count", max=3),
-        Limit("litellm_overhead_seconds", percentile=50, max=0.02),
+        Limit("client_total_seconds", percentile=50, max=0.3),
         Limit("cpu_seconds_per_request", max=0.5),
     ),
 )
