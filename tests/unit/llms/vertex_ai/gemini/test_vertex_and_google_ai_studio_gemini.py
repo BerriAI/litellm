@@ -2562,11 +2562,17 @@ def test_gemini_tts_chat_audio_follows_the_response_format_gemini_receives(
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_gemini_tts_chat_audio_keeps_the_container_asked_for_in_a_snake_case_generation_config(
-    respx_mock: respx.MockRouter,
+@pytest.mark.parametrize(
+    ("mime_type", "audio_data"),
+    [("AUDIO_WAV", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))), (0, _b64(GEMINI_TTS_PCM16_FRAMES))],
+    ids=["wav-asked", "unspecified-enum-number"],
+)
+def test_gemini_tts_chat_audio_follows_the_mime_type_a_snake_case_generation_config_names(
+    respx_mock: respx.MockRouter, mime_type: str | int, audio_data: str
 ) -> None:
-    wav_base64: Final = _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
-    route: Final = _mock_gemini_audio(respx_mock, "audio/wav", wav_base64)
+    route: Final = _mock_gemini_audio(
+        respx_mock, "audio/wav", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
+    )
 
     response: Final = completion(
         model="gemini/gemini-3.8-flash-tts",
@@ -2574,7 +2580,7 @@ def test_gemini_tts_chat_audio_keeps_the_container_asked_for_in_a_snake_case_gen
         extra_body={
             "generation_config": {
                 "response_modalities": ["AUDIO"],
-                "response_format": {"audio": {"mime_type": "AUDIO_WAV"}},
+                "response_format": {"audio": {"mime_type": mime_type}},
             }
         },
         api_key="test-api-key",
@@ -2582,7 +2588,7 @@ def test_gemini_tts_chat_audio_keeps_the_container_asked_for_in_a_snake_case_gen
     )
 
     assert "generationConfig" not in json.loads(route.calls.last.request.content)
-    assert response.choices[0].message.audio.data == wav_base64
+    assert response.choices[0].message.audio.data == audio_data
 
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")

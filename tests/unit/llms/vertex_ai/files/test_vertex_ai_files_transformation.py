@@ -567,12 +567,24 @@ class TestVertexBatchOutputTransformation:
         assert "Hello! How can I help you today?" in choice["message"]["content"]
 
     @pytest.mark.parametrize(
-        ("generation_config", "keeps_wav"),
-        [({"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}, True), ({}, False)],
-        ids=["wav-asked", "no-mime-type"],
+        ("request_body", "keeps_wav"),
+        [
+            (
+                {
+                    "generationConfig": {
+                        "responseModalities": ["AUDIO"],
+                        "responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}},
+                    }
+                },
+                True,
+            ),
+            ({"generationConfig": {"responseModalities": ["AUDIO"]}}, False),
+            (None, False),
+        ],
+        ids=["wav-asked", "no-mime-type", "null-request"],
     )
     def test_tts_batch_output_audio_follows_the_mime_type_its_request_named(
-        self, config: VertexAIFilesConfig, generation_config: Mapping[str, object], keeps_wav: bool
+        self, config: VertexAIFilesConfig, request_body: Mapping[str, object] | None, keeps_wav: bool
     ) -> None:
         frames: Final = bytes(range(256)) * 8
         wav: Final = io.BytesIO()
@@ -585,11 +597,7 @@ class TestVertexBatchOutputTransformation:
         vertex_output: Final = {
             "status": "",
             "processed_time": "2026-11-17T08:00:00.000000+00:00",
-            "request": {
-                "contents": [{"role": "user", "parts": [{"text": "Say hello"}]}],
-                "generationConfig": {"responseModalities": ["AUDIO"], **generation_config},
-                "labels": {"litellm_custom_id": "request-1"},
-            },
+            "request": request_body,
             "response": {
                 "candidates": [
                     {
