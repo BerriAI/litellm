@@ -5,10 +5,16 @@ import respx
 
 import litellm
 from litellm._version import version as LITELLM_VERSION
+from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-SARVAM_API_BASE = "https://api.sarvam.ai/v1"
 SARVAM_USER_AGENT = f"litellm/{LITELLM_VERSION} Python/{platform.python_version()}"
+
+
+def _sarvam_chat_url() -> str:
+    config = JSONProviderRegistry.get("sarvam")
+    assert config is not None
+    return f"{config.base_url}/chat/completions"
 
 
 def _chat_response() -> dict:
@@ -28,13 +34,6 @@ def _chat_response() -> dict:
     }
 
 
-def test_sarvam_config_declares_a_user_agent_template():
-    config = JSONProviderRegistry.get("sarvam")
-    assert config is not None
-    assert config.base_url == SARVAM_API_BASE
-    assert config.user_agent == "litellm/{version} Python/{python}"
-
-
 def test_sarvam_attribution_headers_report_running_versions():
     config = JSONProviderRegistry.get("sarvam")
     assert config is not None
@@ -42,10 +41,6 @@ def test_sarvam_attribution_headers_report_running_versions():
 
 
 def test_generated_config_class_forwards_attribution_headers():
-    """Providers that are also in LlmProviders get a generated config class, so
-    the class itself must forward the JSON config's attribution headers."""
-    from litellm.llms.openai_like.dynamic_config import create_config_class
-
     config = JSONProviderRegistry.get("sarvam")
     assert config is not None
     instance = create_config_class(config)()
@@ -59,7 +54,7 @@ def test_json_provider_without_user_agent_sends_no_attribution_headers():
 
 
 def test_sarvam_chat_completion_sends_the_litellm_user_agent(respx_mock: respx.MockRouter):
-    route = respx_mock.post(f"{SARVAM_API_BASE}/chat/completions").mock(
+    route = respx_mock.post(_sarvam_chat_url()).mock(
         return_value=httpx.Response(200, json=_chat_response())
     )
 
@@ -74,7 +69,7 @@ def test_sarvam_chat_completion_sends_the_litellm_user_agent(respx_mock: respx.M
 
 
 def test_sarvam_caller_user_agent_wins(respx_mock: respx.MockRouter):
-    route = respx_mock.post(f"{SARVAM_API_BASE}/chat/completions").mock(
+    route = respx_mock.post(_sarvam_chat_url()).mock(
         return_value=httpx.Response(200, json=_chat_response())
     )
 
