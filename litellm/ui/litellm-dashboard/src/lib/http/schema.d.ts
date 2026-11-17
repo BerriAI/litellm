@@ -41638,6 +41638,19 @@ export interface components {
             /** Value */
             value: string | boolean;
         };
+        /** OpenAIDecisionCacheWriteTokensDetails */
+        OpenAIDecisionCacheWriteTokensDetails: {
+            /**
+             * Ttl 12H Tokens
+             * @default 0
+             */
+            ttl_12h_tokens: number;
+            /**
+             * Ttl 30M Tokens
+             * @default 0
+             */
+            ttl_30m_tokens: number;
+        };
         /** OpenAIDecisionInputTokensDetails */
         OpenAIDecisionInputTokensDetails: {
             /**
@@ -41645,6 +41658,7 @@ export interface components {
              * @default 0
              */
             cache_write_tokens: number;
+            cache_write_tokens_details?: components["schemas"]["OpenAIDecisionCacheWriteTokensDetails"] | null;
             /**
              * Cached Tokens
              * @default 0
@@ -61180,13 +61194,17 @@ export interface operations {
                     input: string | {
                         /** Content */
                         content: string | ({
-                            prompt_cache_breakpoint?: {
+                            prompt_cache_breakpoint?: ({
                                 /**
                                  * Mode
                                  * @constant
                                  */
                                 mode: "explicit";
-                            } | null;
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -61199,13 +61217,17 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
-                            prompt_cache_breakpoint?: {
+                            prompt_cache_breakpoint?: ({
                                 /**
                                  * Mode
                                  * @constant
                                  */
                                 mode: "explicit";
-                            } | null;
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
@@ -61235,12 +61257,14 @@ export interface operations {
                      * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
                      */
                     prompt_cache_key?: string | null;
-                    prompt_cache_options?: {
+                    prompt_cache_options?: ({
                         /** Mode */
                         mode?: ("implicit" | "explicit") | null;
                         /** Ttl */
-                        ttl?: "30m" | null;
-                    } | null;
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order
@@ -83102,13 +83126,17 @@ export interface operations {
                     input: string | {
                         /** Content */
                         content: string | ({
-                            prompt_cache_breakpoint?: {
+                            prompt_cache_breakpoint?: ({
                                 /**
                                  * Mode
                                  * @constant
                                  */
                                 mode: "explicit";
-                            } | null;
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -83121,13 +83149,17 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
-                            prompt_cache_breakpoint?: {
+                            prompt_cache_breakpoint?: ({
                                 /**
                                  * Mode
                                  * @constant
                                  */
                                 mode: "explicit";
-                            } | null;
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
@@ -83157,12 +83189,14 @@ export interface operations {
                      * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
                      */
                     prompt_cache_key?: string | null;
-                    prompt_cache_options?: {
+                    prompt_cache_options?: ({
                         /** Mode */
                         mode?: ("implicit" | "explicit") | null;
                         /** Ttl */
-                        ttl?: "30m" | null;
-                    } | null;
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order

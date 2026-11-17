@@ -72,6 +72,14 @@ _USAGE: Final[Mapping[str, object]] = {
     "output_tokens_details": {"reasoning_tokens": 1},
     "total_tokens": 385,
 }
+_USAGE_WITH_WRITE_LIFETIMES: Final[Mapping[str, object]] = {
+    **_USAGE,
+    "input_tokens_details": {
+        "cached_tokens": 256,
+        "cache_write_tokens": 64,
+        "cache_write_tokens_details": {"ttl_30m_tokens": 16, "ttl_12h_tokens": 48},
+    },
+}
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
     "model": "gpt-6-luna",
     "answers": [
@@ -104,12 +112,14 @@ def test_an_openai_request_reaches_openai_unchanged() -> None:
     }
 
 
-def test_an_openai_response_reaches_the_caller_unchanged() -> None:
+@pytest.mark.parametrize("usage", (_USAGE, _USAGE_WITH_WRITE_LIFETIMES), ids=("no_write_lifetimes", "write_lifetimes"))
+def test_an_openai_response_reaches_the_caller_unchanged(usage: Mapping[str, object]) -> None:
     ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {**_OPENAI_RESPONSE, "usage": usage}
 
-    parsed: Final = OpenAIDecisionsConfig().parse_response(_OPENAI_RESPONSE, ir)
+    parsed: Final = OpenAIDecisionsConfig().parse_response(payload, ir)
 
-    assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
+    assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == payload
 
 
 @pytest.mark.parametrize("answer_type", ["choice", "score"])
@@ -443,31 +453,26 @@ def test_empty_prompt_cache_options_are_not_sent() -> None:
     }
 
 
-def test_a_breakpoint_rejects_a_ttl() -> None:
-    with pytest.raises(ValidationError, match=r"prompt_cache_breakpoint\.ttl"):
-        _OPENAI_BODY.validate_python(
+def test_prompt_cache_ttls_reach_openai_unchanged() -> None:
+    request: Final = {
+        "input": [
             {
-                "input": [
+                "type": "message",
+                "role": "developer",
+                "content": [
                     {
-                        "type": "message",
-                        "role": "developer",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": _POLICY_TEXT,
-                                "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
-                            }
-                        ],
+                        "type": "input_text",
+                        "text": _POLICY_TEXT,
+                        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"},
                     }
                 ],
-                "questions": _CACHE_REQUEST["questions"],
             }
-        )
+        ],
+        "questions": _CACHE_REQUEST["questions"],
+        "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
+    }
 
-
-def test_prompt_cache_options_reject_a_12h_ttl() -> None:
-    with pytest.raises(ValidationError, match=r"prompt_cache_options\.ttl"):
-        _OPENAI_BODY.validate_python({**_CACHE_REQUEST, "prompt_cache_options": {"mode": "explicit", "ttl": "12h"}})
+    assert ir_to_openai_request("gpt-6-luna", _openai_ir(request)) == {"model": "gpt-6-luna", **request}
 
 
 @pytest.mark.parametrize("role", ("developer", "system"))

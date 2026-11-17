@@ -274,6 +274,7 @@ def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIR
             output_tokens=response.usage.output_tokens,
             cached_tokens=response.usage.input_tokens_details.cached_tokens,
             cache_write_tokens=response.usage.input_tokens_details.cache_write_tokens,
+            cache_write_tokens_details=response.usage.input_tokens_details.cache_write_tokens_details,
             reasoning_tokens=response.usage.output_tokens_details.reasoning_tokens,
         ),
     )
@@ -339,6 +340,7 @@ def ir_to_openai_response(
             input_tokens_details=OpenAIDecisionInputTokensDetails(
                 cached_tokens=usage.cached_tokens,
                 cache_write_tokens=usage.cache_write_tokens,
+                cache_write_tokens_details=usage.cache_write_tokens_details,
             ),
             output_tokens=usage.output_tokens,
             output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=usage.reasoning_tokens),

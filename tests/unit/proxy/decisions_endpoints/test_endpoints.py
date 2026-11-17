@@ -1054,7 +1054,9 @@ _CACHE_POLICY: Final = "A defect is damage that makes the item unusable."
 _CACHED_POLICY_MESSAGE: Final[Mapping[str, object]] = {
     "type": "message",
     "role": "developer",
-    "content": [{"type": "input_text", "text": _CACHE_POLICY, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+    "content": [
+        {"type": "input_text", "text": _CACHE_POLICY, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}
+    ],
 }
 _IMAGE_TEXT_MESSAGE: Final[Mapping[str, object]] = {"type": "message", "role": "user", "content": _IMAGE_TEXT}
 _PREDICATE: Final[Mapping[str, object]] = {
@@ -1091,7 +1093,7 @@ def test_prompt_cache_controls_reach_an_openai_deployment_unchanged(
             "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
             "questions": [_PREDICATE],
             "prompt_cache_key": "defect-review",
-            "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+            "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
         },
     )
 
@@ -1101,7 +1103,7 @@ def test_prompt_cache_controls_reach_an_openai_deployment_unchanged(
         "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
         "questions": [_PREDICATE],
         "prompt_cache_key": "defect-review",
-        "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+        "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
     }
 
 
@@ -1139,7 +1141,7 @@ _MALFORMED_BREAKPOINT_MESSAGE: Final[Mapping[str, object]] = {
         {
             "type": "input_text",
             "text": _CACHE_POLICY,
-            "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+            "prompt_cache_breakpoint": {"mode": "always"},
         }
     ],
 }

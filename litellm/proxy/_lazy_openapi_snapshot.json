@@ -11332,12 +11332,38 @@
           "title": "OpenAIChoiceProbability",
           "type": "object"
         },
+        "OpenAIDecisionCacheWriteTokensDetails": {
+          "properties": {
+            "ttl_12h_tokens": {
+              "default": 0,
+              "title": "Ttl 12H Tokens",
+              "type": "integer"
+            },
+            "ttl_30m_tokens": {
+              "default": 0,
+              "title": "Ttl 30M Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "OpenAIDecisionCacheWriteTokensDetails",
+          "type": "object"
+        },
         "OpenAIDecisionInputTokensDetails": {
           "properties": {
             "cache_write_tokens": {
               "default": 0,
               "title": "Cache Write Tokens",
               "type": "integer"
+            },
+            "cache_write_tokens_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OpenAIDecisionCacheWriteTokensDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "cached_tokens": {
               "default": 0,
@@ -11755,12 +11781,23 @@
                                             "prompt_cache_breakpoint": {
                                               "anyOf": [
                                                 {
-                                                  "additionalProperties": false,
+                                                  "additionalProperties": true,
                                                   "properties": {
                                                     "mode": {
                                                       "const": "explicit",
                                                       "title": "Mode",
                                                       "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
                                                     }
                                                   },
                                                   "required": [
@@ -11812,12 +11849,23 @@
                                             "prompt_cache_breakpoint": {
                                               "anyOf": [
                                                 {
-                                                  "additionalProperties": false,
+                                                  "additionalProperties": true,
                                                   "properties": {
                                                     "mode": {
                                                       "const": "explicit",
                                                       "title": "Mode",
                                                       "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
                                                     }
                                                   },
                                                   "required": [
@@ -11900,7 +11948,7 @@
                     "prompt_cache_options": {
                       "anyOf": [
                         {
-                          "additionalProperties": false,
+                          "additionalProperties": true,
                           "properties": {
                             "mode": {
                               "anyOf": [
@@ -11920,7 +11968,6 @@
                             "ttl": {
                               "anyOf": [
                                 {
-                                  "const": "30m",
                                   "type": "string"
                                 },
                                 {
@@ -13262,12 +13309,23 @@
                                             "prompt_cache_breakpoint": {
                                               "anyOf": [
                                                 {
-                                                  "additionalProperties": false,
+                                                  "additionalProperties": true,
                                                   "properties": {
                                                     "mode": {
                                                       "const": "explicit",
                                                       "title": "Mode",
                                                       "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
                                                     }
                                                   },
                                                   "required": [
@@ -13319,12 +13377,23 @@
                                             "prompt_cache_breakpoint": {
                                               "anyOf": [
                                                 {
-                                                  "additionalProperties": false,
+                                                  "additionalProperties": true,
                                                   "properties": {
                                                     "mode": {
                                                       "const": "explicit",
                                                       "title": "Mode",
                                                       "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
                                                     }
                                                   },
                                                   "required": [
@@ -13407,7 +13476,7 @@
                     "prompt_cache_options": {
                       "anyOf": [
                         {
-                          "additionalProperties": false,
+                          "additionalProperties": true,
                           "properties": {
                             "mode": {
                               "anyOf": [
@@ -13427,7 +13496,6 @@
                             "ttl": {
                               "anyOf": [
                                 {
-                                  "const": "30m",
                                   "type": "string"
                                 },
                                 {

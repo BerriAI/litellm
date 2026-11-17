@@ -568,6 +568,52 @@ def test_custom_token_pricing_bills_cached_decisions_input_tokens_once(
     )
 
 
+def test_12h_decisions_cache_writes_bill_at_the_12h_cache_write_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    twelve_hour_writes: Final = _CACHE_WRITE_TOKENS // 4
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-6-luna",
+        {
+            "input_cost_per_token": 1.0,
+            "output_cost_per_token": 2.0,
+            "cache_read_input_token_cost": 0.1,
+            "cache_creation_input_token_cost": 1.25,
+            "cache_creation_input_token_cost_above_12hr": 2.5,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    response: Final = OpenAIDecisionResponse.model_validate(
+        {
+            **_OPENAI_RESPONSE,
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "input_tokens_details": {
+                    "cached_tokens": _CACHED_TOKENS,
+                    "cache_write_tokens": _CACHE_WRITE_TOKENS,
+                    "cache_write_tokens_details": {
+                        "ttl_30m_tokens": _CACHE_WRITE_TOKENS - twelve_hour_writes,
+                        "ttl_12h_tokens": twelve_hour_writes,
+                    },
+                },
+                "output_tokens": _OUTPUT_TOKENS,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+
+    cost: Final = litellm.completion_cost(completion_response=response, model="gpt-6-luna", custom_llm_provider="openai")
+
+    assert cost == pytest.approx(
+        (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * 1.0
+        + _CACHED_TOKENS * 0.1
+        + (_CACHE_WRITE_TOKENS - twelve_hour_writes) * 1.25
+        + twelve_hour_writes * 2.5
+        + _OUTPUT_TOKENS * 2.0
+    )
+
+
 def test_decisions_response_hidden_params_getter_preserves_mutable_identity() -> None:
     response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
 
@@ -2307,7 +2353,7 @@ _MALFORMED_BREAKPOINT_MESSAGE: Final[Mapping[str, object]] = {
         {
             "type": "input_text",
             "text": _REVIEW_POLICY,
-            "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+            "prompt_cache_breakpoint": {"mode": "always"},
         },
     ],
 }

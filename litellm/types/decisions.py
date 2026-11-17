@@ -279,15 +279,16 @@ class DecisionsResponse(_HiddenParamsResponse):
 
 class OpenAIDecisionPromptCacheBreakpoint(LiteLLMPydanticObjectBase):
     mode: Literal["explicit"]
+    ttl: str | None = None
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIDecisionPromptCacheOptions(LiteLLMPydanticObjectBase):
     mode: Literal["implicit", "explicit"] | None = None
-    ttl: Literal["30m"] | None = None
+    ttl: str | None = None
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIDecisionInputText(LiteLLMPydanticObjectBase):
@@ -507,9 +508,21 @@ OpenAIDecisionAnswer: TypeAlias = Annotated[
 ]
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
+class OpenAIDecisionCacheWriteTokensDetails(LiteLLMPydanticObjectBase):
+    ttl_30m_tokens: int = 0
+    ttl_12h_tokens: int = 0
+
+    model_config = ConfigDict(frozen=True)
+
+
 class OpenAIDecisionInputTokensDetails(LiteLLMPydanticObjectBase):
     cached_tokens: int = 0
     cache_write_tokens: int = 0
+    cache_write_tokens_details: OpenAIDecisionCacheWriteTokensDetails | None = Field(default=None, exclude_if=_is_none)
 
     model_config = ConfigDict(frozen=True)
 
@@ -675,6 +688,7 @@ class DecisionsIRUsage:
     output_tokens: int = 0
     cached_tokens: int = 0
     cache_write_tokens: int = 0
+    cache_write_tokens_details: OpenAIDecisionCacheWriteTokensDetails | None = None
     reasoning_tokens: int = 0
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
