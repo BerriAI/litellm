@@ -18661,7 +18661,9 @@ class TestTierParamsTheTargetAccepts:
         ],
         ids=["list", "bare-string", "comma-separated", "space-separated", "json-list-string", "dict", "unset"],
     )
-    def test_declared_param_allowlist_reads_names_from_any_allowlist_shape(self, allowlist, expected):
+    def test_declared_param_allowlist_reads_names_from_any_allowlist_shape(
+        self, allowlist: object, expected: set[str]
+    ) -> None:
         assert litellm.Router._declared_param_allowlist({"allowed_openai_params": allowlist}) == frozenset(expected)
 
     def test_deployment_accepts_param_honors_deployment_allowlist(self):
