@@ -1,3 +1,4 @@
+import inspect
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
@@ -15,18 +16,19 @@ from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
+from openai._models import construct_type
 from openai._types import RequestOptions
 from openai.pagination import SyncCursorPage
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
 from litellm import LlmProviders
-from litellm._logging import verbose_logger
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
@@ -259,6 +261,8 @@ class OpenAIConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
     ) -> dict:
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
@@ -274,6 +278,7 @@ class OpenAIConfig(BaseConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                reasoning_drop_logger=reasoning_drop_logger,
             )
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.map_openai_params(
@@ -379,13 +384,53 @@ _EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str] | None)
 _EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
 _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
+_CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
+    types.MappingProxyType({"security": types.MappingProxyType({"bearer_auth": True})})
+    if "security" in inspect.signature(make_request_options).parameters
+    else types.MappingProxyType({})
+)
+
+
+class _ChatCompletionChunkDecoder:
+    """
+    Decodes stream chunks for the SDK's `ModelBuilderProtocol` hook in one compiled pydantic pass. Strict
+    validation only accepts payloads whose values already have the declared types, where it builds the same
+    chunk as the SDK's `construct_type`, and everything else keeps the SDK's lenient `construct_type` result.
+    """
+
+    @classmethod
+    def build(cls, *, response: httpx.Response, data: object) -> object:
+        try:
+            return ChatCompletionChunk.model_validate(data, strict=True)
+        except ValidationError:
+            return construct_type(type_=ChatCompletionChunk, value=data)
 
 
 def _raw_chat_response(
-    result: ChatCompletion | Stream[ChatCompletionChunk] | AsyncStream[ChatCompletionChunk],
+    result: ChatCompletion
+    | Stream[ChatCompletionChunk]
+    | AsyncStream[ChatCompletionChunk]
+    | Stream[_ChatCompletionChunkDecoder]
+    | AsyncStream[_ChatCompletionChunkDecoder],
 ) -> LegacyAPIResponse[ChatCompletion]:
     assert isinstance(result, LegacyAPIResponse)
     return result
+
+
+def _sync_chat_stream_cls(
+    client: OpenAI,
+) -> type[Stream[ChatCompletionChunk]] | type[Stream[_ChatCompletionChunkDecoder]]:
+    if client._strict_response_validation:  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+        return Stream[ChatCompletionChunk]
+    return Stream[_ChatCompletionChunkDecoder]
+
+
+def _async_chat_stream_cls(
+    client: AsyncOpenAI,
+) -> type[AsyncStream[ChatCompletionChunk]] | type[AsyncStream[_ChatCompletionChunkDecoder]]:
+    if client._strict_response_validation:  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+        return AsyncStream[ChatCompletionChunk]
+    return AsyncStream[_ChatCompletionChunkDecoder]
 
 
 def _request_without_sdk_transform(
@@ -398,6 +443,7 @@ def _request_without_sdk_transform(
         extra_query=_EXTRA_QUERY_ADAPTER.validate_python(data.get("extra_query")),
         extra_body=data.get("extra_body"),
         timeout=timeout,
+        **_CLIENT_API_KEY_ONLY_AUTH,  # pyright: ignore[reportArgumentType]  # openai<3 make_request_options has no security kwarg
     )
     return body, options
 
@@ -559,7 +605,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=ChatCompletion,
                     options=options,
                     stream=bool(data.get("stream")),
-                    stream_cls=AsyncStream[ChatCompletionChunk],
+                    stream_cls=_async_chat_stream_cls(openai_aclient),
                 )
             )
             end_time = time.time()
@@ -615,7 +661,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=ChatCompletion,
                     options=options,
                     stream=bool(data.get("stream")),
-                    stream_cls=Stream[ChatCompletionChunk],
+                    stream_cls=_sync_chat_stream_cls(openai_client),
                 )
             )
 
@@ -1159,7 +1205,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         shared_session: Optional["ClientSession"] = None,
     ):
         response = None
-        data = provider_config.transform_request(
+        data = await provider_config.async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

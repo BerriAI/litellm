@@ -23,10 +23,15 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import LiteLLMBatch, Usage
 from litellm.types.videos.utils import is_video_status_call_type
 
@@ -206,10 +211,19 @@ class SpendEventDecodeError:
     reason: str
 
 
-def is_offloadable_success(response_obj: object, call_type: object) -> bool:
-    """Batch retrieves and interaction polls branch on the concrete response class, and a video status poll on
-    the status and video id the event leaves out, so they stay in-process."""
-    return not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES) and not is_video_status_call_type(call_type)
+def is_offloadable_success(response_obj: object, kwargs: ObjectMapping) -> bool:
+    """A success stays in-process when its cost logic reads something the spend event leaves out.
+
+    Batches and interaction polls need the concrete response class. A batch retrieve needs the polled batch id,
+    which message redaction can hide. A video status poll needs the status and the video id. A background
+    response's settling read needs the settlement flag."""
+    call_type: Final = kwargs.get("call_type")
+    return (
+        not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES)
+        and not is_batch_retrieve_call_type(call_type)
+        and not is_video_status_call_type(call_type)
+        and kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is not BackgroundResponseSettlement.SETTLES
+    )
 
 
 def _json_fallback(value: object) -> str:

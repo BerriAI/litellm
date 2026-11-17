@@ -84,9 +84,11 @@ DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
 def deployment_oauth_credentials(client_id: object, client_secret: object) -> tuple[str, str] | None:
     if not client_id and not client_secret:
         return None
-    if isinstance(client_id, str) and client_id and isinstance(client_secret, str) and client_secret:
-        return client_id, client_secret
-    missing: Final = "client_secret" if isinstance(client_id, str) and client_id else "client_id"
+    resolved_id: Final = client_id if isinstance(client_id, str) else ""
+    resolved_secret: Final = client_secret if isinstance(client_secret, str) else ""
+    if resolved_id and resolved_secret:
+        return resolved_id, resolved_secret
+    missing: Final = "client_secret" if resolved_id else "client_id"
     raise DatabricksException(
         status_code=400,
         message=(

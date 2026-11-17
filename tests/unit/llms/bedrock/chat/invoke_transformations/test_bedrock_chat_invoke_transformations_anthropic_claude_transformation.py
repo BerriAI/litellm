@@ -562,19 +562,29 @@ def _invoke_params_for_schema(
 
 
 @pytest.mark.parametrize(
-    ("native_key", "thinking_params", "native"),
+    ("model", "native_key", "thinking_params", "native"),
     [
-        ("legacy", {}, True),
-        ("bedrock", {}, False),
-        ("bedrock", {"thinking": {"type": "adaptive"}}, True),
-        ("bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
+        ("us.anthropic.claude-haiku-5-5", "default", {"thinking": {"type": "disabled"}}, True),
     ],
-    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-effort"],
+    ids=[
+        "legacy-key",
+        "bedrock-key-thinking-by-default",
+        "bedrock-key-thinking-off-by-default",
+        "bedrock-key-adaptive",
+        "bedrock-key-effort",
+        "bedrock-key-thinking-disabled",
+        "default-key-thinking-disabled",
+    ],
 )
-def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
-    set_native_structured_output, native_key, thinking_params, native
+def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
+    set_native_structured_output, model, native_key, thinking_params, native
 ):
-    model = "us.anthropic.claude-haiku-5-5"
     set_native_structured_output(model, native_key)
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
 
@@ -914,9 +924,7 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
-def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(set_native_structured_output):
-    """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
-    it lets the model answer in prose instead of the requested JSON."""
+def test_bedrock_chat_invoke_adaptive_thinking_leaves_the_response_format_tool_unforced(set_native_structured_output):
     set_native_structured_output("us.anthropic.claude-opus-5", None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
@@ -935,7 +943,8 @@ def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_
         drop_params=False,
     )
 
-    assert result["tool_choice"] == {"type": "tool", "name": result["tools"][0]["name"]}
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+    assert "tool_choice" not in result
     assert result["thinking"] == {"type": "adaptive"}
 
 
@@ -1148,6 +1157,92 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
                 },
             ],
         },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas
+
+
+_REPLAYED_WEATHER_SEARCH: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {
+            "id": "toolu_01Weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ],
+    "provider_specific_fields": {
+        "server_tool_calls": [
+            {
+                "id": "srvtoolu_01Search",
+                "type": "function",
+                "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+            }
+        ],
+        "tool_results": [
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_01Search",
+                "content": {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                },
+            }
+        ],
+    },
+}
+_PLAIN_WEATHER_CALL: Final = {
+    key: value for key, value in _REPLAYED_WEATHER_SEARCH.items() if key != "provider_specific_fields"
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "assistant_turn", "expected_betas"),
+    [
+        pytest.param(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            _REPLAYED_WEATHER_SEARCH,
+            ["tool-search-tool-2025-10-19"],
+            id="replayed_search",
+        ),
+        pytest.param("us.anthropic.claude-sonnet-4-5-20250929-v1:0", _PLAIN_WEATHER_CALL, None, id="no_search"),
+        pytest.param(
+            "us.anthropic.claude-opus-4-1-20250805-v1:0", _REPLAYED_WEATHER_SEARCH, None, id="opus_4_1_unsupported"
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_sends_the_tool_search_beta_for_a_search_replayed_without_the_search_tool(
+    local_model_cost_map, local_beta_headers_config, model, assistant_turn, expected_betas
+):
+    config: Final = AmazonAnthropicClaudeConfig()
+    result: Final = config.transform_request(
+        model=model,
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            assistant_turn,
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "max_tokens": 64,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                        },
+                    }
+                ],
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ),
         litellm_params={},
         headers={},
     )
@@ -2040,8 +2135,9 @@ def _invoke_chat_params(
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
 def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
-    local_model_cost_map, model, thinking_params
+    set_native_structured_output, model, thinking_params
 ):
+    set_native_structured_output(model, "bedrock")
     optional_params: Final = _invoke_chat_params(
         model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
     )
@@ -2077,6 +2173,19 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
 
 
 @pytest.mark.parametrize(
+    "model",
+    ["us.anthropic.claude-opus-5", "us.anthropic.claude-sonnet-5"],
+    ids=["opus-5", "sonnet-5"],
+)
+def test_invoke_uses_default_native_output_for_schema_retry(local_model_cost_map: None, model: str) -> None:
+    optional_params: Final = _invoke_chat_params(
+        model, None, {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "disabled"}}
+    )
+
+    assert AmazonAnthropicClaudeConfig().uses_native_output(model, optional_params, {})
+
+
+@pytest.mark.parametrize(
     ("forced_tool_use", "map_flag", "model_info", "thinking_params", "native"),
     [
         (False, None, None, {}, True),
@@ -2084,7 +2193,7 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
         (False, True, None, {"thinking": {"type": "adaptive"}}, True),
         (False, False, None, {}, False),
         (False, None, {"supports_bedrock_native_structured_output": False}, {}, False),
-        (True, True, None, {}, False),
+        (True, True, None, {"thinking": {"type": "disabled"}}, False),
     ],
     ids=[
         "cannot-force-tool",

@@ -18,7 +18,9 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.deps.repositories import get_plugin_upload_repository
 from litellm.proxy.public_endpoints import router
+from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -985,6 +987,57 @@ def test_public_model_hub_reports_the_newest_check_of_a_group_not_the_last_row_r
     app.dependency_overrides.clear()
 
 
+def test_public_model_hub_lists_each_deployments_prices_without_exposing_the_deployment() -> None:
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hub-public",
+                "litellm_params": {
+                    "model": "openai/hub-secret-backend-a",
+                    "api_base": "https://secret-a.internal",
+                    "api_key": "sk-secret-a",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+                "model_info": {"id": "hub-secret-id-a"},
+            },
+            {
+                "model_name": "hub-public",
+                "litellm_params": {
+                    "model": "openai/hub-secret-backend-b",
+                    "api_base": "https://secret-b.internal",
+                    "api_key": "sk-secret-b",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 4e-06,
+                },
+                "model_info": {"id": "hub-secret-id-b"},
+            },
+        ]
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.public_model_groups", ["hub-public"]),
+        patch("litellm.proxy.proxy_server.llm_router", llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        response: Final = TestClient(app).get("/public/model_hub")
+
+    assert response.status_code == 200, response.text
+    groups: Final = TypeAdapter(list[ModelGroupInfoProxy]).validate_json(response.text)
+    assert [dict(p.costs) for p in groups[0].deployment_pricing] == [
+        {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
+        {"input_cost_per_token": 3e-06, "output_cost_per_token": 4e-06},
+    ]
+    leaked: Final = [
+        secret
+        for secret in ("secret-a.internal", "secret-b.internal", "sk-secret", "hub-secret-backend", "hub-secret-id")
+        if secret in response.text
+    ]
+    assert leaked == [], response.text
+
+
 # ---------------------------------------------------------------------------
 # /public/agent_hub
 # ---------------------------------------------------------------------------
@@ -1230,6 +1283,18 @@ def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses
     }
     assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
     assert "embeddings" not in streamlake_endpoints
+
+
+def test_get_supported_endpoints_lists_webiq_search(reset_endpoints_cache: None) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    search: Final = next(endpoint for endpoint in response.json()["endpoints"] if endpoint["key"] == "search")
+    assert search["endpoint"] == "/search"
+    assert {"slug": "webiq", "display_name": "Microsoft Web IQ"} in search["providers"]
 
 
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
@@ -1797,25 +1862,40 @@ def test_get_agent_fields_appends_inherited_provider_credential_fields():
 
 
 @pytest.mark.parametrize("preference", ["auto_install", None])
-def test_public_skill_hub_echoes_registered_installation_preference(preference):
+def test_public_skill_hub_echoes_registered_installation_preference(preference: str | None) -> None:
+    from collections.abc import Mapping
+
+    from prisma.models import LiteLLM_ClaudeCodePluginTable
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import register_plugin
     from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
 
+    def create(data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
+        defaults: Final = {"id": "plugin-id", "enabled": True, "anonymous_download_count": 0}
+        return LiteLLM_ClaudeCodePluginTable.model_validate({**defaults, **data})
+
+    def find_many(where: Mapping[str, object]) -> list[LiteLLM_ClaudeCodePluginTable]:
+        return [create(table.create.call_args.kwargs["data"])]
+
     table: Final = MagicMock()
     table.find_unique = AsyncMock(return_value=None)
-    table.create = AsyncMock(side_effect=lambda data: SimpleNamespace(id="plugin-id", **data))
-    table.find_many = AsyncMock(
-        side_effect=lambda where: [SimpleNamespace(id="plugin-id", **table.create.call_args.kwargs["data"])]
-    )
+    table.create = AsyncMock(side_effect=create)
+    table.find_many = AsyncMock(side_effect=find_many)
     prisma: Final = MagicMock()
     prisma.db.litellm_claudecodeplugintable = table
+    prisma.writer_db = prisma.db
+    prisma.db.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
+    prisma.db.litellm_claudecodepluginversion.create = AsyncMock()
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_plugin_upload_repository] = lambda: PluginUploadRepository(prisma)
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         asyncio.run(
             register_plugin(
+                uploads=PluginUploadRepository(prisma),
                 request=RegisterPluginRequest(
                     name="security-review",
                     source={
@@ -1828,8 +1908,10 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference):
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
             )
         )
+        prisma.db.query_raw.return_value = [{"id": "plugin-id", "download_count": 12}]
         response: Final = TestClient(app).get("/public/skill_hub")
 
+    assert response.json()["plugins"][0]["download_count"] == 12
     assert response.status_code == 200
     assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
         ("security-review", preference)
@@ -1839,6 +1921,7 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference):
 _INTERNAL_PLUGIN: Final = SimpleNamespace(
     id="plugin-id",
     name="deploy-helper",
+    created_by=None,
     enabled=True,
     created_at=None,
     updated_at=None,
@@ -1859,8 +1942,11 @@ def _skill_hub_response(find_many: AsyncMock, general_settings: Mapping[str, obj
     table.find_many = find_many
     prisma: Final = MagicMock()
     prisma.db.litellm_claudecodeplugintable = table
+    prisma.writer_db = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_plugin_upload_repository] = lambda: PluginUploadRepository(prisma)
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
@@ -1894,6 +1980,7 @@ def test_public_skill_hub_500_body_carries_no_exception_text() -> None:
 def test_public_skill_hub_without_a_database_answers_db_not_connected() -> None:
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_plugin_upload_repository] = lambda: None
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),

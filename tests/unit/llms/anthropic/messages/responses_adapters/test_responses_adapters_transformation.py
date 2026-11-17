@@ -3,9 +3,11 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 (litellm/llms/anthropic/messages/responses_adapters/transformation.py)
 """
 
+import copy
 import json
 import os
-from typing import Any, Dict, Final, List
+from collections.abc import Mapping
+from typing import Any, Dict, Final, List, Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +22,12 @@ from litellm.constants import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
+)
+from litellm.llms.anthropic.messages.adapters.transformation import (
+    LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -139,21 +146,23 @@ class TestOutputConfigStructuredOutput:
     }
 
     def test_output_config_format_json_schema_converted(self):
-        """output_config.format.json_schema is converted to OpenAI text.format, defaulting strict to False."""
+        """output_config.format.json_schema becomes strict OpenAI text.format."""
         req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
         assert fmt["type"] == "json_schema"
         assert fmt["schema"] == self._SCHEMA
-        assert fmt["strict"] is False
+        assert fmt["strict"] is True
         assert fmt["name"] == "structured_output"
 
-    def test_output_config_format_explicit_strict_true_is_preserved(self):
-        """Nested output_config.format with explicit strict=True is preserved."""
-        req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": True}})
-        kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["text"]["format"]["strict"] is True
+    @pytest.mark.parametrize("strict", (True, False))
+    def test_output_config_format_explicit_strict_is_preserved(self, strict: bool) -> None:
+        req: Final = _make_request(
+            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": strict}}
+        )
+        kwargs: Final = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is strict
 
     def test_output_config_without_format_does_not_set_text(self):
         """output_config with only non-format keys doesn't produce text.format."""
@@ -162,12 +171,12 @@ class TestOutputConfigStructuredOutput:
         assert "text" not in kwargs
 
     def test_output_format_still_works(self):
-        """The original output_format field still takes precedence when present, defaulting strict to False."""
+        """The original output_format field still defaults to strict mode."""
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
-        assert kwargs["text"]["format"]["strict"] is False
+        assert kwargs["text"]["format"]["strict"] is True
 
     def test_output_format_explicit_strict_false_is_preserved(self):
         """output_format with an explicit strict=False is preserved as False."""
@@ -181,6 +190,23 @@ class TestOutputConfigStructuredOutput:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["strict"] is True
 
+    @pytest.mark.parametrize("format_field", ("output_format", "output_config"))
+    @pytest.mark.parametrize("strict_options", ({}, {"strict": None}))
+    def test_default_strict_matches_messages_to_chat_adapter(
+        self,
+        format_field: Literal["output_format", "output_config"],
+        strict_options: Mapping[str, None],
+    ) -> None:
+        output_format: Final = {"type": "json_schema", "schema": self._SCHEMA, **strict_options}
+        request: Final = _make_request(
+            **{format_field: output_format if format_field == "output_format" else {"format": output_format}}
+        )
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+        responses: Final = _ADAPTER.translate_request(request)
+
+        assert chat["response_format"]["json_schema"]["strict"] is True
+        assert responses["text"]["format"]["strict"] is chat["response_format"]["json_schema"]["strict"]
+
     def test_output_format_takes_precedence_over_output_config(self):
         """output_format takes precedence over output_config.format, for both schema and strict."""
         other_schema = {"type": "object", "properties": {"id": {"type": "integer"}}}
@@ -192,8 +218,8 @@ class TestOutputConfigStructuredOutput:
         assert kwargs["text"]["format"]["schema"] == self._SCHEMA
         assert kwargs["text"]["format"]["strict"] is False
 
-    def test_optional_property_stays_out_of_required_list(self):
-        """A property absent from required must stay absent from required in the translated schema."""
+    def test_optional_property_stays_out_of_required_list_when_not_strict(self):
+        """Without strict, a property absent from required stays absent from required in the translated schema."""
         schema = {
             "type": "object",
             "properties": {
@@ -203,7 +229,7 @@ class TestOutputConfigStructuredOutput:
             "required": ["name"],
             "additionalProperties": False,
         }
-        req = _make_request(output_format={"type": "json_schema", "schema": schema})
+        req = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
         kwargs = _ADAPTER.translate_request(req)
         fmt_schema = kwargs["text"]["format"]["schema"]
         assert fmt_schema["required"] == ["name"]
@@ -221,6 +247,79 @@ class TestOutputConfigStructuredOutput:
 
         assert output_format == snapshot
         assert req["output_format"] == snapshot
+
+    @pytest.mark.parametrize("format_field", ("output_format", "output_config"))
+    @pytest.mark.parametrize("strict_options", ({}, {"strict": True}))
+    def test_strict_schema_closes_every_object_like_messages_to_chat_adapter(
+        self,
+        format_field: Literal["output_format", "output_config"],
+        strict_options: Mapping[str, bool],
+    ) -> None:
+        """Regression for #51200: strict output schemas must be closed at every nesting level."""
+
+        def open_object(properties: Mapping[str, object], required: list[str]) -> dict[str, object]:
+            return {"type": "object", "properties": properties, "required": required, "additionalProperties": True}
+
+        def closed_object(properties: Mapping[str, object]) -> dict[str, object]:
+            return {
+                "type": "object",
+                "properties": properties,
+                "required": list(properties),
+                "additionalProperties": False,
+            }
+
+        schema: Final = {
+            **open_object(
+                {
+                    "entry": open_object({"value": {"type": "string"}, "note": {"type": "string"}}, ["value"]),
+                    "rows": {"type": "array", "items": open_object({"id": {"type": "integer"}}, [])},
+                    "choice": {"anyOf": [open_object({"a": {"type": "string"}}, []), {"type": "null"}]},
+                    "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**open_object({"flag": {"type": "boolean"}}, []), "type": ["object", "null"]},
+                },
+                ["entry"],
+            ),
+            "$defs": {"Item": open_object({"label": {"type": "string"}}, [])},
+        }
+        output_format: Final = {"type": "json_schema", "schema": schema, **strict_options}
+        snapshot: Final = copy.deepcopy(output_format)
+        request: Final = _make_request(
+            **{format_field: output_format if format_field == "output_format" else {"format": output_format}}
+        )
+        expected_schema: Final = {
+            **closed_object(
+                {
+                    "entry": closed_object({"value": {"type": "string"}, "note": {"type": "string"}}),
+                    "rows": {"type": "array", "items": closed_object({"id": {"type": "integer"}})},
+                    "choice": {"anyOf": [closed_object({"a": {"type": "string"}}), {"type": "null"}]},
+                    "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**closed_object({"flag": {"type": "boolean"}}), "type": ["object", "null"]},
+                }
+            ),
+            "$defs": {"Item": closed_object({"label": {"type": "string"}})},
+        }
+
+        translated: Final = _ADAPTER.translate_request(request)
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+        assert translated["text"] == {
+            "format": {"type": "json_schema", "name": "structured_output", "schema": expected_schema, "strict": True}
+        }
+        assert chat.get("response_format") == {
+            "type": "json_schema",
+            "json_schema": {"name": "structured_output", "schema": expected_schema, "strict": True},
+        }
+        assert output_format == snapshot
+
+    def test_non_strict_schema_is_forwarded_unchanged(self) -> None:
+        schema: Final = {
+            "type": "object",
+            "properties": {"entry": {"type": "object", "properties": {"value": {"type": "string"}}}},
+            "additionalProperties": True,
+        }
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
+
+        assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == schema
 
 
 # ---------------------------------------------------------------------------

@@ -76,6 +76,7 @@ ignored_function_names = [
     "_acreate_batch",
     "_acreate_file",
     "__init__",
+    "_router_init",  # Never run: it carries Router.__init__'s signature and docstring
     "avector_store_create",  # Tested via proxy vector_store_endpoints (files lack "router" in name)
     "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init
     "_merge_tools_from_deployment",  # Tested indirectly via _update_kwargs_with_deployment (test files lack "router" in name)
@@ -198,6 +199,9 @@ ignored_function_names = [
     "_without_decisions_deployments_refusing_media",  # Tested through the mixed media-flag group tests in tests/unit/decisions/test_main.py
     "_decisions_deployment_refuses_media",  # Read by _without_decisions_deployments_refusing_media, tested through the same group tests
     "_active_default_litellm_params",  # Tested through the router default drop_params test in tests/unit/decisions/test_main.py
+    "_rewound",  # Read by rewrite_rows_naming_model, tested through its stream tests in test_batch_utils.py
+    "_copy_line_renaming_model",  # Read by rewrite_rows_naming_model, tested through its byte-preserving test in test_batch_utils.py
+    "_renamed_row",  # Read by _copy_line_renaming_model, tested through the BOM, unparseable, and truncated rows in test_batch_utils.py
 ]
 
 

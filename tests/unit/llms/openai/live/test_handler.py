@@ -1254,7 +1254,7 @@ def _upstream_failing_a_client_send() -> _FakeUpstream:
     ids=["session-closed", "upstream-1011-after-a-frame", "upstream-1006-after-a-frame", "upstream-send-failed"],
 )
 async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
-    upstream_factory: Callable[[], _FakeUpstream], counted_successes: int
+    upstream_factory: Callable[[], _FakeUpstream], counted_successes: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     router: Final = Router(
         model_list=[
@@ -1276,10 +1276,10 @@ async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
             api_key="live-test-key",
         )
 
+    monkeypatch.setattr(litellm, "_arealtime", _arealtime)
     await asyncio.wait_for(
-        router._ageneric_api_call_with_fallbacks(
+        router._arealtime(  # the routed realtime endpoint the proxy's websocket route calls
             model="live-voice",
-            original_function=_arealtime,
             litellm_logging_obj=Logging(
                 model="gpt-live-1",
                 messages=[],

@@ -690,7 +690,7 @@ generic behavior; use the real client when checking Claude Code routing.
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
 
-By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. Other clients keep those tags and their contents
+By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. For requests with an `opencode/` user agent, it also strips complete `<task_result>` blocks and `<subagent ...>` blocks through `</subagent>`, attributes included, which OpenCode uses to return subagent output as a user turn. Other clients keep those tags and their contents
 
 The proxy records the incoming user agent in request metadata. SDK callers can supply `metadata.user_agent` (or `litellm_metadata.user_agent` on Responses requests), or configure `reminder_markers` explicitly when their client identity is unavailable
 
@@ -713,7 +713,7 @@ model_list:
             close: "[[SUBAGENT_CONTEXT_END]]"
 ```
 
-Setting `reminder_markers` replaces all built-in pairs, including the Codex heading pair, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+Setting `reminder_markers` replaces all built-in pairs, including the Codex and OpenCode pairs, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
 
 ### Code Detection
 
