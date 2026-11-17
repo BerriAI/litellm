@@ -98,7 +98,7 @@ _STREAMING_CHOICE_KEYS: Final = frozenset({"finish_reason", "index", "delta", "l
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = GChunk.__required_keys__
-_GCHUNK_VALUE_FIELDS: Final[frozenset[str]] = _GCHUNK_REQUIRED_FIELDS | {"tool_use"}
+_GCHUNK_VALUE_FIELDS: Final[frozenset[str]] = _GCHUNK_REQUIRED_FIELDS | {"tool_use", "provider_specific_fields"}
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
     {LlmProviders.OPENROUTER.value, LlmProviders.OPENCODE_GO.value}
@@ -1633,7 +1633,7 @@ class CustomStreamWrapper:
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             generic_finish_reason: Final = anthropic_response_obj.get("finish_reason", "")
             completion_obj["content"] = anthropic_response_obj.get("text", "")
-            finish_reason_is_null: Final = generic_chunk is not None and generic_chunk.get("finish_reason", "") is None
+            finish_reason_is_null: Final = chunk_fields is not None and chunk_fields.get("finish_reason", "") is None
             if anthropic_response_obj.get("is_finished", False) and not finish_reason_is_null:
                 self.received_finish_reason = generic_finish_reason or self.intermittent_finish_reason or "stop"
 
@@ -3256,10 +3256,11 @@ def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
 def generic_chunk_shape_error(chunk: object) -> str | None:
     fields: Final = as_str_mapping(chunk)
     if fields is None:
-        return f"expected a dict, got {type(chunk).__name__}"
+        return None if hasattr(chunk, "get") else f"expected a dict, got {type(chunk).__name__}"
     unexpected: Final = sorted(key for key in fields if key not in _GCHUNK_FIELDS)
     missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))
-    if not unexpected or not missing or any(fields.get(key) for key in _GCHUNK_VALUE_FIELDS):
+    has_text: Final = isinstance(fields.get("text"), str)
+    if not unexpected or not missing or has_text or any(fields.get(key) for key in _GCHUNK_VALUE_FIELDS):
         return None
     return f"missing {missing}, unexpected {unexpected}"
 
