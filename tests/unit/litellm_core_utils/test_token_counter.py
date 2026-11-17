@@ -2632,8 +2632,9 @@ def test_token_counter_counts_server_tool_errors(tool: str) -> None:
         {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"url": "https://example.invalid"}]},
         {"type": "code_execution_tool_result", "tool_use_id": "srv_1", "content": {"type": "future_result"}},
         {"type": "web_fetch_tool_result", "tool_use_id": "srv_1", "content": {"url": "https://example.invalid"}},
+        {"type": "mcp_tool_listing", "mcp_server_name": "deepwiki", "tools": {"name": "read_wiki_structure"}},
     ),
-    ids=("result-without-type", "unknown-result-type", "mapping-without-type"),
+    ids=("result-without-type", "unknown-result-type", "mapping-without-type", "listing-tools-not-a-list"),
 )
 @pytest.mark.parametrize("nested", (False, True), ids=("assistant-content", "tool-result"))
 def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, object], nested: bool) -> None:
@@ -2644,6 +2645,142 @@ def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, 
     with pytest.raises(UnsupportedContentTypeError):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
+
+
+def _assistant_history(*blocks: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "assistant", "content": list(blocks)},
+        {"role": "user", "content": "thanks"},
+    ]
+
+
+def _text_blocks(*texts: str) -> tuple[dict[str, str], ...]:
+    return tuple({"type": "text", "text": text} for text in texts)
+
+
+@pytest.mark.parametrize(
+    "block, readable",
+    (
+        (
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_01YQqfPfQVDh9bKqEY8nRfde",
+                "content": {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [
+                        {"type": "tool_reference", "tool_name": "get_weather"},
+                        {"type": "tool_reference", "tool_name": "get_forecast"},
+                    ],
+                },
+            },
+            ("get_weather", "get_forecast"),
+        ),
+        (
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_01YQqfPfQVDh9bKqEY8nRfde",
+                "content": {
+                    "type": "tool_search_tool_result_error",
+                    "error_code": "invalid_tool_input",
+                    "error_message": "Pattern weather|( is not a valid regular expression",
+                },
+            },
+            ("invalid_tool_input", "Pattern weather|( is not a valid regular expression"),
+        ),
+        (
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": "srvtoolu_01Mnxcdw4KHMsXLEzwdoXdkG",
+                "content": {
+                    "type": "advisor_result",
+                    "text": "A sorted array is better here, since 5 fixed keys fit in one cache line.",
+                    "stop_reason": "end_turn",
+                },
+            },
+            ("A sorted array is better here, since 5 fixed keys fit in one cache line.",),
+        ),
+        (
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": "srvtoolu_01Mnxcdw4KHMsXLEzwdoXdkG",
+                "content": {"type": "advisor_redacted_result", "encrypted_content": "EsoICioIFRgCIiRkMDA4" * 500},
+            },
+            (),
+        ),
+        (
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": "srvtoolu_01Mnxcdw4KHMsXLEzwdoXdkG",
+                "content": {"type": "advisor_tool_result_error", "error_code": "overloaded"},
+            },
+            ("overloaded",),
+        ),
+        ({"type": "container_upload", "file_id": "file_" + "013Xh6w8QzRso29wANKVBME2" * 500}, ()),
+        (
+            {
+                "type": "connector_text",
+                "connector_text": "Ticket 42 was closed on Monday.",
+                "signature": "EqQBCkYIBRgCKkBj" * 500,
+            },
+            ("Ticket 42 was closed on Monday.",),
+        ),
+    ),
+    ids=(
+        "tool-search-result",
+        "tool-search-error",
+        "advisor-result",
+        "advisor-redacted-result",
+        "advisor-error",
+        "container-upload",
+        "connector-text",
+    ),
+)
+def test_token_counter_counts_anthropic_server_blocks_like_their_readable_text(
+    block: Mapping[str, object], readable: tuple[str, ...]
+) -> None:
+    counted: Final = litellm.token_counter(model=_CLAUDE, messages=_assistant_history(block))
+
+    assert counted == litellm.token_counter(model=_CLAUDE, messages=_assistant_history(*_text_blocks(*readable)))
+
+
+def _mcp_tool_listing(server_name: str, *tools: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "mcp_tool_listing", "mcp_server_name": server_name, "tools": list(tools)}
+
+
+def test_mcp_tool_listing_counts_its_tools_like_the_same_tools_declared_in_tools() -> None:
+    brief: Final = (_weather_tool("Weather."),)
+    detailed: Final = (
+        _weather_tool("Current weather, temperature and wind for a city.", "country", "date"),
+        {**_weather_tool("Forecast."), "name": "get_forecast"},
+    )
+    plain: Final = _assistant_history()
+
+    listed_delta: Final = litellm.token_counter(
+        model=_CLAUDE, messages=_assistant_history(_mcp_tool_listing("deepwiki", *detailed))
+    ) - litellm.token_counter(model=_CLAUDE, messages=_assistant_history(_mcp_tool_listing("deepwiki", *brief)))
+    declared_delta: Final = litellm.token_counter(
+        model=_CLAUDE, messages=plain, tools=list(detailed)
+    ) - litellm.token_counter(model=_CLAUDE, messages=plain, tools=list(brief))
+
+    assert declared_delta > 0
+    assert listed_delta == declared_delta
+
+
+def test_mcp_tool_listing_counts_its_server_name_like_text() -> None:
+    tool: Final = _weather_tool("Weather.")
+    short: Final = "wx"
+    long: Final = "weather-observations-and-forecasts-for-every-city"
+
+    listed_delta: Final = litellm.token_counter(
+        model=_CLAUDE, messages=_assistant_history(_mcp_tool_listing(long, tool))
+    ) - litellm.token_counter(model=_CLAUDE, messages=_assistant_history(_mcp_tool_listing(short, tool)))
+    text_delta: Final = litellm.token_counter(
+        model=_CLAUDE, messages=_assistant_history(*_text_blocks(long))
+    ) - litellm.token_counter(model=_CLAUDE, messages=_assistant_history(*_text_blocks(short)))
+
+    assert text_delta > 0
+    assert listed_delta == text_delta
 
 
 def test_token_counter_counts_anthropic_search_result_text() -> None:

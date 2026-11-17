@@ -1842,6 +1842,8 @@ _ANTHROPIC_SERVER_TOOL_FIELDS: Final = MappingProxyType(
         "bash_code_execution_tool_result": ("content",),
         "text_editor_code_execution_tool_result": ("content",),
         "mcp_tool_result": ("content",),
+        "tool_search_tool_result": ("content",),
+        "advisor_tool_result": ("content",),
         "web_search_result": ("url", "title", "snippet"),
         "web_fetch_result": ("url", "content"),
         "code_execution_result": ("stdout", "stderr", "content"),
@@ -1852,11 +1854,18 @@ _ANTHROPIC_SERVER_TOOL_FIELDS: Final = MappingProxyType(
         "encrypted_code_execution_result": ("stderr", "content"),
         "code_execution_output": (),
         "bash_code_execution_output": (),
+        "tool_search_tool_search_result": ("tool_references",),
+        "advisor_result": ("text",),
+        "advisor_redacted_result": (),
+        "container_upload": (),
+        "connector_text": ("connector_text",),
         "web_search_tool_result_error": ("error_code",),
         "web_fetch_tool_result_error": ("error_code",),
         "code_execution_tool_result_error": ("error_code",),
         "bash_code_execution_tool_result_error": ("error_code",),
         "text_editor_code_execution_tool_result_error": ("error_code", "error_message"),
+        "tool_search_tool_result_error": ("error_code", "error_message"),
+        "advisor_tool_result_error": ("error_code",),
     }
 )
 _ANTHROPIC_DOCUMENT: Final = TypeAdapter(AnthropicMessagesDocumentParam)
@@ -2042,15 +2051,15 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
-            elif (change := as_str_mapping(c)) is not None and change.get("type") in ("tool_addition", "tool_removal"):
-                num_tokens += _tool_change_tokens(count_function, as_str_mapping(change.get("tool")))
+            elif (block := as_str_mapping(c)) is not None and block.get("type") in _TOOL_DECLARING_BLOCK_TYPES:
+                num_tokens += _tool_declaring_block_tokens(count_function, block)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, tool_addition, tool_removal, search_result, "
+                    f"compaction, tool_reference, tool_addition, tool_removal, mcp_tool_listing, search_result, "
                     f"or Anthropic server tool blocks)."
                 )
         return num_tokens
@@ -2079,6 +2088,23 @@ def _tool_change_tokens(count_function: TokenCounterFunction, tool: Mapping[str,
             raise UnsupportedContentTypeError(
                 f"Invalid tool change target type: {None if tool is None else tool.get('type')}"
             )
+
+
+_TOOL_DECLARING_BLOCK_TYPES: Final = frozenset({"tool_addition", "tool_removal", "mcp_tool_listing"})
+
+
+def _tool_declaring_block_tokens(count_function: TokenCounterFunction, block: Mapping[str, object]) -> int:
+    match block:
+        case {"type": "mcp_tool_listing", "mcp_server_name": str() as server_name, "tools": tools} if (
+            definitions := as_object_list(tools)
+        ) is not None:
+            return count_function(server_name) + count_function(_format_function_definitions(definitions))
+        case {"type": "mcp_tool_listing"}:
+            raise UnsupportedContentTypeError(
+                "Invalid mcp_tool_listing block: expected an mcp_server_name and a tools list"
+            )
+        case _:
+            return _tool_change_tokens(count_function, as_str_mapping(block.get("tool")))
 
 
 def _format_function_definitions(tools: Sequence[object]) -> str:

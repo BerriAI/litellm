@@ -2242,6 +2242,49 @@ async def test_framed_estimate_counts_server_tool_history_when_the_provider_coun
 
 
 @pytest.mark.asyncio
+async def test_local_count_answers_for_a_history_carrying_an_mcp_tool_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+
+    async def count(description: str) -> TokenCountResponse:
+        return await count_request_tokens(
+            request=TokenCountRequest(
+                model="anthropic/claude-sonnet-5-5",
+                messages=[
+                    {"role": "user", "content": "List the wiki topics of the repo BerriAI/litellm."},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "mcp_tool_listing",
+                                "mcp_server_name": "deepwiki",
+                                "tools": [
+                                    {
+                                        "name": "read_wiki_structure",
+                                        "description": description,
+                                        "input_schema": {
+                                            "type": "object",
+                                            "properties": {"repoName": {"type": "string"}},
+                                            "required": ["repoName"],
+                                        },
+                                    }
+                                ],
+                            },
+                            {"type": "text", "text": "The wiki has ten top-level sections."},
+                        ],
+                    },
+                    {"role": "user", "content": "thanks"},
+                ],
+            )
+        )
+
+    brief: Final = await count("Wiki topics.")
+    detailed: Final = await count("Get a list of documentation topics for a GitHub repository. " * 20)
+
+    assert (brief.count_source, detailed.count_source) == ("local_estimate", "local_estimate")
+    assert detailed.total_tokens > brief.total_tokens
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "unreadable_body",
     [
