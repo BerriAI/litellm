@@ -802,3 +802,16 @@ async def test_a_traceback_in_the_primarys_error_keeps_the_fallback_outcome(
     with pytest.raises(litellm.InternalServerError) as raised:
         await collect_bytes(await open_stream(core))
     assert raised.value.message == f"{PRIMARY_RATE_LIMITED}{OUTCOME}litellm.InternalServerError: boom"
+
+
+async def test_a_fallback_groups_retried_stream_with_a_split_error_frame_carries_the_primarys_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN[:25], FALLBACK_FRAME_DOWN[25:]))
+    host.set_dynamic(expose_router_debug_in_errors=True)
+    core = make_core(model_list=GROUPS_AB, fallbacks=[{"a": ["b"]}], num_retries=1)
+    frames = await collect_bytes(await open_stream(core))
+    assert host.deployments_called().count("b") == 2
+    assert event_names(frames) == [b"message_start", b"error"]
+    assert frame_error_message(frames[1]).startswith(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
