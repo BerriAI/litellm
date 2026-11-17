@@ -762,7 +762,9 @@ class _FailureRecorder(CustomLogger):
         super().__init__()
         self.failures: tuple[object, ...] = ()
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self.failures = (*self.failures, kwargs.get("exception"))
 
 
@@ -772,7 +774,7 @@ def _logging_obj_that_records_failures(failure_recorder: _FailureRecorder) -> Li
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id="close-test",
         function_id="close-test",
         dynamic_async_failure_callbacks=[failure_recorder],
