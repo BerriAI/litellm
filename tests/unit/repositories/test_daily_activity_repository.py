@@ -810,6 +810,15 @@ async def test_export_redacts_credential_named_values_the_masker_names_miss(key:
         '{"Authorization": "Bearer opaque-token-value"}',
         "{'authorization': 'Basic dXNlcjpwYXNz'}",
         "Bearer opaque-token-value ",
+        "id_AKIAIOSFODNN7EXAMPLE",
+        "stripe_sk_live_abcdef1234567890",
+        "my_sk-abc123def456ghi",
+        "my_ghp_abcdefghijklmnopqrstuvwxyz0123",
+        "x_eyJhbGciOiJIUzI1NiJ9abc",
+        "HTTPS://hooks.slack.com/services/T000/B000/XXXX",
+        "http://hooks.slack.com/services/T000/B000/XXXX",
+        "https://canary.discord.com/api/webhooks/1/abc",
+        "https://discord.com/api/v10/webhooks/1/abc",
         "x_authorization: Bearer opaque-token-value",
         '{"h": "{\\"Authorization\\": \\"Bearer opaque-token-value\\"}"}',
         "postgres://app:" + "p" * 300 + "@db.internal/app",
@@ -855,6 +864,8 @@ async def test_export_keeps_ordinary_metadata_that_only_resembles_credentials() 
         "dashboard": "https://grafana.example.com:3000/d/abc",
         "webhook": {"url": "https://hooks.example", "enabled": True},
         "cost_center": "cc-1234567890",
+        "review": "risk-assessment-2024",
+        "quota": "disk-quota-1234567890",
     }
 
     assert await _exported_key_metadata(metadata) == metadata
