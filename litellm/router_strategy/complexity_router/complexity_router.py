@@ -816,6 +816,10 @@ _CLAUDE_CODE_REQUEST_CLASS_HEADER: Final = "x-claude-code-request-class"
 _CLAUDE_CODE_AUXILIARY_SENTINEL: Final = f"{_CLAUDE_CODE_REQUEST_CLASS_HEADER}: auxiliary"
 
 
+_REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _proxy_request_header(request_kwargs: Mapping[str, object], header_name: str) -> str | None:
     proxy_request: Final = request_kwargs.get("proxy_server_request")
     if not isinstance(proxy_request, Mapping):
@@ -4543,7 +4547,9 @@ class ComplexityRouter(CustomLogger):
         return TierSessionPin(
             router=self.model_name,
             caller=(
-                DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs)
+                DeploymentAffinityCheck.get_user_key_from_request_kwargs(
+                    _REQUEST_KWARGS.validate_python(request_kwargs)
+                )
                 if self.config.conversation_header is not None
                 else self._get_user_api_key_hash_from_request_kwargs(request_kwargs)
             ),
@@ -4804,7 +4810,9 @@ class ComplexityRouter(CustomLogger):
                             context_fit,
                             retained_pin,
                         ),
-                        request_kwargs,
+                        _REQUEST_KWARGS.validate_python(request_kwargs)
+                        if self.config.conversation_header is not None
+                        else _NO_REQUEST_KWARGS,
                     )
 
         routed_response: Final = await self._classify_and_route(
@@ -4859,7 +4867,12 @@ class ComplexityRouter(CustomLogger):
                 ),
                 self.config.session_affinity_ttl_seconds,
             )
-        return self._with_session_deployment_affinity(response, request_kwargs)
+        return self._with_session_deployment_affinity(
+            response,
+            _REQUEST_KWARGS.validate_python(request_kwargs)
+            if self.config.conversation_header is not None
+            else _NO_REQUEST_KWARGS,
+        )
 
     async def _apply_prompt_cache_routing(
         self,
