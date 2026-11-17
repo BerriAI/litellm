@@ -3305,6 +3305,7 @@ def test_a_bedrock_mantle_web_search_rejection_raises_the_invoke_transforms_bad_
     native: Final = _refused(text)
     native.messages_provider_rejection = text  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
     native.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    native.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
 
     mapped: Final = messages_host.map_failure(
         native, {"model": "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5", "messages": []}, "bedrock_mantle"
@@ -3316,8 +3317,17 @@ def test_a_bedrock_mantle_web_search_rejection_raises_the_invoke_transforms_bad_
     assert mapped.model == "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
 
 
-@pytest.mark.parametrize("model", (_BEDROCK_MANTLE, _MANTLE_ROUTE))
-def test_body_params_shape_mantle_caller_tools_and_drop_a_body_anthropic_beta(model: str) -> None:
+@pytest.mark.parametrize(
+    ("model", "shapes_invoke_tools", "shaped"),
+    (
+        pytest.param(_BEDROCK_MANTLE, False, False, id="bedrock-mantle"),
+        pytest.param(_MANTLE_ROUTE, False, False, id="mantle-route"),
+        pytest.param(_BEDROCK_INVOKE, True, True, id="bedrock-invoke"),
+    ),
+)
+def test_body_params_shape_caller_tools_only_when_rust_asks_and_drop_a_body_anthropic_beta(
+    model: str, shapes_invoke_tools: bool, shaped: bool
+) -> None:
     tools: Final = [{"type": "custom", "name": "", "description": "d", "input_schema": {"type": "custom"}}]
     request: Final[Mapping[str, object]] = {
         "model": model,
@@ -3327,12 +3337,15 @@ def test_body_params_shape_mantle_caller_tools_and_drop_a_body_anthropic_beta(mo
         "anthropic_beta": ["context-management-2025-06-27"],
     }
 
-    params: Final = messages_host.body_params(request, asynchronous=True)
+    params: Final = messages_host.body_params(request, asynchronous=True, shapes_invoke_tools=shapes_invoke_tools)
 
     assert "anthropic_beta" not in params
-    assert tools == [
-        {"type": "custom", "name": "litellm_unnamed_tool_0", "description": "d", "input_schema": {"type": "object"}}
-    ]
+    assert (
+        tools
+        == [
+            {"type": "custom", "name": "litellm_unnamed_tool_0", "description": "d", "input_schema": {"type": "object"}}
+        ]
+    ) is shaped
 
 
 @pytest.mark.parametrize(

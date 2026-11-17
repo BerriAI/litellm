@@ -27,7 +27,10 @@ use crate::{
                 native_output_fallback_litellm_params,
                 should_retry_anthropic_messages_without_native_output,
             },
-            request::{InvokeRequestSettings, clamp_adaptive_reasoning_effort_for_bedrock},
+            request::{
+                InvokeRequestSettings, clamp_adaptive_reasoning_effort_for_bedrock,
+                with_logged_tools,
+            },
         },
         mantle_transformation::{
             AMAZON_MANTLE_REQUEST_SETTINGS, MANTLE_API_BASE_ENV, MANTLE_MESSAGES_PATH,
@@ -339,6 +342,14 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
         with_zero_usage(response)
+    }
+
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        with_logged_tools(params, context)
     }
 
     fn wire_body(&self, body: Value) -> Value {
@@ -888,6 +899,37 @@ mod tests {
             } else {
                 vec![]
             }
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    fn mantle_logs_the_tools_the_invoke_transform_shapes(#[case] config: &dyn BaseMessagesConfig) {
+        let request: MessagesRequest = serde_json::from_value(request(
+            "claude-test",
+            json!({"tools": [{
+                "type": "custom",
+                "name": "",
+                "description": "d",
+                "input_schema": {"type": "custom"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }]}),
+        ))
+        .unwrap();
+        let context = MessagesTransformContext::new(MessagesModelCapabilities::default(), false);
+
+        let logged = config.logged_params(request.params, &context).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(logged.tools).unwrap(),
+            json!([{
+                "type": "custom",
+                "name": "litellm_unnamed_tool_0",
+                "description": "d",
+                "input_schema": {"type": "object"},
+                "cache_control": {"type": "ephemeral"},
+            }])
         );
     }
 

@@ -452,6 +452,40 @@ fn remove_ttl_from_cache_control(body: &mut Body, supports_ttl: bool) {
     }
 }
 
+/// The caller's params with their tools shaped as Python's Bedrock invoke transform shapes the
+/// caller's own tool dicts in place, which its logs then show.
+pub(crate) fn with_logged_tools(
+    params: MessagesOptionalParams,
+    context: &MessagesTransformContext,
+) -> Result<MessagesOptionalParams, Error> {
+    let Some(tools) = params.tools else {
+        return Ok(params);
+    };
+    let failed = |error| Error::InvalidRequest(ErrorDetail::invalid("Bedrock invoke tools", error));
+    let mut body = Body::from_iter([(
+        "tools".to_owned(),
+        serde_json::to_value(tools).map_err(failed)?,
+    )]);
+    remove_ttl_from_cache_control(
+        &mut body,
+        context
+            .thinking
+            .capabilities
+            .bedrock
+            .supports_prompt_cache_ttl,
+    );
+    normalize_custom_field_on_tools(&mut body);
+    normalize_tool_input_schema_types_for_bedrock_invoke(&mut body);
+    ensure_bedrock_anthropic_messages_tool_names(&mut body);
+    Ok(MessagesOptionalParams {
+        tools: Some(
+            serde_json::from_value(body.shift_remove("tools").unwrap_or_default())
+                .map_err(failed)?,
+        ),
+        ..params
+    })
+}
+
 fn drop_compaction_without_beta(body: &mut Body, betas: &[String]) {
     if body.contains_key("compaction")
         && !(body.get("compaction").is_some_and(Value::is_object)

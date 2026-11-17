@@ -152,6 +152,8 @@ fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
 
 pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
+/// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
+const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
 pub(super) const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(
@@ -590,12 +592,13 @@ impl MessagesPythonHost {
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        shapes_invoke_tools: bool,
     ) -> PyResult<Map<String, Value>> {
         let request = effective_py_args(self.view.request(py)?, arguments)?;
         let params = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("body_params")?
-            .call1((request, self.asynchronous, self.hooked))?
+            .call1((request, self.asynchronous, self.hooked, shapes_invoke_tools))?
             .cast_into::<PyMapping>()?;
         params
             .items()?
@@ -624,7 +627,26 @@ impl MessagesPythonHost {
         };
         let model = settings.model;
         let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
-        let mut fields = self.body_params(py, arguments)?;
+        let api_key = string("api_key")?;
+        let api_base = string("api_base")?;
+        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
+        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
+        let custom_llm_provider = match string("custom_llm_provider")? {
+            Some(provider) => Some(provider),
+            None => py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("inferred_provider")?
+                .call1((&model, api_base.as_deref()))?
+                .extract()?,
+        };
+        let mantle = custom_llm_provider
+            .as_deref()
+            .and_then(|provider| mantle_capability_lookup(provider, &model));
+        // Python's Bedrock invoke transform shapes the caller's own tool dicts in place; Rust logs
+        // the tools it shapes for the Mantle routes instead.
+        let shapes_invoke_tools =
+            custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) && mantle.is_none();
+        let mut fields = self.body_params(py, arguments, shapes_invoke_tools)?;
         let prepared = fields.remove("messages");
         let presanitized = prepared.is_some();
         let messages = match prepared {
@@ -642,18 +664,6 @@ impl MessagesPythonHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let api_key = string("api_key")?;
-        let api_base = string("api_base")?;
-        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
-        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
-        let custom_llm_provider = match string("custom_llm_provider")? {
-            Some(provider) => Some(provider),
-            None => py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("inferred_provider")?
-                .call1((&model, api_base.as_deref()))?
-                .extract()?,
-        };
         let filters_beta: bool = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("filters_beta_headers")?
@@ -680,9 +690,6 @@ impl MessagesPythonHost {
             Some(AZURE_AI_PROVIDER) => Some(azure_module_settings(|name| module_global(py, name))?),
             _ => None,
         };
-        let mantle = custom_llm_provider
-            .as_deref()
-            .and_then(|provider| mantle_capability_lookup(provider, &model));
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
         let requested = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
         let capabilities = match &mantle {
@@ -817,6 +824,16 @@ impl MessagesPythonHost {
         )
     }
 
+    fn mantle_model(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let Some(model) = self.view.request(py)?.get_item("model")? else {
+            return Ok(None);
+        };
+        let Ok(model) = model.extract::<String>() else {
+            return Ok(None);
+        };
+        Ok(mantle_capability_lookup(&self.provider(py), &model).map(|lookup| lookup.model))
+    }
+
     fn provider(&self, py: Python<'_>) -> String {
         self.view
             .request(py)
@@ -942,6 +959,9 @@ impl MessagesPythonHost {
         route_failure(py, error, RequestMarker::Messages, |native| {
             if self.stream_opened {
                 native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
+            }
+            if let Some(model) = self.mantle_model(py)? {
+                native.value(py).setattr(MESSAGES_PROVIDER_MODEL, model)?;
             }
             Ok(self.map_failure(py, native))
         })

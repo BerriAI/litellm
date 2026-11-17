@@ -1022,6 +1022,29 @@ async def test_bedrock_mantle_refuses_a_usage_that_is_not_an_object(
     assert_served_natively(server)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", (MANTLE_MODEL, "bedrock/mantle/anthropic.claude-opus-4-8"))
+async def test_bedrock_mantle_logs_the_tools_rust_shaped_and_leaves_the_callers_alone(
+    server: RecordingServer, model: str
+) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    recorder: Final = _Recorder()
+    tools: Final = [{"type": "custom", "name": "", "description": "d", "input_schema": {"type": "custom"}}]
+    sent_tools: Final = json.loads(json.dumps(tools))
+
+    with rebound(litellm, "callbacks", [recorder]):
+        await _mantle(_RUST_ENTRY, server, model=model, tools=sent_tools)
+        await recorder.wait_for(1)
+
+    [(_, logged)] = recorder.logged
+    shaped: Final = [
+        {"type": "custom", "name": "litellm_unnamed_tool_0", "description": "d", "input_schema": {"type": "object"}}
+    ]
+    assert _OBJECT.validate_python(logged["model_parameters"])["tools"] == shaped
+    assert _OBJECT.validate_python(server.requests[0].body)["tools"] == shaped
+    assert sent_tools == tools
+
+
 _SIGV4_ONLY: Final = {
     "api_key": None,
     "aws_access_key_id": "test-access-key",

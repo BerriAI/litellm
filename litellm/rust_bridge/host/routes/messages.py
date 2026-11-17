@@ -305,37 +305,13 @@ def _shape_bedrock_tools(tools: object, model: str) -> None:
     ensure_bedrock_anthropic_messages_tool_names(body)
 
 
-def _mantle_route(request: Mapping[str, object], request_provider: str | None) -> bool:
-    """Whether Python serves the call with a Bedrock Mantle Messages config."""
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-    model: Final = str(request["model"]).removeprefix(f"{request_provider}/")
-    if request_provider == "bedrock_mantle":
-        return True
-    return (
-        request_provider == "bedrock"
-        and not BedrockModelInfo._explicit_claude_platform_route(model)  # pyright: ignore[reportPrivateUsage]  # the route order Python's config lookup applies
-        and not BedrockModelInfo._explicit_converse_route(model)  # pyright: ignore[reportPrivateUsage]  # see above
-        and BedrockModelInfo._explicit_mantle_route(model)  # pyright: ignore[reportPrivateUsage]  # see above
-    )
-
-
-def _mantle_model_id(request: Mapping[str, object], request_provider: str | None) -> str:
-    """The model Python's Mantle configs hand the Invoke transform: `get_llm_provider` drops the
-    provider and a region prefix, then the first `mantle/` goes."""
-    from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
-
-    model: Final = str(request["model"]).removeprefix(f"{request_provider}/")
-    resolved: Final = split_mantle_region_prefix(model)[1] if request_provider == "bedrock_mantle" else model
-    return resolved.replace("mantle/", "", 1)
-
-
-def body_params(request: Mapping[str, object], asynchronous: bool, hooked: bool = False) -> Mapping[str, object]:
+def body_params(
+    request: Mapping[str, object], asynchronous: bool, hooked: bool = False, shapes_invoke_tools: bool = False
+) -> Mapping[str, object]:
+    """`shapes_invoke_tools` is set by Rust for a Bedrock invoke call, whose Python transform shapes the caller's
+    own tool dicts in place."""
     fields: Final = _body_fields(request)
-    provider: Final = _resolved_provider(request)
-    if _mantle_route(request, provider):
-        _shape_bedrock_tools(fields.get("tools"), _mantle_model_id(request, provider))
-    elif provider == "bedrock":
+    if shapes_invoke_tools:
         _shape_bedrock_tools(fields.get("tools"), str(request["model"]).removeprefix("bedrock/"))
     if not detectors.cache_control_injection(NativeCall(args=(), kwargs=request, base={})):
         return {**fields, "messages": request["messages"]} if hooked else fields
@@ -751,6 +727,7 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
             getattr(error, "messages_provider_bad_request", False) is True,
             request,
             request_provider,
+            optional_str(getattr(error, "messages_provider_model", None)),
         )
         if isinstance(rejection, litellm.BadRequestError):
             return rejection
@@ -771,7 +748,7 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
 
 
 def _provider_rejection(
-    text: str, bad_request: bool, request: Mapping[str, object], request_provider: str
+    text: str, bad_request: bool, request: Mapping[str, object], request_provider: str, model: str | None
 ) -> Exception:
     """The Bedrock invoke config raises its own `BadRequestError`, which other configs' HTTP handler
     maps into their error class by its text."""
@@ -779,9 +756,7 @@ def _provider_rejection(
         return _config_error(400, text, (), request, request_provider)
     if request_provider == "bedrock_mantle":
         # Python's Mantle config inherits the Bedrock invoke transform, which raises naming `bedrock`.
-        return litellm.BadRequestError(
-            message=text, model=_mantle_model_id(request, request_provider), llm_provider="bedrock"
-        )
+        return litellm.BadRequestError(message=text, model=model or "", llm_provider="bedrock")
     raised: Final = litellm.BadRequestError(
         message=text,
         model=str(request["model"]).removeprefix(f"{request_provider}/"),
