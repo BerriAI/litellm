@@ -189,9 +189,18 @@ def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedMode
         router.settings().default_deployment is not None
         or router.settings().router_general_settings.pass_through_all_models
     )
-    served_names: Final = frozenset(router.registry().names(kind="group_set")) | (
+    base_served_names: Final = frozenset(router.registry().names(kind="group_set")) | (
         frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
     )
+    aliases: Final = router.registry().aliases()
+    access_groups: Final = router.registry().access_groups()
+    alias_names: Final = frozenset(
+        alias
+        for alias in aliases
+        if (target := resolve_model_group_alias(aliases, alias)) is not None
+        and (target in base_served_names or target in access_groups)
+    )
+    served_names: Final = base_served_names | alias_names
     team_members: Final = _team_public_names_by_group(router=router, team_id=team_id)
     return RoutedModels(
         served_names=served_names,
@@ -602,14 +611,10 @@ def _resolve_global_model_alias_chain(
     aliases: Final = _proxy_model_group_aliases() if model_group_aliases is None else model_group_aliases
     if not aliases:
         return (model,)
-    chain: list[str] = [model]
-    seen: set[str] = {model}
-    current = model
-    while (target := resolve_model_group_alias(aliases, current)) is not None and target not in seen:
-        chain.append(target)
-        seen.add(target)
-        current = target
-    return tuple(chain)
+    target: Final = resolve_model_group_alias(aliases, model)
+    if target is None or target == model:
+        return (model,)
+    return (model, target)
 
 
 def _single_model_candidates(model: str) -> tuple[str, ...]:

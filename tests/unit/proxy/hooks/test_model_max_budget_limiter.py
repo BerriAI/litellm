@@ -1064,8 +1064,8 @@ def test_global_model_group_alias_resolves_to_target_budget_entry(monkeypatch: p
         )
 
 
-def test_global_model_group_alias_cycle_does_not_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    aliases: Final = {"alias-a": "alias-b", "alias-b": "alias-a"}
+def test_global_model_group_alias_resolves_single_hop_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    aliases: Final = {"entry": "actual-served", "actual-served": "other-model"}
     fake_router: Final = SimpleNamespace(registry=lambda: SimpleNamespace(aliases=lambda: aliases))
     monkeypatch.setattr(
         "litellm.proxy.hooks.model_max_budget_limiter._proxy_router",
@@ -1074,12 +1074,32 @@ def test_global_model_group_alias_cycle_does_not_loop(monkeypatch: pytest.Monkey
 
     assert (
         resolve_model_budget(
-            model="alias-a",
-            model_max_budget={"other-model": {"max_budget": 10.0, "budget_duration": "1d"}},
+            model="entry",
+            model_max_budget={"other-model": {"max_budget": 1000.0, "budget_duration": "1d"}},
             model_access_groups=lambda _model, _team_id: frozenset(),
         )
         is None
     )
+
+
+def test_routed_models_of_includes_global_aliases_for_served_groups() -> None:
+    target: Final = "claude-bedrock-fable-5-2"
+    fake_router: Final = SimpleNamespace(
+        settings=lambda: SimpleNamespace(
+            default_deployment=None,
+            router_general_settings=SimpleNamespace(pass_through_all_models=False),
+        ),
+        registry=lambda: SimpleNamespace(
+            names=lambda kind, team_id=None: (target,) if kind == "group_set" else (),
+            aliases=lambda: {"fable": target, "claude-fable-5-2": target, "dangling": "unserved"},
+            access_groups=dict,
+        ),
+    )
+
+    routed: Final = routed_models_of(fake_router)  # type: ignore[arg-type]
+    assert "fable" in routed.served_names
+    assert "claude-fable-5-2" in routed.served_names
+    assert "dangling" not in routed.served_names
 
 
 @pytest.mark.asyncio
