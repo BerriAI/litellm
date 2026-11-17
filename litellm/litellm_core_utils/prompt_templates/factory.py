@@ -1,5 +1,6 @@
 import base64
 import copy
+import functools
 import hashlib
 import itertools
 import json
@@ -3232,7 +3233,9 @@ def anthropic_messages_pt(
             )
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
-    client_tool_calls_by_message: Final = tuple(_client_tool_calls_by_message(messages, client_answered_tool_ids))
+    client_tool_calls_by_message: Final = functools.cache(
+        lambda: tuple(_client_tool_calls_by_message(messages, client_answered_tool_ids))
+    )
 
     # Bedrock invoke models have format: invoke/...
     # Vertex AI Anthropic also doesn't support URL sources for images
@@ -3353,7 +3356,7 @@ def anthropic_messages_pt(
                 )
                 user_content.extend(
                     _split_call_placeholder_results(
-                        message_field(user_message_types_block, "tool_call_id"), client_tool_calls_by_message[msg_i]
+                        message_field(user_message_types_block, "tool_call_id"), client_tool_calls_by_message()[msg_i]
                     )
                 )
 
@@ -3416,7 +3419,7 @@ def anthropic_messages_pt(
                     tool_results=_provider_specific_fields.get("tool_results"),
                     answered_tool_ids=client_answered_tool_ids,
                     server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
-                    client_tool_calls=client_tool_calls_by_message[msg_i],
+                    client_tool_calls=client_tool_calls_by_message()[msg_i],
                 )
                 if assistant_tool_calls is not None
                 else ()
