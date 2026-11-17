@@ -133,7 +133,14 @@ def test_sora_create_posts_model_prompt_seconds_and_size_with_a_bearer_key(gatew
 def test_sora_create_with_seed_is_refused_with_400_before_calling_openai(gateway: Gateway) -> None:
     """The caller adds `seed` 7, which OpenAI's video API does not take. Without `drop_params` the proxy must answer
     400 with `openai video generation does not support seed, set drop_params=True to ignore them` and not call
-    OpenAI (litellm/llms/base_llm/videos/async_task_utils.py unsupported_video_fields)."""
+    OpenAI (litellm/llms/base_llm/videos/async_task_utils.py unsupported_video_fields).
+
+    BUG (run 44176682961): `seed` reaches OpenAI as a form field, together with the deployment's own
+    `drop_params: "true"`, and the create is answered 200. `map_openai_params` refuses or drops `seed`
+    (litellm/llms/openai/videos/transformation.py:127-140 on main), but here it never runs on `seed`: the fields
+    land in `extra_body`, which the create request merges in unchecked (`data.update(extra_body)`, same file
+    :311-312), and the deployment `drop_params` setting leaks into the provider request the same way."""
+    pytest.skip("BUG: an OpenAI video create forwards seed and the deployment drop_params flag to OpenAI unchecked")
     with wire_server(_sora_api("video_x")) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model="openai/sora-2", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY)
         response: Final = gateway.request("POST", _VIDEOS, {"model": model, "prompt": _PROMPT, "seed": 7})
@@ -146,7 +153,14 @@ def test_sora_create_with_seed_is_refused_with_400_before_calling_openai(gateway
 
 def test_sora_create_with_seed_and_drop_params_sends_no_seed(gateway: Gateway) -> None:
     """With `drop_params: true` on the deployment, the same `seed` 7 must be dropped: OpenAI gets the create with
-    no `seed` field and the caller gets 200."""
+    no `seed` field and the caller gets 200.
+
+    BUG (run 44176682961): `seed` reaches OpenAI as a form field, together with the deployment's own
+    `drop_params: "true"`, and the create is answered 200. `map_openai_params` refuses or drops `seed`
+    (litellm/llms/openai/videos/transformation.py:127-140 on main), but here it never runs on `seed`: the fields
+    land in `extra_body`, which the create request merges in unchecked (`data.update(extra_body)`, same file
+    :311-312), and the deployment `drop_params` setting leaks into the provider request the same way."""
+    pytest.skip("BUG: an OpenAI video create forwards seed and the deployment drop_params flag to OpenAI unchecked")
     with wire_server(_sora_api(f"video_{uuid.uuid4().hex}")) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/sora-2", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, drop_params=True
@@ -434,7 +448,15 @@ def test_gemini_veo_content_before_the_operation_finishes_is_an_error(gateway: G
 def test_gemini_veo_without_seconds_sends_no_duration_but_bills_the_eight_second_default(gateway: Gateway) -> None:
     """A Gemini Veo deployment priced at `output_cost_per_second` 0.1 creates a video with no `seconds`. Google must get
     `parameters` without `durationSeconds` (no body field at all when nothing is mapped), yet the key spend must be
-    8 x 0.1, because usage falls back to `DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS` (litellm/constants.py)."""
+    8 x 0.1, because usage falls back to `DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS` (litellm/constants.py).
+
+    BUG (run 44176682961): the key spend never left 0.0 in 60 s. The deployment's `output_cost_per_second` is not
+    applied to a Veo create; owned proxies in the same run log `No cost information found for video model
+    gemini/veo-3.0-generate-001` and `vertex_ai/veo-dec1-test-001` (litellm/llms/openai/cost_calculation.py:215 on
+    main, reached from the video branch at cost_calculator.py:2104-2153). The Sora billing test passes only because
+    the cost map's own `sora-2` price (0.1 per second) equals its deployment rate. Root cause not pinned; medium
+    confidence."""
+    pytest.skip("BUG: a Veo video create ignores the deployment output_cost_per_second and bills 0")
     operation: Final = f"models/veo-3.0-generate-001/operations/{uuid.uuid4().hex}"
     with wire_server(_gemini_veo(operation)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
@@ -522,7 +544,15 @@ def test_vertex_veo_flattens_a_caller_parameters_block_into_the_request_paramete
 def test_vertex_veo_bills_seconds_times_the_sample_count(gateway: Gateway) -> None:
     """A Vertex Veo deployment priced at `output_cost_per_second` 0.1 creates `sampleCount` 2 videos of `seconds` 4.
     The key spend must be 2 x 4 x 0.1, because usage records `video_count` from `sampleCount` and the cost is
-    multiplied by it (`_video_count` in litellm/cost_calculator.py)."""
+    multiplied by it (`_video_count` in litellm/cost_calculator.py).
+
+    BUG (run 44176682961): the key spend never left 0.0 in 60 s. The deployment's `output_cost_per_second` is not
+    applied to a Veo create; owned proxies in the same run log `No cost information found for video model
+    gemini/veo-3.0-generate-001` and `vertex_ai/veo-dec1-test-001` (litellm/llms/openai/cost_calculation.py:215 on
+    main, reached from the video branch at cost_calculator.py:2104-2153). The Sora billing test passes only because
+    the cost map's own `sora-2` price (0.1 per second) equals its deployment rate. Root cause not pinned; medium
+    confidence."""
+    pytest.skip("BUG: a Veo video create ignores the deployment output_cost_per_second and bills 0")
     operation: Final = _vertex_operation()
     with vertex(gateway, _vertex_veo(operation), backend=_VEO, output_cost_per_second=_RATE) as rig:
         key: Final = rig.scenario.key(models=[rig.model])

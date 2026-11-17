@@ -385,9 +385,13 @@ def test_jina_keyless_deployment_sends_no_authorization_header(gateway: Gateway)
 
     `JinaAIEmbeddingConfig.validate_environment` adds Authorization only when a key exists, so the request must
     carry no `authorization` header at all. UNVERIFIED: that no `JINA_AI_API_KEY` is set in the CI environment.
+
+    Test mistake fixed (run 44176682961): `Scenario.model` fills in `api_key: integration-provider-key` unless told
+    otherwise (tests/integration/_support/client.py:293), so the deployment was not keyless; it now sets
+    `api_key=None`.
     """
     with peer(openai_list(6)) as provider, gateway.scenario() as scenario:
-        model: Final = _jina(scenario, provider)
+        model: Final = _jina(scenario, provider, api_key=None)
         served(embed(gateway, model, [marker()]))
         assert "authorization" not in provider.only().headers
 

@@ -215,13 +215,18 @@ def test_an_anthropic_route_error_echoes_the_callers_x_request_id(proxy: Gateway
 
 
 def test_an_unknown_key_on_the_cohere_route_is_a_401_in_the_openai_envelope(proxy: Gateway, wire: Wire) -> None:
-    """The same unknown key sent to `/cohere/v2/chat` must be refused with 401 in the OpenAI envelope
-    (`{"error": {"type": "auth_error", ...}}`), because only `/anthropic/*` switches envelopes, and must not reach
-    the provider."""
+    """The same unknown key sent to `/cohere/v2/chat` must be refused with 401 in the OpenAI envelope, because only
+    `/anthropic/*` switches envelopes, and must not reach the provider.
+
+    Pinned current behaviour (run 44176682961): the envelope is `{"error": {"message": "Authentication Error, Invalid
+    API key provided.", "type": "token_not_found_in_db", "param": "key", "code": "401"}}`. The type names the
+    lookup that failed (`ProxyErrorTypes.token_not_found_in_db`, litellm/proxy/auth/resolvers/exceptions.py:37 on
+    main), not the generic `auth_error`."""
     unknown: Final = f"sk-dec1-passthru-{uuid.uuid4().hex}"
     response: Final = send(proxy, "/cohere/v2/chat", cohere_body(marker()), headers=bearer(unknown))
     error: Final = openai_error(response, 401)
-    assert error["type"] == "auth_error", response.text
+    assert (error["type"], error["param"], error["code"]) == ("token_not_found_in_db", "key", "401"), response.text
+    assert message_of(error) == "Authentication Error, Invalid API key provided.", response.text
     assert unknown not in response.text
     assert posts(wire) == ()
 

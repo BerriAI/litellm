@@ -23,7 +23,6 @@ annotation rate.
 
 from __future__ import annotations
 
-import base64
 import json
 import uuid
 from typing import Final
@@ -50,6 +49,8 @@ from integration.providers.dec1_media2_support import (
 
 _OCR: Final = "/v1/ocr"
 _PAGE_RATE: Final = 0.002
+_MAP_ANNOTATION_RATE: Final = 0.005
+"""`annotation_cost_per_page` of `mistral/mistral-ocr-latest` in model_prices_and_context_window.json."""
 
 
 def _document() -> dict[str, str]:
@@ -303,12 +304,14 @@ def test_azure_ai_ocr_keeps_the_api_base_query_and_does_not_repeat_a_complete_pa
     assert query_of(request) == {"tenant": ["a"]}
 
 
-def test_azure_ai_ocr_downloads_a_remote_document_and_sends_it_inline(gateway: Gateway) -> None:
-    """The caller names `document_url` `<peer>/files/doc.pdf`, which the peer serves as `application/pdf`. Azure AI
-    accepts only inline documents, so the proxy must GET the file first and then POST
-    `/providers/mistral/azure/ocr` with `document_url` `data:application/pdf;base64,<bytes>`.
-    UNVERIFIED: the OCR media fetcher may refuse a loopback URL as an SSRF guard, in which case this needs a
-    public-looking host in front of the peer."""
+def test_azure_ai_ocr_refuses_to_download_a_loopback_document_url(gateway: Gateway) -> None:
+    """The caller names `document_url` `<peer>/files/doc.pdf` on an Azure AI OCR deployment. Azure AI accepts only
+    inline documents, so the proxy downloads a remote document itself before the OCR call.
+
+    Pinned current behaviour (run 44176682961): the media fetcher's network policy refuses the loopback peer, so
+    the caller gets 400 `invalid_request_error` with `Azure_aiException - media URL rejected by network policy`
+    and neither the GET nor the OCR call is made. The download-and-inline path needs a public host, which this
+    harness cannot provide."""
     pdf: Final = PDF_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
@@ -323,14 +326,9 @@ def test_azure_ai_ocr_downloads_a_remote_document_and_sends_it_inline(gateway: G
             _OCR,
             {"model": model, "document": {"type": "document_url", "document_url": f"{wire.url}/files/doc.pdf"}},
         )
-        assert response.status_code == 200, response.text
-        fetch, ocr_call = wire.drain()
-    assert (fetch.method, path_of(fetch)) == ("GET", "/files/doc.pdf")
-    assert "authorization" not in fetch.headers
-    assert json_body(ocr_call)["document"] == {
-        "type": "document_url",
-        "document_url": f"data:application/pdf;base64,{base64.b64encode(pdf).decode()}",
-    }
+        assert response.status_code == 400, response.text
+        assert "media URL rejected by network policy" in error_message(response), response.text
+        assert wire.drain() == ()
 
 
 def test_azure_ai_ocr_bills_pages_at_the_deployment_page_rate(gateway: Gateway) -> None:
@@ -377,10 +375,17 @@ def test_ocr_credit_pricing_wins_over_page_pricing_when_credits_are_reported(gat
         assert len(wire.drain()) == 1
 
 
-def test_ocr_annotation_pages_fall_back_to_the_page_rate_without_an_annotation_price(gateway: Gateway) -> None:
+def test_ocr_annotation_pages_take_the_cost_map_annotation_rate_when_the_deployment_sets_none(
+    gateway: Gateway,
+) -> None:
     """A Mistral deployment sets only `ocr_cost_per_page` 0.002 and Mistral reports 3 pages processed and 2 pages
-    processed for annotation. The cost must be 3 x 0.002 + 2 x 0.002, because the annotation rate defaults to the
-    page rate when no `annotation_cost_per_page` is set."""
+    processed for annotation.
+
+    Pinned current behaviour (run 44176682961): the cost is 3 x 0.002 + 2 x 0.005. Each OCR price is taken from the
+    first source that has it, deployment first and then the cost map (`_first_ocr_price`,
+    litellm/cost_calculator.py:2762 on main), so the annotation pages take `mistral/mistral-ocr-latest`'s map rate
+    `annotation_cost_per_page` 0.005. The page rate is only the fallback when no source has an annotation rate
+    (cost_calculator.py:2884-2885)."""
     usage: Final = {"pages_processed": 3, "pages_processed_annotation": 2, "doc_size_bytes": 4096}
     with wire_server(lambda _r: mistral_ocr_reply(3, usage=usage)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
@@ -388,7 +393,7 @@ def test_ocr_annotation_pages_fall_back_to_the_page_rate_without_an_annotation_p
         )
         response: Final = gateway.request("POST", _OCR, {"model": model, "document": _document()})
         assert response.status_code == 200, response.text
-        assert response_cost(response) == pytest.approx(5 * _PAGE_RATE)
+        assert response_cost(response) == pytest.approx(3 * _PAGE_RATE + 2 * _MAP_ANNOTATION_RATE)
         assert len(wire.drain()) == 1
 
 

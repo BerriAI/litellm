@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, gateway_from_environment
+from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment
 from integration._support.wire import Wire, wire_server
 from integration.providers.dec1_passthru_support import (
     ANTHROPIC_MODEL,
@@ -95,12 +95,16 @@ def test_a_key_limited_to_chat_completions_is_refused_on_a_provider_route_naming
     """A key with `allowed_routes: ["/v1/chat/completions"]` calls `/cohere/v2/chat`. It must be refused with 403
     whose message is exactly `Virtual key is not allowed to call this route. Only allowed to call routes:
     ['/v1/chat/completions']. Tried to call route: /cohere/v2/chat` (`route_checks.py:269`), and the provider must
-    receive nothing."""
+    receive nothing.
+
+    Pinned current behaviour (run 44176682961): the body is FastAPI's bare `{"detail": "<message>"}`, not the OpenAI
+    `error` object. The route check raises a plain `HTTPException` (litellm/proxy/auth/route_checks.py:267-270 on
+    main), the same shape `test_dec1_keys_route_access.py` pins for `/v1/embeddings`."""
     with proxy.scenario() as scenario:
         key: Final = scenario.key(allowed_routes=["/v1/chat/completions"])
         response: Final = send(proxy, "/cohere/v2/chat", cohere_body(marker()), headers=bearer(key))
-        error: Final = openai_error(response, 403)
-        assert message_of(error) == (
+        assert response.status_code == 403, response.text
+        assert JSON_OBJECT.validate_json(response.content)["detail"] == (
             "Virtual key is not allowed to call this route. Only allowed to call routes: ['/v1/chat/completions']. "
             "Tried to call route: /cohere/v2/chat"
         ), response.text

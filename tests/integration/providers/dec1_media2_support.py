@@ -131,10 +131,20 @@ def transcribe(
     content_type: str = "audio/wav",
     key: str | None = None,
 ) -> httpx.Response:
-    """Multipart POST to `/v1/audio/transcriptions`; a sequence of pairs lets a field repeat (`timestamp_granularities[]`)."""
+    """Multipart POST to `/v1/audio/transcriptions`; a sequence of pairs lets a field repeat (`timestamp_granularities[]`).
+
+    httpx takes form data only as a mapping, so repeated names are collected into a list value, which it sends as
+    one form part per value."""
+    data: dict[str, str | list[str]] = dict(fields) if isinstance(fields, Mapping) else {}  # mutable-ok: built here
+    if not isinstance(fields, Mapping):
+        for name, value in fields:
+            previous = data.get(name)
+            data[name] = (
+                value if previous is None else [*([previous] if isinstance(previous, str) else previous), value]
+            )
     return gateway.client.post(
         TRANSCRIPTIONS,
-        data=dict(fields) if isinstance(fields, Mapping) else list(fields),
+        data=data,
         files={"file": (filename, audio, content_type)},
         headers={"Authorization": f"Bearer {gateway.key if key is None else key}"},
     )

@@ -16,10 +16,16 @@ becomes `rate_limit_error`, with the LiteLLM type kept in `litellm_error_type` (
 
 Lesson from earlier runs: over-limit requests on a cached key are refused at auth before the body is read
 (#51428), so the second refusal of a burst may carry no `x-litellm-call-id`; nothing here depends on it.
+
+Pinned current behaviour (run 44176682961): a refusal raised by the pass-through pre-call hook (team, per-model and
+token limits) is rendered from `ProxyRateLimitError.message`, so its text starts with `litellm.RateLimitError: `
+(`getattr(e, "message", ...)`, litellm/proxy/pass_through_endpoints/pass_through_endpoints.py:2529 on main). A
+key request limit refused at auth keeps the bare text.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from typing import Final
 
@@ -82,8 +88,14 @@ def _drained(wire: Wire) -> None:
     wire.drain()
 
 
-def _assert_limited_message(message: str, scope: str, value: str, kind: str, limit: int) -> None:
-    prefix: Final = limit_message(scope, value, kind, limit)
+_PRE_CALL_PREFIX: Final = "litellm.RateLimitError: "
+"""What a refusal raised by the pass-through pre-call hook carries in front of the limiter text."""
+
+
+def _assert_limited_message(
+    message: str, scope: str, value: str, kind: str, limit: int, *, pre_call: bool = False
+) -> None:
+    prefix: Final = (_PRE_CALL_PREFIX if pre_call else "") + limit_message(scope, value, kind, limit)
     assert message.startswith(prefix), message
     assert RESET_AT.match(message.removeprefix(prefix)), message
 
@@ -233,24 +245,34 @@ def test_a_team_rpm_limit_applies_across_the_teams_keys_on_pass_through(proxy: G
             send(proxy, "/mistral/v1/chat/completions", openai_body(marker()), headers=bearer(first)).status_code == 200
         )
         refused: Final = send(proxy, "/openai/v1/chat/completions", openai_body(marker()), headers=bearer(second))
-        _assert_limited_message(message_of(openai_error(refused, 429)), "team", team, "requests", 1)
+        _assert_limited_message(message_of(openai_error(refused, 429)), "team", team, "requests", 1, pre_call=True)
         assert len(posts(wire)) == 1
 
 
 def test_a_keys_tpm_limit_settles_from_the_native_usage_of_a_pass_through_response(proxy: Gateway, wire: Wire) -> None:
-    """A key has `tpm_limit: 15`. Each Anthropic pass-through response reports 7 + 3 = 10 tokens. The first call
-    is served (0 used), the second is served (10 used, under 15) and, once that settles to 20, a third must be
-    refused with 429 `Limit type: tokens`. UNVERIFIED: assumes the limiter's success hook settles token counters
-    from the pass-through logging payload's usage, as it does for chat."""
+    """A key has `tpm_limit: 100`. Each Anthropic pass-through response reports 7 + 3 = 10 tokens, and each call
+    reserves an estimate (prompt plus `max_tokens: 16`) before it is sent. Calls must be served until the settled
+    usage plus the next estimate passes 100, then refused with 429 `Limit type: tokens`, and more than one call must
+    have been served first, so the settled native usage, not the first estimate alone, closed the window.
+
+    Test mistake fixed (run 44176682961): the old limit of 15 was below the first call's own estimate (prompt plus
+    `max_tokens` 16), so the first call was already refused with `Remaining: 15`. The `Remaining` count depends on
+    the tokenizer estimate, so it is matched as a number."""
     with proxy.scenario() as scenario:
-        key: Final = scenario.key(tpm_limit=15)
+        key: Final = scenario.key(tpm_limit=100)
         assert send(proxy, "/anthropic/v1/messages", anthropic_body(marker()), headers=bearer(key)).status_code == 200
         refused: Final = refused_until(
             lambda: send(proxy, "/anthropic/v1/messages", anthropic_body(marker()), headers=bearer(key)),
             429,
             seconds=30,
         )
-        _assert_limited_message(message_of(anthropic_error(refused, 429)), "api_key", hashed(key), "tokens", 15)
+        message: Final = message_of(anthropic_error(refused, 429))
+        assert re.fullmatch(
+            re.escape(f"{_PRE_CALL_PREFIX}Rate limit exceeded for api_key: {hashed(key)}. Limit type: tokens. ")
+            + r"Current limit: 100, Remaining: \d+\. Limit resets at: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC",
+            message,
+        ), message
+        assert len(posts(wire)) >= 2
 
 
 def test_a_keys_parallel_limit_holds_while_a_pass_through_call_is_in_flight(proxy: Gateway, wire: Wire) -> None:
@@ -293,6 +315,7 @@ def test_a_keys_per_model_rpm_limit_applies_to_the_body_model_on_the_anthropic_r
             f"{hashed(key)}:claude-sonnet-4-5",
             "requests",
             1,
+            pre_call=True,
         )
         other: Final = send(
             proxy, "/anthropic/v1/messages", anthropic_body(marker(), model="claude-haiku-4-5"), headers=bearer(key)
@@ -300,17 +323,22 @@ def test_a_keys_per_model_rpm_limit_applies_to_the_body_model_on_the_anthropic_r
         assert other.status_code == 200, other.text
 
 
-def test_a_served_pass_through_response_reports_the_keys_remaining_requests(proxy: Gateway) -> None:
-    """A key with `rpm_limit: 3` makes one `/cohere/v2/chat` call. The 200 must carry
-    `x-ratelimit-api_key-limit-requests: 3` and `x-ratelimit-api_key-remaining-requests: 2`, as a chat response
-    does. UNVERIFIED: pass-through copies `fastapi_response.headers` into its reply
-    (`HttpPassThroughEndpointHelpers.get_response_headers`); confirm the limiter writes them there for this route."""
+def test_a_served_pass_through_response_reports_the_keys_rpm_limit_but_not_the_limiter_headers(
+    proxy: Gateway,
+) -> None:
+    """A key with `rpm_limit: 3` makes one `/cohere/v2/chat` call.
+
+    Pinned current behaviour (run 44176682961): the 200 carries the proxy's own `x-litellm-key-rpm-limit: 3` but
+    none of the limiter's `x-ratelimit-api_key-*` headers a chat response carries; the pass-through reply is built
+    from the custom headers of `ProxyBaseLLMRequestProcessing.get_custom_headers` and the provider's own headers
+    only."""
     with proxy.scenario() as scenario:
         key: Final = scenario.key(rpm_limit=3)
         response: Final = send(proxy, "/cohere/v2/chat", cohere_body(marker()), headers=bearer(key))
         assert response.status_code == 200, response.text
-        assert response.headers.get("x-ratelimit-api_key-limit-requests") == "3", dict(response.headers)
-        assert response.headers.get("x-ratelimit-api_key-remaining-requests") == "2", dict(response.headers)
+        assert response.headers.get("x-litellm-key-rpm-limit") == "3", dict(response.headers)
+        assert "x-ratelimit-api_key-limit-requests" not in response.headers, dict(response.headers)
+        assert "x-ratelimit-api_key-remaining-requests" not in response.headers, dict(response.headers)
 
 
 def test_a_rate_limited_pass_through_call_writes_no_success_spend(proxy: Gateway, wire: Wire) -> None:

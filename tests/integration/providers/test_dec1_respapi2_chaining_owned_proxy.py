@@ -25,6 +25,7 @@ polling on the chat carrier.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -42,11 +43,13 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.wire import Reply
 from integration.providers.dec1_respapi2_support import (
     bedrock,
     converse_texts,
     every_respond,
     gemini,
+    gemini_stream,
     gemini_texts,
     groq,
     unique_text,
@@ -54,7 +57,9 @@ from integration.providers.dec1_respapi2_support import (
 from integration.providers.dec1_respapi_support import (
     REPLY_TEXT,
     STREAM_PIECES,
+    Call,
     anthropic,
+    anthropic_message,
     chat_bridge,
     chat_messages,
     deepseek,
@@ -344,13 +349,62 @@ def test_a_bridged_response_id_is_not_the_raw_chat_id_and_differs_per_turn(rig: 
     assert all(identity.startswith("resp_") and "chatcmpl" not in identity for identity in ids), ids
 
 
+def _anthropic_stream(call: Call) -> Reply:
+    """The Anthropic SSE answer to a `stream: true` Messages call: `STREAM_PIECES` as text deltas, then usage."""
+    message: Final = anthropic_message(call.body)
+    start: Final = {**message, "content": [], "stop_reason": None}
+    events: Final[list[tuple[str, dict[str, JsonValue]]]] = [
+        ("message_start", {"type": "message_start", "message": start}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        *(
+            (
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": piece}},
+            )
+            for piece in STREAM_PIECES
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": object_value(message["usage"])["output_tokens"]},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return Reply(
+        content_type="text/event-stream",
+        chunks=tuple(f"event: {name}\ndata: {json.dumps(event)}\n\n".encode() for name, event in events),
+    )
+
+
+def _streaming_respond(call: Call) -> Reply:
+    """`every_respond`, but a streamed Anthropic or Gemini call is answered with `STREAM_PIECES` as SSE."""
+    if call.method == "POST" and call.path.endswith("/v1/messages") and call.body.get("stream") is True:
+        return _anthropic_stream(call)
+    if call.method == "POST" and ":streamGenerateContent" in call.path:
+        return gemini_stream(STREAM_PIECES)
+    return every_respond(call)
+
+
 @pytest.mark.parametrize("carrier", ["anthropic", "gemini"])
 def test_a_background_request_on_a_non_openai_provider_polls_to_completed(rig: _Rig, carrier: str) -> None:
     """`background: true` on an Anthropic or Gemini deployment with cache polling on for every model answers a
     queued `litellm_poll_` id (`proxy/response_polling/polling_handler.py:59`); polling
     `GET /v1/responses/<id>` must settle on `status: completed` whose output text is `REPLY_TEXT`, and the
-    provider peer receives exactly one POST (the background task, not one per poll)."""
-    with peer(every_respond) as provider, rig.gateway.scenario() as scenario:
+    provider peer receives exactly one POST (the background task, not one per poll).
+
+    Test mistake fixed (run 44176682961): the background task always streams from the provider
+    (`data["stream"] = True`, litellm/proxy/response_polling/background_streaming.py:181 on main), so the peer
+    must answer the streamed call. Before, Gemini settled on the text of `gemini_stream`'s default pieces
+    ("dec1 gemini reply") and Anthropic on "" because the peer answered a stream with a plain JSON message. The
+    peer now streams `STREAM_PIECES` for both, and the one POST must be the streamed form."""
+    with peer(_streaming_respond) as provider, rig.gateway.scenario() as scenario:
         model: Final = anthropic(scenario, provider) if carrier == "anthropic" else gemini(scenario, provider)
         queued: Final = served(responses(rig.gateway, model, background=True))
         poll_id: Final = string_value(queued["id"])
@@ -362,7 +416,11 @@ def test_a_background_request_on_a_non_openai_provider_polls_to_completed(rig: _
         )
         assert settled["status"] == "completed", settled
         assert output_text(settled) == REPLY_TEXT
-        assert len(provider.posts()) == 1
+        (call,) = provider.posts()
+        if carrier == "anthropic":
+            assert call.body.get("stream") is True, call.body
+        else:
+            assert ":streamGenerateContent" in call.path, call.path
 
 
 def test_a_follow_up_waits_for_a_just_finished_turn(rig: _Rig) -> None:

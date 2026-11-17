@@ -128,9 +128,13 @@ def test_jina_keyless_rerank_is_refused_before_any_request(gateway: Gateway) -> 
     `rerank_api/main.py` raises `Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment`
     before any request; the caller must get an error containing that text and Jina receives nothing. UNVERIFIED:
     the status code (a ValueError) and that `JINA_AI_API_KEY` is unset in CI.
+
+    Test mistake fixed (run 44176682961): `Scenario.model` fills in `api_key: integration-provider-key` unless told
+    otherwise (tests/integration/_support/client.py:293), so the deployment was not keyless; it now sets
+    `api_key=None`.
     """
     with peer(cohere_rerank()) as provider, gateway.scenario() as scenario:
-        model: Final = _rerank_model(scenario, f"jina_ai/{_JINA}", provider.url)
+        model: Final = _rerank_model(scenario, f"jina_ai/{_JINA}", provider.url, api_key=None)
         response: Final = rerank(gateway, model)
         assert response.status_code >= 400, response.text
         assert "Jina AI API key is required" in error_message(response)
@@ -287,14 +291,20 @@ def test_infinity_rerank_sends_the_cohere_v1_body_including_max_chunks_per_doc(g
 def test_infinity_rerank_meta_splits_usage_into_input_and_output_tokens(gateway: Gateway) -> None:
     """Infinity answers `usage: {"prompt_tokens": 7, "total_tokens": 10}`.
 
-    The caller's `meta.billed_units` must be the usage block itself (`prompt_tokens: 7`, `total_tokens: 10`) and
     `meta.tokens` must be `{"input_tokens": 7, "output_tokens": 3}` (total minus prompt).
+
+    Pinned current behaviour (run 44176682961): `meta.billed_units` keeps `total_tokens: 10` but has no
+    `prompt_tokens`. The transform builds it as `RerankBilledUnits(**usage)` (litellm/llms/infinity/rerank/
+    transformation.py:112 on main), and `RerankBilledUnits` declares only `search_units`, `total_tokens`,
+    `input_tokens` and `output_tokens` (litellm/types/rerank.py:57-61), so the undeclared key does not reach the
+    caller.
     """
     with peer(_usage_answer({"prompt_tokens": 7, "total_tokens": 10})) as provider, gateway.scenario() as scenario:
         model: Final = _rerank_model(scenario, f"infinity/{_INFINITY}", provider.url, api_key=PROVIDER_KEY)
         meta: Final = object_value(served(rerank(gateway, model))["meta"])
         billed: Final = object_value(meta["billed_units"])
-        assert (billed["prompt_tokens"], billed["total_tokens"]) == (7, 10)
+        assert billed["total_tokens"] == 10, meta
+        assert "prompt_tokens" not in billed, meta
         assert meta["tokens"] == {"input_tokens": 7, "output_tokens": 3}
 
 
@@ -320,7 +330,7 @@ def test_infinity_keyless_rerank_sends_no_bearer_none(gateway: Gateway) -> None:
     """
     pytest.skip("BUG: InfinityRerankConfig.validate_environment formats a missing key as 'Bearer None'")
     with peer(cohere_rerank()) as provider, gateway.scenario() as scenario:
-        model: Final = _rerank_model(scenario, f"infinity/{_INFINITY}", provider.url)
+        model: Final = _rerank_model(scenario, f"infinity/{_INFINITY}", provider.url, api_key=None)
         served(rerank(gateway, model))
         assert provider.only().headers.get("authorization") != "Bearer None"
 
@@ -352,9 +362,13 @@ def test_hosted_vllm_keyless_rerank_sends_the_fake_api_key_bearer(gateway: Gatew
 
     Unlike vLLM embeddings (no header), the rerank config sends `Authorization: Bearer fake-api-key`. Pinned
     because the asymmetry is easy to "fix" in one place only. UNVERIFIED: `HOSTED_VLLM_API_KEY` unset in CI.
+
+    Test mistake fixed (run 44176682961): `Scenario.model` fills in `api_key: integration-provider-key` unless told
+    otherwise (tests/integration/_support/client.py:293), so the deployment was not keyless; it now sets
+    `api_key=None`.
     """
     with peer(cohere_rerank()) as provider, gateway.scenario() as scenario:
-        model: Final = _rerank_model(scenario, f"hosted_vllm/{_VLLM}", provider.url)
+        model: Final = _rerank_model(scenario, f"hosted_vllm/{_VLLM}", provider.url, api_key=None)
         served(rerank(gateway, model))
         assert provider.only().headers["authorization"] == "Bearer fake-api-key"
 

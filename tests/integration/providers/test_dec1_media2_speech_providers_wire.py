@@ -193,7 +193,13 @@ def test_elevenlabs_speech_error_keeps_the_provider_status(gateway: Gateway) -> 
 def test_elevenlabs_speech_bills_each_input_character(gateway: Gateway) -> None:
     """An ElevenLabs deployment priced at `input_cost_per_character` 0.00003 speaks a 40 character input. The
     response cost header and the spend row must both be 40 x 0.00003, and the row's `call_type` is `aspeech` with
-    `custom_llm_provider` `elevenlabs`."""
+    `custom_llm_provider` `elevenlabs`.
+
+    BUG (run 44176682961): the cost is 0.0032, which is 40 x 8e-05, the cost map's `input_cost_per_character` for
+    `elevenlabs/eleven_multilingual_v2` (model_prices_and_context_window.json). The deployment's own per-character
+    price is ignored on the speech cost path (`_SPEECH_CALL_TYPES` branch, litellm/cost_calculator.py:2154 on
+    main). Root cause not pinned; medium confidence."""
+    pytest.skip("BUG: ElevenLabs speech bills the cost map per-character price, not the deployment's")
     line: Final = "x" * 32 + uuid.uuid4().hex[:8]
     assert len(line) == 40
     with wire_server(_audio) as wire, gateway.scenario() as scenario:

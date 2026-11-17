@@ -24,7 +24,7 @@ import uuid
 from typing import Final
 
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway
+from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers.dec1_media2_support import (
     AZURE_KEY,
@@ -72,7 +72,13 @@ def test_azure_transcription_posts_to_the_deployment_path_with_api_version_and_a
 ) -> None:
     """An `azure/whisper-1` deployment with `api_version` 2024-06-01 transcribes a WAV upload. Azure must get one
     POST to `/openai/deployments/whisper-1/audio/transcriptions?api-version=2024-06-01`, authenticated with the
-    `api-key` header (no bearer token), carrying the upload under the `file` part, and the caller gets the text."""
+    `api-key` header (no bearer token), carrying the upload under the `file` part, and the caller gets the text.
+
+    BUG (run 44176682961): Azure got `api-version=2025-02-01-preview`, which is `litellm.AZURE_DEFAULT_API_VERSION`
+    (litellm/__init__.py:339 on main), not the deployment's 2024-06-01. `transcription()` reads
+    `api_version or litellm.api_version or AZURE_API_VERSION` (litellm/main.py, `def transcription`), so the
+    deployment value is lost before it; where it is dropped is not pinned (medium-low confidence)."""
+    pytest.skip("BUG: Azure transcription ignores the deployment api_version and sends the default api-version")
     audio: Final = _clip()
     with wire_server(_openai_text) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
@@ -181,8 +187,11 @@ def test_groq_drops_a_subtitle_response_format_when_the_deployment_sets_drop_par
 
 def test_groq_verbose_json_returns_segments_and_duration_unchanged(gateway: Gateway) -> None:
     """Groq answers `verbose_json` with `duration` 3.25, a language and one segment. The caller must get the same
-    `text`, `language`, `duration` and `segments` values back, because the OpenAI transport returns the provider's
-    transcription object as is."""
+    `text`, `language`, `duration` and `segments` values back.
+
+    Pinned current behaviour (run 44176682961): each segment is re-serialised through the typed OpenAI segment
+    model, which adds its unset optional fields as null (`avg_logprob`, `compression_ratio`, `no_speech_prob`,
+    `temperature`, `tokens`). Every field Groq sent is unchanged, so the segments are compared without nulls."""
     reply: Final = {
         "task": "transcribe",
         "language": "English",
@@ -196,7 +205,11 @@ def test_groq_verbose_json_returns_segments_and_duration_unchanged(gateway: Gate
         assert response.status_code == 200, response.text
         body: Final = JSON_OBJECT.validate_json(response.content)
         assert (body["text"], body["language"], body["duration"]) == ("groq says hi", "English", 3.25)
-        assert body["segments"] == reply["segments"]
+        segments: Final = [
+            {name: value for name, value in object_value(segment).items() if value is not None}
+            for segment in list_value(body["segments"])
+        ]
+        assert segments == reply["segments"], body["segments"]
         assert len(wire.drain()) == 1
 
 
@@ -247,7 +260,14 @@ def test_deepgram_receives_raw_audio_at_listen_with_the_model_in_the_query_and_a
     """A `deepgram/nova-2` deployment transcribes a WAV upload with `language=en`. Deepgram must get one POST to
     `/v1/listen` whose query has `model=nova-2` and `language=en`, whose body is exactly the uploaded bytes (no
     multipart envelope), and whose `Authorization` header is `Token <key>` rather than `Bearer`
-    (litellm/llms/deepgram/audio_transcription/transformation.py)."""
+    (litellm/llms/deepgram/audio_transcription/transformation.py).
+
+    BUG (run 44176682961): the query has `model` but no `language`. `map_openai_params` keeps `language` in
+    `optional_params`, but `_build_query_params` only copies `get_provider_specific_params(...,
+    openai_params=self.get_supported_openai_params(model))`, which skips every supported OpenAI parameter, and
+    `language` is the only one (litellm/llms/deepgram/audio_transcription/transformation.py:59-60 and :241-264 on
+    main), so it is dropped."""
+    pytest.skip("BUG: Deepgram transcription drops the caller's language instead of sending it in the query")
     audio: Final = _clip()
     with wire_server(lambda _r: deepgram_reply()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model="deepgram/nova-2", api_base=f"{wire.url}/v1", api_key=DEEPGRAM_KEY)

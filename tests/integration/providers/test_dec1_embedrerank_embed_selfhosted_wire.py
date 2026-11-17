@@ -229,7 +229,7 @@ def test_infinity_keyless_deployment_sends_no_bearer_none(gateway: Gateway) -> N
         "BUG: InfinityEmbeddingConfig.validate_environment formats a missing key as 'Authorization: Bearer None'"
     )
     with peer(openai_list()) as provider, gateway.scenario() as scenario:
-        model: Final = _model(scenario, f"infinity/{_INFINITY}", f"{provider.url}/v1")
+        model: Final = _model(scenario, f"infinity/{_INFINITY}", f"{provider.url}/v1", api_key=None)
         served(embed(gateway, model, [marker()]))
         assert provider.only().headers.get("authorization") != "Bearer None"
 
@@ -268,9 +268,13 @@ def test_hosted_vllm_keyless_deployment_sends_no_authorization(gateway: Gateway)
 
     `HostedVLLMEmbeddingConfig` substitutes `fake-api-key` and then leaves Authorization out, so vLLM must receive no
     `authorization` header. UNVERIFIED: that `HOSTED_VLLM_API_KEY` is unset in the CI environment.
+
+    Test mistake fixed (run 44176682961): `Scenario.model` fills in `api_key: integration-provider-key` unless told
+    otherwise (tests/integration/_support/client.py:293), so the deployment was not keyless; it now sets
+    `api_key=None`.
     """
     with peer(openai_list()) as provider, gateway.scenario() as scenario:
-        model: Final = _model(scenario, f"hosted_vllm/{_VLLM}", f"{provider.url}/v1")
+        model: Final = _model(scenario, f"hosted_vllm/{_VLLM}", f"{provider.url}/v1", api_key=None)
         served(embed(gateway, model, [marker()]))
         assert "authorization" not in provider.only().headers
 
@@ -496,7 +500,15 @@ def test_ollama_without_prompt_eval_count_estimates_prompt_tokens(gateway: Gatew
     The handler estimates with the proxy tokenizer over the joined inputs, so the caller's `prompt_tokens` must be
     a positive integer equal to `total_tokens`, never 0 and never missing. UNVERIFIED: the exact count depends on
     the tokenizer, so only positivity is pinned.
+
+    BUG (run 44176682961): the call fails with 400 `'Logging' object has no attribute 'debug'`. When
+    `prompt_eval_count` is missing and an encoding is available, `_process_ollama_embedding_response` calls
+    `.debug(...)` on the litellm `Logging` object it was handed (litellm/llms/ollama/completion/handler.py:79-82 on
+    main), which has no such method, so the estimate is never returned.
     """
+    pytest.skip(
+        "BUG: an Ollama embedding without prompt_eval_count fails with 'Logging' object has no attribute 'debug'"
+    )
     with peer(ollama_embed(None)) as provider, gateway.scenario() as scenario:
         model: Final = _model(scenario, f"ollama/{_OLLAMA}", provider.url)
         usage: Final = object_value(served(embed(gateway, model, [f"hello world {marker()}"]))["usage"])

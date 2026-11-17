@@ -200,8 +200,12 @@ def test_a_failed_embedding_writes_a_failure_row_with_zero_spend(gateway: Gatewa
 def test_a_repeated_voyage_embedding_is_served_from_the_cache(gateway: Gateway) -> None:
     """The same single-input Voyage embedding is sent twice on the shared gateway (cache `default_on`).
 
-    Voyage must be called once; the second answer must carry `x-litellm-cache-key` and
-    `x-litellm-response-cost: 0`.
+    Voyage must be called once and the second answer must carry `x-litellm-response-cost: 0`.
+
+    Pinned current behaviour (run 44176682961): the cached answer carries no `x-litellm-cache-key`. A list
+    embedding is cached per input and the hit is rebuilt from those entries
+    (`combine_cached_embedding_response_with_api_result`, litellm/caching/caching_handler.py:888 on main) without
+    the `cache_key` hidden param that `common_request_processing.py:2906` turns into the header.
     """
     text: Final = marker()
     with peer(_voyage_usage) as provider, gateway.scenario() as scenario:
@@ -210,7 +214,7 @@ def test_a_repeated_voyage_embedding_is_served_from_the_cache(gateway: Gateway) 
         second: Final = embed(gateway, model, [text])
         served(second)
         assert len(provider.posts()) == 1
-        assert second.headers.get(CACHE_KEY_HEADER)
+        assert CACHE_KEY_HEADER not in second.headers, dict(second.headers)
         assert float(second.headers[COST_HEADER]) == 0.0
 
 

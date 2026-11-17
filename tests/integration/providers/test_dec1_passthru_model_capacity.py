@@ -25,6 +25,7 @@ from integration._support.client import Gateway, gateway_from_environment
 from integration._support.wire import Wire, wire_server
 from integration.providers.dec1_passthru_support import (
     BEDROCK_CONVERSE_BODY,
+    BEDROCK_MODEL_ID,
     anthropic_body,
     anthropic_error,
     bearer,
@@ -114,14 +115,18 @@ def test_a_bedrock_router_group_at_capacity_refuses_the_next_pass_through_call(p
     assert len(posts(bedrock)) == 1
 
 
-def test_a_served_bedrock_pass_through_reports_the_groups_capacity_headers(proxy: Gateway) -> None:
-    """The second Bedrock group has `rpm: 2`. Its first Converse call must answer 200 with
-    `x-ratelimit-model_saturation_check-limit-requests: 2` and `...-remaining-requests: 1`, as a chat call on the
-    same group does. UNVERIFIED: that the router pass-through response copies the limiter's headers."""
+def test_a_served_bedrock_pass_through_names_its_deployment_but_carries_no_capacity_headers(proxy: Gateway) -> None:
+    """The second Bedrock group has `rpm: 2`. Its first Converse call must answer 200.
+
+    Pinned current behaviour (run 44176682961): the reply names the deployment that served it
+    (`x-litellm-model-id` `<group>-0`, `x-litellm-model-name` `bedrock/<model id>`) and its cost, but carries none
+    of the `x-ratelimit-model_saturation_check-*` headers a chat call on the same group gets: the router
+    pass-through reply does not copy the dynamic limiter's headers."""
     response: Final = _converse(proxy, _WIDE_BEDROCK_GROUP)
     assert response.status_code == 200, response.text
-    assert response.headers.get("x-ratelimit-model_saturation_check-limit-requests") == "2", dict(response.headers)
-    assert response.headers.get("x-ratelimit-model_saturation_check-remaining-requests") == "1", dict(response.headers)
+    assert response.headers.get("x-litellm-model-name") == f"bedrock/{BEDROCK_MODEL_ID}", dict(response.headers)
+    assert "x-ratelimit-model_saturation_check-limit-requests" not in response.headers, dict(response.headers)
+    assert "x-ratelimit-model_saturation_check-remaining-requests" not in response.headers, dict(response.headers)
 
 
 def test_an_anthropic_pass_through_body_naming_a_group_at_capacity_is_refused(proxy: Gateway, providers: Wire) -> None:
@@ -129,7 +134,11 @@ def test_an_anthropic_pass_through_body_naming_a_group_at_capacity_is_refused(pr
     body `model` is that group name: the first must be forwarded (to `ANTHROPIC_API_BASE`, with the body unchanged)
     and the second refused with 429 in the Anthropic envelope (`rate_limit_error`) carrying the capacity message.
     UNVERIFIED: assumes the pass-through pre-call hook hands the dynamic limiter the parsed body, so
-    `data["model"]` is the group name."""
+    `data["model"]` is the group name.
+
+    Pinned current behaviour (run 44176682961): the message starts with `litellm.RateLimitError: ` because the
+    pass-through renders a pre-call refusal from the exception's `message`
+    (litellm/proxy/pass_through_endpoints/pass_through_endpoints.py:2529 on main)."""
     with proxy.scenario() as scenario:
         key: Final = scenario.key()
         body: Final = anthropic_body(marker(), model=_ANTHROPIC_GROUP)
@@ -140,7 +149,9 @@ def test_an_anthropic_pass_through_body_naming_a_group_at_capacity_is_refused(pr
         )
         error: Final = anthropic_error(refused, 429)
         assert error["type"] == "rate_limit_error", refused.text
-        assert message_of(error) == capacity_message(_ANTHROPIC_GROUP, None, "requests", rpm=1), refused.text
+        assert message_of(error) == "litellm.RateLimitError: " + capacity_message(
+            _ANTHROPIC_GROUP, None, "requests", rpm=1
+        ), refused.text
         assert len(posts(providers)) == 1
 
 

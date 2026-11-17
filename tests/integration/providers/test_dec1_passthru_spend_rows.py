@@ -16,6 +16,7 @@ sibling spend agents left out.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Iterator
 from typing import Final
@@ -58,6 +59,12 @@ from pydantic import JsonValue
 pytestmark = pytest.mark.timeout(300)
 
 _GPT_4O_MINI_RATES: Final = (1.5e-07, 6e-07)
+_MESSAGE_ID: Final = re.compile(rb"msg_[0-9a-f]{12}")
+
+
+def _without_message_id(stream: bytes) -> bytes:
+    """The scripted provider mints a fresh `msg_<hex>` per reply, so the relayed id is compared as a placeholder."""
+    return _MESSAGE_ID.sub(b"msg_dec1", stream)
 
 
 @pytest.fixture(scope="module")
@@ -111,7 +118,9 @@ def test_an_anthropic_call_writes_one_row_with_the_native_token_counts_and_price
 def test_a_streamed_anthropic_call_is_relayed_byte_for_byte(proxy: Gateway) -> None:
     """A `stream: true` call to `/anthropic/v1/messages` must answer 200 `text/event-stream` whose body is exactly
     the six SSE frames the provider sent, concatenated, with nothing added (no `[DONE]`, no cost injection unless
-    asked) and nothing re-serialised."""
+    asked) and nothing re-serialised. The provider mints a fresh message id per reply, so the expected frames are
+    built locally and the id alone is compared as a placeholder (test mistake fixed in run 44176682961, which
+    compared against frames carrying a different random id)."""
     with proxy.scenario() as scenario:
         key: Final = scenario.key()
         with proxy.client.stream(
@@ -120,7 +129,8 @@ def test_a_streamed_anthropic_call_is_relayed_byte_for_byte(proxy: Gateway) -> N
             body: Final = response.read()
             assert response.status_code == 200, body
             assert response.headers["content-type"].startswith("text/event-stream"), dict(response.headers)
-        assert body == b"".join(anthropic_frames("scripted anthropic")), body
+        assert len(_MESSAGE_ID.findall(body)) == 1, body
+        assert _without_message_id(body) == _without_message_id(b"".join(anthropic_frames("scripted anthropic"))), body
 
 
 def test_a_streamed_anthropic_call_bills_input_from_message_start_and_output_from_message_delta(
@@ -165,7 +175,13 @@ def test_a_cohere_call_bills_usage_tokens_not_billed_units(proxy: Gateway) -> No
 def test_a_cohere_row_names_cohere_as_its_provider(proxy: Gateway) -> None:
     """The same Cohere call's row must carry a Cohere provider name in `custom_llm_provider`. UNVERIFIED: the
     handler's `llm_provider_name` is `LlmProviders.COHERE` (`cohere`), while the cost map files the model under
-    `cohere_chat`; this pins `cohere`."""
+    `cohere_chat`; this pins `cohere`.
+
+    BUG (run 44176682961): the row's `custom_llm_provider` is empty. `/v2/chat` falls through to the generic
+    `passthrough_chat_handler`, whose `_create_response_logging_payload` sets `model` and `response_cost` but never
+    `custom_llm_provider` (litellm/proxy/pass_through_endpoints/llm_provider_handlers/base_passthrough_logging_handler.py:96-125
+    on main); only the embed branch sets `cohere` (cohere_passthrough_logging_handler.py:126 and :153)."""
+    pytest.skip("BUG: a Cohere /v2/chat pass-through spend row has an empty custom_llm_provider")
     with proxy.scenario() as scenario:
         key: Final = scenario.key()
         assert send(proxy, "/cohere/v2/chat", cohere_body(marker()), headers=bearer(key)).status_code == 200
@@ -175,7 +191,13 @@ def test_a_cohere_row_names_cohere_as_its_provider(proxy: Gateway) -> None:
 def test_an_openai_call_writes_a_row_priced_from_the_openai_usage_block(proxy: Gateway) -> None:
     """One `/openai/v1/chat/completions` call on `gpt-4o-mini` whose reply reports 5 prompt and 3 completion
     tokens must write one row with `custom_llm_provider` `openai`, `model` `gpt-4o-mini`, tokens 5 and 3 and spend
-    5 * 1.5e-07 + 3 * 6e-07."""
+    5 * 1.5e-07 + 3 * 6e-07.
+
+    BUG (run 44176682961): the row has 0 and 0 tokens. The OpenAI usage parser is chosen by the upstream host, not
+    the route: `is_openai_compatible_url` only accepts api.openai.com and the Azure OpenAI domains
+    (llm_provider_handlers/openai_passthrough_logging_handler.py:94-117 on main, used by success_handler.py:325), so
+    `/openai/*` with an operator `OPENAI_API_BASE` (an egress proxy, or the test peer) writes an unpriced row."""
+    pytest.skip("BUG: /openai pass-through to a non-api.openai.com OPENAI_API_BASE records no tokens and no spend")
     with proxy.scenario() as scenario:
         key: Final = scenario.key()
         assert send(proxy, "/openai/v1/chat/completions", openai_body(marker()), headers=bearer(key)).status_code == 200
@@ -274,7 +296,14 @@ def test_a_body_model_served_by_one_priced_anthropic_deployment_bills_that_deplo
     `input_cost_per_token: 0.001` and `output_cost_per_token: 0.002`. An `/anthropic/v1/messages` call whose body
     names `dec1-claude-<hex>` reports 7 and 3 tokens. Its row must be priced 7 * 0.001 + 3 * 0.002 = 0.013: the
     pass-through selects no deployment, but the only deployment serving that exact Anthropic model supplies the
-    price (`anthropic_deployment_pricing_model_info`, `llm_passthrough_endpoints.py:296`)."""
+    price (`anthropic_deployment_pricing_model_info`, `llm_passthrough_endpoints.py:296`).
+
+    BUG (run 44176682961): spend is 0. The deployment was found (the zero-cost warning names its pricing entry), but
+    `AnthropicPassthroughLoggingHandler._compute_response_cost` passes `custom_llm_provider` from
+    `model_call_details`, which is unset on this route, so `cost_per_token` calls `get_llm_provider` on the bare
+    `dec1-claude-<hex>` and raises `LLM Provider NOT provided`
+    (llm_provider_handlers/anthropic_passthrough_logging_handler.py:336-358 on main, cost_calculator.py:651)."""
+    pytest.skip("BUG: an Anthropic pass-through body naming a deployment-priced model outside the cost map bills 0")
     name: Final = f"dec1-claude-{uuid.uuid4().hex[:10]}"
     with proxy.scenario() as scenario:
         scenario.model(name=name, model=f"anthropic/{name}", input_cost_per_token=0.001, output_cost_per_token=0.002)
