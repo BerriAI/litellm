@@ -190,3 +190,16 @@ def test_vispark_missing_key_rejects_before_openai_fallback(monkeypatch: pytest.
             with pytest.raises(litellm.AuthenticationError, match="VISPARK_LAB_API_KEY"):
                 litellm.completion(model="vispark/vision-medium", messages=[{"role": "user", "content": "Hello"}])
     assert route.call_count == 0
+
+
+def test_vispark_text_completion_uses_authenticated_client(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("VISPARK_LAB_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="vispark-client-key", base_url="https://api.lab.vispark.in/v1") as client:
+        with respx.mock() as upstream:
+            route: Final = upstream.post("https://api.lab.vispark.in/v1/completions").respond(200, json=_TEXT_COMPLETION)
+            response: Final = litellm.text_completion(model="vispark/vision-small", prompt="Hello", client=client)
+    assert route.calls.last.request.headers["authorization"] == "Bearer vispark-client-key"
+    assert response.choices[0].text == "Hello from Vispark"
