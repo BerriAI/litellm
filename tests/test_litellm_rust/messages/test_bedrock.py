@@ -1068,6 +1068,8 @@ async def test_bedrock_mantle_refusal_logs_and_names_the_model_python_does(
     assert type(raised.value) is litellm.BadRequestError
     assert raised.value.model == raised_model  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
     assert raised.value.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    # Python main raises the Bedrock invoke transform's own error, unwrapped by an HTTP handler.
+    assert str(raised.value).startswith("litellm.BadRequestError: Bedrock does not support")
     [(kind, logged)] = recorder.logged
     assert (kind, logged["model"]) == ("failure", logged_model)
     assert server.requests == []

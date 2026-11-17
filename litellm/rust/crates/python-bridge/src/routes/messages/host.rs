@@ -43,7 +43,7 @@ use super::agentic::HookedRequest;
 use super::safeguards::{SafeguardsCall, SafeguardsHost};
 use super::transport::{HostedTransport, Selected, TransportCall, python_failure};
 use crate::{
-    errors::{RequestMarker, route_failure},
+    errors::{RequestMarker, raises_bad_request, route_failure},
     marshal::{
         ArgumentError, optional_timeout, project_optional_fields, public_json_response,
         python_timeout_seconds,
@@ -157,7 +157,8 @@ const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
 /// The model Python's handler logs a Mantle call under before the config transforms the request.
 const MESSAGES_LOGGED_MODEL: &str = "messages_logged_model";
 /// The provider litellm's error names when it is not the route's: none for a call refused while
-/// resolving its provider, as Python's `get_llm_provider` raises it.
+/// resolving its provider, as Python's `get_llm_provider` raises it, and `bedrock` for a Mantle
+/// refusal the inherited Bedrock invoke transform raises as `BadRequestError`.
 const MESSAGES_PROVIDER: &str = "messages_provider";
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
 const REPLAYED_CREDENTIAL_FAILURE: &str = "replay";
@@ -968,6 +969,7 @@ impl MessagesPythonHost {
             return Ok(PyErr::from_value(raised));
         }
         let unresolved_provider = refused_resolving_provider(&error);
+        let bad_request = raises_bad_request(&error);
         route_failure(py, error, RequestMarker::Messages, |native| {
             if self.stream_opened {
                 native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
@@ -983,6 +985,11 @@ impl MessagesPythonHost {
                 let value = native.value(py);
                 value.setattr(MESSAGES_PROVIDER_MODEL, models.sent)?;
                 value.setattr(MESSAGES_LOGGED_MODEL, models.logged)?;
+                if bad_request {
+                    // Python's Mantle configs inherit the Bedrock invoke transform, which raises
+                    // its `BadRequestError` naming `bedrock`.
+                    value.setattr(MESSAGES_PROVIDER, BEDROCK_PROVIDER)?;
+                }
                 // The Mantle routes map a credential Rust could not acquire from a fixed class
                 // list, never by running Python's signing again.
                 if value

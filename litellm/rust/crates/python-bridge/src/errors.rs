@@ -166,6 +166,15 @@ fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<ProviderRe
     }
 }
 
+/// Whether Python's provider config raises this refusal as litellm's own `BadRequestError`, as the
+/// Bedrock invoke transform does, naming the provider it raises for.
+pub(crate) fn raises_bad_request(error: &Error) -> bool {
+    error
+        .rejected_request()
+        .and_then(provider_rejection)
+        .is_some_and(|rejection| rejection.bad_request)
+}
+
 pub(crate) fn upstream_error(
     py: Python<'_>,
     status: u16,
@@ -548,6 +557,10 @@ mod tests {
         #[case] error: Error,
         #[case] expected: Option<(&str, bool)>,
     ) {
+        assert_eq!(
+            raises_bad_request(&error),
+            expected.is_some_and(|(_, bad_request)| bad_request)
+        );
         Python::initialize();
         Python::attach(|py| {
             let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();

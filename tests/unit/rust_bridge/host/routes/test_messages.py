@@ -3319,6 +3319,37 @@ _BEDROCK_MANTLE: Final = "bedrock_mantle/anthropic.claude-sonnet-5-5"
 _MANTLE_ROUTE: Final = "bedrock/mantle/anthropic.claude-sonnet-5-5"
 
 
+_WEB_SEARCH_REFUSAL: Final = "Bedrock does not support Anthropic's server-side web search tool"
+
+
+@pytest.mark.parametrize(
+    ("named_provider", "text"),
+    (
+        ("bedrock", f"litellm.BadRequestError: {_WEB_SEARCH_REFUSAL}"),
+        # Unnamed, the host maps it as any config's HTTP handler maps the transform's error.
+        (None, f"litellm.BadRequestError: BedrockException - litellm.BadRequestError: {_WEB_SEARCH_REFUSAL}"),
+    ),
+    ids=("rust-names-bedrock", "rust-names-none"),
+)
+def test_a_mantle_bad_request_rejection_raises_as_the_provider_rust_names(
+    named_provider: str | None, text: str
+) -> None:
+    native: Final = ValueError(_WEB_SEARCH_REFUSAL)
+    native.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    native.messages_provider_rejection = _WEB_SEARCH_REFUSAL  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    native.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    native.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    if named_provider is not None:
+        native.messages_provider = named_provider  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(native, {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle")
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+    assert str(mapped) == text
+    assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
 @pytest.mark.parametrize(
     ("model", "provider", "named_model", "raised_model"),
     (
@@ -3433,6 +3464,7 @@ def test_a_bedrock_mantle_web_search_rejection_raises_the_invoke_transforms_bad_
     rust_error.messages_provider_rejection = text  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
     rust_error.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
     rust_error.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    rust_error.messages_provider = "bedrock"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
 
     mapped: Final = messages_host.map_failure(
         rust_error, {"model": "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5", "messages": []}, "bedrock_mantle"

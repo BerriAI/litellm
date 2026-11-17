@@ -724,6 +724,7 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
         rejection: Final = _provider_rejection(
             provider_rejection,
             getattr(error, "messages_provider_bad_request", False) is True,
+            optional_str(getattr(error, "messages_provider", None)),
             request,
             request_provider,
             model,
@@ -741,17 +742,22 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
 
 
 def _provider_rejection(
-    text: str, bad_request: bool, request: Mapping[str, object], request_provider: str, model: str
+    text: str,
+    bad_request: bool,
+    named_provider: str | None,
+    request: Mapping[str, object],
+    request_provider: str,
+    model: str,
 ) -> Exception:
     """The Bedrock invoke config raises its own `BadRequestError`, which other configs' HTTP handler
-    maps into their error class by its text."""
+    maps into their error class by its text. A config that raises it naming another provider, as
+    the Mantle configs name `bedrock`, is one Rust names."""
     if not bad_request:
         return _config_error(400, text, (), request, request_provider)
-    if request_provider == "bedrock_mantle":
-        # Python's Mantle config inherits the Bedrock invoke transform, which raises naming `bedrock`.
-        return litellm.BadRequestError(message=text, model=model, llm_provider="bedrock")
-    raised: Final = litellm.BadRequestError(message=text, model=model, llm_provider=request_provider)
-    if request_provider == "bedrock":
+    raised: Final = litellm.BadRequestError(
+        message=text, model=model, llm_provider=request_provider if named_provider is None else named_provider
+    )
+    if request_provider == "bedrock" or named_provider is not None:
         return raised
     return _config_error(400, str(raised), (), request, request_provider)
 
