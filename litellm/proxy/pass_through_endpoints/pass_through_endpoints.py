@@ -3610,9 +3610,10 @@ async def websocket_passthrough_request(
         )
 
     kwargs: Final = init_call_kwargs(user_api_key_dict, passthrough_logging_payload, litellm_call_id, logging_obj)
+    session_model_group: Final = frame_policy.session_model_group(target)
 
     def start_call_logging(call_logging: LiteLLMLoggingObj, call_kwargs: Mapping[str, object]) -> None:
-        _pin_model_group(call_kwargs, frame_policy.session_model_group(target))
+        _pin_model_group(call_kwargs, session_model_group)
         call_logging.update_environment_variables(
             model="unknown",
             user="unknown",
@@ -3727,7 +3728,12 @@ async def websocket_passthrough_request(
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
     websocket_hook_data: Final = guardrail_request_data_with_streaming(
-        MappingProxyType({"litellm_call_id": litellm_call_id}), is_streaming=True
+        MappingProxyType(
+            {"litellm_call_id": litellm_call_id}
+            if session_model_group is None
+            else {"litellm_call_id": litellm_call_id, "model": session_model_group}
+        ),
+        is_streaming=True,
     )
     await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,

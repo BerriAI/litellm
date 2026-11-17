@@ -9838,27 +9838,34 @@ def _client_sends_then_waits(*frames: str | bytes) -> _ClientReceive:
     return receive
 
 
+_PreCallHook: TypeAlias = Callable[[UserAPIKeyAuth, dict[str, object], str], Awaitable[None]]
+
+
 async def _relay_elevenlabs_tts(
     upstream_ws: FrameCountingUpstreamWebSocket | DrainingUpstreamWebSocket,
     client_receive: _ClientReceive,
     client_send_text: AsyncMock | None = None,
+    key: UserAPIKeyAuth | None = None,
+    admit: _PreCallHook | None = None,
 ) -> tuple[MagicMock, AsyncMock]:
     websocket: Final = _client_websocket(client_receive)
     if client_send_text is not None:
         websocket.send_text = client_send_text
     with (
-        _patched_websocket_passthrough_environment(upstream_ws),
+        _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging,
         patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
             "pass_through_endpoint_logging.pass_through_async_success_handler",
             new=AsyncMock(),
         ) as success_handler,
     ):
+        if admit is not None:
+            proxy_logging.pre_call_hook = admit
         await websocket_passthrough_request(
             websocket=websocket,
             target=ELEVENLABS_TTS_TARGET,
             custom_headers={"xi-api-key": "el-provider-key"},
-            user_api_key_dict=UserAPIKeyAuth(),
+            user_api_key_dict=UserAPIKeyAuth() if key is None else key,
             forward_headers=False,
             endpoint="/elevenlabs/v1/text-to-speech/voice1/stream-input",
             accept_websocket=False,
@@ -9902,6 +9909,33 @@ async def test_websocket_passthrough_elevenlabs_logs_the_session_under_the_model
 
     metadata: Final = success_handler.call_args.kwargs["litellm_params"]["metadata"]
     assert metadata["model_group"] == "elevenlabs/eleven_flash_v2_5"
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_elevenlabs_refuses_a_session_past_the_keys_model_rpm_limit() -> None:
+    limiter_cache: Final = DualCache()
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-one-flash-session-a-minute"),
+        metadata={"model_rpm_limit": {"elevenlabs/eleven_flash_v2_5": 1}},
+    )
+    first_upstream: Final = FrameCountingUpstreamWebSocket(1, ELEVENLABS_AUDIO_FRAME, json.dumps({"isFinal": True}))
+    second_upstream: Final = FrameCountingUpstreamWebSocket(1, ELEVENLABS_AUDIO_FRAME, json.dumps({"isFinal": True}))
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=data, call_type=call_type
+        )
+
+    await _relay_elevenlabs_tts(first_upstream, _client_sends_then_waits(json.dumps({"text": "H"})), key=key, admit=admit)
+    with pytest.raises(ProxyRateLimitError) as refused:
+        await _relay_elevenlabs_tts(
+            second_upstream, _client_sends_then_waits(json.dumps({"text": "H"})), key=key, admit=admit
+        )
+
+    assert refused.value.status_code == 429
+    assert [json.loads(frame) for frame in first_upstream.sent] == [{"text": "H"}]
+    assert second_upstream.sent == ()
 
 
 @pytest.mark.asyncio
