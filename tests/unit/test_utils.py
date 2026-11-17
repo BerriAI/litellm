@@ -485,6 +485,28 @@ def test_supports_video_input_reads_its_own_cost_map_flag(
     assert litellm.get_model_info(model)["supports_video_input"] is video_input
 
 
+@pytest.mark.parametrize("openai_breakpoint", [True, False])
+def test_get_model_info_reports_the_openai_breakpoint_and_bedrock_cache_point_flags_apart(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, openai_breakpoint: bool
+) -> None:
+    model: Final = "bedrock/split-cache-flags-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "supports_openai_prompt_cache_breakpoint": openai_breakpoint,
+            "supports_bedrock_converse_cache_point": not openai_breakpoint,
+        },
+    )
+    info: Final = litellm.get_model_info(model)
+    assert (info["supports_openai_prompt_cache_breakpoint"], info["supports_bedrock_converse_cache_point"]) == (
+        openai_breakpoint,
+        not openai_breakpoint,
+    )
+
+
 @pytest.mark.parametrize("continuation", [True, False])
 def test_supports_continuation_reads_its_own_cost_map_flag(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, continuation: bool
@@ -1227,6 +1249,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_pdf_input": {"type": "boolean"},
             "prompt_cache_min_tokens": {"type": "number"},
             "supports_prompt_cache_breakpoint": {"type": "boolean"},
+            "supports_bedrock_converse_cache_point": {"type": "boolean"},
+            "supports_openai_prompt_cache_breakpoint": {"type": "boolean"},
             "supports_thinking_cache_preservation": {"type": "boolean"},
             "supports_prompt_caching": {"type": "boolean"},
             "supports_response_schema": {"type": "boolean"},

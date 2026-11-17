@@ -49,6 +49,20 @@ pub fn from_json(value: serde_json::Value) -> Value {
     }
 }
 
+/// `type(json.loads(text)).__name__`: the type [`crate::json::from_json`] gives the value,
+/// so an integer `serde_json` holds as `f64` (beyond `u64`) reads as `float`.
+pub fn type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "NoneType",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => "int",
+        serde_json::Value::Number(_) => "float",
+        serde_json::Value::String(_) => "str",
+        serde_json::Value::Array(_) => "list",
+        serde_json::Value::Object(_) => "dict",
+    }
+}
+
 /// `json.loads(text)`. Integers keep full precision, and a repeated key keeps its first position
 /// with its last value, as `dict(pairs)` does. An escape that leaves a lone surrogate fails, since
 /// a Rust `String` cannot hold one.

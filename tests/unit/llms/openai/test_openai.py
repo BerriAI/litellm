@@ -926,7 +926,7 @@ _QUERY_SECRET: Final = "query-secret"
     ("status_code", "mapped_error", "body"),
     (
         (400, litellm.BadRequestError, _REFUSAL_BODY),
-        (403, litellm.APIError, _REFUSAL_BODY),
+        (403, litellm.PermissionDeniedError, _REFUSAL_BODY),
         (408, litellm.Timeout, _REFUSAL_BODY),
         (408, litellm.Timeout, _GATEWAY_TIMEOUT_BODY),
         (409, litellm.APIError, _REFUSAL_BODY),
