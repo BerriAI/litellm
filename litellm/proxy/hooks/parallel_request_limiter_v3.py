@@ -5625,6 +5625,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
     @with_service_target(RATE_LIMITS_TARGET)
+    async def async_release_request_parallel_slot(self) -> None:
+        await self._release_stashed_parallel_slot(get_request_stash(), None)
+
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:
         """
         Release completed-request slots and update rate limit headers in the response.

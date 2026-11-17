@@ -1,8 +1,9 @@
 import asyncio
+import contextvars
 import json
 import logging
 import math
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from typing import Final
 
@@ -11,9 +12,11 @@ import pytest
 import respx
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
     OpenAIAgentsTurnBiller,
     TurnClaims,
@@ -22,6 +25,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_tu
 from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -539,6 +543,65 @@ async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed
     assert api.urls == [TURNS_URL]
     assert row["model"] == AGENT_MODEL
     assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+class _GatedClock(_Clock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate: Final = asyncio.Event()
+
+    async def sleep(self, seconds: float) -> None:
+        await self.gate.wait()
+        await super().sleep(seconds)
+
+
+def _as_new_request(coroutine: Coroutine[object, object, object]) -> "asyncio.Future[object]":
+    return contextvars.Context().run(asyncio.ensure_future, coroutine)
+
+
+@pytest.mark.asyncio
+async def test_a_key_at_its_parallel_limit_can_call_again_while_its_agent_turn_bills(local_model_cost_map: None):
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-agents-parallel"), max_parallel_requests=1)
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    clock: Final = _GatedClock()
+    rows: Final = _SpendRows()
+    released: Final = asyncio.Event()
+
+    async def release_request_slot() -> None:
+        await limiter.async_release_request_parallel_slot()
+        released.set()
+
+    biller: Final = OpenAIAgentsTurnBiller(
+        get=api.get, sleep=clock.sleep, clock=clock, release_request_slot=release_request_slot
+    )
+
+    async def agent_turn(litellm_call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=DualCache(),
+            data={"litellm_call_id": litellm_call_id},
+            call_type="pass_through_endpoint",
+        )
+        await _relay_call(biller, rows, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, litellm_call_id)
+
+    await _as_new_request(agent_turn("0c2e4a6c-8e0a-4c2e-9a4c-6e8a0c2e4a61"))
+    await asyncio.wait_for(released.wait(), timeout=5)
+    await _as_new_request(
+        limiter.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=DualCache(),
+            data={"litellm_call_id": "1d3f5b7d-9f1b-4d3f-8b5d-7f9b1d3f5b72"},
+            call_type="pass_through_endpoint",
+        )
+    )
+
+    assert api.turn_polls == 0
+    clock.gate.set()
+    row: Final = await rows.only_row()
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
 
 
