@@ -576,7 +576,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -617,7 +617,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -643,9 +643,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_rpm": released,
                 }
 
                 new_val = {
@@ -669,9 +669,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_rpm": released,
                 }
 
                 new_val = {
@@ -695,9 +695,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_rpm": released,
                 }
 
                 new_val = {
@@ -767,7 +767,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }

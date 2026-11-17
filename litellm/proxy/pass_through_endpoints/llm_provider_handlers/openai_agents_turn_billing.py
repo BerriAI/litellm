@@ -641,25 +641,53 @@ class OpenAIAgentsTurnBiller:
             _ = await asyncio.wait(tuple(self._tasks), timeout=timeout)
 
     async def _bill(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
-        await self._release_request_slot(row.logging_obj)
+        await self._release_slot(turn_start, row)
         outcome: Final = await self._turn_outcome(turn_start, row.logging_obj.litellm_call_id)
+        await self._log(row, await self._row_kwargs(turn_start, row, outcome))
+
+    async def _release_slot(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
+        try:
+            await self._release_request_slot(row.logging_obj)
+        except Exception as e:  # noqa: BLE001  # a limiter outage must not cost the call its spend row
+            verbose_proxy_logger.warning(
+                "OpenAI Agents passthrough: could not free the parallel request slot of session %s early: %r",
+                turn_start.session_id,
+                e,
+            )
+
+    async def _row_kwargs(
+        self, turn_start: AgentsTurnStart, row: DeferredAgentsRow, outcome: _TurnOutcome
+    ) -> Mapping[str, object]:
+        try:
+            return await self._outcome_kwargs(turn_start, row, outcome)
+        except Exception as e:  # noqa: BLE001  # the call already succeeded upstream, so its row logs even when costing breaks
+            verbose_proxy_logger.warning(
+                "OpenAI Agents passthrough: logging session %s call without cost, costing its turns failed: %r",
+                turn_start.session_id,
+                e,
+            )
+            return row.kwargs
+
+    async def _outcome_kwargs(
+        self, turn_start: AgentsTurnStart, row: DeferredAgentsRow, outcome: _TurnOutcome
+    ) -> Mapping[str, object]:
         match outcome:
             case _BilledTurns(turns=turns, unsettled_reason=None):
-                await self._log_billed(turn_start, row, turns)
+                return await self._billed_kwargs(turn_start, row, turns)
             case _BilledTurns(turns=turns, unsettled_reason=reason):
                 verbose_proxy_logger.warning(
                     "OpenAI Agents passthrough: billing session %s with the usage its turns reported so far, %s",
                     turn_start.session_id,
                     reason,
                 )
-                await self._log_billed(turn_start, row, turns)
+                return await self._billed_kwargs(turn_start, row, turns)
             case _UnbilledTurn(reason=reason):
                 verbose_proxy_logger.warning(
                     "OpenAI Agents passthrough: logging session %s call without cost, %s",
                     turn_start.session_id,
                     reason,
                 )
-                await self._log(row, row.kwargs)
+                return row.kwargs
 
     async def _turn_outcome(self, turn_start: AgentsTurnStart, claimant: str) -> _TurnOutcome:
         try:
@@ -869,9 +897,9 @@ class OpenAIAgentsTurnBiller:
             ]
         )
 
-    async def _log_billed(
+    async def _billed_kwargs(
         self, turn_start: AgentsTurnStart, row: DeferredAgentsRow, turns: tuple[_BilledTurn, ...]
-    ) -> None:
+    ) -> Mapping[str, object]:
         agent: Final = await self._agent(turn_start)
         if agent is None:
             verbose_proxy_logger.warning(
@@ -895,7 +923,7 @@ class OpenAIAgentsTurnBiller:
             logging_obj=row.logging_obj,
             status="success",
         )
-        await self._log(row, {**row.kwargs, **billed, "standard_logging_object": standard_logging_object})
+        return {**row.kwargs, **billed, "standard_logging_object": standard_logging_object}
 
     @staticmethod
     async def _log(row: DeferredAgentsRow, kwargs: Mapping[str, object]) -> None:
