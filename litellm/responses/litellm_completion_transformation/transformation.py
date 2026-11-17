@@ -3333,7 +3333,7 @@ class LiteLLMCompletionResponsesConfig:
         deferred_top_level_entries: Final = tuple(
             (name, (name, name)) for name in LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools)
         )
-        return MappingProxyType(dict(qualified_entries + unambiguous_entries + deferred_top_level_entries))
+        return MappingProxyType(dict(unambiguous_entries + qualified_entries + deferred_top_level_entries))
 
     @staticmethod
     def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
