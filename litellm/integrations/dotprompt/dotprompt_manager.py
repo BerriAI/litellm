@@ -54,9 +54,11 @@ class DotpromptManager(CustomPromptManagement):
         prompt_file: str | None = None,
         prompt_data: dict | str | None = None,
         prompt_id: str | None = None,
+        ignore_prompt_manager_optional_params: bool | None = False,
     ):
         import litellm
 
+        self.ignore_prompt_manager_optional_params = ignore_prompt_manager_optional_params
         self.prompt_directory = prompt_directory or litellm.global_prompt_directory
         # Support for JSON-based prompts stored in memory/database
         if isinstance(prompt_data, str):

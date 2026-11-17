@@ -1,10 +1,12 @@
 from collections.abc import Mapping
 from functools import reduce
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -23,6 +25,7 @@ _TEXT_OUTPUT_RATE: Final = "output_cost_per_token"
 _AUDIO_OUTPUT_RATE: Final = "output_cost_per_audio_token"
 _RATE_KEY_MARKERS: Final = ("cost", "pricing")
 _NESTED_PRICING: Final = TypeAdapter(Mapping[str, object] | tuple[object, ...])
+_PRICING_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _MAX_PRICING_DEPTH: Final = 4
 
 
@@ -103,6 +106,33 @@ def _declares_a_rate(pricing_entry: Mapping[str, object]) -> bool:
 
 def _is_explicit_zero(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and value == 0
+
+
+def _pricing_for_usage(usage: Usage, pricing_entry: Mapping[str, object]) -> Mapping[str, object]:
+    tiered_pricing: Final = pricing_entry.get("tiered_pricing")
+    if not isinstance(tiered_pricing, list):
+        return pricing_entry
+    try:
+        tiers: Final = _PRICING_TIERS.validate_python(tiered_pricing)
+    except ValidationError:
+        return pricing_entry
+    tier: Final = select_tier_for_input(tiers, usage.prompt_tokens)
+    if tier is None or _TEXT_INPUT_RATE not in tier:
+        return pricing_entry
+    cache_rate: Final = tier.get(_CACHE_READ_INPUT_RATE)
+    return MappingProxyType(
+        {
+            **pricing_entry,
+            **tier,
+            _CACHE_READ_INPUT_RATE: cache_rate if cache_rate is not None else tier[_TEXT_INPUT_RATE],
+        }
+    )
+
+
+def is_explicitly_free_usage(usage: Usage, pricing_entry: Mapping[str, object]) -> bool:
+    selected_pricing: Final = _pricing_for_usage(usage, pricing_entry)
+    used_keys: Final = tuple(_effective_pricing_key(key, selected_pricing) for key in used_pricing_keys(usage))
+    return bool(used_keys) and all(_is_explicit_zero(selected_pricing.get(key)) for key in used_keys)
 
 
 def diagnose_zero_cost(
