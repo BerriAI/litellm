@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from botocore.credentials import RefreshableCredentials
 
 import litellm
@@ -157,6 +158,37 @@ async def test_get_search_preserves_tinyfish_http_error_formatting(is_async: boo
             )
             assert error.value.headers is not None
             assert error.value.headers["retry-after"] == "7"
+
+
+def test_a_caller_fake_stream_is_honored_and_kept_off_the_wire(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.mistral.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-fake-stream",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "mistral-small-latest",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="mistral/mistral-small-latest",
+            api_key="fake-mistral-key",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            fake_stream=True,
+        )
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert "fake_stream" not in sent, sent
+    assert sent.get("stream") is not True, sent
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "ok"
 
 
 def test_prepare_fake_stream_request():
@@ -439,6 +471,125 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
     assert sent.body["stream"] is False
     assert "stream_options" not in sent.body
     assert "stream_options" not in recorder.seen_kwargs
+
+
+class _LookupLoop(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return True, {"tool_calls": [{"id": "call_lookup", "name": "lookup"}]}
+
+    async def async_run_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        self.runs += 1
+        return response
+
+
+def _a_lookup_call(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_lookup",
+                    "name": "lookup",
+                    "arguments": "{}",
+                    "status": "completed",
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def test_response_api_handler_runs_a_hook_call_the_allowed_tools_choice_lists():
+    hook: Final = _LookupLoop()
+
+    response: Final = BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-4o",
+        input="what time is it?",
+        responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+        response_api_optional_request_params={
+            "tools": [
+                {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}},
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "function", "name": "lookup"}],
+            },
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_key="sk-test", api_base="https://example.openai.azure.com", api_version="2025-04-01-preview"
+        ),
+        logging_obj=Mock(litellm_call_id="call-1", dynamic_success_callbacks=[hook], model_call_details={}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
+    )
+
+    assert hook.runs == 1
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(response.output) == 1
+
+
+def test_response_api_handler_refuses_a_hook_call_the_allowed_tools_choice_excludes_with_a_400():
+    hook: Final = _LookupLoop()
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        BaseLLMHTTPHandler().response_api_handler(
+            model="gpt-4o",
+            input="what time is it?",
+            responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+            response_api_optional_request_params={
+                "tools": [
+                    {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                    {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}},
+                ],
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "mode": "auto",
+                    "tools": [{"type": "function", "name": "get_time"}],
+                },
+            },
+            custom_llm_provider="azure",
+            litellm_params=GenericLiteLLMParams(
+                api_key="sk-test", api_base="https://example.openai.azure.com", api_version="2025-04-01-preview"
+            ),
+            logging_obj=Mock(litellm_call_id="call-1", dynamic_success_callbacks=[hook], model_call_details={}),
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
+        )
+
+    assert refused.value.status_code == 400
+    assert hook.runs == 0
 
 
 @pytest.mark.asyncio

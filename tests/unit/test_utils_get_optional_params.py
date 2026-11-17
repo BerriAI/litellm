@@ -17,6 +17,7 @@ from litellm.utils import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_llm import CustomLLM
 
 
 COHERE_CHAT_RESPONSE: Final = {
@@ -125,6 +126,65 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["tools"] == tools
     assert optional_params["response_format"] == response_format
     assert optional_params["reasoning_effort"] == reasoning_effort
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    ["user", "seed, user", "seed user", '["user"]', {"user": True}],
+    ids=["bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
+)
+def test_get_optional_params_reads_param_names_from_a_string_or_dict_allowlist(
+    monkeypatch: pytest.MonkeyPatch, allowlist: str | dict[str, bool]
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=allowlist,
+        user="end-user-1",
+    )
+
+    assert optional_params["user"] == "end-user-1"
+
+
+def test_get_optional_params_an_allowlist_that_is_no_string_mapping_or_sequence_allowlists_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=5,
+        user="end-user-1",
+    )
+
+    assert "user" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    [
+        ["dimensions"],
+        "dimensions",
+        "dimensions,user",
+        "dimensions encoding_format",
+        '["dimensions"]',
+        {"dimensions": True},
+    ],
+    ids=["list", "bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
+)
+def test_get_optional_params_embeddings_keeps_dimensions_the_allowlist_names(
+    allowlist: list[str] | str | dict[str, bool],
+):
+    optional_params: Final = get_optional_params_embeddings(
+        model="text-embedding-ada-002",
+        custom_llm_provider="openai",
+        dimensions=256,
+        allowed_openai_params=allowlist,
+        drop_params=False,
+    )
+
+    assert optional_params["dimensions"] == 256
 
 
 def test_allowed_openai_params_does_not_forward_unset_params():
@@ -1884,13 +1944,16 @@ def test_cohere_drop_params_rejects_unsupported_param(
     drop_params: bool | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    with pytest.raises(litellm.UnsupportedParamsError):
+    with pytest.raises(litellm.UnsupportedParamsError) as rejection:
         get_optional_params(
             model="command-r-plus-08-2024",
             custom_llm_provider="cohere",
             parallel_tool_calls=True,
             drop_params=drop_params,
         )
+
+    assert rejection.value.response.status_code == rejection.value.status_code == 400
+    assert rejection.value.args == (rejection.value.message,)
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -2090,3 +2153,28 @@ def test_supports_system_message_merges_system_prompt_into_user_message() -> Non
     ]
 
     assert map_system_message_pt(messages=messages) == [{"role": "user", "content": "Listen here! Hello there!"}]
+
+
+@pytest.fixture
+def custom_provider_named(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> str:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": request.param, "custom_handler": CustomLLM()}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return request.param
+
+
+@pytest.mark.parametrize("custom_provider_named", ["studio"], indirect=True)
+def test_image_params_pass_through_unmapped_for_a_custom_provider(custom_provider_named: str) -> None:
+    assert get_optional_params_image_gen(
+        model="flare-1", custom_llm_provider=custom_provider_named, n=2, size="1024x1536", quality="low", user="u-1"
+    ) == {"n": 2, "size": "1024x1536", "quality": "low", "user": "u-1"}
+
+
+@pytest.mark.parametrize("custom_provider_named", ["vertex_ai"], indirect=True)
+def test_image_params_keep_the_builtin_mapping_when_a_custom_provider_reuses_its_name(
+    custom_provider_named: str,
+) -> None:
+    assert get_optional_params_image_gen(
+        model="imagegeneration", custom_llm_provider=custom_provider_named, n=2, size="1024x1024"
+    ) == {"sampleCount": 2, "aspectRatio": "1:1"}

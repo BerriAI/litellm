@@ -17,6 +17,7 @@ from openai.types.responses.response_input_param import (
     ResponseCustomToolCallOutputParam,
     ResponseCustomToolCallParam,
 )
+from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -25,7 +26,14 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    parse_allowed_tools_tool_choice,
+    responses_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -58,7 +66,14 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import CallTypes, Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes,
+    Delta,
+    GenericStreamingChunk,
+    LlmProviders,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
@@ -138,6 +153,17 @@ def _pending_audio_breakpoint(pending: object, part: object) -> object:
     return pending if pending is not None else _breakpoint_of(part)
 
 
+_PROVIDERS_CACHING_WITHOUT_BREAKPOINTS: Final = frozenset({LlmProviders.BEDROCK_MANTLE.value})
+
+
+def _is_system(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _is_system_string(message: Mapping[str, object]) -> bool:
+    return _is_system(message) and isinstance(message.get("content", ""), str)
+
+
 def _carried_breakpoints(content: Sequence[object]) -> tuple[object, ...]:
     seeded_from_the_end: Final = chain((None,), reversed(content))
     pending_after_each: Final = tuple(accumulate(seeded_from_the_end, _pending_audio_breakpoint))
@@ -190,6 +216,24 @@ def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> b
         isinstance(base_model, str)
         and bool(base_model)
         and litellm.supports_audio_input(model=base_model, custom_llm_provider=provider)
+    )
+
+
+class _PromptCacheRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    prompt_cache_options: object = None
+
+
+def _reads_prompt_cache_breakpoints(
+    model: str, litellm_params: Mapping[str, object], prompt_cache_options: object
+) -> bool:
+    provider: Final = _served_provider(litellm_params)
+    api_base: Final = litellm_params.get("api_base") or litellm_params.get("base_url")
+    base_model: Final = litellm_params.get("base_model")
+    named_models: Final = (model, base_model) if isinstance(base_model, str) and base_model else (model,)
+    return any(
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(name, provider, api_base, prompt_cache_options)
+        for name in named_models
     )
 
 
@@ -795,13 +839,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _normalize_tool_choice_for_responses_api(
         self, tool_choice: _ToolChoiceT
-    ) -> _ToolChoiceT | ToolChoiceFunctionParam | ToolChoiceCustomParam | Literal["auto", "none", "required"]:
+    ) -> (
+        _ToolChoiceT
+        | ToolChoiceFunctionParam
+        | ToolChoiceCustomParam
+        | ToolChoiceAllowedParam
+        | Literal["auto", "none", "required"]
+    ):
         """Chat tool_choice nests the name under function/custom; Responses API expects top-level name."""
         if not isinstance(tool_choice, dict):
             return tool_choice
         choice_type: Final = tool_choice.get("type")
         if isinstance(choice_type, str) and choice_type in ("auto", "none", "required"):
             return choice_type
+        if choice_type == "allowed_tools":
+            parsed: Final = parse_allowed_tools_tool_choice(
+                cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                    object, tool_choice
+                )
+            )
+            flat: Final = responses_allowed_tools_tool_choice(parsed) if parsed is not None else None
+            if flat is not None:
+                return flat
         if choice_type not in ("function", "custom"):
             return tool_choice
         if isinstance(tool_choice.get("name"), str) and tool_choice.get("name"):
@@ -865,12 +924,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         *,
         drop_params: bool = False,
         keep_prompt_cache_breakpoints: bool = False,
+        keep_system_order: bool = False,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
         converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(
             messages,
             drop_params=drop_params,
+            keep_system_order=keep_system_order,
             replay_tool_search=replay_tool_search,
             include_namespace=include_namespace,
         )
@@ -886,6 +947,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         messages: list["AllMessageValues"],
         *,
         drop_params: bool = False,
+        keep_system_order: bool = False,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
@@ -901,8 +963,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
+        joins_instructions: Final = _is_system_string if keep_system_order else _is_system
         leading_system_count: Final = next(
-            (index for index, msg in enumerate(messages) if msg.get("role") != "system"),
+            (index for index, msg in enumerate(messages) if not joins_instructions(msg)),
             len(messages),
         )
 
@@ -1136,10 +1199,27 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and bool(base_model)
             and supports_openai_prompt_cache_breakpoint(base_model, provider)
         )
+        renames_cache_control: Final = (
+            supports_prompt_cache_breakpoint
+            and provider not in _PROVIDERS_CACHING_WITHOUT_BREAKPOINTS
+            and _reads_prompt_cache_breakpoints(
+                model, litellm_params, _PromptCacheRequest.model_validate(optional_params).prompt_cache_options
+            )
+        )
+        bridged_messages: Final = (
+            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            if renames_cache_control
+            else messages
+        )
+        marked_a_system_string: Final = any(
+            _is_system_string(message) and not _is_system_string(bridged)
+            for message, bridged in zip(messages, bridged_messages, strict=True)
+        )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
-            messages,
+            bridged_messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+            keep_system_order=marked_a_system_string,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
         )

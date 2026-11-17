@@ -12348,7 +12348,7 @@ def test_set_budget_reset_at_clears_when_budget_duration_null():
     data = UpdateTeamRequest(team_id="test-team", budget_duration=None)
     updated_kv = {"team_id": "test-team", "budget_duration": None}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" in updated_kv
     assert updated_kv["budget_reset_at"] is None
@@ -12365,7 +12365,7 @@ def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     data = UpdateTeamRequest(team_id="test-team")
     updated_kv = {"team_id": "test-team"}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" not in updated_kv
 
@@ -12381,10 +12381,39 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     data = UpdateTeamRequest(team_id="test-team", budget_duration="30d")
     updated_kv = {"team_id": "test-team", "budget_duration": "30d"}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" in updated_kv
     assert updated_kv["budget_reset_at"] is not None
+
+
+@pytest.mark.parametrize(
+    ("stored_duration", "stored_reset_at", "moves_reset"),
+    [
+        ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", None, True),
+    ],
+)
+def test_set_budget_reset_at_keeps_a_due_reset_when_the_duration_is_resent(
+    stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
+) -> None:
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    updated_kv: Final[dict[str, object]] = {"team_id": "test-team", "budget_duration": "30d"}
+
+    _set_budget_reset_at(
+        UpdateTeamRequest(team_id="test-team", budget_duration="30d"),
+        updated_kv,
+        LiteLLM_TeamTable(team_id="test-team", budget_duration=stored_duration, budget_reset_at=stored_reset_at),
+    )
+
+    reset_at: Final = updated_kv.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in updated_kv) is moves_reset
 
 
 @pytest.mark.asyncio

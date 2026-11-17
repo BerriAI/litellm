@@ -309,6 +309,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -358,6 +359,7 @@ def create_batch(
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
                 custom_endpoint=optional_params.get("custom_endpoint"),
+                litellm_params=litellm_params,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -471,6 +473,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             organization=organization,
             timeout=timeout,
             max_retries=optional_params.max_retries,
+            litellm_params=litellm_params,
         )
     elif custom_llm_provider == "azure":
         api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -819,6 +822,7 @@ def list_batches(
                 organization=organization,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -1016,6 +1020,7 @@ def cancel_batch(
                 organization=organization,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
