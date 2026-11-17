@@ -2789,6 +2789,28 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _client_carries_own_api_key(client: object) -> bool:
+    """An OpenAI SDK client sends its own key; a bare transport client (HTTPHandler, httpx) does not."""
+    return isinstance(client, (openai.OpenAI, openai.AsyncOpenAI))
+
+
+def _json_provider_scoped_api_key(custom_llm_provider: str | None, model: str, api_key: str | None) -> str | None:
+    """Return the key for a JSON provider flagged `require_api_key`, never the shared OpenAI key.
+
+    Returns None for every other provider, so callers keep their usual key resolution.
+    """
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    if json_provider is None or not json_provider.special_handling.get("require_api_key"):
+        return None
+    if not api_key:
+        raise litellm.AuthenticationError(
+            message=f"Set {json_provider.api_key_env} or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
+    return api_key
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2823,7 +2845,7 @@ def _complete_custom_openai(
     json_provider: Final = JSONProviderRegistry.get(custom_llm_provider)
     if (
         not api_key
-        and client is None
+        and not _client_carries_own_api_key(client)
         and json_provider is not None
         and json_provider.special_handling.get("require_api_key")
     ):
@@ -8525,6 +8547,7 @@ async def amoderation(
     optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
+    _dynamic_api_key: str | None = None
     try:
         (
             model,
@@ -8543,11 +8566,17 @@ async def amoderation(
 
     openai_client: Final = kwargs.get("client", None)
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
+        moderation_api_key: Final = (
+            _json_provider_scoped_api_key(
+                custom_llm_provider, model or "", api_key or optional_params.api_key or _dynamic_api_key
+            )
+            or static_api_key
+        )
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
         _openai_client: AsyncOpenAI = openai_chat_completions.get_openai_client(
             is_async=True,
-            api_key=static_api_key,
+            api_key=moderation_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
             litellm_params=optional_params.model_dump(exclude_none=True),
         )
@@ -8879,7 +8908,17 @@ def transcription(
             or get_secret("OPENAI_ORGANIZATION")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
-        static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+        static_api_key: Final = (
+            (
+                _json_provider_scoped_api_key(custom_llm_provider, model, api_key)
+                if not _client_carries_own_api_key(client)
+                else None
+            )
+            or api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret("OPENAI_API_KEY")
+        )
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -9177,7 +9216,12 @@ def speech(
         )
         # set API KEY
         api_key = (
-            api_key
+            (
+                _json_provider_scoped_api_key(custom_llm_provider, model, api_key or dynamic_api_key)
+                if not _client_carries_own_api_key(client)
+                else None
+            )
+            or api_key
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
