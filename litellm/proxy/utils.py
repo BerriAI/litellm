@@ -4931,7 +4931,7 @@ class ProxyLogging:
     async def post_mcp_call_hook(
         self,
         response: "CallToolResult",
-        request_data: Mapping[str, Any],
+        request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> "CallToolResult":
         """

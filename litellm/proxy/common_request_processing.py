@@ -1290,7 +1290,7 @@ async def _parse_event_data_for_error(
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
-            data: Final[object] = orjson.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(orjson.loads(json_str))
             if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
                 error_code_raw: Final = data["error"].get("code")
                 error_code: int | None = None
@@ -1342,7 +1342,7 @@ def _extract_error_from_sse_chunk(event_line: str | bytes, data_payload: SseData
             return default_error
 
         try:
-            data: Final[object] = orjson.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(orjson.loads(json_str))
             if isinstance(data, dict) and "error" in data:
                 error_obj: Final = data["error"]
                 if isinstance(error_obj, dict):

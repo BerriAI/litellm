@@ -3,7 +3,7 @@ import copy
 import inspect
 import json
 import ssl
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
 from itertools import chain
@@ -80,6 +80,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    decoded_json_object,
     require_attributes,
     set_provider_response_headers_in_hidden_params,
 )
@@ -314,6 +315,10 @@ else:
 
 class _HttpMethodName(Protocol):
     def lower(self) -> str: ...
+
+
+class _HeaderItems(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
 
 
 class _RealtimeClientWebSocket(Protocol):
@@ -727,10 +732,14 @@ def _unwrap_provider_error(error: Exception) -> Exception:
     return error
 
 
-def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Mapping[str, object]:
+def _header_items(value: object) -> _HeaderItems | None:
+    return require_attributes(value, _HeaderItems, "items") if value else None
+
+
+def _merge_messages_header_sources(*sources: _HeaderItems | None) -> Mapping[str, object]:
     """Later sources win per header, except ``anthropic-beta``, which unions every source so client betas
     never drop a deployment's configured ones."""
-    entries: Final = tuple(chain.from_iterable((source or {}).items() for source in sources))
+    entries: Final = tuple(chain.from_iterable(() if source is None else source.items() for source in sources))
     beta_values: Final = tuple(
         cast("str | Sequence[str]", value)  # cast-ok: the merge helper skips non-str list entries
         for name, value in entries
@@ -2625,7 +2634,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         api_base: str | None = None,
         stream: bool | None = False,
-        kwargs: dict[str, Any] | None = None,
+        kwargs: dict[str, object] | None = None,
     ) -> AnthropicMessagesResponse | AsyncIterator:
         from litellm.litellm_core_utils.get_provider_specific_headers import (
             ProviderSpecificHeaderUtils,
@@ -2652,7 +2661,7 @@ class BaseLLMHTTPHandler:
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
         merged_headers: Final = _merge_messages_header_sources(
-            forwarded_headers, extra_headers_from_kwargs, provider_specific_headers
+            _header_items(forwarded_headers), _header_items(extra_headers_from_kwargs), provider_specific_headers
         )
         request_params: Final = reduce(
             delete_nested_value,
@@ -8903,7 +8912,7 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = prefetch_resp.json()
+            prefetched_source_data = _DECODED_JSON.validate_python(prefetch_resp.json())
 
         try:
             url, data, files = video_provider_config.transform_video_edit_request(
@@ -8914,7 +8923,9 @@ class BaseLLMHTTPHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 extra_body=extra_body,
-                prefetched_source_data=prefetched_source_data,
+                prefetched_source_data=(
+                    None if prefetched_source_data is None else dict(decoded_json_object(prefetched_source_data))
+                ),
             )
 
             logging_obj.pre_call(
@@ -9001,7 +9012,7 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = prefetch_resp.json()
+            prefetched_source_data = _DECODED_JSON.validate_python(prefetch_resp.json())
 
         try:
             url, data, files = video_provider_config.transform_video_edit_request(
@@ -9012,7 +9023,9 @@ class BaseLLMHTTPHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 extra_body=extra_body,
-                prefetched_source_data=prefetched_source_data,
+                prefetched_source_data=(
+                    None if prefetched_source_data is None else dict(decoded_json_object(prefetched_source_data))
+                ),
             )
 
             logging_obj.pre_call(
@@ -11375,7 +11388,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ):
+    ) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
         if _is_async:
             return self.async_vector_store_list_handler(
                 after=after,
@@ -11652,7 +11665,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ):
+    ) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
         if _is_async:
             return self.async_vector_store_delete_handler(
                 vector_store_id=vector_store_id,

@@ -121,6 +121,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     attribute_or_none,
     decoded_json_object,
@@ -643,6 +644,7 @@ _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
+_DECODED_BODY: Final = TypeAdapter(object)
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
@@ -758,6 +760,11 @@ class _MetadataUpdate(Protocol):
 
 class _ExceptionHeaders(Protocol):
     headers: object
+
+
+class _McpStructuredResult(Protocol):
+    structured_content: object
+    is_error: bool
 
 
 def _callback_control_params(litellm_params: object) -> dict[str, object]:
@@ -900,6 +907,7 @@ class _SyncSuccessRun:
 class _McpToolCallRun:
     kwargs: dict[str, object]  # mutable-ok: forwarded unchanged to legacy hooks that take a dict
     response_obj: "CallToolResult"
+    structured_result: _McpStructuredResult
     start_time: datetime.datetime
     end_time: datetime.datetime
     hidden_params: "HiddenParams"
@@ -2239,6 +2247,7 @@ class Logging(LiteLLMLoggingBaseClass):
         run: Final = _McpToolCallRun(
             kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # kwargs arrives as a bare dict
             response_obj=response_obj,
+            structured_result=response_obj,
             start_time=start_time,
             end_time=end_time,
             hidden_params=HiddenParams(),
@@ -2259,25 +2268,27 @@ class Logging(LiteLLMLoggingBaseClass):
 
     async def _post_mcp_tool_call_one(self, run: "_McpToolCallRun", callback: CustomLogger) -> None:
         response_obj: Final = run.response_obj
+        structured_result: Final = run.structured_result
         try:
             original_content: Final = copy.deepcopy(response_obj.content)
-            original_structured_content: Final = copy.deepcopy(response_obj.structured_content)
+            original_structured_content: Final = copy.deepcopy(structured_result.structured_content)
             callback_response: Final = MCPPostCallResponseObject(
                 mcp_tool_call_response=copy.deepcopy(original_content), hidden_params=run.hidden_params
             )
             hook_content: Final = await self._post_mcp_tool_call_content(run, callback, callback_response)
-            structured_replacement_matches: Final = response_obj.structured_content != original_structured_content and (
-                hook_content is None or hook_content == original_content or response_obj.content == hook_content
+            structured_replacement_matches: Final = (
+                structured_result.structured_content != original_structured_content
+                and (hook_content is None or hook_content == original_content or response_obj.content == hook_content)
             )
             if hook_content is not None and hook_content != original_content:
                 response_obj.content[:] = hook_content
             if (
                 response_obj.content != original_content
-                and response_obj.structured_content is not None
+                and structured_result.structured_content is not None
                 and not structured_replacement_matches
             ):
-                response_obj.structured_content = None
-                response_obj.is_error = True
+                structured_result.structured_content = None
+                structured_result.is_error = True
         except Exception as e:
             verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
 
@@ -6211,9 +6222,9 @@ class Logging(LiteLLMLoggingBaseClass):
         httpx_response: Final[Response | None] = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
-        dict_result: Final[GenerateContentResponseBody] = httpx_response.json()
+        decoded_body: Final = _DECODED_BODY.validate_python(httpx_response.json())
         result = litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
-            completion_response=dict_result,
+            completion_response=dict(decoded_json_object(decoded_body)),
             model_response=litellm.ModelResponse(),
             model=self.model,
             logging_obj=self,
@@ -8015,14 +8026,22 @@ class StandardLoggingPayloadSetup:
         else:
             final_response_obj = {}
 
-        modified_final_response_obj: Final = redact_message_input_output_from_logging(
-            model_call_details=kwargs,
-            result=overlay_served_output_texts(final_response_obj, kwargs.get(SERVED_OUTPUT_TEXTS_KEY)),
+        modified_final_response_obj: Final = _REDACTED_RESULT.validate_python(
+            redact_message_input_output_from_logging(
+                model_call_details=kwargs,
+                result=overlay_served_output_texts(final_response_obj, kwargs.get(SERVED_OUTPUT_TEXTS_KEY)),
+            )
         )
 
-        if modified_final_response_obj is not None and isinstance(modified_final_response_obj, BaseModel):
+        if isinstance(modified_final_response_obj, BaseModel):
             return modified_final_response_obj.model_dump()
-        return modified_final_response_obj
+        if modified_final_response_obj is None or isinstance(modified_final_response_obj, str):
+            return modified_final_response_obj
+        redacted_items: Final = as_object_list(modified_final_response_obj)
+        if isinstance(redacted_items, list):
+            return redacted_items
+        redacted_fields: Final = decoded_json_object(modified_final_response_obj)
+        return redacted_fields if isinstance(redacted_fields, dict) else dict(redacted_fields)
 
     @staticmethod
     def get_additional_headers(

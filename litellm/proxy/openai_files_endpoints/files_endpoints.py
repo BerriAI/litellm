@@ -470,7 +470,7 @@ async def route_create_file(
         from litellm.proxy.proxy_server import prisma_client
 
         return await StorageBackendFileService.upload_file_to_storage_backend(
-            file_data=extract_file_data(cast(Any, _create_file_request.get("file"))),
+            file_data=extract_file_data(_create_file_request["file"]),
             target_storage=storage,
             target_model_names=(executed_model,) if executed_model is not None else target_model_names_list,
             purpose=purpose,

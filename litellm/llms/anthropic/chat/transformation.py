@@ -399,6 +399,11 @@ def _hosted_web_call(call_id: str, tool_name: str, tool_input: object, result: o
     )
 
 
+class _AnthropicCacheCreation(TypedDict, total=False):
+    ephemeral_5m_input_tokens: ReadOnly[int | None]
+    ephemeral_1h_input_tokens: ReadOnly[int | None]
+
+
 class _AnthropicUsageIteration(TypedDict, total=False):
     """One entry of the ``usage.iterations`` array on an Anthropic response."""
 
@@ -406,6 +411,7 @@ class _AnthropicUsageIteration(TypedDict, total=False):
     output_tokens: ReadOnly[int | None]
     cache_creation_input_tokens: ReadOnly[int | None]
     cache_read_input_tokens: ReadOnly[int | None]
+    cache_creation: ReadOnly[_AnthropicCacheCreation]
 
 
 class _AnthropicToolResultBlock(TypedDict, total=False):
@@ -3043,7 +3049,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _aggregate_cache_creation_token_details(
-        iterations: Sequence[Mapping[str, Any]],
+        iterations: Sequence[_AnthropicUsageIteration],
     ) -> CacheCreationTokenDetails | None:
         breakdowns: Final = tuple(c for c in (it.get("cache_creation") for it in iterations) if isinstance(c, Mapping))
         if not breakdowns:
@@ -3058,13 +3064,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
-        iterations: Final = usage.get("iterations")
+    def _resolve_cache_creation_token_details(
+        iterations: Sequence[_AnthropicUsageIteration] | None,
+        cache_creation: _AnthropicCacheCreation | None,
+    ) -> CacheCreationTokenDetails | None:
         if iterations:
             aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
             if aggregated is not None:
                 return aggregated
-        cache_creation: Final = usage.get("cache_creation")
         if not isinstance(cache_creation, Mapping):
             return None
         return CacheCreationTokenDetails(
@@ -3087,7 +3094,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _usage: Final = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
-        cache_creation_token_details: Final = self._resolve_cache_creation_token_details(_usage)
+        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
+        usage_cache_creation: Final[_AnthropicCacheCreation | None] = _usage.get("cache_creation")
+        cache_creation_token_details: Final = self._resolve_cache_creation_token_details(
+            iterations, usage_cache_creation
+        )
         web_search_requests: int | None = None
         tool_search_requests: int | None = None
         inference_geo: str | None = None
@@ -3100,7 +3111,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_speed: Final = _usage.get("speed")
         resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
-        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)

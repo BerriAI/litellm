@@ -453,7 +453,7 @@ class GigaChatConfig(BaseConfig):
         choices: Final[list[Choices]] = []  # mutable-ok: accumulator for building response choices
         for choice in response_json.get("choices", []):
             message_data = choice.get("message", {})
-            finish_reason = _JSON_VALUE.validate_python(choice.get("finish_reason", "stop"))
+            finish_reason = decoded_json_object(_JSON_VALUE.validate_python(choice)).get("finish_reason", "stop")
 
             function_call = (
                 decoded_json_object(_JSON_VALUE.validate_python(message_data)).get("function_call")

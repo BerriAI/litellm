@@ -13,7 +13,7 @@ import yaml
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
 
 # local imports
 from ... import Client
@@ -37,7 +37,7 @@ class _ModelInfoColumnConfig(TypedDict):
 @dataclass
 class ModelYamlInfo:
     model_name: str
-    model_params: dict[str, object]
+    model_params: Mapping[str, object]
     model_info: dict[str, object]
     model_id: str
     access_groups: list[str]
@@ -48,12 +48,11 @@ class ModelYamlInfo:
         return ", ".join(self.access_groups) if self.access_groups else ""
 
 
-def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
+def _get_model_info_obj_from_yaml(model: dict[str, Any], model_id: str) -> ModelYamlInfo:
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: Final[str] = model["model_name"]
-    model_params: Final[dict[str, Any]] = model["litellm_params"]
+    model_params: Final = decoded_json_object(_DECODED_YAML.validate_python(model["litellm_params"]))
     model_info: Final[dict[str, Any]] = model.get("model_info", {})
-    model_id: Final[str] = model_params["model"]
     access_groups: Final = model_info.get("access_groups", [])
     provider: Final = model_id.split("/", 1)[0] if "/" in model_id else model_id
     return ModelYamlInfo(
@@ -341,24 +340,24 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
     rich.print_json(data=result)
 
 
-def _filter_model(model, model_regex, access_group_regex):
+def _filter_model(model, model_regex, access_group_regex) -> str | None:
     model_name: Final = model.get("model_name")
     model_params: Final = model.get("litellm_params")
     model_info: Final = model.get("model_info", {})
     if not model_name or not model_params:
-        return False
+        return None
     model_id: Final = model_params.get("model")
     if not model_id or not isinstance(model_id, str):
-        return False
+        return None
     if model_regex and not model_regex.search(model_id):
-        return False
+        return None
     access_groups: Final = model_info.get("access_groups", [])
     if access_group_regex:
         if not isinstance(access_groups, list):
-            return False
+            return None
         if not any(isinstance(group, str) and access_group_regex.search(group) for group in access_groups):
-            return False
-    return True
+            return None
+    return model_id
 
 
 def _print_models_table(added_models: list[ModelYamlInfo], table_title: str):
@@ -400,10 +399,14 @@ def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, object]]:
 
 
 def _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex):
-    """Return a list of models that pass the filter criteria."""
+    """Return (model, model_id) pairs for the models that pass the filter criteria."""
     model_regex: Final = re.compile(only_models_matching_regex) if only_models_matching_regex else None
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
-    return [model for model in model_list if _filter_model(model, model_regex, access_group_regex)]
+    return [
+        (model, model_id)
+        for model in model_list
+        if (model_id := _filter_model(model, model_regex, access_group_regex)) is not None
+    ]
 
 
 def _import_models_get_table_title(dry_run: bool) -> str:
@@ -449,8 +452,8 @@ def import_models(
     if not dry_run:
         client: Final = create_client(ctx)
 
-    for model in filtered_model_list:
-        model_info_obj = _get_model_info_obj_from_yaml(model)
+    for model, model_id in filtered_model_list:
+        model_info_obj = _get_model_info_obj_from_yaml(model, model_id)
         if not dry_run:
             try:
                 client.models.new(

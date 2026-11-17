@@ -6992,7 +6992,7 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
 
 def _first_registered_match(
     candidates: Sequence[str], custom_llm_provider: str | None
-) -> tuple[str | None, dict[str, Any] | None]:
+) -> tuple[str | None, dict[str, object] | None]:
     registered_keys: Final = (key for key in map(get_model_cost_key, candidates) if key is not None)
     entries: Final = ((key, _get_model_info_from_model_cost(key=key)) for key in registered_keys)
     matches: Final = (
@@ -7897,6 +7897,17 @@ def json_schema_type(python_type_name: str):
     return python_to_json_schema_types.get(python_type_name, "string")
 
 
+class _SignatureParameterDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+    @property
+    def empty(self) -> object: ...
+
+
+def _has_no_default(param: _SignatureParameterDefault) -> bool:
+    return param.default == param.empty
+
+
 def function_to_dict(input_function) -> dict:
     """Using type hints and numpy-styled docstring,
     produce a dictionary usable for OpenAI function calling
@@ -7966,7 +7977,7 @@ def function_to_dict(input_function) -> dict:
         parameters[param_name] = {k: v for k, v in param_dict.items() if isinstance(v, str)}
 
         # Check if the parameter has no default value (i.e., it's required)
-        if param.default == param.empty:
+        if _has_no_default(param):
             required_params.append(param_name)
 
     # Create the dictionary

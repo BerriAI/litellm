@@ -6219,7 +6219,7 @@ class ProxyConfig:
     def __init__(self) -> None:
         self.config: Mapping[str, object] = MappingProxyType({})
         self.auto_router_db_catalog: tuple[AutoRouterCatalogEntry, ...] | None = None
-        self._last_semantic_filter_config: dict[str, object] | None = None
+        self._last_semantic_filter_config: object = None
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
@@ -9366,21 +9366,25 @@ class ProxyConfig:
         try:
             config_record: Final = await get_config_param(prisma_client, "litellm_settings")
 
-            if config_record is None or config_record.param_value is None:
+            if config_record is None:
+                return
+            stored_settings: Final = config_record.param_value
+            if stored_settings is None:
                 return
 
-            litellm_settings = config_record.param_value
-            if isinstance(litellm_settings, str):
-                litellm_settings = json.loads(litellm_settings)
+            litellm_settings: Final = (
+                json.loads(stored_settings) if isinstance(stored_settings, str) else stored_settings
+            )
 
             mcp_semantic_filter_config: Final = litellm_settings.get("mcp_semantic_tool_filter", None)
 
             if mcp_semantic_filter_config is None:
                 return
+            semantic_filter_config: Final = _UNTYPED_VALUE.validate_python(mcp_semantic_filter_config)
 
             # Check if settings have changed (compare with in-memory state)
             if hasattr(self, "_last_semantic_filter_config"):
-                if self._last_semantic_filter_config == mcp_semantic_filter_config:
+                if self._last_semantic_filter_config == semantic_filter_config:
                     # If hook is missing or router isn't built yet, reinitialize anyway
                     active_hooks = litellm.logging_callback_manager.get_custom_loggers_for_type(SemanticToolFilterHook)
                     if active_hooks:
@@ -9399,7 +9403,7 @@ class ProxyConfig:
             litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, SemanticToolFilterHook)
 
             # Initialize new hook if enabled
-            if mcp_semantic_filter_config.get("enabled", False):
+            if _with_get(semantic_filter_config).get("enabled", False):
                 global llm_router
                 hook: Final = await SemanticToolFilterHook.initialize_from_config(
                     config=mcp_semantic_filter_config,
@@ -9412,7 +9416,7 @@ class ProxyConfig:
                 verbose_proxy_logger.info("MCP Semantic Filter disabled")
 
             # Store current config for comparison next time
-            self._last_semantic_filter_config = mcp_semantic_filter_config.copy()
+            self._last_semantic_filter_config = require_attributes(semantic_filter_config, _SupportsCopy, "copy").copy()
 
         except Exception as e:
             verbose_proxy_logger.exception("Error initializing semantic filter settings from DB: %s", e)
@@ -11590,16 +11594,17 @@ class ProxyStartupEvent:
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         mcp_semantic_filter_config: Final = litellm_settings.get("mcp_semantic_tool_filter", None)
+        semantic_filter_config: Final = _UNTYPED_VALUE.validate_python(mcp_semantic_filter_config)
 
         # Only proceed if the feature is configured and enabled
-        if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get("enabled", False):
+        if not semantic_filter_config or not _with_get(semantic_filter_config).get("enabled", False):
             verbose_proxy_logger.debug("Semantic tool filter not configured or not enabled, skipping initialization")
             return
 
         verbose_proxy_logger.debug(
             "Initializing semantic tool filter: llm_router=%s, config=%s",
             llm_router is not None,
-            mcp_semantic_filter_config,
+            semantic_filter_config,
         )
         hook: Final = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
@@ -17290,12 +17295,19 @@ async def get_all_team_and_direct_access_models(
     return _filter_models_to_user_accessible(all_models)
 
 
+def _model_info_mapping(value: object, first_read: str) -> Mapping[str, object]:
+    model_info: Final = as_str_mapping(value)
+    if model_info is not None:
+        return model_info
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{first_read}'", name=first_read, obj=value)
+
+
 def _enrich_model_info_with_litellm_data(
     model: dict[str, Any],
     debug: bool = False,
     llm_router: Router | None = None,
     caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Enrich a model dictionary with litellm model info (pricing, context window, etc.)
     and remove sensitive information.
@@ -17310,7 +17322,7 @@ def _enrich_model_info_with_litellm_data(
         Enriched model dictionary with sensitive info removed
     """
     # provided model_info in config.yaml
-    model_info: Final = model.get("model_info", {})
+    model_info_value: Final = _UNTYPED_VALUE.validate_python(model.get("model_info", {}))
     if debug is True:
         _openai_client = "None"
         if llm_router is not None:
@@ -17323,6 +17335,9 @@ def _enrich_model_info_with_litellm_data(
     # read litellm model_prices_and_context_window.json to get the following:
     # input_cost_per_token, output_cost_per_token, max_tokens
     priced_as: Final = wildcard_row_priced_model(model, llm_router, caller_aliases)
+    model_info: Final = _model_info_mapping(
+        model_info_value, "items" if isinstance(priced_as, OtherDeploymentsBill) else "get"
+    )
     billed_model: Final = priced_as.model if isinstance(priced_as, OtherDeploymentsBill) else priced_as
     lookup_model_info: Final = (
         {k: v for k, v in model_info.items() if k != "base_model"}
@@ -17346,7 +17361,7 @@ def _enrich_model_info_with_litellm_data(
         )
     )
     discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(model_info.get("id"))
+        llm_router.registry().discovered_model_info(model.get("model_info", {}).get("id"))
         if llm_router is not None
         else MappingProxyType({})
     )
@@ -17425,6 +17440,14 @@ def _with_get(value: object) -> _SupportsGet:
     return require_attributes(value, _SupportsGet, "get")
 
 
+class _SupportsCopy(Protocol):
+    def copy(self) -> object: ...
+
+
+class _SupportsPop(Protocol):
+    def pop(self, key: str, default: object = None, /) -> object: ...
+
+
 class _SupportsLower(Protocol):
     def lower(self) -> object: ...
 
@@ -17441,7 +17464,7 @@ def _lowered(value: object) -> object:
     return require_attributes(value, _SupportsLower, "lower").lower()
 
 
-def _byok_row_outside_caller_teams(model_info_dict: object, allowed_team_ids: set[str] | None) -> bool:
+def _byok_row_outside_caller_teams(model_info_dict: object, allowed_team_ids: AbstractSet[str] | None) -> bool:
     """Whether a team BYOK row belongs to a team the caller is not a member of.
 
     `team_id` is only set on team BYOK rows; non-team rows fall through
@@ -19860,10 +19883,13 @@ async def async_queue_request(
     Now using a FastAPI background task + /chat/completions compatible endpoint
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
-    data = {}
+    request_body = {}
     try:
-        data = await request.json()
-        data.pop("_litellm_strip_stream_usage", None)
+        request_body = await request.json()
+        queued_body: Final = _UNTYPED_VALUE.validate_python(request_body)
+        require_attributes(queued_body, _SupportsPop, "pop").pop("_litellm_strip_stream_usage", None)
+        str_keyed_body: Final = as_str_mapping(queued_body)
+        data: Final = str_keyed_body if isinstance(str_keyed_body, dict) else _queued_body_not_json_object()
         data.pop(STREAM_USAGE_INJECTED_FIELD, None)
         await refuse_s3_media_the_key_may_not_read(
             data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
@@ -19898,20 +19924,20 @@ async def async_queue_request(
         }
         data["metadata"] = queued_metadata
         logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
-        data["metadata"]["user_api_key"] = logged_api_key
-        data["metadata"]["user_api_key_hash"] = logged_api_key
-        data["metadata"].update(LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict))
+        queued_metadata["user_api_key"] = logged_api_key
+        queued_metadata["user_api_key_hash"] = logged_api_key
+        queued_metadata.update(LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict))
         _headers: Final = safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(user_api_key_dict, "key_alias", None)
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(user_api_key_dict, "team_id", None)
-        data["metadata"]["user_api_key_object_permission_id"] = getattr(user_api_key_dict, "object_permission_id", None)
-        data["metadata"]["user_api_key_team_object_permission_id"] = getattr(
+        queued_metadata["headers"] = _headers
+        queued_metadata["user_api_key_alias"] = getattr(user_api_key_dict, "key_alias", None)
+        queued_metadata["user_api_key_user_id"] = user_api_key_dict.user_id
+        queued_metadata["user_api_key_team_id"] = getattr(user_api_key_dict, "team_id", None)
+        queued_metadata["user_api_key_object_permission_id"] = getattr(user_api_key_dict, "object_permission_id", None)
+        queued_metadata["user_api_key_team_object_permission_id"] = getattr(
             user_api_key_dict, "team_object_permission_id", None
         )
-        data["metadata"]["endpoint"] = str(request.url)
+        queued_metadata["endpoint"] = str(request.url)
         LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
             headers=_headers, data=data, _metadata_variable_name="metadata"
         )
@@ -19922,9 +19948,9 @@ async def async_queue_request(
             user_api_key_dict=user_api_key_dict,
         )
         if queued_tags:
-            data["metadata"]["tags"] = list(queued_tags)
-        data["metadata"]["inherited_tags"] = LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
-        data["metadata"]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+            queued_metadata["tags"] = list(queued_tags)
+        queued_metadata["inherited_tags"] = LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
+        queued_metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
             request=request, request_data=data, metadata_key="metadata"
         )
@@ -19946,10 +19972,10 @@ async def async_queue_request(
 
         data.update(
             router.health().priority_header_fields(
-                model=data["model"], kwargs=data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
+                model=request_body["model"], kwargs=data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
             )
         )
-        queued_priority, _ = router.health().split_priority(data["model"], data)
+        queued_priority, _ = router.health().split_priority(request_body["model"], data)
         queued_headers: Final = {"x-litellm-priority": str(queued_priority), LITELLM_CALL_ID_HEADER: litellm_call_id}
 
         async def schedule_queued_call() -> object:
@@ -19993,13 +20019,17 @@ async def async_queue_request(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=request_body
         )
         failure: Final = _queued_call_failure(e)
         failure.headers = {**failure.headers, LITELLM_CALL_ID_HEADER: litellm_call_id}
         if failure is e:
             raise
         raise failure from e
+
+
+def _queued_body_not_json_object() -> NoReturn:
+    raise TypeError("queued request body must be a JSON object")
 
 
 def _queued_call_failure(e: Exception) -> ProxyException:
