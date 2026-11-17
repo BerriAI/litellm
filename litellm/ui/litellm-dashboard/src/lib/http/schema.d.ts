@@ -8645,6 +8645,8 @@ export interface paths {
          *         - key: str - The key identifier (token) to update
          *         - budget_id: Optional[str] - Budget ID associated with the key
          *         - max_budget: Optional[float] - Max budget for key
+         *         - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+         *         - user_id: Optional[str] - Owner user ID, or null to remove the owner
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
@@ -30259,6 +30261,8 @@ export interface components {
          * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Key */
@@ -30270,6 +30274,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * BulkUpdateKeyResponse
