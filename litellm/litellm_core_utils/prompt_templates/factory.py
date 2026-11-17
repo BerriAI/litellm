@@ -2083,7 +2083,32 @@ def _server_tool_call_ids(message: object) -> frozenset[str]:
     )
 
 
-_SplitCallIds: TypeAlias = Mapping[str, tuple[str, ...]]
+_ArgumentObjects: TypeAlias = tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolArguments:
+    objects: _ArgumentObjects
+    parse_error: ValueError | None
+
+
+def _tool_arguments(raw: str | None, tool_name: str | None) -> _ToolArguments:
+    try:
+        return _ToolArguments(
+            (parse_tool_call_arguments(raw, tool_name=tool_name, context="Anthropic tool invoke"),), None
+        )
+    except ValueError as error:
+        return _ToolArguments(salvage_concatenated_tool_arguments(raw or ""), error)
+
+
+@dataclass(frozen=True, slots=True)
+class _ClientToolCall:
+    call_ids: tuple[str, ...]
+    arguments: _ToolArguments
+
+
+_ClientToolCalls: TypeAlias = Mapping[str, _ClientToolCall]
+_NO_CLIENT_TOOL_CALLS: Final[_ClientToolCalls] = MappingProxyType({})
 
 
 def _is_client_tool_use(tool_id: str, answered_tool_ids: Container[str], server_tool_call_ids: Container[str]) -> bool:
@@ -2092,43 +2117,54 @@ def _is_client_tool_use(tool_id: str, answered_tool_ids: Container[str], server_
     )
 
 
-def _client_tool_call_object_count(
+def _parsed_client_tool_call(
     tool_call: object, answered_tool_ids: Container[str], server_tool_call_ids: Container[str]
-) -> tuple[str, int] | None:
+) -> tuple[str, _ToolArguments] | None:
     call_id: Final = message_field(tool_call, "id")
+    function: Final = message_field(tool_call, "function")
+    arguments: Final = message_field(function, "arguments")
     if (
         not isinstance(call_id, str)
         or message_field(tool_call, "type") != "function"
+        or not (arguments is None or isinstance(arguments, str))
         or not _is_client_tool_use(call_id, answered_tool_ids, server_tool_call_ids)
     ):
         return None
-    function: Final = message_field(tool_call, "function")
-    arguments: Final = _tool_arguments(string_field(function, "arguments"), string_field(function, "name"))
-    return call_id, len(arguments.objects)
+    return call_id, _tool_arguments(arguments, string_field(function, "name"))
 
 
-def _client_tool_call_object_counts(message: object, answered_tool_ids: Container[str]) -> tuple[tuple[str, int], ...]:
+def _parsed_client_tool_calls(
+    message: object, answered_tool_ids: Container[str]
+) -> tuple[tuple[str, _ToolArguments], ...]:
     server_tool_call_ids: Final = _server_tool_call_ids(message)
     return tuple(
-        count
+        parsed
         for tool_call in parts_of(message_field(message, "tool_calls"))
-        if (count := _client_tool_call_object_count(tool_call, answered_tool_ids, server_tool_call_ids)) is not None
+        if (parsed := _parsed_client_tool_call(tool_call, answered_tool_ids, server_tool_call_ids)) is not None
     )
 
 
-def _turn_split_call_ids(
+def _client_call_ids(call_id: str, object_count: int, suffixes: Mapping[str, Iterator[str]]) -> tuple[str, ...]:
+    if object_count < 2:
+        return (call_id,)
+    return (call_id, *itertools.islice(suffixes[sanitize_anthropic_tool_use_id(call_id)], object_count - 1))
+
+
+def _turn_client_tool_calls(
     turn: Sequence[object], answered_tool_ids: Container[str], reserved_ids: frozenset[str]
-) -> _SplitCallIds:
-    counts: Final = tuple(
-        itertools.chain.from_iterable(_client_tool_call_object_counts(message, answered_tool_ids) for message in turn)
+) -> _ClientToolCalls:
+    parsed: Final = tuple(
+        itertools.chain.from_iterable(_parsed_client_tool_calls(message, answered_tool_ids) for message in turn)
     )
-    occurrences: Final = Counter(call_id for call_id, _ in counts)
-    splits: Final = tuple(call for call in counts if call[1] > 1 and occurrences[call[0]] == 1)
-    suffixes: Final = _concat_suffix_streams(splits, reserved_ids)
+    occurrences: Final = Counter(call_id for call_id, _ in parsed)
+    unique: Final = tuple(call for call in parsed if occurrences[call[0]] == 1)
+    suffixes: Final = _concat_suffix_streams(
+        tuple((call_id, len(arguments.objects)) for call_id, arguments in unique), reserved_ids
+    )
     return MappingProxyType(
         {
-            call_id: tuple(itertools.islice(suffixes[sanitize_anthropic_tool_use_id(call_id)], count - 1))
-            for call_id, count in splits
+            call_id: _ClientToolCall(_client_call_ids(call_id, len(arguments.objects), suffixes), arguments)
+            for call_id, arguments in unique
         }
     )
 
@@ -2141,45 +2177,32 @@ def _assistant_tool_call_ids(message: object) -> Iterator[str]:
     )
 
 
-_NO_SPLIT_CALL_IDS: Final[_SplitCallIds] = MappingProxyType({})
-
-
-def _split_call_ids_by_message(
+def _client_tool_calls_by_message(
     messages: Sequence[object], answered_tool_ids: Container[str]
-) -> tuple[_SplitCallIds, ...]:
-    """Split ids for each message's assistant turn: an assistant message reads its own run of consecutive
-    assistant messages, and a tool or user message reads the most recent run before it."""
+) -> Iterator[_ClientToolCalls]:
     reserved_ids: Final = frozenset(
         itertools.chain(
             _tool_call_ids_in_tool_messages(messages),
             itertools.chain.from_iterable(_assistant_tool_call_ids(message) for message in messages),
         )
     )
-    runs: Final = tuple(
-        (is_assistant, tuple(run))
-        for is_assistant, run in itertools.groupby(
-            messages, key=lambda message: message_field(message, "role") == "assistant"
-        )
-    )
-
-    def carry_forward(previous: _SplitCallIds, run: tuple[bool, tuple[object, ...]]) -> _SplitCallIds:
-        is_assistant, run_messages = run
-        return _turn_split_call_ids(run_messages, answered_tool_ids, reserved_ids) if is_assistant else previous
-
-    run_split_ids: Final = tuple(itertools.accumulate(runs, carry_forward, initial=_NO_SPLIT_CALL_IDS))[1:]
-    return tuple(
-        itertools.chain.from_iterable(
-            itertools.repeat(split_ids, len(run)) for split_ids, (_, run) in zip(run_split_ids, runs, strict=True)
-        )
-    )
+    latest_assistant_turn = _NO_CLIENT_TOOL_CALLS  # rebind-ok: each message reads the latest assistant turn
+    for is_assistant, run in itertools.groupby(
+        messages, key=lambda message: message_field(message, "role") == "assistant"
+    ):
+        run_messages = tuple(run)
+        if is_assistant:
+            latest_assistant_turn = _turn_client_tool_calls(run_messages, answered_tool_ids, reserved_ids)
+        yield from itertools.repeat(latest_assistant_turn, len(run_messages))
 
 
 def _split_call_placeholder_results(
-    tool_call_id: object, split_call_ids: _SplitCallIds
+    tool_call_id: object, client_tool_calls: _ClientToolCalls
 ) -> tuple[AnthropicMessagesToolResultParam, ...]:
-    if not isinstance(tool_call_id, str):
+    client_tool_call: Final = client_tool_calls.get(tool_call_id) if isinstance(tool_call_id, str) else None
+    if client_tool_call is None:
         return ()
-    original_id: Final = sanitize_anthropic_tool_use_id(tool_call_id)
+    original_id: Final = sanitize_anthropic_tool_use_id(client_tool_call.call_ids[0])
     return tuple(
         AnthropicMessagesToolResultParam(
             type="tool_result",
@@ -2189,7 +2212,7 @@ def _split_call_placeholder_results(
                 f"See the result for tool call '{original_id}'.]"
             ),
         )
-        for split_id in split_call_ids.get(tool_call_id, ())
+        for split_id in client_tool_call.call_ids[1:]
     )
 
 
@@ -2305,13 +2328,64 @@ def _paused_turn_replay(
     return tuple(block for block in tool_invokes if _block_id(block) not in dropped_ids), ()
 
 
+def _anthropic_tool_invoke_items(
+    tool: ChatCompletionAssistantToolCall,
+    answered_tool_ids: Container[str],
+    server_tool_call_ids: Container[str],
+    web_search_results: Sequence[object] | None,
+    tool_results: Sequence[object] | None,
+    client_tool_calls: _ClientToolCalls,
+) -> tuple[_AnthropicToolInvokeItem, ...]:
+    if get_attribute_or_key(tool, "type") != "function":
+        return ()
+    tool_id: Final = cast(str, get_attribute_or_key(tool, "id"))
+    tool_name: Final = cast(str, get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"))
+    is_client_tool_use: Final = _is_client_tool_use(tool_id, answered_tool_ids, server_tool_call_ids)
+    planned: Final = client_tool_calls.get(tool_id) if is_client_tool_use else None
+    call_ids: Final = planned.call_ids if planned is not None else (tool_id,)
+    arguments: Final = (
+        planned.arguments
+        if planned is not None
+        else _tool_arguments(get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"), tool_name)
+    )
+    if arguments.parse_error is not None and len(arguments.objects) != len(call_ids):
+        raise arguments.parse_error
+    if arguments.parse_error is not None:
+        verbose_logger.warning(
+            "Recovered %d tool call(s) from concatenated JSON arguments for tool '%s' (Anthropic tool invoke)",
+            len(arguments.objects),
+            tool_name or "<unknown>",
+        )
+    if is_client_tool_use:
+        tool_uses: Final = tuple(
+            AnthropicMessagesToolUseParam(
+                type="tool_use", id=sanitize_anthropic_tool_use_id(call_id), name=tool_name, input=call_input
+            )
+            for call_id, call_input in zip(call_ids, arguments.objects, strict=True)
+        )
+        add_cache_control_to_content(anthropic_content_element=tool_uses[-1], original_content_element=dict(tool))
+        return tool_uses
+    server_tool_use: Final = {
+        "type": "server_tool_use",
+        "id": tool_id,
+        "name": tool_name,
+        "input": arguments.objects[0],
+    }
+    server_tool_result: Final = find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
+    if server_tool_result is not None:
+        return (server_tool_use, server_tool_result)
+    if is_anthropic_tool_search_use(tool_id, tool_name):
+        return ()
+    return (server_tool_use,)
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: Sequence[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
     server_tool_call_ids: Container[str] = frozenset(),
-    split_call_ids: _SplitCallIds = MappingProxyType({}),
+    client_tool_calls: _ClientToolCalls = _NO_CLIENT_TOOL_CALLS,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2355,65 +2429,14 @@ def convert_to_anthropic_tool_invoke(
 
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
-    anthropic_tool_invoke: Final[list[AnthropicMessagesToolUseParam | dict[str, object]]] = []
-
-    for tool in tool_calls:
-        if get_attribute_or_key(tool, "type") != "function":
-            continue
-
-        tool_id = cast(str, get_attribute_or_key(tool, "id"))
-        tool_name = cast(
-            str,
-            get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+    return list(
+        itertools.chain.from_iterable(
+            _anthropic_tool_invoke_items(
+                tool, answered_tool_ids, server_tool_call_ids, web_search_results, tool_results, client_tool_calls
+            )
+            for tool in tool_calls
         )
-        is_client_tool_use = _is_client_tool_use(tool_id, answered_tool_ids, server_tool_call_ids)
-        call_ids = (tool_id, *split_call_ids.get(tool_id, ())) if is_client_tool_use else (tool_id,)
-        arguments = _tool_arguments(
-            get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"), tool_name
-        )
-        if arguments.parse_error is not None and len(arguments.objects) != len(call_ids):
-            raise arguments.parse_error
-        if arguments.parse_error is not None:
-            verbose_logger.warning(
-                "Recovered %d tool call(s) from concatenated JSON arguments for tool '%s' (Anthropic tool invoke)",
-                len(arguments.objects),
-                tool_name or "<unknown>",
-            )
-        tool_input = arguments.objects[0]
-
-        if is_client_tool_use:
-            for index, (call_id, call_input) in enumerate(zip(call_ids, arguments.objects, strict=True)):
-                tool_use = AnthropicMessagesToolUseParam(
-                    type="tool_use",
-                    id=sanitize_anthropic_tool_use_id(call_id),
-                    name=tool_name,
-                    input=call_input,
-                )
-                if index == len(call_ids) - 1:
-                    add_cache_control_to_content(
-                        anthropic_content_element=tool_use, original_content_element=dict(tool)
-                    )
-                anthropic_tool_invoke.append(tool_use)
-        elif (
-            server_tool_result := find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
-        ) is not None:
-            anthropic_tool_invoke.append(
-                {
-                    "type": "server_tool_use",
-                    "id": tool_id,
-                    "name": tool_name,
-                    "input": tool_input,
-                }
-            )
-            anthropic_tool_invoke.append(server_tool_result)
-        elif is_anthropic_tool_search_use(tool_id, tool_name):
-            continue
-        else:
-            anthropic_tool_invoke.append(
-                {"type": "server_tool_use", "id": tool_id, "name": tool_name, "input": tool_input}
-            )
-
-    return anthropic_tool_invoke
+    )
 
 
 def add_cache_control_to_content(
@@ -3204,7 +3227,7 @@ def anthropic_messages_pt(
             )
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
-    split_call_ids_by_message: Final = _split_call_ids_by_message(messages, client_answered_tool_ids)
+    client_tool_calls_by_message: Final = tuple(_client_tool_calls_by_message(messages, client_answered_tool_ids))
 
     # Bedrock invoke models have format: invoke/...
     # Vertex AI Anthropic also doesn't support URL sources for images
@@ -3325,7 +3348,7 @@ def anthropic_messages_pt(
                 )
                 user_content.extend(
                     _split_call_placeholder_results(
-                        message_field(user_message_types_block, "tool_call_id"), split_call_ids_by_message[msg_i]
+                        message_field(user_message_types_block, "tool_call_id"), client_tool_calls_by_message[msg_i]
                     )
                 )
 
@@ -3388,7 +3411,7 @@ def anthropic_messages_pt(
                     tool_results=_provider_specific_fields.get("tool_results"),
                     answered_tool_ids=client_answered_tool_ids,
                     server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
-                    split_call_ids=split_call_ids_by_message[msg_i],
+                    client_tool_calls=client_tool_calls_by_message[msg_i],
                 )
                 if assistant_tool_calls is not None
                 else ()
@@ -6620,7 +6643,6 @@ class NormalizedToolCall(TypedDict):
     arguments: dict[str, object]
 
 
-_ArgumentObjects: TypeAlias = tuple[dict[str, object], ...]
 _ParsedToolCall: TypeAlias = tuple[str | None, str | None, _ArgumentObjects]
 
 
@@ -6664,21 +6686,6 @@ def _split_tool_call_ids(calls: Sequence[tuple[str | None, int]]) -> tuple[tuple
         else (None,) * count
         for call_id, count in calls
     )
-
-
-@dataclass(frozen=True, slots=True)
-class _ToolArguments:
-    objects: _ArgumentObjects
-    parse_error: ValueError | None
-
-
-def _tool_arguments(raw: str | None, tool_name: str | None) -> _ToolArguments:
-    try:
-        return _ToolArguments(
-            (parse_tool_call_arguments(raw, tool_name=tool_name, context="Anthropic tool invoke"),), None
-        )
-    except ValueError as error:
-        return _ToolArguments(salvage_concatenated_tool_arguments(raw or ""), error)
 
 
 def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str) -> _ArgumentObjects:

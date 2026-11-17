@@ -5847,6 +5847,37 @@ def test_anthropic_messages_pt_skips_a_split_id_already_used_by_a_tool_result():
     assert _blocks(result[-1], "tool_result")[-1]["tool_use_id"] == "call_read__concat_2"
 
 
+def test_anthropic_messages_pt_skips_a_split_id_already_used_by_an_earlier_assistant_turn():
+    result: Final = _replay_on_anthropic(
+        _assistant_tool_calls(LOOK_SIBLING),
+        {"role": "user", "content": "Go on."},
+        _assistant_tool_calls(READ_BOTH),
+    )
+
+    assert [block["id"] for block in _blocks(result[-1], "tool_use")] == ["call_read", "call_read__concat_2"]
+
+
+def test_anthropic_messages_pt_collapses_identical_server_tool_call_arguments_into_one_server_tool_use():
+    result: Final = _replay_on_anthropic(
+        _assistant_tool_calls(_function_tool_call("srvtoolu_search", "web_search", '{"query":"a"}' * 2))
+    )
+
+    assert _blocks(result[-1], "server_tool_use") == (
+        {"type": "server_tool_use", "id": "srvtoolu_search", "name": "web_search", "input": {"query": "a"}},
+    )
+
+
+def test_anthropic_messages_pt_repairs_truncated_tool_call_arguments_once(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = _replay_on_anthropic(
+            _assistant_tool_calls(_function_tool_call("call_read", "read", '{"path":"/a"')),
+            {"role": "tool", "tool_call_id": "call_read", "content": "contents of /a"},
+        )
+
+    assert _blocks(result[1], "tool_use")[0]["input"] == {"path": "/a"}
+    assert caplog.text.count("Repaired truncated tool call arguments") == 1
+
+
 def test_anthropic_messages_pt_sends_every_split_tool_call_when_the_turn_is_still_pending():
     result: Final = _replay_on_anthropic(_assistant_tool_calls(READ_BOTH))
 
