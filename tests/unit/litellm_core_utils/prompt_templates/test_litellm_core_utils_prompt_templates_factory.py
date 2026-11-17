@@ -5719,6 +5719,98 @@ def _chat_tool_response(*tool_calls: dict[str, object]) -> dict[str, object]:
     return {"choices": [{"message": {"tool_calls": list(tool_calls)}}]}
 
 
+def _replay_on_anthropic(*messages: Message) -> Sequence[Message]:
+    return anthropic_messages_pt(
+        messages=[{"role": "user", "content": "Read both files."}, *messages],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+
+def _assistant_tool_calls(*tool_calls: Mapping[str, object]) -> Message:
+    return {"role": "assistant", "content": None, "tool_calls": [{**call, "type": "function"} for call in tool_calls]}
+
+
+def _blocks(turn: Message, block_type: str) -> tuple[Mapping[str, object], ...]:
+    content: Final = turn["content"]
+    assert isinstance(content, list)
+    return tuple(block for block in content if isinstance(block, Mapping) and block["type"] == block_type)
+
+
+READ_BOTH: Final = {
+    **_function_tool_call("call_read", "read", _concatenated_json({"path": "/a"}, {"path": "/b"})),
+    "cache_control": {"type": "ephemeral"},
+}
+LOOK_SIBLING: Final = _function_tool_call("call_read__concat_1", "look", '{"path":"/c"}')
+
+
+@pytest.mark.parametrize(
+    ("tool_calls", "real_results"),
+    [
+        ((READ_BOTH,), {"call_read": "contents of /a"}),
+        ((READ_BOTH, LOOK_SIBLING), {"call_read": "contents of /a", "call_read__concat_1": "contents of /c"}),
+    ],
+    ids=["alone", "beside-a-call-holding-the-first-split-id"],
+)
+def test_anthropic_messages_pt_pairs_every_split_concatenated_tool_call_with_one_result(
+    tool_calls: tuple[Mapping[str, object], ...], real_results: Mapping[str, str]
+):
+    result: Final = _replay_on_anthropic(
+        _assistant_tool_calls(*tool_calls),
+        *({"role": "tool", "tool_call_id": call_id, "content": text} for call_id, text in real_results.items()),
+        {"role": "user", "content": "Thanks."},
+    )
+
+    tool_uses: Final = _blocks(result[1], "tool_use")
+    results_by_id: Final = {block["tool_use_id"]: block["content"] for block in _blocks(result[2], "tool_result")}
+    reads: Final = [block for block in tool_uses if block["name"] == "read"]
+    assert sorted(block["id"] for block in tool_uses) == sorted(results_by_id)
+    assert len(results_by_id) == len(_blocks(result[2], "tool_result"))
+    assert [block["input"] for block in reads] == [{"path": "/a"}, {"path": "/b"}]
+    assert [block.get("cache_control") for block in reads] == [None, {"type": "ephemeral"}]
+    assert {call_id: results_by_id[call_id] for call_id in real_results} == real_results
+    assert "call_read" in str(results_by_id[reads[1]["id"]])
+
+
+def test_anthropic_messages_pt_sends_every_split_tool_call_when_the_turn_is_still_pending():
+    result: Final = _replay_on_anthropic(_assistant_tool_calls(READ_BOTH))
+
+    assert [block["input"] for block in _blocks(result[-1], "tool_use")] == [{"path": "/a"}, {"path": "/b"}]
+
+
+def test_anthropic_messages_pt_collapses_identical_concatenated_arguments_into_one_tool_call():
+    result: Final = _replay_on_anthropic(
+        _assistant_tool_calls(_function_tool_call("call_read", "read", '{"path":"/a"}' * 3)),
+        {"role": "tool", "tool_call_id": "call_read", "content": "contents of /a"},
+    )
+
+    assert _blocks(result[1], "tool_use") == (
+        {"type": "tool_use", "id": "call_read", "name": "read", "input": {"path": "/a"}},
+    )
+    assert result[2]["content"] == [{"type": "tool_result", "tool_use_id": "call_read", "content": "contents of /a"}]
+
+
+@pytest.mark.parametrize(
+    ("call_id", "arguments"),
+    [
+        ("call_read", '{"path":"/a"}{"path":'),
+        ("call_read", _concatenated_json(*({"path": f"/{index}"} for index in range(9)))),
+        ("srvtoolu_search", _concatenated_json({"query": "a"}, {"query": "b"})),
+    ],
+    ids=["truncated-tail", "past-the-salvage-cap", "server-tool-call"],
+)
+def test_anthropic_messages_pt_still_rejects_concatenated_arguments_it_cannot_split(call_id: str, arguments: str):
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        _replay_on_anthropic(_assistant_tool_calls(_function_tool_call(call_id, "read", arguments)))
+
+
+def test_convert_to_anthropic_tool_invoke_without_split_ids_rejects_distinct_concatenated_arguments():
+    tool_call: Final = {**READ_BOTH, "type": "function"}
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        convert_to_anthropic_tool_invoke([tool_call])
+
+
 def test_get_tool_calls_from_response_expands_distinct_concatenated_arguments(caplog):
     raw = '{"flag":true}{"box":"A","limit":50}'
     response: Final = _chat_tool_response(_function_tool_call("call_move", "move", raw))
