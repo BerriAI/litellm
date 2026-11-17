@@ -18,6 +18,7 @@ use litellm_host::{
     protocol::UnobservedTail,
 };
 use litellm_http::Phases;
+use litellm_llms::anthropic::messages::transformation::is_claude_model;
 use litellm_llms::base_llm::{
     auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, resolve_auth},
     messages::{
@@ -324,6 +325,11 @@ async fn provider_call(
     let transform_context = MessagesTransformContext {
         drops_unsupported_params: shaping.settings.drops_unsupported_params,
         global_drop_params: shaping.settings.global_drop_params,
+        claude_base_model: shaping
+            .settings
+            .base_model
+            .as_deref()
+            .is_some_and(is_claude_model),
         ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
     };
     let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);

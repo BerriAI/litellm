@@ -1,8 +1,10 @@
 """Cross-group fallbacks of a router core: where the chain comes from, how it is walked, and what is raised."""
 
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -818,17 +820,27 @@ def unsupported_params() -> litellm.UnsupportedParamsError:
     return litellm.UnsupportedParamsError(message="nope", llm_provider="openai", model="a")
 
 
+def bad_request_with_status(status_code: int, llm_provider: str = "openai") -> litellm.BadRequestError:
+    response: Final = httpx.Response(status_code, request=httpx.Request("POST", "https://provider.test"))
+    return litellm.BadRequestError(message="rejected", llm_provider=llm_provider, model="a", response=response)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [bad_request, unsupported_params], ids=["bad-request", "unsupported-params"])
+@pytest.mark.parametrize(
+    "error",
+    [bad_request, partial(bad_request_with_status, 413), partial(bad_request_with_status, 422), unsupported_params],
+    ids=["bad-request", "bad-request-413", "bad-request-422", "unsupported-params"],
+)
 async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_params_is_off(
-    make_core: MakeCore, host: ScriptedHost, error: Callable[[], Exception]
+    make_core: MakeCore, host: ScriptedHost, error: Callable[[], litellm.BadRequestError]
 ) -> None:
     core = build(make_core, fallbacks=[{"a": ["b"]}], fallback_on_unsupported_params=False)
     host.answer("openai/a", error())
 
-    with pytest.raises(type(error())):
+    with pytest.raises(type(error())) as raised:
         await complete(core)
 
+    assert raised.value.status_code == error().status_code
     assert host.deployments_called("acompletion") == ["a"]
 
 
@@ -837,7 +849,12 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
     ("error", "fallback_on_unsupported_params"),
     [
         (bad_request, True),
+        (partial(bad_request_with_status, 413), True),
+        (partial(bad_request_with_status, 422), True),
         (unsupported_params, True),
+        (partial(bad_request_with_status, 413, llm_provider=""), False),
+        (partial(bad_request_with_status, 422, llm_provider=""), False),
+        (partial(bad_request_with_status, 409), False),
         (context_window, False),
         (content_policy, False),
         (rate_limit, False),
@@ -845,7 +862,12 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
     ],
     ids=[
         "bad-request-flag-on",
+        "bad-request-413-flag-on",
+        "bad-request-422-flag-on",
         "unsupported-params-flag-on",
+        "providerless-413-flag-off",
+        "providerless-422-flag-off",
+        "bad-request-409-flag-off",
         "context-window-flag-off",
         "content-policy-flag-off",
         "rate-limit-flag-off",
