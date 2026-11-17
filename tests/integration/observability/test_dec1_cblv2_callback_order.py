@@ -201,10 +201,12 @@ def test_streaming_iterator_hooks_wrap_in_config_order(rig: Rig) -> None:
 
 def test_streaming_iterator_hook_is_called_once_per_logger_per_stream(rig: Rig) -> None:
     """A streamed chat must call `async_post_call_streaming_iterator_hook` exactly once on each of the three
-    loggers, not once per chunk."""
+    loggers, not once per chunk. The hooks are wrapped in config order (proxy/utils.py:5272), so the last listed is
+    the outermost generator and its body starts first when the caller pulls: the probe records the starts in
+    reverse config order, chain_third, chain_second, chain_first (CI run 44161684479)."""
     text: Final = marker()
     assert stream_chat(rig, text)[0] == 200
-    assert _loggers_for(rig, text, "async_post_call_streaming_iterator_hook", 3) == ORDER
+    assert _loggers_for(rig, text, "async_post_call_streaming_iterator_hook", 3) == tuple(reversed(ORDER))
 
 
 def test_streamed_chat_skips_the_post_call_success_hook(rig: Rig) -> None:

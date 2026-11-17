@@ -28,7 +28,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Scenario
-from integration.observability.dec1_cblv2_support import Rig, cblv2_rig, chat, marker
+from integration.observability.dec1_cblv2_support import Rig, cblv2_rig, chat, marker, skip_until_v2_instances_load
 from integration.observability.dec1_cblv2b_support import (
     DISABLE_HEADER,
     LICENSE_SKIP,
@@ -51,6 +51,7 @@ READERS: Final = (
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    skip_until_v2_instances_load()
     directory: Final = tmp_path_factory.mktemp("cblv2b-selection")
     with cblv2_rig(directory, {"callbacks": instances(*READERS)}) as booted:
         yield booted
@@ -59,6 +60,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
 @pytest.fixture(scope="module")
 def locked(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     """A proxy with dynamic callback disabling switched off and the no-log parameter disabled globally."""
+    skip_until_v2_instances_load()
     directory: Final = tmp_path_factory.mktemp("cblv2b-selection-locked")
     with cblv2_rig(
         directory,

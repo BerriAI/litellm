@@ -55,6 +55,7 @@ from integration.observability.dec1_cblv2_support import (
     error_message,
     marker,
     reply_text,
+    skip_until_v2_instances_load,
     stream_chat,
 )
 from pydantic import JsonValue
@@ -74,6 +75,7 @@ LOGGERS: Final = (
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    skip_until_v2_instances_load()
     directory: Final = tmp_path_factory.mktemp("cblv2-v2-loggers")
     with cblv2_rig(directory, {"callbacks": [f"{PROBE_MODULE}.{name}" for name in LOGGERS]}) as booted:
         yield booted

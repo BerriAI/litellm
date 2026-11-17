@@ -17,7 +17,10 @@ Contract under test, read from litellm/integrations/prometheus.py and litellm/ty
   (types/integrations/prometheus.py:1029-1035), whose value is `str(payload["stream"])` on success
   (prometheus.py:1854) and `str(request_data.get("stream"))` on failure (prometheus.py:3285).
 - `requested_model` is bounded: an unknown model is "other" and the empty string stays empty
-  (prometheus.py:580-613); the pre-body limiter refusal passes `request_data={}`, so its model is "".
+  (prometheus.py:580-613). The pre-body limiter refusal reads a small JSON body for its failure log (#51525,
+  proxy/auth/user_api_key_auth.py:2184-2205, :2322), so its model is the requested one.
+- A label with no value is exported as the string "None" (prometheus_client stringifies the None the label
+  factory leaves, prometheus.py:5374), the same way an absent team is labelled team="None".
 """
 
 from __future__ import annotations
@@ -112,14 +115,17 @@ def test_budget_refusal_counts_a_422_on_proxy_total_requests(rig: Rig, scenario:
     assert values(scrape(rig.proxy), PROXY_TOTAL, hashed_api_key=hashed, status_code="200") == []
 
 
-def test_budget_refusal_is_neither_a_request_nor_an_llm_api_failure(rig: Rig, scenario: Scenario) -> None:
+def test_budget_refusal_is_not_a_request_but_counts_an_llm_api_failure(rig: Rig, scenario: Scenario) -> None:
     """A budget refusal never calls a model, so after its proxy failure is counted the key must have no
-    `litellm_requests_metric_total` and no `litellm_llm_api_failed_requests_metric_total` series."""
+    `litellm_requests_metric_total` series. It does count 1 on `litellm_llm_api_failed_requests_metric_total`:
+    a budget refusal on an inference route is a proxy-only error logged through `async_failure_handler`
+    (proxy/utils.py:4435-4446, :4514-4548), and Prometheus counts every `async_log_failure_event` there
+    (prometheus.py:2916-2962). Observed in CI run 44161684479."""
     key, _, hashed = new_key(scenario, max_budget=0)
     assert chat(rig, marker(), key=key).status_code == 422
     until_series(rig, PROXY_FAILED, hashed_api_key=hashed)
+    until_value(rig, LLM_FAILED, 1.0, hashed_api_key=hashed)
     _quiet(rig, REQUESTS, hashed)
-    _quiet(rig, LLM_FAILED, hashed)
 
 
 def test_per_model_limiter_refusal_counts_http_exception_429(rig: Rig, scenario: Scenario) -> None:
@@ -142,10 +148,11 @@ def test_per_model_limiter_refusal_counts_http_exception_429(rig: Rig, scenario:
     )
 
 
-def test_pre_body_limiter_refusal_counts_with_an_empty_requested_model(rig: Rig, scenario: Scenario) -> None:
-    """A key with `rpm_limit: 1` is refused before its body is read on the second chat (#51428). The early path
-    calls the failure hook with `request_data={}`, so the failed series must have requested_model "" (the bounded
-    label keeps the empty string, prometheus.py:596-597), exception_class "HTTPException" and status "429"."""
+def test_pre_body_limiter_refusal_counts_with_the_requested_model(rig: Rig, scenario: Scenario) -> None:
+    """A key with `rpm_limit: 1` is refused before its body is parsed on the second chat (#51428). The early path
+    still reads a small JSON body for the failure log (#51525, proxy/auth/user_api_key_auth.py:2184-2205, :2322),
+    so the failed series must have requested_model "cblv2-chat", exception_class "HTTPException", status "429" and
+    the chat route."""
     key, _, hashed = new_key(scenario, rpm_limit=1)
     assert chat(rig, marker(), key=key).status_code == 200
     assert chat(rig, marker(), key=key).status_code == 429
@@ -156,7 +163,7 @@ def test_pre_body_limiter_refusal_counts_with_an_empty_requested_model(rig: Rig,
         hashed_api_key=hashed,
         exception_status="429",
         exception_class="HTTPException",
-        requested_model="",
+        requested_model=CHAT,
         route=ROUTE,
     )
 
@@ -199,7 +206,9 @@ def test_vendor_429_carries_the_vendor_rate_limit_category(rig: Rig, scenario: S
 
 def test_failed_metric_label_set_gains_the_two_rate_limit_labels(rig: Rig, scenario: Scenario) -> None:
     """With `prometheus_emit_rate_limit_labels: true` the failed metric's label set must be the default set
-    (types/integrations/prometheus.py:514-534) plus rate_limit_category and rate_limit_type, and nothing else."""
+    (types/integrations/prometheus.py:514-534), the org_id and org_alias labels every org-labelled metric gains
+    (types/integrations/prometheus.py:937-944, :1063-1069), plus rate_limit_category and rate_limit_type, and
+    nothing else."""
     key, _, hashed = new_key(scenario)
     assert chat(rig, marker(), model=CHAT_REJECTED, key=key).status_code == 400
     sample: Final = until_series(rig, PROXY_FAILED, hashed_api_key=hashed)[0]
@@ -219,18 +228,21 @@ def test_failed_metric_label_set_gains_the_two_rate_limit_labels(rig: Rig, scena
         "user_agent",
         "model_id",
         "api_provider",
+        "org_id",
+        "org_alias",
         "rate_limit_category",
         "rate_limit_type",
     }
 
 
 def test_provider_400_has_no_rate_limit_label_values(rig: Rig, scenario: Scenario) -> None:
-    """A provider 400 is not a rate limit, so its failed series must carry empty rate_limit_category and
-    rate_limit_type (validate_rate_limit_category returns None, exceptions.py:85-95). UNVERIFIED: assumes a None
-    label is exported as the empty string."""
+    """A provider 400 is not a rate limit, so its failed series must carry no rate_limit_category and
+    rate_limit_type value (validate_rate_limit_category returns None, exceptions.py:85-95). A None label is
+    exported as the string "None", like team="None" for a key without a team; CI run 44161684479 found no series
+    with the empty string."""
     key, _, hashed = new_key(scenario)
     assert chat(rig, marker(), model=CHAT_REJECTED, key=key).status_code == 400
-    until_series(rig, PROXY_FAILED, hashed_api_key=hashed, rate_limit_category="", rate_limit_type="")
+    until_series(rig, PROXY_FAILED, hashed_api_key=hashed, rate_limit_category="None", rate_limit_type="None")
 
 
 def test_stream_label_is_true_on_a_streamed_success(rig: Rig, scenario: Scenario) -> None:

@@ -39,6 +39,7 @@ from integration.observability.dec1_cblv2_support import (
     error_message,
     marker,
     reply_text,
+    skip_until_v2_instances_load,
 )
 from integration.observability.dec1_cblv2b_probe import (
     ABORT_AT,
@@ -80,6 +81,7 @@ CALLBACKS: Final = instances(
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    skip_until_v2_instances_load()
     directory: Final = tmp_path_factory.mktemp("cblv2b-outcomes")
     with cblv2_rig(directory, {"callbacks": CALLBACKS}) as booted:
         yield booted

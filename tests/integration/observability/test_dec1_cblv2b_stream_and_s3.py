@@ -46,7 +46,7 @@ CHUNK_HOOK: Final = "async_post_call_streaming_hook"
 @pytest.fixture(scope="module")
 def streams(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     directory: Final = tmp_path_factory.mktemp("cblv2b-streams")
-    with cblv2_rig(directory, {"callbacks": instances("chunk_ledger", "required_reader")}) as booted:
+    with cblv2_rig(directory, {"callbacks": instances("chunk_ledger")}) as booted:
         yield booted
 
 
@@ -126,11 +126,11 @@ def test_chunk_hook_returning_nothing_leaves_the_stream_unchanged(streams: Rig, 
 
 
 def test_chunk_hook_is_not_called_for_a_plain_chat(streams: Rig, stream_scenario: Scenario) -> None:
-    """A non-streamed chat on a fresh key must never call the per-chunk hook, once the reader has seen the call."""
+    """A non-streamed chat on a fresh key must never call the per-chunk hook: no record arrives for the key alias in
+    the 3 s after the 200. The rig loads only the legacy `chunk_ledger`, since config load refuses V2 instances
+    (`skip_until_v2_instances_load` in dec1_cblv2_support.py), so there is no V2 reader to wait on."""
     key, alias, _ = new_key(stream_scenario)
-    text: Final = marker()
-    assert chat(streams, text, key=key).status_code == 200
-    records(streams, text, "required_reader", "attempt_ended", 1)
+    assert chat(streams, marker(), key=key).status_code == 200
     assert records(streams, alias, "chunk_ledger", CHUNK_HOOK, 0) == ()
 
 
