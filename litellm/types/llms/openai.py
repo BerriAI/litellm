@@ -103,7 +103,7 @@ from .base import CachedTokensDetails
 if TYPE_CHECKING:
     from litellm.types.utils import Usage
 
-FileContent = IO[bytes] | bytes | PathLike
+FileContent = IO[bytes] | bytes | PathLike[str]
 
 FileTypes = (
     # file (or bytes)
@@ -169,6 +169,9 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
         except RuntimeError:
             return self.response.num_bytes_downloaded
         return len(content)
+
+    def unread_response(self) -> httpx.Response | None:
+        return None if self.response.is_stream_consumed else self.response
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -816,6 +819,12 @@ class ChatCompletionTextObject(
     OpenAIChatCompletionTextObject, total=False
 ):  # litellm wrapper on top of openai object for handling cached content
     cache_control: ChatCompletionCachedContent
+
+
+class ChatCompletionGuardedTextObject(TypedDict):
+    type: ReadOnly[Literal["guarded_text"]]
+    text: ReadOnly[str]
+    cache_control: NotRequired[ReadOnly[ChatCompletionCachedContent]]
 
 
 class ChatCompletionImageUrlObject(TypedDict, total=False):

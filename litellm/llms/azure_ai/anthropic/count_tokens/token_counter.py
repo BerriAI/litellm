@@ -17,6 +17,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    malformed_message_error,
     messages_count_options,
 )
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
@@ -111,6 +112,9 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 )
             case None:
                 pass
+
+        if (malformed := malformed_message_error(messages)) is not None:
+            return malformed.response(request_model, model_to_use, "azure_ai_anthropic_api")
 
         match options := await asyncify(messages_count_options)(
             AzureAnthropicMessagesConfig(),

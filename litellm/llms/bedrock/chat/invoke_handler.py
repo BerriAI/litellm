@@ -32,6 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported, aiter_bytes_then_close
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
@@ -299,7 +300,7 @@ async def make_call(
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+                aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
             )
 
         # LOGGING
@@ -888,14 +889,17 @@ class AWSEventStreamDecoder:
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         served_tier: Final = served_service_tier(response_headers)
-        async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    _data = json.loads(message)
-                    yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
+        try:
+            async for chunk in iterator:
+                event_stream_buffer.add_data(chunk)
+                tally.add_chunk(chunk)
+                for event in event_stream_buffer:
+                    message = self._decode_event(event, tally, request_id_headers)
+                    if message:
+                        _data = json.loads(message)
+                        yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
+        finally:
+            await aclose_if_supported(iterator)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error

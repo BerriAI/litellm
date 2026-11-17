@@ -5,7 +5,9 @@ Every test builds its core through ``make_core`` on the ``host`` fixture, so it 
 """
 
 import datetime
+import gc
 import io
+import weakref
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from typing import Final
 
@@ -22,6 +24,7 @@ from tests.unit.test_router.core.scripted_host import (
     completion_response,
     deployment,
     embedding_response,
+    server_error,
 )
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -448,3 +451,58 @@ async def test_streaming_acompletion_yields_the_host_stream_chunks_with_routing_
     assert stream._hidden_params["model_id"] == "d1"
     assert stream._hidden_params["additional_headers"]["x-litellm-model-group"] == "g"
     assert (host.calls[0].op, host.calls[0].kwargs["stream"]) == ("acompletion", True)
+
+
+class _RequestState:
+    pass
+
+
+async def _request_state_after_a_call(
+    core: RouterCore, host: ScriptedHost, endpoint: str
+) -> "weakref.ref[_RequestState]":
+    state: Final = _RequestState()
+    _ = await core.call(endpoint, {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}})
+    host.calls.clear()
+    host.raised.clear()
+    return weakref.ref(state)
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
+@pytest.mark.parametrize("retry_then_succeed", [False, True])
+async def test_a_finished_call_frees_its_request_without_a_gc_pass(
+    make_core: MakeCore, host: ScriptedHost, endpoint: str, retry_then_succeed: bool
+):
+    if retry_then_succeed:
+        host.answer("openai/d1", server_error("d1"), None)
+    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=1, retry_after=0)
+    gc.disable()
+    try:
+        state: Final = await _request_state_after_a_call(core, host, endpoint)
+        assert state() is None, "the finished call's request stays in a reference cycle until the next gc pass"
+    finally:
+        gc.enable()
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
+async def test_a_failed_call_frees_its_request_without_a_gc_pass(
+    make_core: MakeCore, host: ScriptedHost, endpoint: str
+):
+    host.answer("openai/d1", bad_request(message="scripted bad input"))
+    core: Final = _one_group(make_core)
+    gc.disable()
+    try:
+        state: Final = await _request_state_after_a_failed_call(core, host, endpoint)
+        assert state() is None, "the failed call's request stays in a reference cycle until the next gc pass"
+    finally:
+        gc.enable()
+
+
+async def _request_state_after_a_failed_call(
+    core: RouterCore, host: ScriptedHost, endpoint: str
+) -> "weakref.ref[_RequestState]":
+    state: Final = _RequestState()
+    with pytest.raises(litellm.BadRequestError, match="scripted bad input"):
+        await core.call(endpoint, {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}})
+    host.calls.clear()
+    host.raised.clear()
+    return weakref.ref(state)
