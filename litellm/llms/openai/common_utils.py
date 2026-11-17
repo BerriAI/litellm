@@ -505,9 +505,13 @@ def openai_client_organization(headers: Mapping[str, object] | None, organizatio
     return organization if openai_organization_header(headers or {}, organization) else None
 
 
-def caller_or_deployment_openai_organization(
-    headers: Mapping[str, object] | None, organization: str | None
-) -> str | None:
+def caller_or_deployment_openai_organization(headers: Mapping[str, object] | None, organization: object) -> str | None:
+    if organization is not None and not isinstance(organization, str):
+        raise litellm.BadRequestError(
+            message=f"organization must be a string, got {type(organization).__name__}",
+            model=None,
+            llm_provider="openai",
+        )
     caller_organization: Final = next(
         (value for name, value in (headers or {}).items() if name.lower() == "openai-organization"), None
     )

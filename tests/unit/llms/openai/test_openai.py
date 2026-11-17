@@ -2823,6 +2823,23 @@ def test_sync_moderation_sends_the_deployment_organization() -> None:
     assert moderations.calls.last.request.headers["OpenAI-Organization"] == _DEPLOYMENT_ORGANIZATION
 
 
+@pytest.mark.parametrize("organization", [123, ["org-a"]])
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [(litellm.speech, _SPEECH_CALL), (litellm.transcription, _TRANSCRIPTION_CALL)],
+)
+def test_non_string_organization_is_a_bad_request_and_sends_nothing(
+    recording_openai: _OpenAIThatRecordsTheHeaders,
+    route: Callable[..., object],
+    route_kwargs: Mapping[str, object],
+    organization: object,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="organization must be a string"):
+        route(api_key=f"sk-{uuid4()}", organization=organization, **route_kwargs)
+
+    assert recording_openai.headers is None
+
+
 
 _LOWERCASE_ORGANIZATION_HEADER: Final[Mapping[str, str]] = {"openai-organization": "org-header"}
 
