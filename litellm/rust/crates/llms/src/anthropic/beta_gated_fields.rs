@@ -343,7 +343,7 @@ fn is_raw_tool_change_block(block: &Value) -> bool {
 
 fn is_tool_change_block(block: &ContentBlock) -> bool {
     matches!(
-        &block.block_type,
+        block.known_type(),
         Some(ContentBlockType::Other(block_type))
             if TOOL_CHANGE_BLOCK_TYPES.contains(&block_type.as_str())
     )

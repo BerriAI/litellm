@@ -2768,6 +2768,41 @@ async def test_requests_sent_while_the_model_was_idle_charge_only_their_tokens_t
     _held_to_class_share(exc.value)
 
 
+def _priority_remaining() -> dict[str, int]:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    response: Final = get_or_create_request_stash().rate_limit_response
+    assert response is not None
+    return {
+        status["rate_limit_type"]: status["limit_remaining"]
+        for status in response["statuses"]
+        if status["descriptor_key"] == "priority_model"
+    }
+
+
+@pytest.mark.asyncio
+async def test_requests_are_still_counted_and_reported_after_a_class_spends_its_tokens_on_an_idle_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False)
+    await _burn(handler, _class_team("team-a"), "interactive", 600, saturation=0.0)
+    await _check(handler, _class_team("team-a"), saturation=0.1, priority="interactive")
+    assert _priority_remaining() == {"requests": 58, "tokens": 0}
+    await _check(handler, _class_team("team-a"), saturation=0.1, priority="interactive")
+    assert _priority_remaining() == {"requests": 57, "tokens": 0}
+
+
+@pytest.mark.asyncio
+async def test_tokens_are_still_reported_after_a_class_uses_its_requests_on_an_idle_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False, rpm=5)
+    for _ in range(3):
+        await _burn(handler, _class_team("team-a"), "interactive", 100, saturation=0.0)
+    await _check(handler, _class_team("team-a"), saturation=0.1, priority="interactive")
+    assert _priority_remaining() == {"requests": 0, "tokens": 300}
+
+
 @pytest.mark.asyncio
 async def test_the_only_active_class_gets_the_whole_model_instead_of_its_weight(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)

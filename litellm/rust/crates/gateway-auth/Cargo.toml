@@ -11,7 +11,6 @@ axum = { workspace = true, features = ["matched-path"] }
 axum-login.workspace = true
 litellm-config.workspace = true
 litellm-error.workspace = true
-litellm-secrets.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
@@ -20,7 +19,6 @@ tower-sessions.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
 rstest.workspace = true
 tokio.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
