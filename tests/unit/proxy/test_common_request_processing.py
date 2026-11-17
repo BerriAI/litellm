@@ -7,7 +7,7 @@ import gzip
 import json
 import time
 import weakref
-from base64 import urlsafe_b64encode
+from base64 import b64encode, urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
@@ -15214,6 +15214,30 @@ class TestErrorLogCarriesCallId:
         assert "stacktrace" not in line
         assert line["litellm_call_id"] == call_id
         assert "_handle_llm_api_exception(): Exception occured" in str(line["message"])
+
+    @pytest.mark.parametrize(
+        "model_name, kept_text",
+        [
+            pytest.param("nope-model " * 24_000, "nope-model", id="long_text"),
+            pytest.param(b64encode(bytes(range(256)) * 600).decode(), "base64_data truncated", id="base64_run"),
+        ],
+    )
+    def test_error_detail_fields_stay_within_the_stdout_cap(
+        self,
+        model_name: str,
+        kept_text: str,
+        monkeypatch: pytest.MonkeyPatch,
+        proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    ) -> None:
+        monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "4096")
+        monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "4096")
+        detail: Final = {"error": f"Invalid model name passed in model={model_name}"}
+
+        log_llm_api_exception(HTTPException(status_code=400, detail=detail), str(uuid.uuid4()))
+
+        (line,) = proxy_json_log_lines()
+        assert len(str(line["error"])) <= 4096
+        assert kept_text in str(line["error"])
 
 
 class TestAnthropicMessagesStreamErrorFrame:

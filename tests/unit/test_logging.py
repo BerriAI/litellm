@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Final, List
 
 import pytest
+from fastapi import HTTPException
 from pydantic import BaseModel, computed_field
 
 import litellm
@@ -592,6 +593,37 @@ def test_json_message_never_supplies_the_call_id_or_a_stacktrace() -> None:
     assert "litellm_call_id" not in obj
     assert "stacktrace" not in obj
     assert obj["event"] == "giveup"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_logged_http_exception_detail_reaches_the_json_line_redacted(monkeypatch, native):
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret: Final = "sk-" + "q" * 48
+    exception: Final = HTTPException(
+        status_code=500,
+        detail={
+            "error": f"No db connected for key {secret}",
+            "component": "forged",
+            "logger": "forged",
+            "stacktrace": "forged",
+            "litellm_call_id": "forged",
+            "component\x00": "forged",
+        },
+    )
+    record: Final = _make_record(
+        logging.ERROR, "generate_key_fn(): Exception occured - %s", (exception,), (HTTPException, exception, None)
+    )
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+    line: Final = json.loads(JsonFormatter().format(record))
+
+    assert str(line["error"]).startswith("No db connected for key ")
+    assert "sk-qq" not in json.dumps(line)
+    assert line["component"] == "LiteLLM Router"
+    assert line["logger"] == ":0"
+    assert "HTTPException" in str(line["stacktrace"])
+    assert "litellm_call_id" not in line
 
 
 def test_trace_id_and_session_id_are_redacted_when_credential_shaped(monkeypatch):

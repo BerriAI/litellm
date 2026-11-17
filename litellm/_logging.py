@@ -759,14 +759,32 @@ def _object_mapping(source: object) -> Mapping[object, object]:
     return source if isinstance(source, Mapping) else MappingProxyType({})
 
 
+def _stdout_sized_text(text: str) -> str:
+    base64_limit: Final = _get_max_base64_length_stdout_log()
+    text_limit: Final = _get_max_string_length_stdout_log()
+    collapsed: Final = _collapse_base64_runs(text, base64_limit) if base64_limit > 0 else text
+    return _truncate_for_stdout_log(collapsed, text_limit) if 0 < text_limit < len(collapsed) else collapsed
+
+
+def _stdout_sized(value: object) -> object:
+    prepared: Final = safe_json_structure(value)
+    return _replace_string_leaves(prepared, (_stdout_sized_text(text) for _, text in _string_leaves(None, prepared)))
+
+
 def json_log_fields(source: object) -> Mapping[str, object]:
     return MappingProxyType(
         {
-            key: value
+            key: _stdout_sized(value)
             for key, value in _object_mapping(source).items()
-            if isinstance(key, str) and key not in _RESERVED_JSON_LOG_KEYS
+            if isinstance(key, str) and "\x00" not in key and key not in _RESERVED_JSON_LOG_KEYS
         }
     )
+
+
+def _exception_detail_fields(record: logging.LogRecord) -> Mapping[str, object]:
+    exception: Final = record.exc_info[1] if record.exc_info else None
+    detail: Final[object] = getattr(exception, "detail", None)
+    return json_log_fields(detail)
 
 
 class JsonFormatter(Formatter):
@@ -801,10 +819,10 @@ class JsonFormatter(Formatter):
             for key, value in (_try_parse_json_message(message_str) or {}).items()
             if "\x00" not in key and key not in logger_fields and key not in _UNPROMOTABLE_MESSAGE_KEYS
         }
-        json_record: Final = {**fixed_fields, **message_fields, **logger_fields}
-        return safe_dumps(
-            json_record if _is_redacted(record) or not _ENABLE_SECRET_REDACTION else _redact_json_record(json_record)
-        )
+        exception_fields: Final = _exception_detail_fields(record)
+        json_record: Final = {**fixed_fields, **message_fields, **exception_fields, **logger_fields}
+        needs_redaction: Final = _ENABLE_SECRET_REDACTION and (not _is_redacted(record) or bool(exception_fields))
+        return safe_dumps(_redact_json_record(json_record) if needs_redaction else json_record)
 
 
 class CorrelationPlainFormatter(logging.Formatter):
