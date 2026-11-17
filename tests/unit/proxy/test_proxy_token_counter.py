@@ -472,16 +472,27 @@ def _affinity_router(pre_call_check: str) -> Router:
     )
 
 
+_PINNED_SESSION: Final = "2f1c9d4e-7b3a-4c61-9e0f-5d8a2b6c4e17"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("pre_call_check", "session_id"),
-    [("deployment_affinity", None), ("session_affinity", "2f1c9d4e-7b3a-4c61-9e0f-5d8a2b6c4e17")],
+    ("pre_call_check", "session_id", "session_headers", "session_body"),
+    [
+        ("deployment_affinity", None, {}, {}),
+        ("session_affinity", _PINNED_SESSION, {"x-claude-code-session-id": _PINNED_SESSION}, {}),
+        ("session_affinity", _PINNED_SESSION, {"baggage": f"user.id=42,session.id={_PINNED_SESSION}"}, {}),
+        ("session_affinity", _PINNED_SESSION, {}, {"litellm_session_id": _PINNED_SESSION}),
+        ("session_affinity", _PINNED_SESSION, {}, {"metadata": {"user_id": f"user_abc_account__session_{_PINNED_SESSION}"}}),
+    ],
 )
 async def test_messages_count_tokens_counts_on_the_deployment_inference_pinned_for_the_caller(
     monkeypatch: pytest.MonkeyPatch,
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
     pre_call_check: str,
     session_id: str | None,
+    session_headers: Mapping[str, str],
+    session_body: Mapping[str, object],
 ):
     router: Final = _affinity_router(pre_call_check)
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
@@ -495,8 +506,7 @@ async def test_messages_count_tokens_counts_on_the_deployment_inference_pinned_f
             **({"session_id": session_id} if session_id else {}),
         },
     )
-    session_headers: Final = {"x-claude-code-session-id": session_id} if session_id else {}
-    body: Final = {"model": "pinned-model", "messages": [{"role": "user", "content": "hello"}]}
+    body: Final = {"model": "pinned-model", "messages": [{"role": "user", "content": "hello"}], **session_body}
 
     for _ in range(8):
         await anthropic_count_tokens(_json_request(body, "claude-cli/2.1.299", session_headers), Response(), caller)

@@ -8500,7 +8500,7 @@ _BEDROCK_COUNT_BODY: Final = MappingProxyType(
 
 
 def _bedrock_count_deployment(
-    model_name: str, model: str, model_info: Mapping[str, object]
+    model_name: str, model: str, model_info: Mapping[str, object], tags: Sequence[str] = ()
 ) -> dict[str, object]:
     return {
         "model_name": model_name,
@@ -8509,6 +8509,7 @@ def _bedrock_count_deployment(
             "aws_region_name": "us-east-1",
             "aws_access_key_id": "AKIATESTACCESSKEY",
             "aws_secret_access_key": "test-secret",
+            **({"tags": list(tags)} if tags else {}),
         },
         "model_info": dict(model_info),
     }
@@ -8525,13 +8526,16 @@ async def _bedrock_native_count(
     ),
     caller: UserAPIKeyAuth | None = None,
     cooled_down_ids: Sequence[str] = (),
+    enable_tag_filtering: bool = False,
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         handle_bedrock_count_tokens,
     )
 
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    router: Final = litellm.Router(model_list=[dict(deployment) for deployment in model_list])
+    router: Final = litellm.Router(
+        model_list=[dict(deployment) for deployment in model_list], enable_tag_filtering=enable_tag_filtering
+    )
     for deployment_id in cooled_down_ids:
         router.health().cooldowns.add_deployment_to_cooldown(deployment_id, Exception("429 throttled"), 429, 60)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
@@ -8639,6 +8643,32 @@ async def test_bedrock_native_count_tokens_keeps_the_deployments_region_and_keys
     assert respx_mock.calls.last.request.headers["authorization"].startswith(
         "AWS4-HMAC-SHA256 Credential=AKIATESTACCESSKEY/"
     )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_caller_whose_tags_no_deployment_allows(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "tags": ["other-team"]},
+            model_list=(
+                _bedrock_count_deployment(
+                    _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "tagged-deployment"}, tags=("team-tag",)
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+            enable_tag_filtering=True,
+        )
+
+    assert refused.value.status_code == 401
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.asyncio

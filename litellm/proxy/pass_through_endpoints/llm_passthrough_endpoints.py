@@ -198,7 +198,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
     is_allowed_tinyfish_endpoint,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm.types.router import LiteLLMParamsTypedDict
+from litellm.types.router import LiteLLMParamsTypedDict, RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     SERVER_DERIVED_PRICING_FIELDS,
@@ -1657,6 +1657,15 @@ async def _bedrock_count_tokens(
         route: Final = await route_count(
             model, None, user_api_key_dict, request_routing_metadata(request, request_body, user_api_key_dict)
         )
+        if route.miss is not None and not isinstance(route.miss, RouterRateLimitError):
+            raise rejected_token_count(
+                HTTPException(
+                    status_code=int(proxy_exception_status_code(str(route.miss), "400")),
+                    detail={"error": str(route.miss)},
+                ),
+                litellm_call_id,
+                model,
+            )
         deployment: Final = route.deployment if route.deployment is not None else next(iter(route.routable), None)
         model_litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
         deployment_model: Final = None if model_litellm_params is None else model_litellm_params.get("model")

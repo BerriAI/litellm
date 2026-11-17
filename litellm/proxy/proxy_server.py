@@ -16035,11 +16035,6 @@ _COUNT_TOOLS: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = Type
 _ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
-def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
-    group: Final = () if router is None else router.registry().deployments(model_group, source="all")
-    return group[0] if group else None
-
-
 def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
@@ -16109,6 +16104,7 @@ class CountRoute:
     select_request: Mapping[str, object]
     routable: tuple[Mapping[str, object], ...]
     deployment: Mapping[str, object] | None
+    miss: Exception | None = None
 
 
 def _count_context_management(
@@ -16511,16 +16507,16 @@ def _routable_count_deployments(served: str, select_request: Mapping[str, object
 
 async def _routed_count_deployment(
     served: str, select_request: Mapping[str, object], routable: tuple[Mapping[str, object], ...]
-) -> Mapping[str, object] | None:
+) -> Mapping[str, object] | Exception | None:
     if llm_router is None or not routable:
         return None
     try:
         routed: Final = await llm_router.select(served, dict(select_request))
-    except Exception:
+    except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
         )
-        return None
+        return e
     return routed if isinstance(routed, Mapping) else None
 
 
@@ -16541,11 +16537,13 @@ async def route_count(
         **_caller_routing_kwargs(caller, request_routing),
     }
     routable: Final = _routable_count_deployments(served, select_request)
+    routed: Final = await _routed_count_deployment(served, select_request, routable)
     return CountRoute(
         served=served,
         select_request=select_request,
         routable=routable,
-        deployment=await _routed_count_deployment(served, select_request, routable),
+        deployment=routed if isinstance(routed, Mapping) else None,
+        miss=routed if isinstance(routed, Exception) else None,
     )
 
 
@@ -16593,7 +16591,7 @@ async def _count_request_tokens(
         litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
     )
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
-        deployment or _model_group_deployment(llm_router, request.model) or {}
+        deployment or next(iter(count_route.routable), None) or {}
     )
     cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
     settings: Final = await asyncify(resolve_token_count_settings)(
