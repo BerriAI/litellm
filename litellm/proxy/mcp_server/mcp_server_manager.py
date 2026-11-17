@@ -169,6 +169,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
     handler_outcome,
+    is_url_elicitation_required,
     to_gateway_tool,
 )
 from litellm.proxy.mcp_server.sampling_handler import (
@@ -6791,6 +6792,8 @@ class MCPServerManager:
                     persistent_session=persistent_session,
                 )
         except Exception as exc:
+            if is_url_elicitation_required(exc):
+                raise
             auth_failure: Final = _extract_upstream_auth_failure(exc)
             if auth_failure is None and not isinstance(exc, UpstreamSessionClosedError):
                 return MCPClient.error_tool_result(exc)
@@ -7030,6 +7033,8 @@ class MCPServerManager:
                             persistent_session=persistent_session,
                         )
                     except Exception as e:
+                        if is_url_elicitation_required(e):
+                            raise
                         required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
                         if required_scope is not None:
                             raise MCPUpstreamAuthError(

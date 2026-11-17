@@ -24,7 +24,9 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.message import SessionMessage
 from mcp.types import (
     CONNECTION_CLOSED,
+    INVALID_PARAMS,
     REQUEST_TIMEOUT,
+    URL_ELICITATION_REQUIRED,
     CallToolRequestParams,
     CallToolResult,
     DiscoverResult,
@@ -40,6 +42,7 @@ from mcp.types import (
     JSONRPCResponse,
     LoggingMessageNotificationParams,
     ServerCapabilities,
+    TextContent,
 )
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -1626,6 +1629,80 @@ async def test_sdk_same_origin_redirect_lists_and_calls_tools() -> None:
     assert result.content[0].type == "text"
     assert result.content[0].text == "5"
     assert any(call.args[0].url.path == "/mcp" for call in responder.call_args_list)
+
+
+_URL_ELICITATION_DATA: Final = {
+    "elicitations": [
+        {
+            "mode": "url",
+            "elicitationId": "el-1",
+            "url": "https://consent.example.invalid/authorize",
+            "message": "Authorize to continue.",
+        }
+    ]
+}
+
+
+def _tool_call_error_client(code: int) -> _MockTransportClient:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "elicitation-test", "version": "1"},
+                    },
+                },
+            )
+        if payload.method == "tools/list":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {"tools": [{"name": "add", "inputSchema": {"type": "object"}}]},
+                },
+            )
+        assert payload.method == "tools/call"
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "error": {"code": code, "message": "upstream refused", "data": _URL_ELICITATION_DATA},
+            },
+        )
+
+    return _MockTransportClient(respond, server_url="https://upstream.example.com/mcp", timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_call_tool_raises_upstream_url_elicitation_required_with_data_when_swallowing_errors() -> None:
+    client: Final = _tool_call_error_client(URL_ELICITATION_REQUIRED)
+    with anyio.fail_after(10), pytest.raises(MCPError) as raised:
+        await client.call_tool(CallToolRequestParams(name="add", arguments={}))
+    assert raised.value.error.code == URL_ELICITATION_REQUIRED
+    assert raised.value.error.message == "upstream refused"
+    assert raised.value.error.data == _URL_ELICITATION_DATA
+
+
+@pytest.mark.asyncio
+async def test_call_tool_still_swallows_other_upstream_error_codes_into_an_error_result() -> None:
+    client: Final = _tool_call_error_client(INVALID_PARAMS)
+    with anyio.fail_after(10):
+        result: Final = await client.call_tool(CallToolRequestParams(name="add", arguments={}))
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert result.content == [TextContent(type="text", text="MCPError: upstream refused")]
 
 
 @pytest.mark.asyncio

@@ -108,6 +108,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     age_freshness,
     aggregate_freshness,
     error_text_result,
+    is_url_elicitation_required,
 )
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -1276,6 +1277,8 @@ class MCPClient:
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
             if raise_on_error:
+                raise
+            if is_url_elicitation_required(e):
                 raise
             # Return a default error result instead of raising
             return self.error_tool_result(e)

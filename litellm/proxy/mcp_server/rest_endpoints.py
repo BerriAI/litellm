@@ -50,7 +50,12 @@ from litellm.proxy.mcp_server.oauth_utils import (  # noqa: F401  # legacy modul
     _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     redact_mcp_resource_url,
 )
-from litellm.proxy.mcp_server.result_conversion import WireCompat, complete_call_tool_result
+from litellm.proxy.mcp_server.result_conversion import (
+    WireCompat,
+    complete_call_tool_result,
+    error_text_result,
+    is_url_elicitation_required,
+)
 from litellm.proxy.mcp_server.ui_session_utils import (
     acting_user_auth,
     build_effective_auth_contexts,
@@ -1266,27 +1271,32 @@ if MCP_AVAILABLE:
             else None
         )
         tool_start_time: Final = datetime.now()
-        executed: Final = await execute_mcp_tool(
-            name=tool_name,
-            arguments=TypeAdapter(dict[str, object]).validate_python(tool_arguments),
-            allowed_mcp_servers=list(allowed_mcp_servers),
-            start_time=tool_start_time,
-            user_api_key_auth=TypeAdapter(UserAPIKeyAuth | None).validate_python(
-                execution_data.get("user_api_key_auth")
-            ),
-            mcp_auth_header=TypeAdapter(str | None).validate_python(execution_data.get("mcp_auth_header")),
-            mcp_server_auth_headers=TypeAdapter(dict[str, dict[str, str]] | None).validate_python(
-                execution_data.get("mcp_server_auth_headers")
-            ),
-            oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
-            raw_headers=TypeAdapter(dict[str, str] | None).validate_python(execution_data.get("raw_headers")),
-            client_ip=IPAddressUtils.get_mcp_client_ip(request),
-            litellm_logging_obj=logging_obj,
-            guardrail_context=MCPRequestContext.resolve_guardrail_context(execution_data),
-            requested_server_id=canonical_server_id,
-            incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
-            guardrail_auth=guardrail_auth,
-        )
+        try:
+            executed: Final = await execute_mcp_tool(
+                name=tool_name,
+                arguments=TypeAdapter(dict[str, object]).validate_python(tool_arguments),
+                allowed_mcp_servers=list(allowed_mcp_servers),
+                start_time=tool_start_time,
+                user_api_key_auth=TypeAdapter(UserAPIKeyAuth | None).validate_python(
+                    execution_data.get("user_api_key_auth")
+                ),
+                mcp_auth_header=TypeAdapter(str | None).validate_python(execution_data.get("mcp_auth_header")),
+                mcp_server_auth_headers=TypeAdapter(dict[str, dict[str, str]] | None).validate_python(
+                    execution_data.get("mcp_server_auth_headers")
+                ),
+                oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
+                raw_headers=TypeAdapter(dict[str, str] | None).validate_python(execution_data.get("raw_headers")),
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                litellm_logging_obj=logging_obj,
+                guardrail_context=MCPRequestContext.resolve_guardrail_context(execution_data),
+                requested_server_id=canonical_server_id,
+                incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
+                guardrail_auth=guardrail_auth,
+            )
+        except Exception as e:
+            if is_url_elicitation_required(e):
+                return error_text_result(e), tool_start_time
+            raise
         return executed, tool_start_time
 
     async def _rest_tool_call_server_and_auth(

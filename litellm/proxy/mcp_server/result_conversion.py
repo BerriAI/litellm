@@ -15,7 +15,16 @@ import math
 from collections.abc import Sequence
 from typing import Final, Protocol, TypeAlias, TypeVar
 
-from mcp.types import CacheableResult, CallToolResult, ContentBlock, InputRequiredResult, TextContent, Tool
+from mcp import MCPError
+from mcp.types import (
+    URL_ELICITATION_REQUIRED,
+    CacheableResult,
+    CallToolResult,
+    ContentBlock,
+    InputRequiredResult,
+    TextContent,
+    Tool,
+)
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm.proxy.mcp_server.tool_outcome import (
@@ -36,6 +45,7 @@ __all__ = (
     "complete_call_tool_result",
     "error_text_result",
     "handler_outcome",
+    "is_url_elicitation_required",
     "parse_http_body",
     "to_call_tool_result",
     "to_gateway_tool",
@@ -64,6 +74,10 @@ def error_text_result(exc: Exception) -> CallToolResult:
         content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc}")],
         is_error=True,
     )
+
+
+def is_url_elicitation_required(exc: BaseException) -> bool:
+    return isinstance(exc, MCPError) and exc.error.code == URL_ELICITATION_REQUIRED
 
 
 def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolResult | InputRequiredResult:

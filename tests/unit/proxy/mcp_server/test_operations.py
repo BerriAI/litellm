@@ -1227,6 +1227,40 @@ async def test_tool_operation_preserves_failure_messages_and_request_trace(failu
 
 
 @pytest.mark.asyncio
+async def test_tool_operation_raises_upstream_url_elicitation_required_with_data() -> None:
+    from mcp import MCPError
+    from mcp.types import URL_ELICITATION_REQUIRED, CallToolRequest, CallToolRequestParams
+
+    from litellm.proxy.mcp_server import operations
+
+    data: Final = {"elicitations": [{"mode": "url", "elicitationId": "el-1", "url": "https://consent.example.invalid"}]}
+    dispatch: Final = AsyncMock(side_effect=MCPError(code=URL_ELICITATION_REQUIRED, message="consent", data=data))
+    with patch.object(operations, "call_mcp_tool", dispatch), pytest.raises(MCPError) as raised:
+        await GatewayOperations().execute(
+            CallToolRequest(params=CallToolRequestParams(name="catalog-tool", arguments={})), prepare_context()
+        )
+    assert raised.value.error.code == URL_ELICITATION_REQUIRED
+    assert raised.value.error.message == "consent"
+    assert raised.value.error.data == data
+
+
+@pytest.mark.asyncio
+async def test_tool_operation_keeps_other_upstream_error_codes_as_error_results() -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, CallToolRequest, CallToolRequestParams
+
+    from litellm.proxy.mcp_server import operations
+
+    dispatch: Final = AsyncMock(side_effect=MCPError(code=INVALID_PARAMS, message="bad arguments"))
+    with patch.object(operations, "call_mcp_tool", dispatch):
+        result: Final = await GatewayOperations().execute(
+            CallToolRequest(params=CallToolRequestParams(name="catalog-tool", arguments={})), prepare_context()
+        )
+    assert result.is_error is True
+    assert result.content[0].text == "Error: bad arguments"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method,helper",
     [

@@ -141,6 +141,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
     handler_outcome,
+    is_url_elicitation_required,
     to_call_tool_result,
 )
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_blocked
@@ -3642,6 +3643,8 @@ async def _execute_mcp_server_tool_call(
             is_error=True,
         )
     except Exception as e:
+        if is_url_elicitation_required(e):
+            raise
         verbose_logger.exception("MCP mcp_server_tool_call - error: %s", e)
         return CallToolResult(
             content=[TextContent(text=f"Error: {e}", type="text")],
