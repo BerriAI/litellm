@@ -23,7 +23,6 @@ use parking_lot::Mutex;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
-/// The in-memory cache plus the cooldown key batches a request actually reads.
 #[derive(Clone, Default)]
 struct RecordingCache {
     inner: InMemoryRouterCache,
