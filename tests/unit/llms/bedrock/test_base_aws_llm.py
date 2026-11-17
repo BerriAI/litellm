@@ -35,6 +35,11 @@ from litellm.llms.bedrock.base_aws_llm import (
 )
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_SESSION_POLICY,
+    S3_LOGGING_SESSION_POLICY,
+    session_policy_document,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -311,6 +316,37 @@ def test_web_identity_token_oidc_reference_still_resolved():
             )
 
     assert exc.value.status_code == 401
+
+
+def test_configured_web_identity_policies_isolate_sts_permissions_and_cached_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UNIT_WEB_IDENTITY_TOKEN", "policy-test-token")
+    sts: Final = MagicMock()
+    sts.assume_role_with_web_identity.side_effect = tuple(
+        {
+            "Credentials": {"AccessKeyId": key, "SecretAccessKey": "test-secret", "SessionToken": "test-session"},
+            "PackedPolicySize": 1,
+        }
+        for key in ("s3-key", "bedrock-key")
+    )
+    s3: Final = BaseAWSLLM(web_identity_session_policy=S3_LOGGING_SESSION_POLICY)
+    bedrock: Final = BaseAWSLLM()
+    with patch("boto3.client", return_value=sts):
+        credentials: Final = tuple(
+            helper.get_credentials(
+                aws_web_identity_token="oidc/env/UNIT_WEB_IDENTITY_TOKEN",
+                aws_role_name="arn:aws:iam::123456789012:role/policy-test",
+                aws_session_name="policy-test",
+                aws_region_name="eu-west-1",
+            )
+            for helper in (s3, bedrock, s3)
+        )
+    assert tuple(item.access_key for item in credentials) == ("s3-key", "bedrock-key", "s3-key")
+    assert tuple(call.kwargs["Policy"] for call in sts.assume_role_with_web_identity.call_args_list) == (
+        session_policy_document(S3_LOGGING_SESSION_POLICY),
+        session_policy_document(BEDROCK_SESSION_POLICY),
+    )
 
 
 def test_web_identity_credentials_cached_in_iam_cache():

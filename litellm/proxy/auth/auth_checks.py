@@ -209,6 +209,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy.spend_tracking.native_budgets import BudgetDecision
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     Span = _Span
 else:
@@ -1104,6 +1105,8 @@ MCP_DISCOVERY_ROUTES: Final = frozenset({"/mcp-rest/tools/list", "/v1/mcp/tools"
 
 MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/initialized", "ping", "tools/list"})
 
+MCP_ADMISSION_SCOPE_KEY: Final = "mcp_servers"
+_SCOPE_NAMES: Final = TypeAdapter(tuple[str, ...])
 MCP_TOOL_CALL_ROUTES: Final = frozenset({"/mcp/tools/call", "/mcp-rest/tools/call"})
 
 
@@ -1114,6 +1117,112 @@ def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> 
         return False
     method: Final = request_body.get("method")
     return isinstance(method, str) and method in MCP_ZERO_SPEND_JSONRPC_METHODS
+
+
+def _is_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
+    if route in MCP_TOOL_CALL_ROUTES:
+        return True
+    return (route == "/mcp" or route.startswith("/mcp/")) and request_body.get("method") == "tools/call"
+
+
+def _mcp_tool_call_name(route: str, request_body: Mapping[str, object]) -> str | None:
+    from litellm.proxy.mcp_server.utils import string_field
+
+    if route in MCP_TOOL_CALL_ROUTES:
+        name: Final = request_body.get("name")
+        return name if isinstance(name, str) else None
+    return string_field(request_body.get("params"), "name")
+
+
+def _server_free_price_for(tool_name: str, server: "MCPServer") -> bool:
+    """A server with display names can run a different tool than the one named, so it is never taken as free."""
+    from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        mcp_tool_cost_per_query,
+    )
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        strip_known_server_prefix,
+    )
+
+    if server.tool_name_to_display_name:
+        return False
+    return (
+        mcp_tool_cost_per_query(
+            cost_info=(server.mcp_info or {}).get("mcp_server_cost_info"),
+            tool_name=strip_known_server_prefix(tool_name, server),
+        )
+        <= 0
+    )
+
+
+def _is_shown_as_a_display_name(tool_name: str, server: "MCPServer") -> bool:
+    return tool_name in (server.tool_name_to_display_name or {}).values()
+
+
+def _is_reserved_mcp_tool_name(tool_name: str) -> bool:
+    from litellm.proxy.mcp_server.tool_search import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        MCP_PROXY_TOOL_NAMES,
+        VIRTUAL_TOOL_NAMES,
+    )
+
+    return tool_name in VIRTUAL_TOOL_NAMES or tool_name in MCP_PROXY_TOOL_NAMES
+
+
+def _mcp_scope_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    """The path or header scope of a streamable HTTP call, which can run a prefixed name on another server."""
+    try:
+        return _SCOPE_NAMES.validate_python(request_body.get(MCP_ADMISSION_SCOPE_KEY) or ())
+    except ValueError:
+        return ("",)
+
+
+def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
+    """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
+
+    Only a name with a known server prefix, or a REST ``server_id``, says which server runs it. Display names can
+    send a name to another tool, so a call stays budget checked when a server that could run it has any, or when
+    any server shows a tool under the name."""
+    if not _is_mcp_tool_call(route=route, request_body=request_body):
+        return False
+    from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        mcp_server_charges_for_tool_calls,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        global_mcp_server_manager,
+    )
+
+    servers: Final = tuple(global_mcp_server_manager.get_registry().values())
+    if not any(
+        mcp_server_charges_for_tool_calls((server.mcp_info or {}).get("mcp_server_cost_info")) for server in servers
+    ):
+        return True
+    tool_name: Final = _mcp_tool_call_name(route=route, request_body=request_body)
+    if tool_name is None:
+        return False
+    requested_server_id: Final = request_body.get("server_id") if route in MCP_TOOL_CALL_ROUTES else None
+    named_servers: Final = tuple(
+        server
+        for server in (
+            global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
+            (
+                global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
+                or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
+            )
+            if isinstance(requested_server_id, str)
+            else None,
+        )
+        if server is not None
+    )
+    servers_in_scope: Final = tuple(
+        global_mcp_server_manager.get_mcp_server_by_identifier(name) for name in _mcp_scope_names(request_body)
+    )
+    servers_that_could_run_it: Final = tuple(
+        server for server in (*named_servers, *servers_in_scope) if server is not None
+    )
+    if _is_reserved_mcp_tool_name(tool_name) or not named_servers or None in servers_in_scope:
+        return False
+    if any(_is_shown_as_a_display_name(tool_name, server) for server in servers):
+        return False
+    return all(_server_free_price_for(tool_name, server) for server in servers_that_could_run_it)
 
 
 def is_video_retrieval_request(route: str, http_method: str | None) -> bool:
@@ -1153,13 +1262,16 @@ def request_skips_budget_checks(
 ) -> bool:
     if route_skips_budget_checks(route=route) or is_video_retrieval_request(route=route, http_method=http_method):
         return True
-    if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
+    if request_body is not None and (
+        is_mcp_discovery_request(route=route, request_body=request_body)
+        or is_zero_cost_mcp_tool_call(route=route, request_body=request_body)
+    ):
         return True
     return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
 async def common_checks(
-    request_body: dict,
+    request_body: dict[str, object],
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,

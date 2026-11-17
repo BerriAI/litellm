@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 
 try:
     from prisma.errors import RecordNotFoundError
@@ -116,16 +117,19 @@ async def _emit_config_override_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
-                object_id=object_id,
-                action=action,
-                updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
-                before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
+                    object_id=object_id,
+                    action=action,
+                    updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
+                    before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )

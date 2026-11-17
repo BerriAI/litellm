@@ -4965,6 +4965,7 @@ class TestPricingInjectionBlocked:
             ("output_cost_per_second", -1.0),
             ("cache_read_input_token_cost", 0.0),
             ("cache_creation_input_token_cost", -0.05),
+            ("pricing_currency", "EUR"),
         ],
     )
     def test_pricing_field_rejected_by_default(self, field, value):
