@@ -193,6 +193,7 @@ def mailing(tmp_path_factory: pytest.TempPathFactory) -> Iterator[MailingProxy]:
             "SMTP_PORT": str(mailbox.port),
             "SMTP_TLS": "False",
             "SMTP_SENDER_EMAIL": "alerts@integration.test",
+            "LITELLM_LOG": "WARNING",
         }
         config: Final = alerting_config(directory, "mailing", alerting=["slack", "webhook", "email"])
         with owned_proxy_process(shared, directory, overrides, config=config) as proxy:
@@ -1071,6 +1072,11 @@ def test_user_without_an_email_is_served_and_still_reaches_the_webhook(mailing: 
         event: Final = JSON_OBJECT.validate_json(exactly_one_alert_naming(mailing.webhooks, user_id))
         assert (event["event"], event["event_group"], event["user_email"]) == ("soft_budget_crossed", "user", None)
         assert [html for delivery in mailing.mailbox.deliveries() if user_id in (html := delivery.html)] == []
+        sentinel_email: Final = f"sentinel-{uuid.uuid4().hex}@integration.test"
+        gateway.chat(model, key=scenario.key(user_id=crossing_user(scenario, user_email=sentinel_email)))
+        eventually(
+            lambda: mail_to(mailing.mailbox, sentinel_email), lambda found: len(found) > 0, seconds=ALERT_SECONDS
+        )
         logged: Final = [line for line in mailing.log.read_text().splitlines() if user_id in line]
         assert logged == [], logged
 
