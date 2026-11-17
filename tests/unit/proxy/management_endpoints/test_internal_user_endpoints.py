@@ -2815,6 +2815,40 @@ async def test_bulk_user_spend_reset_clears_every_users_spend_counters(
 
 
 @pytest.mark.asyncio
+async def test_bulk_user_soft_budget_is_checked_against_the_rows_locked_for_the_write(mocker: MockerFixture) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    writes: Final = mocker.AsyncMock(return_value=1)
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=[LiteLLM_UserTable(user_id="user-spruce", max_budget=None)]
+    )
+    transaction_db: Final = SimpleNamespace(
+        litellm_usertable=SimpleNamespace(
+            find_many=mocker.AsyncMock(return_value=[LiteLLM_UserTable(user_id="user-spruce", max_budget=10.0)]),
+            update_many=writes,
+        )
+    )
+    prisma_client.tx = lambda: _transaction_over(transaction_db)
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+
+    with pytest.raises(HTTPException) as refused:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates={"soft_budget": 20.0}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert refused.value.status_code == 400
+    writes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_bulk_user_update_that_expires_inside_the_transaction_changes_no_user(mocker: MockerFixture) -> None:
     from prisma.errors import TransactionExpiredError
 

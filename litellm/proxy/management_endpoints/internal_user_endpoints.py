@@ -2163,10 +2163,6 @@ async def bulk_user_update(
         non_default_values.pop("user_id", None)
         non_default_values.pop("user_email", None)
 
-        if "soft_budget" in non_default_values or "max_budget" in non_default_values:
-            for user_budget in _USER_BUDGET_ROWS.validate_python(all_users_in_db, from_attributes=True):
-                _validate_updated_user_soft_budget(_UserBudgetRow.model_validate(non_default_values), user_budget)
-
         shared_values: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "budget_limits"})
 
         successful_updates = 0
@@ -2178,6 +2174,11 @@ async def bulk_user_update(
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
                 locked_users: Final = await user_tx_db(transaction).find_many(order={"created_at": "desc"})
+                if "soft_budget" in non_default_values or "max_budget" in non_default_values:
+                    for user_budget in _USER_BUDGET_ROWS.validate_python(locked_users, from_attributes=True):
+                        _validate_updated_user_soft_budget(
+                            _UserBudgetRow.model_validate(non_default_values), user_budget
+                        )
                 windows_by_user: Final[Mapping[str, str]] = (
                     _windows_by_user(locked_users, data.user_updates.budget_limits)
                     if "budget_limits" in non_default_values
@@ -2258,6 +2259,8 @@ async def bulk_user_update(
             except Exception as audit_error:
                 verbose_proxy_logger.warning("Failed to create bulk audit log: %s", audit_error)
 
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception("Failed to perform bulk update: %s", e)
             raise HTTPException(status_code=500, detail={"error": str(e)}) from e
