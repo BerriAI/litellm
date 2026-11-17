@@ -431,7 +431,7 @@ def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
 
-async def _call_entrypoint(entrypoint: str, output_cap: Mapping[str, Mapping[str, int]]) -> None:
+async def _call_entrypoint(entrypoint: str, output_cap: Mapping[str, object]) -> None:
     from litellm.google_genai.main import (
         agenerate_content,
         agenerate_content_stream,
@@ -471,6 +471,33 @@ async def test_adapter_path_sends_the_output_cap_in_every_spelling(
         await _call_entrypoint(entrypoint, output_cap)
 
     assert json.loads(route.calls.last.request.content)["max_tokens"] == 16
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_field", ["generationConfig", "generation_config"])
+async def test_adapter_path_sends_quoted_numbers_as_numbers(_httpx_transport: None, config_field: str) -> None:
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{_CHAT_UPSTREAM}/chat/completions").mock(side_effect=_chat_reply)
+        await _call_entrypoint(
+            "agenerate_content", {config_field: {"max_output_tokens": "16", "temperature": "0.5", "topP": "0.9"}}
+        )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["max_tokens"], sent["temperature"], sent["top_p"]) == (16, 0.5, 0.9)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_field", ["generationConfig", "generation_config"])
+@pytest.mark.parametrize("config", ["abc", ["maxOutputTokens"], {"max_output_tokens": "abc"}, {"maxOutputTokens": 16.5}])
+async def test_adapter_path_rejects_an_invalid_config_before_calling_upstream(
+    _httpx_transport: None, config_field: str, config: object
+) -> None:
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{_CHAT_UPSTREAM}/chat/completions").mock(side_effect=_chat_reply)
+        with pytest.raises(litellm.BadRequestError):
+            await _call_entrypoint("agenerate_content", {config_field: config})
+
+    assert not route.called
 
 
 @pytest.mark.asyncio

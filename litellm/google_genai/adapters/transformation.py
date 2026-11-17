@@ -4,7 +4,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar, cast
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
@@ -125,6 +125,9 @@ _COMPLETION_PARAM_CONFIG_KEYS: Final = (
     ("stop", ("stopSequences", "stop_sequences")),
 )
 _ADAPTER_SCALAR_CONFIG_KEYS: Final = frozenset(chain.from_iterable(keys for _, keys in _COMPLETION_PARAM_CONFIG_KEYS))
+_COMPLETION_PARAM_CONFIG_KEY_NAMES: Final = MappingProxyType(
+    {param: "/".join(keys) for param, keys in _COMPLETION_PARAM_CONFIG_KEYS}
+)
 _ADAPTER_DEFAULT_GENERATION_CONFIG: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"responseModalities": ["TEXT"], "response_modalities": ["TEXT"], "candidateCount": 1, "candidate_count": 1}
 )
@@ -154,6 +157,34 @@ def _adapter_honors(key: str, value: object, keeps_response_format: bool) -> boo
 
 def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object | None:
     return next((config[key] for key in keys if config.get(key) is not None), None)
+
+
+class _CompletionConfigParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    temperature: float | None = None
+    max_tokens: int | None = None
+    top_p: float | None = None
+    stop: str | Sequence[str] | None = None
+
+
+def _completion_params(config: Mapping[str, object], model: str, llm_provider: str | None) -> Mapping[str, JsonValue]:
+    sent: Final = MappingProxyType(
+        {
+            param: value
+            for param, keys in _COMPLETION_PARAM_CONFIG_KEYS
+            if (value := _first_present(config, keys)) is not None
+        }
+    )
+    try:
+        return MappingProxyType(_CompletionConfigParams.model_validate(sent).model_dump(exclude_none=True))
+    except ValidationError as error:
+        issue: Final = error.errors()[0]
+        raise BadRequestError(
+            message=f"generationConfig {_COMPLETION_PARAM_CONFIG_KEY_NAMES[str(issue['loc'][0])]}: {issue['msg']}",
+            model=model,
+            llm_provider=llm_provider,
+        ) from error
 
 
 def _asks_for_plain_text(config: Mapping[str, object]) -> bool:
@@ -524,11 +555,7 @@ class GoogleGenAIAdapter:
         completion_request: Final[_JsonDict] = {
             "model": model,
             "messages": messages,
-            **{
-                param: value
-                for param, keys in _COMPLETION_PARAM_CONFIG_KEYS
-                if (value := _first_present(config_fields, keys)) is not None
-            },
+            **_completion_params(config_fields, model, litellm_params.custom_llm_provider if litellm_params else None),
         }
 
         #########################################################

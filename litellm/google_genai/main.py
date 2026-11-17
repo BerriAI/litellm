@@ -169,6 +169,13 @@ class GenerateContentHelper:
         if litellm_params.custom_llm_provider is None:
             litellm_params.custom_llm_provider = custom_llm_provider
 
+        if request_config is not None and not isinstance(request_config, Mapping):
+            raise litellm.BadRequestError(
+                message="generationConfig must be an object",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
         custom_handler: Final = _custom_generate_content_handler(custom_llm_provider)
         # get provider config
         generate_content_provider_config: Final[BaseGoogleGenAIGenerateContentConfig | None] = (
