@@ -420,7 +420,11 @@ from litellm.proxy.pricing_currency import (
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
+from litellm.types.litellm_params import (
+    AGENTIC_LOOP_KWARG_NAMES,
+    PROMPT_MANAGEMENT_APPLIED_FIELD,
+    STREAM_USAGE_INJECTED_FIELD,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_API_HEADERS,
     ANTHROPIC_USER_PROFILE_ID_HEADER,
@@ -544,6 +548,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "guardrail_scan_metadata",
     "routing_decision",
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
+    PROMPT_MANAGEMENT_APPLIED_FIELD,
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
