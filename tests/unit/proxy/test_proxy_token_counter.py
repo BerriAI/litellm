@@ -445,7 +445,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
         client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
@@ -530,7 +530,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
         client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
@@ -1355,7 +1355,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
         client_user_profile_id=None,
     ):
         raise ProxyException(
@@ -1417,7 +1417,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
         client_user_profile_id=None,
     ):
         raise ProxyException(
@@ -1479,7 +1479,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
         client_user_profile_id=None,
     ):
         raise ProxyException(
@@ -5848,9 +5848,23 @@ _HELLO_COUNT_ROUTES: Final = (
 @pytest.mark.parametrize("litellm_params", _CLAUDE_COUNT_DEPLOYMENTS)
 @pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
 @pytest.mark.parametrize(
-    ("key_metadata", "sent_profile_id"),
-    (({"anthropic_user_profile_id": "uprof_pinned"}, "uprof_pinned"), ({}, "uprof_client")),
-    ids=("key_pin_over_client_header", "client_header"),
+    ("key_metadata", "deployment_headers", "sent_profile_id"),
+    (
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
+        ({}, {}, "uprof_client"),
+        ({}, {"Anthropic-User-Profile-Id": "uprof_deployment"}, "uprof_deployment"),
+        (
+            {"anthropic_user_profile_id": "uprof_pinned"},
+            {"Anthropic-User-Profile-Id": "uprof_deployment"},
+            "uprof_pinned",
+        ),
+    ),
+    ids=(
+        "key_pin_over_client_header",
+        "client_header",
+        "deployment_header_over_client_header",
+        "key_pin_over_deployment_header",
+    ),
 )
 def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_would_send(
     litellm_params: dict[str, JsonValue],
@@ -5858,6 +5872,7 @@ def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_wo
     body: Mapping[str, JsonValue],
     count_field: str,
     key_metadata: Mapping[str, str],
+    deployment_headers: dict[str, JsonValue],
     sent_profile_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5876,7 +5891,7 @@ def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_wo
             request=request,
         )
 
-    _route_to_one_deployment(litellm_params, monkeypatch)
+    _route_to_one_deployment({**litellm_params, "extra_headers": deployment_headers}, monkeypatch)
     monkeypatch.setitem(
         app.dependency_overrides,
         user_api_key_auth,

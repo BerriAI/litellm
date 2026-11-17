@@ -21,7 +21,7 @@ def override_headers(
     return {**{name: value for name, value in headers.items() if name.lower() not in overridden}, **overrides}
 
 
-def _names_a_claude_model(model: str | None) -> bool:
+def names_a_claude_model(model: str | None) -> bool:
     return model is not None and "claude" in model.lower()
 
 
@@ -33,7 +33,7 @@ def _applies_to_call(
 ) -> bool:
     if scoped_header.get("native_anthropic_messages_only") and not native_anthropic_messages:
         return False
-    if scoped_header.get("claude_models_only") and not _names_a_claude_model(model):
+    if scoped_header.get("claude_models_only") and not names_a_claude_model(model):
         return False
     scoped_providers: Final = scoped_header.get("custom_llm_provider", "").split(",")
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)

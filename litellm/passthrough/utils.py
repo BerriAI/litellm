@@ -7,6 +7,8 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
 from litellm.litellm_core_utils.aws_partition import contains_aws_arn
+from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 
 # Headers that must not be overwritten via the x-pass- forwarding mechanism.
 # Includes standard credential/auth headers and protocol-level headers that
@@ -35,6 +37,15 @@ def _is_forwarded_pass_through_header(header_name: str) -> bool:
     return forwarded_name not in _PASS_THROUGH_PROTECTED_HEADERS and not any(
         forwarded_name.startswith(prefix) for prefix in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
     )
+
+
+_PASS_THROUGH_PROFILE_HEADER: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USER_PROFILE_ID_HEADER
+
+
+def claude_scoped_pass_through_headers(request_headers: Mapping[str, str], model: str) -> dict[str, str]:
+    if names_a_claude_model(model):
+        return dict(request_headers)
+    return {name: value for name, value in request_headers.items() if name.lower() != _PASS_THROUGH_PROFILE_HEADER}
 
 
 class BasePassthroughUtils:

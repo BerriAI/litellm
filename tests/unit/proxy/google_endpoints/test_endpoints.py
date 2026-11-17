@@ -114,6 +114,7 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
         ),
         model_name="volcengine/foo",
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
     assert response.get("totalTokens") > 0

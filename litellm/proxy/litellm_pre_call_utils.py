@@ -3141,7 +3141,7 @@ async def add_litellm_data_to_request(
         data["api_version"] = dynamic_api_version
 
     _warn_on_unusable_profile_pins(user_api_key_dict)
-    caller_body_profile: Final = _caller_body_anthropic_user_profile_id(_REQUEST_FIELDS.validate_python(data))
+    caller_body_profile: Final = anthropic_user_profile_id_in_headers(_REQUEST_FIELDS.validate_python(data))
     if anthropic_user_profile_id(user_api_key_dict, {}) is not None:
         for field in ("extra_headers", "headers"):
             if field in data:
@@ -4925,9 +4925,9 @@ def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
     return isinstance(api_key, str) and bool(api_key.strip())
 
 
-def _caller_body_anthropic_user_profile_id(data: Mapping[str, object]) -> str | None:
+def anthropic_user_profile_id_in_headers(params: Mapping[str, object]) -> str | None:
     for field in ("extra_headers", "headers"):
-        for name, value in reversed(tuple(_request_fields(data.get(field)).items())):
+        for name, value in reversed(tuple(_request_fields(params.get(field)).items())):
             if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER and isinstance(value, str):
                 return value
     return None

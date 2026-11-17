@@ -761,6 +761,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
     anthropic_user_profile_id,
+    anthropic_user_profile_id_in_headers,
+    pinned_anthropic_user_profile_id,
     sanitize_for_log,
 )
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
@@ -15539,9 +15541,15 @@ _PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO: Final = frozenset({LlmProviders.OPENROU
 def _with_client_identity(
     counter: BaseTokenCounter | None,
     client_oauth_token: str | None,
-    user_profile_id: str | None,
+    pinned_user_profile_id: str | None,
     client_user_profile_id: str | None,
+    deployment_litellm_params: Mapping[str, object],
 ) -> BaseTokenCounter | None:
+    user_profile_id: Final = (
+        pinned_user_profile_id
+        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+        or client_user_profile_id
+    )
     match counter:
         case AnthropicTokenCounter() if client_oauth_token is not None:
             return AnthropicTokenCounter(
@@ -16429,7 +16437,10 @@ async def token_counter(
                 else {"additional_drop_params": request.additional_drop_params}
             ),
             litellm_call_id=call_id,
-            user_profile_id=anthropic_user_profile_id(user_api_key_dict, http_request.headers),
+            pinned_user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
+            client_user_profile_id=anthropic_user_profile_id(
+                user_api_key_dict, http_request.headers, caller_credential=True
+            ),
         ),
         call_id,
         http_request,
@@ -16448,7 +16459,7 @@ async def count_request_tokens(
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
     count_options: Mapping[str, JsonValue] = MappingProxyType({}),
-    user_profile_id: str | None = None,
+    pinned_user_profile_id: str | None = None,
     client_user_profile_id: str | None = None,
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
@@ -16470,7 +16481,7 @@ async def count_request_tokens(
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
         count_options=count_options,
-        user_profile_id=user_profile_id,
+        pinned_user_profile_id=pinned_user_profile_id,
         client_user_profile_id=client_user_profile_id,
     )
     return await logged_token_count(
@@ -16520,7 +16531,7 @@ async def _count_request_tokens(
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
     count_options: Mapping[str, JsonValue],
-    user_profile_id: str | None,
+    pinned_user_profile_id: str | None,
     client_user_profile_id: str | None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
@@ -16564,7 +16575,11 @@ async def _count_request_tokens(
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
         provider_counter = _with_client_identity(
-            routed_counter, client_oauth_token, user_profile_id, client_user_profile_id
+            routed_counter,
+            client_oauth_token,
+            pinned_user_profile_id,
+            client_user_profile_id,
+            _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})),
         )
         if _model is not None:
             model_to_use = _model

@@ -56,6 +56,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_c
 from litellm.proxy.litellm_pre_call_utils import (
     anthropic_user_profile_id,
     forwarded_anthropic_oauth_token,
+    pinned_anthropic_user_profile_id,
     should_auto_drop_params_for_agentic_cli,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -420,7 +421,7 @@ async def _count_tokens(
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
             client_oauth_token=client_oauth_token,
-            user_profile_id=anthropic_user_profile_id(user_api_key_dict, request.headers),
+            pinned_user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
             client_user_profile_id=anthropic_user_profile_id(
                 user_api_key_dict, request.headers, caller_credential=True
             ),
