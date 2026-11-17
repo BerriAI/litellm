@@ -114,7 +114,7 @@ class StreamAttempt:
     routed: str | None = None
     # The deployment's max_parallel_requests slot the attempt holds; an open chat stream takes it.
     slot: contextlib.ExitStack | None = None
-    explain_failure: "Callable[[BaseException], str | None] | None" = None
+    explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None" = None
     # Set by the wrapper that reports the stream's outcome when it ends; the attempt's answer is then
     # deferred and counts only the request and the tokens read so far (``counted_tokens``).
     reports_outcome: bool = False
@@ -525,16 +525,23 @@ def _walk_outcome(error: Exception, trigger_message: str | None) -> str:
     return outcome if carries_fallback_failure(outcome) else ""
 
 
+def _client_failure_message(primary_message: str, outcome: str) -> str:
+    from litellm._logging import redact_internal_details_from_client_message
+
+    return "".join(map(redact_internal_details_from_client_message, (primary_message, outcome)))
+
+
 def _failure_message(
     attempt: StreamAttempt, error: Exception, surfaced: BaseException, trigger_message: str | None
 ) -> str | None:
     if attempt.explain_failure is not None:
-        return attempt.explain_failure(surfaced)
+        explained: Final = attempt.explain_failure(surfaced)
+        return _client_failure_message(*explained) if explained is not None else None
     outcome: Final = _walk_outcome(error, trigger_message)
     surfaced_message: Final[object] = getattr(surfaced, "message", None)
     if not outcome or not isinstance(surfaced_message, str):
         return None
-    return surfaced_message + outcome
+    return _client_failure_message(surfaced_message, outcome)
 
 
 def _raise_stream_failure(
@@ -1355,7 +1362,6 @@ def _hop_error_frame(
     model: str,
     bridged_failure: Exception | None,
 ) -> bytes:
-    from litellm._logging import redact_internal_details_from_client_message
     from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 
     if attempt.explain_failure is None or not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
@@ -1363,11 +1369,11 @@ def _hop_error_frame(
     hop_error: Final = (
         bridged_failure if bridged_failure is not None else anthropic_error_frame_exception(*error_event, model)
     )
-    message: Final = attempt.explain_failure(provider_error(hop_error))
-    if message is None:
+    explained: Final = attempt.explain_failure(provider_error(hop_error))
+    if explained is None:
         return chunk
-    client_message: Final = redact_internal_details_from_client_message(message)
-    return b"\n".join(_error_line_with_message(line, client_message) for line in bytes(chunk).split(b"\n"))
+    message: Final = _client_failure_message(*explained)
+    return b"\n".join(_error_line_with_message(line, message) for line in bytes(chunk).split(b"\n"))
 
 
 def wrap_anthropic_stream(
@@ -1972,7 +1978,7 @@ async def _responses_yield_retried(
     retried: tuple[object, int, int],
     wrapper: object,
     adopt_headers: Callable[[object], _Prepared],
-    explain_failure: "Callable[[BaseException], str | None] | None",
+    explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None",
 ) -> AsyncGenerator[object, None]:
     """Hands a same-group retry's stream to the client through the wrapper, with the retry's headers, and
     closes it after. A retried stream that breaks again counts on from the retries already made, and when

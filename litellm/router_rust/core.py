@@ -5621,7 +5621,9 @@ class _Driver:
             primary.message += self._explanation(primary, model)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
         return primary
 
-    def _hop_failure_explainer(self, step: Mapping[str, object]) -> "Callable[[BaseException], str | None] | None":
+    def _hop_failure_explainer(
+        self, step: Mapping[str, object]
+    ) -> "Callable[[BaseException], tuple[str, str] | None] | None":
         level: Final = step.get("fallback_level")
         on_fallback_hop: Final = self._base_level == 0 and isinstance(level, int) and level > 0
         primary: Final = self._level_errors.get(self._base_level)
@@ -5630,14 +5632,14 @@ class _Driver:
         model: Final = str(self._request.get("model"))
         primary_message: Final[object] = getattr(provider_error(primary), "message", None)
 
-        def explain(hop_error: BaseException) -> str | None:
+        def explain(hop_error: BaseException) -> tuple[str, str] | None:
             if (
                 not isinstance(primary_message, str)
                 or not self._explains_failure
                 or not self._core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # see above
             ):
                 return None
-            return primary_message + self._explanation(primary, model, hop_error)
+            return primary_message, self._explanation(primary, model, hop_error)
 
         return explain
 
