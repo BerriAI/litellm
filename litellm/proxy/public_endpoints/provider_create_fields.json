@@ -3664,6 +3664,34 @@
     "default_model_placeholder": "wally/glm-5.3-flash"
   },
   {
+    "provider": "OPENSCALE",
+    "provider_display_name": "OpenScale",
+    "litellm_provider": "openscale",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.openscale.so/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "openscale/deepseek-v4-1-flash"
+  },
+  {
     "provider": "Sail",
     "provider_display_name": "Sail",
     "litellm_provider": "sail",
