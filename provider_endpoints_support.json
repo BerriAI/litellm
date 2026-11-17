@@ -1352,7 +1352,9 @@
         "audio_speech": true,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "groq": {
