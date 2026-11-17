@@ -188,8 +188,6 @@ export default function CustomerBudgetGroupsEditor({
         <Plus className="size-4" />
         {t("customerPortal.createDialog.addGroup")}
       </Button>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.defaultHelp")}</p>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.resetHelp")}</p>
     </section>
   );
 }

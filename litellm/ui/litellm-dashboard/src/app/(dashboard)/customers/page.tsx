@@ -94,20 +94,14 @@ function CustomerOrganizations() {
   return (
     <div className="w-full space-y-5 px-6 py-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h1 className="text-lg font-semibold tracking-tight">{t("customerPortal.list.title")}</h1>
-          <p className="text-sm text-muted-foreground">{t("customerPortal.list.subtitle")}</p>
-        </div>
+        <h1 className="min-w-0 text-lg font-semibold tracking-tight">{t("customerPortal.list.title")}</h1>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="size-4" /> {t("customerPortal.list.create")}
         </Button>
       </div>
       <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
-            <p className="mt-1 text-xs text-muted-foreground">{t("customerPortal.list.overallUsageHelp")}</p>
-          </div>
+          <h2 className="text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
           <AdvancedDatePicker
             value={dateValue}
             onValueChange={onDateChange}
@@ -179,8 +173,6 @@ function CustomerOrganizations() {
           isLoading={organizations.isFetching || monthlyUsage.isFetching}
         />
       </div>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.list.budgetAndShareHelp")}</p>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.list.attribution")}</p>
       <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
     </div>
   );

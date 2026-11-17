@@ -85,7 +85,6 @@ export default function CustomerUsageHeader({
         <div>
           <p className="mb-1 text-xs text-muted-foreground">{t(scopeLabel(scope))}</p>
           <h1 className="text-2xl font-semibold tracking-tight">{label}</h1>
-          <p className="mt-1.5 text-sm text-muted-foreground">{t("customerPortal.analytics.subtitle")}</p>
         </div>
         <AdvancedDatePicker
           value={dateValue}

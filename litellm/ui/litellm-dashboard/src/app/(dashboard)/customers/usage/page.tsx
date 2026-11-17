@@ -137,7 +137,6 @@ export default function CustomerHierarchyUsagePage() {
               {t("customerPortal.analytics.allOrganizationUsage")}
             </Button>
           )}
-          <p className="text-[11px] leading-5 text-muted-foreground">{t("customerPortal.analytics.freshness")}</p>
         </>
       )}
     </main>

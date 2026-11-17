@@ -600,7 +600,7 @@ describe("customer hierarchy management", () => {
     renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&source=portal", onUrlUpdate });
     await user.click(await screen.findByRole("button", { name: "Product" }));
     const members = await screen.findByRole("table", { name: "Customer members" });
-    expect(screen.getByText("Manage customer members and settings for this customer team.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Product" })).toBeInTheDocument();
     expect(
       requestedUrls()
         .find((url) => url.pathname === "/management/v1/customer_members")
@@ -610,7 +610,6 @@ describe("customer hierarchy management", () => {
     await user.keyboard("{ArrowDown}");
     await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
-    expect(screen.getByText("Manage settings and budget for this customer member.")).toBeInTheDocument();
     const usage = screen.getByRole("link", { name: "Usage" });
     expect(usage).toHaveAttribute("href", `${uiHref("customers/usage")}?org=org-1&team=team-a&member=member-a`);
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");

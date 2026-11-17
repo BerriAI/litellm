@@ -145,12 +145,9 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
       <form onSubmit={(event) => void save(event)} className="space-y-7">
         <fieldset disabled={pending !== null} className="space-y-7">
           <section className="space-y-4" aria-labelledby="hierarchy-general-title">
-            <div>
-              <h2 id="hierarchy-general-title" className="text-base font-medium">
-                {t("customerPortal.hierarchy.profileTitle")}
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">{t("customerPortal.hierarchy.profileHint")}</p>
-            </div>
+            <h2 id="hierarchy-general-title" className="text-base font-medium">
+              {t("customerPortal.hierarchy.profileTitle")}
+            </h2>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="hierarchy-alias">{t("customerPortal.hierarchy.alias")}</Label>

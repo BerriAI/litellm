@@ -31,21 +31,11 @@ import { customerBudgetLimit } from "./customerBudgetUsage";
 import { CustomerBudgetLimitCell, CustomerBudgetSortHeader } from "./CustomerBudgetColumn";
 
 type Hierarchy = ReturnType<typeof useCustomerHierarchy>;
-const CHILD_HINTS = {
-  teams: "customerPortal.hierarchy.teamsHint",
-  members: "customerPortal.hierarchy.membersHint",
-} as const;
 interface ScopeProps {
   hierarchy: Hierarchy;
   selected: CustomerHierarchyContext;
   scope: CustomerHierarchyScope;
 }
-
-const DESCRIPTION_KEYS = {
-  organization: "customerPortal.hierarchy.subtitle",
-  team: "customerPortal.hierarchy.teamSubtitle",
-  member: "customerPortal.hierarchy.memberSubtitle",
-} as const;
 
 function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" | "selected">) {
   const { t } = useTranslation();
@@ -117,7 +107,6 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
         <div className="min-w-0 flex-1 basis-72">
           <p className="mb-1 text-xs text-muted-foreground">{kindLabel}</p>
           <h1 className="text-2xl font-semibold tracking-tight">{label}</h1>
-          <p className="mt-1.5 text-sm text-muted-foreground">{t(DESCRIPTION_KEYS[entity.kind])}</p>
           <p className="mt-3 font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
         </div>
         <div className="w-full sm:w-72">
@@ -225,7 +214,6 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
       {childUsage.isError && (
         <ErrorState message={extractProxyErrorMessage(childUsage.error)} onRetry={() => void childUsage.refetch()} />
       )}
-      <p className="mb-4 text-xs text-muted-foreground">{t("customerPortal.analytics.memberSpendHint")}</p>
       <Table aria-label={childLabel}>
         <TableHeader>
           <TableRow>
@@ -355,15 +343,11 @@ function HierarchyChildTable(props: ScopeProps) {
   const { hierarchy } = props;
   const { childTab } = hierarchy;
   const showTeam = childTab === "members" && props.selected.team === null;
-  const hint = showTeam ? "customerPortal.hierarchy.organizationMembersHint" : CHILD_HINTS[childTab];
   const childLabel = childTab === "teams" ? t("customerPortal.hierarchy.teams") : t("customerPortal.hierarchy.members");
   return (
     <>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-medium tracking-tight">{childLabel}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t(hint)}</p>
-        </div>
+        <h2 className="text-base font-medium tracking-tight">{childLabel}</h2>
         <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
       </div>
       {childTab === "members" && (

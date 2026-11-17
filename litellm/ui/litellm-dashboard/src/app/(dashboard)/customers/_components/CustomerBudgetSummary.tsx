@@ -36,9 +36,6 @@ export default function CustomerBudgetSummary({
         );
       })}
       {budgets.length === 0 && <p className="text-muted-foreground">{t("customerPortal.analytics.noBudget")}</p>}
-      {budgets.length > 0 && (
-        <p className="text-[11px] text-muted-foreground">{t("customerPortal.analytics.budgetUsageHint")}</p>
-      )}
     </section>
   );
 }
