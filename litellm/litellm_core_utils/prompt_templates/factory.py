@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Any, Final, NamedTuple, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError, model_validator
@@ -2198,17 +2198,67 @@ _BACK_TO_BACK_JSON_OBJECTS: Final = re.compile(r"\}\s*\{")
 _NO_SPLIT_TOOL_USE_IDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({})
 
 
-def _assistant_tool_call_arguments(messages: Sequence[object]) -> tuple[tuple[str, object], ...]:
-    tool_calls: Final = itertools.chain.from_iterable(
-        parts_of(message_field(message, "tool_calls"))
-        for message in messages
-        if message_field(message, "role") == "assistant"
-    )
+class _AssistantToolCall(NamedTuple):
+    message_index: int
+    tool_id: str
+    arguments: object
+
+
+def _assistant_tool_calls_of(message_index: int, message: object) -> tuple[_AssistantToolCall, ...]:
+    if message_field(message, "role") != "assistant":
+        return ()
     return tuple(
-        (tool_id, message_field(message_field(tool_call, "function"), "arguments"))
-        for tool_call in tool_calls
+        _AssistantToolCall(message_index, tool_id, message_field(message_field(tool_call, "function"), "arguments"))
+        for tool_call in parts_of(message_field(message, "tool_calls"))
         if isinstance(tool_id := message_field(tool_call, "id"), str)
     )
+
+
+def _split_tool_use_ids_by_message(
+    messages: Sequence[object], object_count: Callable[[object], int], sanitize: Callable[[str], str], infix: str
+) -> tuple[Mapping[str, tuple[str, ...]], ...]:
+    """Per message, the extra tool use ids each tool call of its assistant turn splits into.
+
+    Empty when no tool call in the history carries concatenated JSON argument objects.
+    """
+    calls: Final = tuple(
+        itertools.chain.from_iterable(
+            _assistant_tool_calls_of(index, message) for index, message in enumerate(messages)
+        )
+    )
+    counts: Final = tuple((call.tool_id, object_count(call.arguments)) for call in calls)
+    if all(count == 1 for _, count in counts):
+        return ()
+    id_groups: Final = _split_tool_call_ids(counts, sanitize, infix)
+    own: Final = MappingProxyType(
+        {
+            index: MappingProxyType(
+                {call.tool_id: tuple(filter(None, extra_ids)) for call, (_, *extra_ids) in group if extra_ids}
+            )
+            for index, group in itertools.groupby(
+                zip(calls, id_groups, strict=True), key=lambda pair: pair[0].message_index
+            )
+        }
+    )
+
+    def turn_split_ids(
+        turn: tuple[bool, Mapping[str, tuple[str, ...]]], indexed_message: tuple[int, object]
+    ) -> tuple[bool, Mapping[str, tuple[str, ...]]]:
+        in_assistant_turn, split_ids = turn
+        index, message = indexed_message
+        if message_field(message, "role") != "assistant":
+            return False, split_ids
+        mine: Final = own.get(index, _NO_SPLIT_TOOL_USE_IDS)
+        return True, MappingProxyType({**split_ids, **mine}) if in_assistant_turn else mine
+
+    turns: Final = itertools.accumulate(enumerate(messages), turn_split_ids, initial=(False, _NO_SPLIT_TOOL_USE_IDS))
+    return tuple(split_ids for _, split_ids in itertools.islice(turns, 1, None))
+
+
+def _split_tool_use_ids_at(
+    split_tool_use_ids_by_message: Sequence[Mapping[str, tuple[str, ...]]], message_index: int
+) -> Mapping[str, tuple[str, ...]]:
+    return split_tool_use_ids_by_message[message_index] if split_tool_use_ids_by_message else _NO_SPLIT_TOOL_USE_IDS
 
 
 def _anthropic_argument_object_count(arguments: object) -> int:
@@ -2221,26 +2271,9 @@ def _anthropic_argument_object_count(arguments: object) -> int:
     return 1
 
 
-def _anthropic_split_tool_use_ids(messages: Sequence[object]) -> Mapping[str, tuple[str, ...]]:
-    """The extra ``tool_use`` ids each tool call with concatenated JSON argument objects splits into."""
-    calls: Final = tuple(
-        (tool_id, _anthropic_argument_object_count(arguments))
-        for tool_id, arguments in _assistant_tool_call_arguments(messages)
-    )
-    if all(count == 1 for _, count in calls):
-        return _NO_SPLIT_TOOL_USE_IDS
-    return MappingProxyType(
-        {
-            tool_id: tuple(sanitize_anthropic_tool_use_id(extra_id) for extra_id in extra_ids if extra_id)
-            for (tool_id, _), (_, *extra_ids) in zip(calls, _split_tool_call_ids(calls), strict=True)
-            if extra_ids
-        }
-    )
-
-
 def _anthropic_tool_inputs(
     arguments: str | None, tool_name: str, tool_id: str, split_tool_use_ids: Mapping[str, tuple[str, ...]]
-) -> tuple[tuple[str, Any], ...]:
+) -> tuple[tuple[str, dict[str, object]], ...]:  # mutable-ok: the tool_use block's input field is typed dict
     try:
         return ((tool_id, parse_tool_call_arguments(arguments, tool_name=tool_name, context="Anthropic tool invoke")),)
     except ValueError:
@@ -3165,7 +3198,9 @@ def anthropic_messages_pt(
     messages = [_sanitize_empty_text_content(m) for m in messages]
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
-    split_tool_use_ids: Final = _anthropic_split_tool_use_ids(messages)
+    split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
+        messages, _anthropic_argument_object_count, sanitize_anthropic_tool_use_id, "__concat_"
+    )
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -3301,7 +3336,9 @@ def anthropic_messages_pt(
                 user_content.extend(
                     _anthropic_tool_results_for_split_ids(
                         _tool_result,
-                        split_tool_use_ids.get(str(message_field(user_message_types_block, "tool_call_id")), ()),
+                        _split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i).get(
+                            str(message_field(user_message_types_block, "tool_call_id")), ()
+                        ),
                     )
                 )
 
@@ -3364,7 +3401,7 @@ def anthropic_messages_pt(
                     tool_results=_provider_specific_fields.get("tool_results"),
                     answered_tool_ids=client_answered_tool_ids,
                     server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
-                    split_tool_use_ids=split_tool_use_ids,
+                    split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
                 )
                 if assistant_tool_calls is not None
                 else ()
@@ -4473,44 +4510,43 @@ class BedrockImageProcessor:
         return cls._create_bedrock_block(BedrockSourceBlock(bytes=img_bytes), mime_type, image_format)
 
 
-def _bedrock_split_tool_use_ids(tool_id: str, object_count: int) -> tuple[str, ...]:
-    return tuple(
-        _sanitize_bedrock_tool_use_id(tool_id if index == 0 else f"{tool_id}_{index}") for index in range(object_count)
-    )
-
-
 def _bedrock_argument_object_count(arguments: object) -> int:
-    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import split_concatenated_json_objects
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+        MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS,
+        split_concatenated_json_objects,
+    )
 
     if not isinstance(arguments, str) or not arguments.strip():
         return 1
     try:
         json.loads(arguments)
     except json.JSONDecodeError:
-        return max(len(split_concatenated_json_objects(arguments)), 1)
+        object_count: Final = len(split_concatenated_json_objects(arguments))
+        return object_count if 1 < object_count <= MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS else 1
     return 1
 
 
-def _bedrock_split_off_tool_use_ids(messages: Sequence[object]) -> Mapping[str, tuple[str, ...]]:
-    """The extra ``toolUse`` ids each tool call with concatenated JSON argument objects splits into."""
-    return MappingProxyType(
-        {
-            ids[0]: ids[1:]
-            for tool_id, arguments in _assistant_tool_call_arguments(messages)
-            if len(ids := _bedrock_split_tool_use_ids(tool_id, _bedrock_argument_object_count(arguments))) > 1
-        }
+def _bedrock_split_tool_use_ids(
+    tool_id: str, object_count: int, split_tool_use_ids: Mapping[str, tuple[str, ...]]
+) -> tuple[str, ...]:
+    reserved: Final = split_tool_use_ids.get(tool_id, ())
+    ids: Final = (
+        (tool_id, *reserved)
+        if len(reserved) == object_count - 1
+        else (tool_id, *(f"{tool_id}_{index}" for index in range(1, object_count)))
     )
+    return tuple(_sanitize_bedrock_tool_use_id(block_id) for block_id in ids)
 
 
 def _bedrock_tool_results_for_split_ids(
-    tool_result: BedrockContentBlock, split_off_tool_use_ids: Mapping[str, tuple[str, ...]]
+    tool_result: BedrockContentBlock, split_ids: Sequence[str]
 ) -> tuple[BedrockContentBlock, ...]:
     result: Final = tool_result.get("toolResult")
     if result is None:
         return ()
     return tuple(
-        BedrockContentBlock(toolResult={**result, "toolUseId": split_id})
-        for split_id in split_off_tool_use_ids.get(result["toolUseId"], ())
+        BedrockContentBlock(toolResult={**result, "toolUseId": _sanitize_bedrock_tool_use_id(split_id)})
+        for split_id in split_ids
     )
 
 
@@ -4519,6 +4555,7 @@ def _convert_to_bedrock_tool_call_invoke(
     model: str | None = None,
     deployment_model: str | None = None,
     model_info: Mapping[str, object] | None = None,
+    split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
 ) -> list[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -4590,7 +4627,9 @@ def _convert_to_bedrock_tool_call_invoke(
                         if parsed_objects:
                             # First object keeps the original tool id.
                             for block_id, obj in zip(
-                                _bedrock_split_tool_use_ids(tool_id, len(parsed_objects)), parsed_objects, strict=True
+                                _bedrock_split_tool_use_ids(tool_id, len(parsed_objects), split_tool_use_ids),
+                                parsed_objects,
+                                strict=True,
                             ):
                                 bedrock_tool = BedrockToolUseBlock(input=obj, name=name, toolUseId=block_id)
                                 _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
@@ -5363,7 +5402,9 @@ class BedrockConverseMessagesProcessor:
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
         )
-        split_off_tool_use_ids: Final = _bedrock_split_off_tool_use_ids(messages)
+        split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
+            messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
+        )
         message_count: Final = len(messages)
 
         while msg_i < message_count:
@@ -5459,7 +5500,14 @@ class BedrockConverseMessagesProcessor:
                 current_message = messages[msg_i]
                 tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
                 tool_content.append(tool_call_result)
-                tool_content.extend(_bedrock_tool_results_for_split_ids(tool_call_result, split_off_tool_use_ids))
+                tool_content.extend(
+                    _bedrock_tool_results_for_split_ids(
+                        tool_call_result,
+                        _split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i).get(
+                            str(message_field(current_message, "tool_call_id")), ()
+                        ),
+                    )
+                )
 
                 # Check if we need to add a separate cachePoint block
                 tool_msg_cache_control = None
@@ -5586,7 +5634,11 @@ class BedrockConverseMessagesProcessor:
                 if _tool_calls:
                     assistant_content.extend(
                         _convert_to_bedrock_tool_call_invoke(
-                            _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
+                            _tool_calls,
+                            model=model,
+                            deployment_model=deployment_model,
+                            model_info=model_info,
+                            split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
                         )
                     )
 
@@ -5829,7 +5881,9 @@ def _bedrock_converse_messages_pt(
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
     )
-    split_off_tool_use_ids: Final = _bedrock_split_off_tool_use_ids(messages)
+    split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
+        messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
+    )
     message_count: Final = len(messages)
 
     while msg_i < message_count:
@@ -5925,7 +5979,14 @@ def _bedrock_converse_messages_pt(
 
             # Add the tool result first
             tool_content.append(tool_call_result)
-            tool_content.extend(_bedrock_tool_results_for_split_ids(tool_call_result, split_off_tool_use_ids))
+            tool_content.extend(
+                _bedrock_tool_results_for_split_ids(
+                    tool_call_result,
+                    _split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i).get(
+                        str(message_field(current_message, "tool_call_id")), ()
+                    ),
+                )
+            )
 
             # Check if we need to add a separate cachePoint block
             tool_msg_cache_control = None
@@ -6051,7 +6112,11 @@ def _bedrock_converse_messages_pt(
             if _tool_calls:
                 assistant_content.extend(
                     _convert_to_bedrock_tool_call_invoke(
-                        _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
+                        _tool_calls,
+                        model=model,
+                        deployment_model=deployment_model,
+                        model_info=model_info,
+                        split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
                     )
                 )
 
@@ -6658,22 +6723,26 @@ def _optional_tool_name(value: object) -> str | None:
     return None
 
 
-def _split_tool_call_ids(calls: Sequence[tuple[str | None, int]]) -> tuple[tuple[str | None, ...], ...]:
-    taken: Final = frozenset(sanitize_anthropic_tool_use_id(call_id) for call_id, _ in calls if call_id)
+def _split_tool_call_ids(
+    calls: Sequence[tuple[str | None, int]],
+    sanitize: Callable[[str], str] = sanitize_anthropic_tool_use_id,
+    infix: str = "__concat_",
+) -> tuple[tuple[str | None, ...], ...]:
+    taken: Final = frozenset(sanitize(call_id) for call_id, _ in calls if call_id)
 
     def fresh(call_id: str) -> Iterator[str]:
         return filter(
-            lambda candidate: sanitize_anthropic_tool_use_id(candidate) not in taken,
-            (f"{call_id}__concat_{n}" for n in itertools.count(1)),
+            lambda candidate: sanitize(candidate) not in taken,
+            (f"{call_id}{infix}{n}" for n in itertools.count(1)),
         )
 
     suffixes: Final = MappingProxyType(
-        {sanitize_anthropic_tool_use_id(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
+        {sanitize(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
     )
     return tuple(
         (
             call_id,
-            *(next(suffixes[sanitize_anthropic_tool_use_id(call_id)]) for _ in range(count - 1)),
+            *(next(suffixes[sanitize(call_id)]) for _ in range(count - 1)),
         )
         if call_id
         else (None,) * count
