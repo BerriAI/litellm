@@ -140,3 +140,32 @@ async def test_openai_compatible_transcription_without_its_own_cost_row_is_bille
     assert response._hidden_params["response_cost"] == pytest.approx(
         2 * litellm.model_cost["whisper-1"]["input_cost_per_second"]
     )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "declared_rates",
+    ({"input_cost_per_second": 0.0}, {"input_cost_per_token": 0.0, "input_cost_per_second": 0.0003}),
+)
+def test_openai_compatible_transcription_row_with_a_zero_rate_is_billed_from_that_row(
+    monkeypatch: pytest.MonkeyPatch, declared_rates: dict[str, float]
+):
+    import respx
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.register_model(
+        {"hosted_vllm/whisper-1": {"litellm_provider": "hosted_vllm", "mode": "audio_transcription", **declared_rates}}
+    )
+
+    with respx.mock() as upstream:
+        upstream.route().respond(200, json={"text": "four score"})
+        response = litellm.transcription(
+            model="hosted_vllm/whisper-1",
+            api_key="sk-gateway-test",
+            api_base="https://gateway.example/v1",
+            file=("clip.wav", _silent_wav(seconds=2)),
+        )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(2 * declared_rates["input_cost_per_second"])

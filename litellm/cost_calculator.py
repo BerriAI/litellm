@@ -332,7 +332,10 @@ def _transcription_pricing_provider(model: str, custom_llm_provider: str | None)
     if custom_llm_provider not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS:
         return custom_llm_provider
     provider_info: Final = _cost_map_model_info(model, custom_llm_provider)
-    if _declared_transcription_rate(provider_info, _TRANSCRIPTION_TOKEN_RATE_KEYS + _TRANSCRIPTION_SECOND_RATE_KEYS):
+    if (
+        _declared_transcription_rate(provider_info, _TRANSCRIPTION_TOKEN_RATE_KEYS + _TRANSCRIPTION_SECOND_RATE_KEYS)
+        is not None
+    ):
         return custom_llm_provider
     return "openai"
 
