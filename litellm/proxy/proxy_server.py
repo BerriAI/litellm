@@ -11331,8 +11331,10 @@ async def async_data_generator(
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
-            # A relayed chunk is no proof of billing: a Responses stream left before output text bills nothing.
+            # A Responses stream bills itself from its terminal event in a task that may not have started yet.
+            # Before that event it may have relayed only lifecycle or reasoning events, which nothing bills.
             release_reservation_if_unbilled=client_disconnected
+            and not (error_state is not None and error_state.terminal_emitted)
             and not withheld_provider_output(_UNTYPED_VALUE.validate_python(response)),
         )
 

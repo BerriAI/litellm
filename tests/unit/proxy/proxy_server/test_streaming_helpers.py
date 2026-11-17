@@ -1261,37 +1261,17 @@ class _StallingSSEStream(httpx.AsyncByteStream):
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for event in self._events:
-            yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+            yield f"event: {event['type']}\ndata: {json.dumps(dict(event))}\n\n".encode()
         self._stalled.set()
         await asyncio.Event().wait()
 
 
-@pytest.mark.asyncio
-async def test_async_data_generator_releases_the_reservation_of_a_responses_stream_left_before_any_output_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
-
-    _patch_logging_flags(monkeypatch)
-    recorder: Final = _PartialBillingRecorder()
-    logging_obj: Final = Logging(
-        model="gpt-4o-mini",
-        messages=[],
-        stream=True,
-        call_type="aresponses",
-        start_time=datetime.now(),
-        litellm_call_id="reasoning-disconnect",
-        function_id="reasoning-disconnect",
-        dynamic_async_success_callbacks=[recorder],
-    )
-    stalled: Final = asyncio.Event()
-    created: Final = {
+_RESPONSE_CREATED: Final = MappingProxyType(
+    {
         "type": "response.created",
         "sequence_number": 0,
         "response": {
-            "id": "resp_reasoning",
+            "id": "resp_disconnect",
             "object": "response",
             "created_at": 1700000000.0,
             "model": "gpt-4o-mini",
@@ -1302,19 +1282,68 @@ async def test_async_data_generator_releases_the_reservation_of_a_responses_stre
             "tools": [],
         },
     }
+)
+
+
+class _HoldStateAtBilling(CustomLogger):
+    """Records whether the request's budget hold was still open when the stream's own success event billed it."""
+
+    def __init__(self, auth: UserAPIKeyAuth) -> None:
+        super().__init__()
+        self._auth: Final = auth
+        self.hold_finalized_at_billing: Final[list[bool]] = []  # mutable-ok: one entry per success event dispatched
+        self.billed: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        reservation: Final = self._auth.budget_reservation or {}
+        self.hold_finalized_at_billing.append(reservation.get("finalized") is True)
+        self.billed.set()
+
+
+def _responses_stream_that_stalls_after(
+    events: Iterable[Mapping[str, object]], stalled: asyncio.Event, callback: CustomLogger
+) -> tuple[object, object]:
+    """A native Responses stream relaying ``events`` and then stalling, with the logging object it bills through."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime(2026, 11, 17, 12, 0, 0),
+        litellm_call_id="responses-disconnect",
+        function_id="responses-disconnect",
+        dynamic_async_success_callbacks=[callback],
+    )
+    stream: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200, stream=_StallingSSEStream(events, stalled)),
+        model="gpt-4o-mini",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-4o-mini", "input": "think hard"},
+        custom_llm_provider="openai",
+    )
+    return stream, logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_releases_the_reservation_of_a_responses_stream_left_before_any_output_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    recorder: Final = _PartialBillingRecorder()
+    stalled: Final = asyncio.Event()
     reasoning_item_added: Final = {
         "type": "response.output_item.added",
         "sequence_number": 1,
         "output_index": 0,
         "item": {"type": "reasoning", "id": "rs_1", "summary": []},
     }
-    stream: Final = ResponsesAPIStreamingIterator(
-        response=httpx.Response(200, stream=_StallingSSEStream((created, reasoning_item_added), stalled)),
-        model="gpt-4o-mini",
-        responses_api_provider_config=OpenAIResponsesAPIConfig(),
-        logging_obj=logging_obj,
-        request_data={"model": "gpt-4o-mini", "input": "think hard"},
-        custom_llm_provider="openai",
+    stream, logging_obj = _responses_stream_that_stalls_after(
+        (_RESPONSE_CREATED, reasoning_item_added), stalled, recorder
     )
     auth: Final = UserAPIKeyAuth(
         api_key="sk-test-key", budget_reservation={"reserved_cost": 0.25, "input_cost": 0.0008, "entries": []}
@@ -1332,12 +1361,60 @@ async def test_async_data_generator_releases_the_reservation_of_a_responses_stre
     with pytest.raises(asyncio.CancelledError):
         await next_frame
 
-    # The client got the lifecycle events but no output text, so disconnect billing has nothing to bill
-    # and no cost callback will ever settle the hold.
     assert "response.created" in _sse_text(relayed[0])
-    assert recorder.billed_texts == []
+    assert recorder.billed_texts == [], "nothing but lifecycle events was relayed, so there is no output to bill"
     assert auth.budget_reservation is not None
-    assert auth.budget_reservation.get("finalized") is True
+    assert auth.budget_reservation.get("finalized") is True, "no cost callback will ever settle this hold"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_leaves_a_completed_responses_stream_hold_to_its_own_success_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    stalled: Final = asyncio.Event()
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.25, "input_cost": 0.0008, "entries": []}
+    )
+    recorder: Final = _HoldStateAtBilling(auth)
+    completed_response: Final = {
+        **_RESPONSE_CREATED["response"],
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hi", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 300, "output_tokens": 1, "total_tokens": 301},
+    }
+    events: Final = (
+        _RESPONSE_CREATED,
+        {"type": "response.output_text.delta", "sequence_number": 1, "item_id": "msg_1", "output_index": 0,
+         "content_index": 0, "delta": "Hi"},
+        {"type": "response.completed", "sequence_number": 2, "response": completed_response},
+    )
+    stream, logging_obj = _responses_stream_that_stalls_after(events, stalled, recorder)
+    generator: Final = async_data_generator(
+        response=stream,
+        user_api_key_dict=auth,
+        request_data={"model": "gpt-4o-mini", "litellm_logging_obj": logging_obj},
+        responses_stream_errors=True,
+    )
+    relayed: Final = [await generator.__anext__() for _ in range(3)]
+    await generator.aclose()
+    await asyncio.wait_for(recorder.billed.wait(), timeout=5)
+
+    assert "response.completed" in _sse_text(relayed[-1])
+    assert recorder.hold_finalized_at_billing == [False]
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is not True, (
+        "the stream reached its terminal event, so its own success event settles the hold at the real cost, "
+        "not the disconnect cleanup at the input cost"
+    )
 
 
 @pytest.mark.asyncio
