@@ -5903,6 +5903,18 @@
               }
             },
             {
+              "description": "Fill key_metadata and user_metadata for admin callers. Off leaves them '{}'.",
+              "in": "query",
+              "name": "include_metadata",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Fill key_metadata and user_metadata for admin callers. Off leaves them '{}'.",
+                "title": "Include Metadata",
+                "type": "boolean"
+              }
+            },
+            {
               "in": "query",
               "name": "agent_ids",
               "required": false,
