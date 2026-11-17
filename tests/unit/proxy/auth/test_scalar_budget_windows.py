@@ -16,6 +16,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from tests.unit.proxy.rust_auth_stores import GroupBudget, RustAuthStores, install_rust_auth_stores
 
 
 class BudgetRow(BaseModel):
@@ -24,21 +25,27 @@ class BudgetRow(BaseModel):
     max_budget: float | None = 0
     budget_limits: BudgetLimits | None = None
 
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reader", ("end_user", "team_member", "model_access_group"))
 @pytest.mark.parametrize("has_windows", (False, True))
 async def test_scalar_readers_reject_windows_instead_of_returning_no_budget(
-    reader: Literal["end_user", "team_member", "model_access_group"], has_windows: bool
+    reader: Literal["end_user", "team_member", "model_access_group"],
+    has_windows: bool,
+    rust_auth_stores: RustAuthStores,
 ) -> None:
     row: Final = BudgetRow.model_validate({
         "max_budget": 0,
         "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}] if has_windows else None,
     })
-    db: Final = SimpleNamespace(
-        litellm_budgettable=SimpleNamespace(find_unique=AsyncMock(return_value=row)),
-        litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=AsyncMock(return_value=[
-            SimpleNamespace(access_group_name="group", spend=0, litellm_budget_table=row),
-        ])),
+    db: Final = SimpleNamespace(litellm_budgettable=SimpleNamespace(find_unique=AsyncMock(return_value=row)))
+    rust_auth_stores.model_access_group.groups["group"] = GroupBudget(
+        spend=0, max_budget=row.max_budget, has_budget_windows=row.budget_limits is not None
     )
     client: Final = require_attributes(SimpleNamespace(db=db), PrismaClient, "db")
     cache: Final = UserApiKeyCache()
