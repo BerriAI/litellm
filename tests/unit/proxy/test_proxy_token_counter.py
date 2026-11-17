@@ -3366,3 +3366,55 @@ def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_wo
 
     assert response.status_code == 200, response.text
     assert response.json()[count_field] == 41
+
+
+@pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
+def test_count_routes_send_no_user_profile_id_for_a_model_that_is_not_claude(
+    path: str, body: Mapping[str, JsonValue], count_field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get_list("anthropic-user-profile-id")
+        if not received:
+            return httpx.Response(200, json={"input_tokens": 41}, request=request)
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+            request=request,
+        )
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(count_api))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "provider-counted",
+                    "litellm_params": {
+                        "model": "anthropic/kimi-k3",
+                        "api_key": "test-key",
+                        "api_base": "https://count-tokens.test",
+                        "extra_headers": {"anthropic-user-profile-id": "uprof_deployment"},
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-test", metadata={"anthropic_user_profile_id": "uprof_pinned"}),
+    )
+    with patch.object(anthropic_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        response: Final = TestClient(app, raise_server_exceptions=False).post(
+            path, json=dict(body), headers={"anthropic-user-profile-id": "uprof_client"}
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()[count_field] == 41

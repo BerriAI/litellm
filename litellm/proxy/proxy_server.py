@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
 )
+from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -14228,10 +14229,15 @@ def _with_user_profile_id(
     from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
+    counts_claude: Final = names_a_claude_model(str(deployment_litellm_params.get("model") or ""))
     user_profile_id: Final = (
-        pinned_user_profile_id
-        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
-        or client_user_profile_id
+        (
+            pinned_user_profile_id
+            or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+            or client_user_profile_id
+        )
+        if counts_claude
+        else None
     )
     match counter:
         case AnthropicTokenCounter() if user_profile_id:

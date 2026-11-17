@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.passthrough.utils import CommonUtils, claude_scoped_pass_through_headers
+from litellm.passthrough.utils import CommonUtils, with_pinned_pass_through_profile_id
 from litellm.utils import client
 
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -438,6 +438,7 @@ def llm_passthrough_route(
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
     guardrailConfig: object = None,
+    anthropic_user_profile_id_pin: str | None = None,
     **kwargs,
 ) -> (
     httpx.Response
@@ -540,7 +541,11 @@ def llm_passthrough_route(
     )
 
     headers = BasePassthroughUtils.forward_headers_from_request(
-        request_headers=dict(claude_scoped_pass_through_headers(request_headers or {}, model)),
+        request_headers=dict(
+            with_pinned_pass_through_profile_id(
+                request_headers or {}, custom_llm_provider, model, anthropic_user_profile_id_pin
+            )
+        ),
         headers=auth_headers,
         forward_headers=False,
     )

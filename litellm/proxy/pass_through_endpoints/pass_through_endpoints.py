@@ -60,7 +60,11 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
-from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model, override_headers
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
+    names_a_claude_model,
+    override_headers,
+)
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1129,11 +1133,15 @@ def _upstream_request_filter_or_pin(
     user_api_key_dict: UserAPIKeyAuth,
     request_headers: Mapping[str, str],
     route_headers: Mapping[str, object],
+    custom_llm_provider: str | None,
 ) -> UpstreamRequestFilter:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
 
     if upstream_request_filter is not None:
         return upstream_request_filter
+    vendor_route: Final = (
+        custom_llm_provider is not None and custom_llm_provider not in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
+    )
     route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
     caller_credentials: Final[Mapping[str, str]] = (
         {}
@@ -1147,7 +1155,7 @@ def _upstream_request_filter_or_pin(
     )
     return partial(
         _with_pinned_profile_id_for_claude_or_where_sent,
-        pinned_anthropic_user_profile_id(user_api_key_dict),
+        None if vendor_route else pinned_anthropic_user_profile_id(user_api_key_dict),
         caller_credentials,
     )
 
@@ -1541,7 +1549,7 @@ async def pass_through_request(
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         outbound_headers, upstream_body = _filtered_upstream_request(
             _upstream_request_filter_or_pin(
-                upstream_request_filter, user_api_key_dict, request.headers, custom_headers
+                upstream_request_filter, user_api_key_dict, request.headers, custom_headers, custom_llm_provider
             ),
             upstream_headers,
             outgoing_body,

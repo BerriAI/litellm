@@ -44,7 +44,6 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
-    PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -112,7 +111,7 @@ from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.litellm_pre_call_utils import anthropic_user_profile_id
+from litellm.proxy.litellm_pre_call_utils import anthropic_user_profile_id, pinned_anthropic_user_profile_id
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
@@ -562,6 +561,7 @@ async def vllm_proxy_route(
                 headers=None,
                 cookies=None,
                 litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+                anthropic_user_profile_id_pin=pinned_anthropic_user_profile_id(user_api_key_dict),
             ),
         )
 
@@ -2225,7 +2225,7 @@ async def _relay_router_model(
             method=request.method,
             endpoint=endpoint,
             request_query_params=request.query_params,
-            request_headers=dict(_relay_request_headers(request, user_api_key_dict)),
+            request_headers=safe_get_request_headers(request),
             stream=is_streaming_request,
             content=None,
             data=None,
@@ -2235,6 +2235,7 @@ async def _relay_router_model(
             headers=None,
             cookies=None,
             litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+            anthropic_user_profile_id_pin=pinned_anthropic_user_profile_id(user_api_key_dict),
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)
@@ -2914,21 +2915,6 @@ def _vertex_upstream_request(
 
 def _targets_vertex_claude(path: str) -> bool:
     return _vertex_publisher(tuple(path.strip("/").split("/"))) == "anthropic"
-
-
-def _relay_request_headers(request: Request, user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
-    from litellm.proxy.litellm_pre_call_utils import pinned_anthropic_user_profile_id
-
-    pinned: Final = pinned_anthropic_user_profile_id(user_api_key_dict)
-    if pinned is None:
-        return request.headers
-    pass_through_profile_header: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USER_PROFILE_ID_HEADER
-    return MappingProxyType(
-        {
-            **{name: value for name, value in dict(request.headers).items() if name != pass_through_profile_header},
-            pass_through_profile_header: pinned,
-        }
-    )
 
 
 def _upstream_headers_for_bedrock_agent_runtime_route(

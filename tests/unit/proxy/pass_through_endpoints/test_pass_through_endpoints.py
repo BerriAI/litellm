@@ -6495,17 +6495,37 @@ async def test_pass_through_request_without_caller_trace_headers_still_propagate
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("route_headers", "inbound_headers", "model", "sent_profile_id"),
+    ("route_headers", "inbound_headers", "model", "custom_llm_provider", "sent_profile_id"),
     [
-        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", ["uprof_key"], id="claude-body-gets-the-pin"),
-        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "Claude-Opus-5-5", ["uprof_key"], id="claude-in-any-case"),
-        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "gpt-5.5", [], id="other-model-gets-nothing"),
+        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", None, ["uprof_key"], id="claude-body-gets-the-pin"),
+        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "Claude-Opus-5-5", None, ["uprof_key"], id="claude-in-any-case"),
+        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "gpt-5.5", None, [], id="other-model-gets-nothing"),
         pytest.param(
             {},
             {"x-api-key": "caller-anthropic-key"},
             "claude-haiku-5-5",
+            None,
             [],
             id="caller-credential-gets-no-pin",
+        ),
+        pytest.param(
+            _SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", "azure_ai", ["uprof_key"], id="foundry-route-gets-the-pin"
+        ),
+        pytest.param(
+            {"Authorization": "Bearer server-openrouter-key"},
+            {},
+            "anthropic/claude-haiku-5-5",
+            "openrouter",
+            [],
+            id="vendor-route-gets-no-pin",
+        ),
+        pytest.param(
+            {"Authorization": "Bearer server-openrouter-key"},
+            {"anthropic-user-profile-id": "uprof_caller"},
+            "anthropic/claude-haiku-5-5",
+            "openrouter",
+            ["uprof_caller"],
+            id="vendor-route-keeps-the-callers-id",
         ),
     ],
 )
@@ -6514,6 +6534,7 @@ async def test_pass_through_request_adds_the_pin_to_a_claude_request_without_a_p
     route_headers: dict[str, str],
     inbound_headers: dict[str, str],
     model: str,
+    custom_llm_provider: str | None,
     sent_profile_id: list[str],
 ) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
@@ -6535,6 +6556,7 @@ async def test_pass_through_request_adds_the_pin_to_a_claude_request_without_a_p
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=_PINNED_KEY_METADATA),
                 forward_headers=True,
                 custom_body=body,
+                custom_llm_provider=custom_llm_provider,
             )
     finally:
         cleanup()

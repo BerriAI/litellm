@@ -1,5 +1,4 @@
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs
 
@@ -8,7 +7,10 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
 from litellm.litellm_core_utils.aws_partition import contains_aws_arn
-from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
+    names_a_claude_model,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 
 # Headers that must not be overwritten via the x-pass- forwarding mechanism.
@@ -34,12 +36,19 @@ _PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
 _PASS_THROUGH_PROFILE_HEADER: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USER_PROFILE_ID_HEADER
 
 
-def claude_scoped_pass_through_headers(request_headers: Mapping[str, str], model: str) -> Mapping[str, str]:
-    if names_a_claude_model(model):
+def with_pinned_pass_through_profile_id(
+    request_headers: Mapping[str, str], custom_llm_provider: str, model: str, pinned_profile_id: str | None
+) -> Mapping[str, str]:
+    if (
+        pinned_profile_id is None
+        or custom_llm_provider not in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
+        or not names_a_claude_model(model)
+    ):
         return request_headers
-    return MappingProxyType(
-        {name: value for name, value in request_headers.items() if name.lower() != _PASS_THROUGH_PROFILE_HEADER}
-    )
+    return {
+        **{name: value for name, value in request_headers.items() if name.lower() != _PASS_THROUGH_PROFILE_HEADER},
+        _PASS_THROUGH_PROFILE_HEADER: pinned_profile_id,
+    }
 
 
 class BasePassthroughUtils:
