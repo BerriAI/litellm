@@ -216,10 +216,6 @@ impl SecretResolver {
 
 pub fn normalize_nonempty_secret_str(value: Option<&str>) -> Option<&str> {
     value
-        .map(|value| {
-            value.trim_matches(|character: char| {
-                character.is_whitespace() || matches!(character, '\u{1c}'..='\u{1f}')
-            })
-        })
+        .map(|value| value.trim_matches(litellm_python_compat::unicode::isspace))
         .filter(|value| !value.is_empty())
 }
