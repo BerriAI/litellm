@@ -194,6 +194,8 @@ def test_enabled_wires_guard_with_env_config(monkeypatch):
     monkeypatch.setitem(sys.modules, "guard", stub_module)
     _StubSecurityMiddleware.instances.clear()
     monkeypatch.delenv("LITELLM_GUARD_REDIS_URL", raising=False)
+    monkeypatch.delenv("LITELLM_GUARD_TRUSTED_PROXIES", raising=False)
+    monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
     monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
     monkeypatch.setenv("LITELLM_GUARD_RATE_LIMIT", "33")
     client: Final = _client(_unique_ip())
@@ -202,7 +204,7 @@ def test_enabled_wires_guard_with_env_config(monkeypatch):
     assert isinstance(wired.config, _StubSecurityConfig)
     assert wired.config.kwargs["rate_limit"] == 33
     assert wired.config.kwargs["enable_redis"] is False
-    assert wired.config.kwargs["trusted_proxies"] == ()
+    assert wired.config.kwargs["trusted_proxies"] == ("127.0.0.1",)
     assert wired.config.kwargs["exclude_paths"] == []
 
 
@@ -957,3 +959,74 @@ def test_prompt_text_never_reaches_guard_logs(monkeypatch, caplog):
     assert response.status_code == 400
     assert any("Potential attack detected" in record.getMessage() for record in caplog.records)
     assert not [record for record in caplog.records if marker in record.getMessage()]
+
+
+def _identity_through_guard(peer, forwarded_for=_REAL_CLIENT, forwarded_proto="https"):
+    from starlette.responses import JSONResponse
+
+    seen: Final = []
+
+    async def downstream(scope, receive, send):
+        seen.append((scope["client"][0], scope["scheme"]))
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    headers: Final = {"x-forwarded-for": forwarded_for, "x-forwarded-proto": forwarded_proto}
+    response: Final = TestClient(_ClientIPInjector(GuardMiddleware(downstream), peer)).get("/ping", headers=headers)
+    assert response.status_code == 200
+    return seen[0]
+
+
+def _guard_trusted_proxies():
+    from litellm.proxy.middleware.guard_middleware import _build_guard_config
+
+    return _build_guard_config().trusted_proxies
+
+
+@pytest.fixture
+def guard_on_without_trust_variables(monkeypatch):
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.delenv("LITELLM_GUARD_TRUSTED_PROXIES", raising=False)
+    monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+    return monkeypatch
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_loopback_proxy_is_trusted_when_no_trust_variable_is_set(guard_on_without_trust_variables):
+    assert _identity_through_guard("127.0.0.1") == (_REAL_CLIENT, "https")
+    assert "127.0.0.1" in _guard_trusted_proxies()
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_forwarded_allow_ips_is_the_trust_when_the_guard_list_is_not_set(guard_on_without_trust_variables):
+    guard_on_without_trust_variables.setenv("FORWARDED_ALLOW_IPS", "10.0.0.0/8")
+    assert _identity_through_guard("10.1.1.1") == (_REAL_CLIENT, "https")
+    assert _identity_through_guard("127.0.0.1") == ("127.0.0.1", "http")
+    assert tuple(_guard_trusted_proxies()) == ("10.0.0.0/8",)
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_forwarded_allow_ips_star_trusts_every_peer(guard_on_without_trust_variables):
+    guard_on_without_trust_variables.setenv("FORWARDED_ALLOW_IPS", "*")
+    assert _identity_through_guard("203.0.113.7") == (_REAL_CLIENT, "https")
+    assert _identity_through_guard("2001:db8::1") == (_REAL_CLIENT, "https")
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_empty_guard_list_trusts_nobody_even_with_forwarded_allow_ips(guard_on_without_trust_variables):
+    guard_on_without_trust_variables.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "")
+    guard_on_without_trust_variables.setenv("FORWARDED_ALLOW_IPS", "127.0.0.1")
+    assert _identity_through_guard("127.0.0.1") == ("127.0.0.1", "http")
+    assert not _guard_trusted_proxies()
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_guard_list_wins_over_forwarded_allow_ips(guard_on_without_trust_variables):
+    guard_on_without_trust_variables.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "203.0.113.0/24")
+    guard_on_without_trust_variables.setenv("FORWARDED_ALLOW_IPS", "10.0.0.0/8")
+    assert _identity_through_guard("203.0.113.7") == (_REAL_CLIENT, "https")
+    assert _identity_through_guard("10.1.1.1") == ("10.1.1.1", "http")
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_untrusted_peer_headers_change_nothing_with_default_trust(guard_on_without_trust_variables):
+    assert _identity_through_guard("203.0.113.7") == ("203.0.113.7", "http")

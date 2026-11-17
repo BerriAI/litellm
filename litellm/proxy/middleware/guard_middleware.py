@@ -25,12 +25,15 @@ Design constraints honored here:
   unscreened passthrough. (Fork PRs may not modify dependency files per
   the guard-fork-dependencies CI policy, so the dependency addition is
   left to the maintainers.)
-- Zero-trust client identity by default: ``X-Forwarded-For`` is honored
-  only from proxies explicitly listed in ``LITELLM_GUARD_TRUSTED_PROXIES``
-  (guard ignores forwarded headers from unlisted peers), so a caller
-  cannot spoof its way past allowlists, limits, or bans by setting the
-  header. Deployments behind a load balancer must list their ingress
-  addresses there. The proxy's uvicorn and gunicorn start paths turn off
+- Client identity follows the trust uvicorn applied before this wrapper turned
+  its proxy headers off: ``X-Forwarded-For`` is honored only from the peers in
+  ``LITELLM_GUARD_TRUSTED_PROXIES`` when that variable is set (an empty value
+  trusts nobody), and otherwise from the peers in ``FORWARDED_ALLOW_IPS``, or
+  ``127.0.0.1`` when that is unset too (``*`` trusts every address). A caller
+  cannot spoof its way past allowlists, limits, or bans by setting the header
+  from an unlisted peer, and a loopback reverse proxy keeps working by default.
+  Deployments behind a load balancer must list their ingress addresses. The
+  proxy's uvicorn and gunicorn start paths turn off
   uvicorn's own ``proxy_headers`` client rewriting when ``LITELLM_GUARD_ENABLED``
   is in the process environment at startup (``server_proxy_header_overrides``),
   so the server cannot pre-empt that policy. Not covered, set it yourself:
@@ -45,7 +48,7 @@ Design constraints honored here:
   whose ``client`` is the client resolved above and whose ``scheme`` follows
   ``X-Forwarded-Proto`` (``http``, ``https``, ``ws`` or ``wss``, the way
   uvicorn's ``ProxyHeadersMiddleware`` reads it), but only when the socket peer
-  is listed in ``LITELLM_GUARD_TRUSTED_PROXIES``. Otherwise the scope is
+  is a trusted proxy by the rule above. Otherwise the scope is
   untouched. Without this, turning off uvicorn's ``proxy_headers`` would leave
   the proxy's IP-based authorization (``IPAddressUtils.get_mcp_client_ip``)
   seeing the ingress address and its HTTPS checks (``is_request_https``,
@@ -58,7 +61,7 @@ Design constraints honored here:
 - WebSocket scopes are not screened by guard's HTTP pipeline. The wrapper
   enforces ``LITELLM_GUARD_BLOCKED_IPS`` and ``LITELLM_GUARD_ALLOWED_IPS``
   (IPs or CIDRs) on the handshake, resolving the client the way guard does
-  (socket peer; ``X-Forwarded-For`` only from ``LITELLM_GUARD_TRUSTED_PROXIES``,
+  (socket peer; ``X-Forwarded-For`` only from the trusted proxies above,
   at ``LITELLM_GUARD_TRUSTED_PROXY_DEPTH``) and closing with 1008 before
   accept on a miss. The lists follow guard's rules (the allowlist alone when
   set, IPv4-mapped entries read as IPv4), and an invalid entry or a depth
@@ -84,6 +87,7 @@ import importlib
 import os
 from collections.abc import Callable, Mapping, Sequence
 from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address, ip_network
+from itertools import chain
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter
@@ -96,6 +100,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 
 GUARD_ENABLED_ENV: Final = "LITELLM_GUARD_ENABLED"
+TRUSTED_PROXIES_ENV: Final = "LITELLM_GUARD_TRUSTED_PROXIES"
 GUARD_EXCLUDED_PATHS_ENV: Final = "LITELLM_GUARD_EXCLUDED_PATHS"
 # Only the unauthenticated k8s probes (health_endpoints/_health_endpoints.py).
 # /health runs live deployment calls behind auth and /metrics can be public,
@@ -181,11 +186,10 @@ def _networks(entries: Sequence[str]) -> tuple[IPNetwork, ...]:
     return tuple(network for network in map(_parse_network, entries) if network is not None)
 
 
-def _validated_entries(variable: str, *, allow_unix: bool = False) -> tuple[str, ...]:
+def _validate_entries(variable: str, entries: Sequence[str], *, allow_unix: bool = False) -> tuple[str, ...]:
     """guard-core's ``_validate_ip_or_cidr_list``: an entry with a "/" is a
     network, any other an address, and anything else is refused (``unix``
     stays valid for the trusted proxies)."""
-    entries: Final = _csv(_env_str(variable))
     for entry in entries:
         if allow_unix and entry == "unix":
             continue
@@ -193,7 +197,28 @@ def _validated_entries(variable: str, *, allow_unix: bool = False) -> tuple[str,
             ip_network(entry, strict=False) if "/" in entry else ip_address(entry)
         except ValueError:
             raise ValueError(f"{variable}: invalid IP or CIDR entry {entry!r}") from None
-    return entries
+    return tuple(entries)
+
+
+def _validated_entries(variable: str) -> tuple[str, ...]:
+    return _validate_entries(variable, _csv(_env_str(variable)))
+
+
+_UVICORN_DEFAULT_TRUSTED: Final = "127.0.0.1"
+_EVERY_ADDRESS: Final = ("0.0.0.0/0", "::/0")
+
+
+def _trusted_proxy_entries() -> tuple[str, ...]:
+    """The trusted proxies: ``LITELLM_GUARD_TRUSTED_PROXIES`` when it is set,
+    even to an empty string (trust nobody); when it is not set, the trust
+    uvicorn would have used, ``FORWARDED_ALLOW_IPS`` or else ``127.0.0.1``,
+    with ``*`` meaning every address."""
+    explicit: Final = os.getenv(TRUSTED_PROXIES_ENV)
+    if explicit is not None:
+        return _validate_entries(TRUSTED_PROXIES_ENV, _csv(explicit), allow_unix=True)
+    inherited: Final = _csv(os.getenv("FORWARDED_ALLOW_IPS", _UVICORN_DEFAULT_TRUSTED))
+    expanded: Final = tuple(chain.from_iterable(_EVERY_ADDRESS if entry == "*" else (entry,) for entry in inherited))
+    return _validate_entries("FORWARDED_ALLOW_IPS", expanded, allow_unix=True)
 
 
 def _listed(client: IPAddress, entries: Sequence[str]) -> bool:
@@ -266,7 +291,7 @@ def _ip_lists_permit(scope: Scope) -> bool:
     inspection do not apply to either."""
     blocked: Final = _validated_entries("LITELLM_GUARD_BLOCKED_IPS")
     allowed: Final = _validated_entries("LITELLM_GUARD_ALLOWED_IPS")
-    trusted: Final = _validated_entries("LITELLM_GUARD_TRUSTED_PROXIES", allow_unix=True)
+    trusted: Final = _trusted_proxy_entries()
     depth: Final = _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1)
     if depth < 1:
         raise ValueError("trusted_proxy_depth must be at least 1")
@@ -304,7 +329,7 @@ def _forwarded_scheme(scope: Scope) -> str | None:
 def _scope_with_guard_resolved_identity(scope: Scope) -> Scope:
     """A copy of the scope carrying the client and scheme guard resolved, when
     the socket peer is a trusted proxy; the scope itself otherwise."""
-    trusted: Final = _networks(_validated_entries("LITELLM_GUARD_TRUSTED_PROXIES", allow_unix=True))
+    trusted: Final = _networks(_trusted_proxy_entries())
     peer_text: Final = _peer_and_forwarded_for(scope)[0]
     peer: Final = _parse_ip(peer_text) if peer_text is not None else None
     if peer is None or not _in_any(peer, trusted):
@@ -428,10 +453,10 @@ def _build_guard_config() -> object:
         "blocked_countries": frozenset(_csv(_env_str("LITELLM_GUARD_BLOCKED_COUNTRIES"))),
         "whitelist_countries": frozenset(_csv(_env_str("LITELLM_GUARD_ALLOWED_COUNTRIES"))),
         "block_cloud_providers": frozenset(_csv(_env_str("LITELLM_GUARD_BLOCK_CLOUD_PROVIDERS"))) or None,
-        # Zero-trust default: no proxies are trusted, so forwarded headers
-        # are ignored and the connecting peer is the client. List real
-        # ingress addresses to enable X-Forwarded-For resolution.
-        "trusted_proxies": _csv(_env_str("LITELLM_GUARD_TRUSTED_PROXIES")),
+        # Unset list: trust what uvicorn trusted before the server's proxy
+        # headers went off (FORWARDED_ALLOW_IPS, else loopback). Set it to
+        # an empty value to trust no proxy and ignore forwarded headers.
+        "trusted_proxies": _trusted_proxy_entries(),
         "trusted_proxy_depth": _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1),
         # Operator entries only, with guard's subtree matching.
         "exclude_paths": list(_csv(_env_str(GUARD_EXCLUDED_PATHS_ENV))),
