@@ -2992,10 +2992,17 @@ _WEATHER_SYSTEM: Final = "You are a helpful assistant that answers weather quest
 _AZURE_GROK_4_1: Final = "azure_ai/grok-4-1-fast-reasoning"
 _FIREWORKS_DEEPSEEK_V4_1: Final = "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"
 _XAI_GROK_4_3: Final = "xai/grok-4.3"
+_AZURE_GROK_4_1_NON_REASONING: Final = "azure_ai/grok-4-1-fast-non-reasoning"
+_AZURE_GROK_4_3: Final = "azure_ai/grok-4.3"
+_VERTEX_GROK_4_3: Final = "vertex_ai/xai/grok-4.3"
+_MANTLE_GROK_4_3: Final = "bedrock_mantle/xai.grok-4.3"
+_PERPLEXITY_GROK_4_3: Final = "perplexity/xai/grok-4.3"
 _NATIVE_RESPONSES_BASE: Final = {
     _AZURE_GROK_4_1: "https://unused.services.ai.azure.com/models",
+    _AZURE_GROK_4_1_NON_REASONING: "https://unused.services.ai.azure.com/models",
     _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
     _XAI_GROK_4_3: "https://unused.invalid",
+    _PERPLEXITY_GROK_4_3: "https://unused.invalid",
 }
 
 
@@ -3015,8 +3022,9 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
 
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
-# xAI grok-4.3 on 2026-10-29, and usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
-# 2026-10-30
+# xAI grok-4.3 on 2026-10-29, usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
+# 2026-10-30, and usage.input_tokens that POST /v1/messages billed through xAI grok-4.3-latest, Kyma grok-4.3, Azure AI
+# Foundry grok-4-1-fast-non-reasoning and grok-4.3, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3 on 2026-11-17
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3044,6 +3052,31 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
         ("deepseek/deepseek-v4-pro", None, (_GET_WEATHER,), 367),
         ("deepseek/deepseek-v4-pro", None, _THREE_TOOLS, 493),
         ("deepseek/deepseek-v4-pro", _WEATHER_SYSTEM, (_GET_WEATHER,), 378),
+        ("xai/grok-4.3-latest", None, (), 199),
+        ("xai/grok-4.3-latest", None, (_GET_WEATHER,), 283),
+        ("xai/grok-4.3-latest", None, _THREE_TOOLS, 402),
+        ("xai/grok-4.3-latest", None, (_FILL_FORM,), 530),
+        ("xai/grok-4.3-latest", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        ("kyma/grok-4.3", None, (), 199),
+        ("kyma/grok-4.3", None, (_GET_WEATHER,), 283),
+        ("kyma/grok-4.3", None, _THREE_TOOLS, 402),
+        ("kyma/grok-4.3", None, (_FILL_FORM,), 530),
+        ("kyma/grok-4.3", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 175),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_GET_WEATHER,), 369),
+        (_AZURE_GROK_4_1_NON_REASONING, None, _THREE_TOOLS, 457),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_FILL_FORM,), 562),
+        (_AZURE_GROK_4_1_NON_REASONING, _WEATHER_SYSTEM, (_GET_WEATHER,), 380),
+        (_AZURE_GROK_4_3, None, (_GET_WEATHER,), 96),
+        (_AZURE_GROK_4_3, None, _THREE_TOOLS, 215),
+        (_AZURE_GROK_4_3, None, (_FILL_FORM,), 343),
+        (_AZURE_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 110),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
+        (_VERTEX_GROK_4_3, None, (_FILL_FORM,), 688),
+        (_VERTEX_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 455),
+        (_MANTLE_GROK_4_3, None, (), 37),
     ],
 )
 async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
@@ -3080,7 +3113,8 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
 
 
 # usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
-# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29
+# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29, and
+# through Azure AI Foundry grok-4-1-fast-non-reasoning and Perplexity xai/grok-4.3 on 2026-11-17
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3092,6 +3126,8 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
         (_AZURE_GROK_4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 170),
         (_FIREWORKS_DEEPSEEK_V4_1, None, (_GET_WEATHER,), 304),
         (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 181),
+        (_PERPLEXITY_GROK_4_3, None, (), 218),
     ],
 )
 async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_shipped_framing(
@@ -3214,6 +3250,41 @@ async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_
     )
 
     assert billed_prompt_tokens <= counted <= billed_prompt_tokens * 1.02
+
+
+# usage.input_tokens that POST /v1/messages billed through Bedrock Mantle xai.grok-4.3, and POST /v1/responses through
+# Perplexity xai/grok-4.3 and Azure AI Foundry grok-4-1-fast-non-reasoning, on 2026-11-17 for the input "What is the
+# weather in Paris?" with these tools. Each host bills more hidden tokens per tool as the schema grows
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "responses", "tools", "billed_prompt_tokens"),
+    [
+        (_MANTLE_GROK_4_3, False, (_GET_WEATHER,), 114),
+        (_MANTLE_GROK_4_3, False, _THREE_TOOLS, 256),
+        (_MANTLE_GROK_4_3, False, (_FILL_FORM,), 424),
+        (_PERPLEXITY_GROK_4_3, True, (_GET_WEATHER,), 308),
+        (_PERPLEXITY_GROK_4_3, True, _THREE_TOOLS, 442),
+        (_PERPLEXITY_GROK_4_3, True, (_FILL_FORM,), 555),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_GET_WEATHER,), 178),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _THREE_TOOLS, 276),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_FILL_FORM,), 371),
+    ],
+)
+async def test_a_host_whose_tool_prompt_grows_with_the_schema_never_counts_under_the_bill(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    responses: bool,
+    tools: tuple[dict[str, object], ...],
+    billed_prompt_tokens: int,
+):
+    router: Final = _single_deployment_router(
+        {"model": model, "api_base": _NATIVE_RESPONSES_BASE.get(model, "https://unused.invalid")}, {}
+    )
+    sent_tools: Final = tuple(_responses_function(tool) for tool in tools) if responses else tools
+
+    counted: Final = await _count_with_router(monkeypatch, router, sent_tools, responses)
+
+    assert counted >= billed_prompt_tokens, f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
 
 
 # POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
