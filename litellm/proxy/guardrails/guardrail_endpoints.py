@@ -2657,6 +2657,7 @@ async def apply_guardrail(
         "guardrail_name": request.guardrail_name,
         "input": [request.text],
         "messages": request.messages or [],
+        **({"images": list(request.images)} if request.images else {}),
         "metadata": {"route": "/apply_guardrail"},
     }
     litellm_logging_obj = None

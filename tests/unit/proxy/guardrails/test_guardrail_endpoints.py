@@ -53,6 +53,7 @@ from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureCo
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -4495,6 +4496,23 @@ async def test_apply_guardrail_stops_at_a_blocked_image(mocker: MockerFixture) -
     assert call.response.status_code == 400
     assert _scanned_content(call) == [["image"]]
     assert _logged_verdicts(call) == [("bedrock-guard", "guardrail_intervened")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_stores_the_image_in_the_spend_log_request(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_BLOCKED,), {"images": [_PNG]})
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True})
+    spend_row: Final = call.spend_rows[0]
+
+    stored_request: Final = get_logging_payload(
+        kwargs=spend_row["kwargs"],
+        response_obj=spend_row["completion_response"],
+        start_time=spend_row["start_time"],
+        end_time=spend_row["end_time"],
+    )["proxy_server_request"]
+
+    assert call.response.status_code == 400
+    assert json.loads(stored_request)["images"] == [_PNG]
 
 
 @pytest.mark.parametrize(
