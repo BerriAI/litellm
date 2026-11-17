@@ -463,6 +463,22 @@ async def test_env_header_shadowed_by_config_reuses_logger(monkeypatch: pytest.M
         logger_a.shutdown()
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_empty_endpoint_resolved_from_env_reuses_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", _ENDPOINT_A)
+    _use_generic_api_settings(monkeypatch, endpoint="", headers=_BEARER_HEADERS)
+    logger_a: Final = _resolve_generic_api_logger()
+    logger_b: Final = _resolve_generic_api_logger()
+
+    try:
+        assert logger_a is logger_b
+        assert logger_a.endpoint == _ENDPOINT_A
+    finally:
+        logger_b.shutdown()
+        logger_a.shutdown()
+
+
 def test_get_callbacks_by_type_treats_both_failure_lists_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     for callback_list in (
         "callbacks",

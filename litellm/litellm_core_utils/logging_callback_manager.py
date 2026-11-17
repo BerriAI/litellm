@@ -232,7 +232,7 @@ class LoggingCallbackManager:
             cached_logger = _generic_api_logger_cache.get(callback)
             if (
                 isinstance(cached_logger, GenericAPILogger)
-                and cached_logger.endpoint == endpoint
+                and cached_logger.endpoint == GenericAPILogger.resolve_endpoint(endpoint)
                 and cached_logger.headers == GenericAPILogger.resolve_headers(headers)
                 and cached_logger.event_types == event_types
                 and cached_logger.log_format == (log_format if log_format is not None else "json_array")

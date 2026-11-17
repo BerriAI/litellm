@@ -13,7 +13,7 @@ import re
 import time
 import traceback
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, get_args
 
 import httpx
 
@@ -160,7 +160,7 @@ class GenericAPILogger(CustomBatchLogger):
             if async_httpx_client is not None
             else get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         )
-        endpoint = endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
+        endpoint = self.resolve_endpoint(endpoint)
         if endpoint is None:
             raise ValueError(
                 "endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
@@ -210,23 +210,20 @@ class GenericAPILogger(CustomBatchLogger):
             except asyncio.TimeoutError:
                 verbose_logger.debug("CustomLogger periodic flush after %s seconds", self.flush_interval)
                 await self.flush_queue()
-        if self._replacement is not None:
-            await self._hand_off_unsent_logs()
         await self.flush_queue()
 
-    def _accepts_every_event_of(self, other: "GenericAPILogger") -> bool:
-        return self.event_types is None or (
-            other.event_types is not None and frozenset(other.event_types) <= frozenset(self.event_types)
-        )
+    def _accepted_event_types(self) -> frozenset[API_EVENT_TYPES]:
+        return frozenset(get_args(API_EVENT_TYPES) if self.event_types is None else self.event_types)
 
-    async def _hand_off_unsent_logs(self) -> None:
-        async with self.flush_lock:
-            target: Final = self.active_logger()
-            if not target._accepts_every_event_of(self):
-                return
-            unsent: Final = tuple(self.log_queue)
-            del self.log_queue[: len(unsent)]
-            target.log_queue.extend(unsent)
+    def _hand_off_unsent_logs(self) -> None:
+        if self._replacement is None:
+            return
+        target: Final = self.active_logger()
+        if not self._accepted_event_types() <= target._accepted_event_types():
+            return
+        unsent: Final = tuple(self.log_queue)
+        del self.log_queue[: len(unsent)]
+        target.log_queue.extend(unsent)
 
     def shutdown(self, replacement: "GenericAPILogger | None" = None) -> None:
         if self._stop_flush.is_set():
@@ -238,6 +235,10 @@ class GenericAPILogger(CustomBatchLogger):
         if self._replacement is None:
             return self
         return self._replacement.active_logger()
+
+    @staticmethod
+    def resolve_endpoint(endpoint: str | None) -> str | None:
+        return endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
 
     @staticmethod
     def resolve_headers(
@@ -401,6 +402,7 @@ class GenericAPILogger(CustomBatchLogger):
 
     async def async_send_batch(self) -> None:
         async with self.flush_lock:
+            self._hand_off_unsent_logs()
             await self._send_batch()
 
     async def _send_batch(self) -> None:

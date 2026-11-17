@@ -994,6 +994,48 @@ async def test_retired_logger_finishes_its_in_flight_send_and_hands_queued_logs_
 
 
 @pytest.mark.asyncio
+async def test_logs_waiting_behind_an_in_flight_send_at_rotation_go_out_with_the_replacement() -> None:
+    sink: Final = _InProcessLogSink(hold_first=True)
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    old: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "old"},
+        async_httpx_client=handler,
+        batch_size=1,
+        flush_interval=3600,
+    )
+    replacement: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "new"},
+        async_httpx_client=handler,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    try:
+        in_flight: Final = asyncio.create_task(
+            old.async_log_success_event({"standard_logging_object": {"id": "in-flight"}}, None, None, None)
+        )
+        await asyncio.wait_for(sink.arrived.wait(), timeout=5)
+        waiting: Final = asyncio.create_task(
+            old.async_log_success_event({"standard_logging_object": {"id": "waiting"}}, None, None, None)
+        )
+        await asyncio.sleep(0)
+        old.shutdown(replacement=replacement)
+        sink.release.set()
+        await asyncio.wait_for(asyncio.gather(in_flight, waiting, old._flush_task), timeout=5)
+        await replacement.flush_queue()
+        delivered: Final = tuple(_received_log_ids_with_auth(sink.requests))
+        assert delivered == (("in-flight", "old"), ("waiting", "new"))
+    finally:
+        sink.release.set()
+        old.shutdown()
+        replacement.shutdown()
+        await old._flush_task
+        await replacement._flush_task
+        await handler.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("event", ("success", "failure"))
 @pytest.mark.parametrize("use_v1", (False, True))
 async def test_retired_logger_sends_late_events_through_its_replacement(
@@ -1092,6 +1134,7 @@ async def test_queued_logs_stay_with_the_retired_logger_when_a_later_replacement
         (["llm_api_success"], ["llm_api_success"], "new"),
         (["llm_api_success"], ["llm_api_failure", "llm_api_success"], "new"),
         (["llm_api_success"], None, "new"),
+        (None, ["llm_api_success", "llm_api_failure"], "new"),
     ),
 )
 async def test_queued_logs_go_to_the_replacement_only_when_it_accepts_every_event_type_of_the_retired_logger(
