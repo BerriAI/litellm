@@ -284,7 +284,7 @@ def test_a_token_without_an_email_is_refused_when_a_domain_is_enforced(domains: 
     """`user_allowed_email_domain` is set and a token carries a `sub` but no `email` claim.
 
     A missing email counts as not allowed, so the proxy must answer 403 `auth_error` param `user_email` with
-    "Email domain not allowed. User email: None. Allowed domain: <domain>".
+    "Email domain not allowed. User email: unset. Allowed domain: <domain>" (litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:35,362).
     """
     with domains.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -293,7 +293,7 @@ def test_a_token_without_an_email_is_refused_when_a_domain_is_enforced(domains: 
             chat_as(domains.proxy, domains.idp.token(sub=subject), model),
             status=403,
             error_type="auth_error",
-            message=f"Email domain not allowed. User email: None. Allowed domain: {DOMAIN}",
+            message=f"Email domain not allowed. User email: unset. Allowed domain: {DOMAIN}",
             param="user_email",
         )
         assert user_row(domains.proxy, subject) is None
@@ -314,29 +314,29 @@ def test_a_scope_mapped_to_the_model_is_served(scopes: JwtRig) -> None:
 def test_a_model_outside_the_tokens_scopes_is_refused_with_a_dict_message(scopes: JwtRig) -> None:
     """A token with scope `dec1.chat` asks for a model that is deployed but mapped to no scope.
 
-    The proxy must answer 403 `auth_error` whose message is the Python repr `{'error': "<model denied
-    text>"}`, because the refusal's detail is a dict that the error handler stringifies.
+    The proxy must answer 403 `auth_error` with the plain model denied text: the Rust auth core (#51374) no longer
+    wraps it in a stringified `{'error': ...}` dict.
     """
     denied: Final = MODEL_DENIED_TEMPLATE.format(model=UNSCOPED_MODEL)
     assert_denied(
         chat_as(scopes.proxy, scopes.idp.token(sub=unique("scope-no"), scope="dec1.chat"), UNSCOPED_MODEL),
         status=403,
         error_type="auth_error",
-        message=str({"error": denied}),
+        message=denied,
     )
 
 
 def test_a_token_without_a_scope_claim_can_call_no_model(scopes: JwtRig) -> None:
     """With scope based access on, a token carries no `scope` claim and asks for a mapped model.
 
-    No scope grants it, so the proxy must answer 403 `auth_error` with the same dict repr message.
+    No scope grants it, so the proxy must answer 403 `auth_error` with the same plain message.
     """
     denied: Final = MODEL_DENIED_TEMPLATE.format(model=SCOPED_MODEL)
     assert_denied(
         chat_as(scopes.proxy, scopes.idp.token(sub=unique("scope-none")), SCOPED_MODEL),
         status=403,
         error_type="auth_error",
-        message=str({"error": denied}),
+        message=denied,
     )
 
 

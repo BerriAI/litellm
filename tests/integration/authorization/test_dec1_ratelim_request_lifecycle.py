@@ -165,7 +165,7 @@ def test_image_generation_uses_the_keys_request_window(gateway: Gateway) -> None
 
 
 @pytest.fixture(scope="module")
-def passthrough(gateway: Gateway, tmp_path_factory: pytest.TempPathFactory):  # noqa: ANN201
+def passthrough(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory):  # noqa: ANN201
     """A proxy of our own whose config declares an authenticated pass-through route ``/ratelim-passthrough`` to a
     scripted provider, on the shared database and Redis. UNVERIFIED: ``general_settings.pass_through_endpoints``
     entry shape (``path``, ``target``, ``auth``) read from the pass-through docs."""
@@ -173,7 +173,7 @@ def passthrough(gateway: Gateway, tmp_path_factory: pytest.TempPathFactory):  # 
     with (
         wire_server(provider()) as wire,
         limits_proxy(
-            gateway,
+            session_gateway,
             directory,
             general_settings={
                 "pass_through_endpoints": [

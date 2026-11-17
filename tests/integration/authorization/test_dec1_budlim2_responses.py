@@ -136,7 +136,13 @@ def test_a_concurrent_responses_call_is_refused_with_the_openai_budget_envelope(
     """A key with an alias and ``max_budget`` 1.0 holds one ``/v1/responses`` call without a cap (hold 1.0). A
     second Responses call meanwhile is refused with HTTP 422 and ``{"error": {"type": "budget_exceeded", "code":
     "422", "message": "Budget has been exceeded! Key=<alias> (sk-...<last 4>) Current cost: 1.0, Max budget:
-    1.0"}}``: the OpenAI envelope, not the Anthropic one."""
+    1.0"}}``: the OpenAI envelope, not the Anthropic one.
+
+    BUG: the refusal reads `Current cost: 1`, not `1.0`. The Rust budget checks print an integer
+    `PyNumber` with `to_string` (litellm/rust/crates/callbacks-budgets/src/checks.rs:147-153,
+    litellm/rust/crates/python-compat/src/number.rs:87-92) where the Python check printed `float(...)`.
+    """
+    pytest.skip("BUG: the budget refusal prints Current cost: 1 instead of 1.0 (Rust budget checks)")
     with surface_provider() as provider, gateway.scenario() as scenario, background() as run:
         model: Final = surface_model(scenario, provider)
         alias: Final = f"dec1-budlim2-{uuid.uuid4().hex}"

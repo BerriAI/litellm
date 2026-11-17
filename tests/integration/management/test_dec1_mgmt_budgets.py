@@ -254,8 +254,11 @@ def test_budget_delete_of_a_budget_linked_to_a_customer_is_refused_and_keeps_bot
     with gateway.scenario() as scenario:
         budget_id: Final = scenario.budget(max_budget=1.0)
         identity: Final = unique("linked")
-        gateway.post("/customer/new", {"user_id": identity, "budget_id": budget_id})
-        scenario.cleanups.callback(gateway.post, "/customer/delete", {"user_ids": [identity]})
+        # `Gateway.post` validates the body as a JSON object, and `/customer/new` answered a JSON `null` here, so
+        # the raw `post` helper is used and only the status is checked.
+        created: Final = post(gateway, "/customer/new", {"user_id": identity, "budget_id": budget_id})
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(post, gateway, "/customer/delete", {"user_ids": [identity]})
         response: Final = post(gateway, "/budget/delete", {"id": budget_id})
         assert response.status_code >= 400, response.text
         assert len(budget_rows(budget_id)) == 1

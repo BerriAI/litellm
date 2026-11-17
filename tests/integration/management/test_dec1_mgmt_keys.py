@@ -188,12 +188,15 @@ def test_update_by_an_alias_shared_by_two_keys_is_400_and_changes_neither(gatewa
         assert budgets == [{"max_budget": None}, {"max_budget": None}]
 
 
-def test_update_without_key_or_alias_is_400(gateway: Gateway) -> None:
-    """A /key/update body that names neither key nor key_alias must answer 400 with message
-    "either key or key_alias must be provided"."""
+def test_update_without_key_or_alias_is_422(gateway: Gateway) -> None:
+    """A /key/update body that names neither key nor key_alias is refused by the request model's validator
+    (litellm/types/proxy/management_endpoints/key_requests.py:148) before the handler runs, so FastAPI answers 422
+    with one `value_error` on `body` whose msg is "Value error, either key or key_alias must be provided"."""
     response: Final = post(gateway, "/key/update", {"max_budget": 1.0})
-    assert response.status_code == 400, response.text
-    assert proxy_error(response)["message"] == "either key or key_alias must be provided"
+    assert response.status_code == 422, response.text
+    assert [(item["type"], item["loc"], item["msg"]) for item in response.json()["detail"]] == [
+        ("value_error", ["body"], "Value error, either key or key_alias must be provided")
+    ]
 
 
 def test_regenerate_returns_the_new_key_hash_as_token_id_and_its_abbreviation(gateway: Gateway) -> None:

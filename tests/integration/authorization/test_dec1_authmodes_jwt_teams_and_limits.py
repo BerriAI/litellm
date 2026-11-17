@@ -172,7 +172,8 @@ def test_a_team_header_outside_the_tokens_groups_is_a_403_listing_the_allowed_id
     """The token lists one team; the request sends `x-litellm-team-id` naming a different existing team.
 
     The proxy must answer 403 `auth_error` with exactly "x-litellm-team-id '<other>' does not resolve to a team
-    id or a unique team alias in your JWT's allowed teams. Allowed team ids: ['<team>']".
+    id or a unique team alias in your JWT's allowed teams. Allowed team ids: ["<team>"]" (compact JSON list,
+    litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:335).
     """
     with groups.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -189,7 +190,7 @@ def test_a_team_header_outside_the_tokens_groups_is_a_403_listing_the_allowed_id
             error_type="auth_error",
             message=(
                 f"x-litellm-team-id '{other}' does not resolve to a team id or a unique team alias in your JWT's "
-                f"allowed teams. Allowed team ids: ['{team}']"
+                f'allowed teams. Allowed team ids: ["{team}"]'
             ),
         )
 

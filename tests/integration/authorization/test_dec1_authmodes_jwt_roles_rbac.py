@@ -270,14 +270,14 @@ def test_role_permissions_refuse_a_route_outside_the_roles_list(rbac: JwtRig) ->
     `/v1/chat/completions`.
 
     The proxy must answer 403 `auth_error` with exactly "Role=internal_user not allowed to call
-    route=/v1/models. Allowed routes=['/v1/chat/completions']" (handle_jwt.py:1446).
+    route=/v1/models. Allowed routes=["/v1/chat/completions"]" (compact JSON list, litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:266).
     """
     refused: Final = rbac.proxy.request("GET", "/v1/models", key=rbac.idp.token(roles=["dec1-user"]))
     assert_denied(
         refused,
         status=403,
         error_type="auth_error",
-        message="Role=internal_user not allowed to call route=/v1/models. Allowed routes=['/v1/chat/completions']",
+        message='Role=internal_user not allowed to call route=/v1/models. Allowed routes=["/v1/chat/completions"]',
     )
 
 

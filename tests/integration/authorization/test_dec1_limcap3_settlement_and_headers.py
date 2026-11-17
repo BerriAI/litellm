@@ -264,9 +264,9 @@ def test_a_daily_reset_time_with_the_right_shape_but_no_real_time_is_refused_wit
     gateway: Gateway,
 ) -> None:
     """``daily_reset_time: 25:00`` passes the ``\\d{2}:\\d{2}`` shape check, so ``datetime.time.fromisoformat`` raises
-    instead (litellm/types/router.py:590-592). The deployment must still be refused, but the text is Python's
-    ``Invalid isoformat string`` rather than the ``HH:MM in UTC`` hint. Pinned as current behaviour; UNVERIFIED: the
-    422 status and the exact Python wording."""
+    instead (litellm/types/router.py:592). The deployment must still be refused with 422, but the text is Python's
+    ``hour must be in 0..23`` (what ``fromisoformat`` raises for an out-of-range hour on Python 3.12+) rather than
+    the ``HH:MM in UTC`` hint. Pinned as current behaviour."""
     refused: Final = gateway.request(
         "POST",
         "/model/new",
@@ -281,5 +281,5 @@ def test_a_daily_reset_time_with_the_right_shape_but_no_real_time_is_refused_wit
         },
     )
     assert refused.status_code == 422, refused.text
-    assert "Invalid isoformat string" in refused.text
+    assert "Value error, hour must be in 0..23" in refused.text
     assert "daily_reset_time must be HH:MM in UTC" not in refused.text

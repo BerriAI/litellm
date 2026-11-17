@@ -323,12 +323,13 @@ def test_project_list_for_a_member_holds_only_their_teams_projects(gateway: Gate
         assert their_project not in listed
 
 
-def test_project_update_without_project_id_is_400(gateway: Gateway) -> None:
-    """/project/update without project_id answers 400 with "project_id is required". UNVERIFIED: whether the request
-    model makes project_id optional so the handler check is reached, else this is a 422."""
+def test_project_update_without_project_id_is_422(gateway: Gateway) -> None:
+    """/project/update without project_id is refused by the request model, where `project_id: str` is required
+    (litellm/proxy/_types.py:3517-3520), so FastAPI answers 422 with one `missing` error on `body.project_id`
+    before the handler runs."""
     response: Final = post(gateway, "/project/update", {"description": "nameless"})
-    assert response.status_code == 400, response.text
-    assert "project_id is required" in error_text(response)
+    assert response.status_code == 422, response.text
+    assert [(item["type"], item["loc"]) for item in response.json()["detail"]] == [("missing", ["body", "project_id"])]
 
 
 def test_project_delete_is_proxy_admin_only(gateway: Gateway) -> None:

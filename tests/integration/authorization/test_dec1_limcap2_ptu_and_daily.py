@@ -92,7 +92,9 @@ def _ptu(
         candidate.scenario() as scenario,
     ):
         candidate.post("/team/new", {"team_id": team_id})
-        scenario.cleanups.callback(candidate.post, "/team/delete", {"team_ids": [team_id]})
+        # The team cannot be deleted while the config deployment still names it in `model_info.ptu_shares` (the
+        # delete answers 400), so the cleanup only tries, and the row goes with the proxy's database.
+        scenario.cleanups.callback(candidate.request, "POST", "/team/delete", {"team_ids": [team_id]})
         yield candidate, wire, group, team_id, scenario.key(team_id=team_id)
 
 

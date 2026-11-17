@@ -188,11 +188,11 @@ def test_best_effort_throughput_lets_keys_overallocate_their_team(gateway: Gatew
 
 
 @pytest.fixture(scope="module")
-def throttling(gateway: Gateway, tmp_path_factory: pytest.TempPathFactory):  # noqa: ANN201
+def throttling(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory):  # noqa: ANN201
     """A proxy of our own with ``budget_exceeded_throttle_percentage: 0.5`` on the shared database and Redis."""
     directory: Final[Path] = tmp_path_factory.mktemp("ratelim-throttle")
     with limits_proxy(
-        gateway, directory, litellm_settings={"budget_exceeded_throttle_percentage": 0.5}, shared=True
+        session_gateway, directory, litellm_settings={"budget_exceeded_throttle_percentage": 0.5}, shared=True
     ) as candidate:
         yield candidate
 

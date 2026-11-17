@@ -43,7 +43,7 @@ DEFAULT_TEAM: Final = f"dec1-authmodes-default-team-{uuid.uuid4().hex[:12]}"
 
 
 def _team_missing(team_id: str) -> str:
-    return "{'error': \"Team doesn't exist in db. Team=" + team_id + '. Create team via `/team/new` call."}'
+    return f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
 
 
 @pytest.fixture(scope="module")
@@ -107,7 +107,7 @@ def test_a_token_without_the_required_team_claim_is_a_401_naming_the_field(claim
 
     A configured team field makes the claim required, so the proxy must answer 401 `auth_error` with exactly
     "Authentication Error, No team found in token. Checked team_id field 'tenant.team' and team_alias field
-    'None'." (handle_jwt.py:1697).
+    'unset'." (the Rust auth core prints a missing field as `unset`, litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:362).
     """
     with claims.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -117,7 +117,7 @@ def test_a_token_without_the_required_team_claim_is_a_401_naming_the_field(claim
             error_type="auth_error",
             message=(
                 "Authentication Error, No team found in token. Checked team_id field 'tenant.team' "
-                "and team_alias field 'None'."
+                "and team_alias field 'unset'."
             ),
         )
 
@@ -125,9 +125,8 @@ def test_a_token_without_the_required_team_claim_is_a_401_naming_the_field(claim
 def test_a_team_claim_naming_a_team_that_does_not_exist_is_a_404(claims: JwtRig) -> None:
     """A token's `tenant.team` names a team id that was never created, and `team_id_upsert` is off.
 
-    Pinned current behaviour: the team lookup's 404 HTTPException passes through the auth handler with its
-    dict detail stringified, so the proxy must answer 404 `auth_error` whose message is the Python repr
-    `{'error': "Team doesn't exist in db. Team=<id>. Create team via `/team/new` call."}`.
+    Pinned current behaviour: the Rust auth core (#51374) answers 404 `auth_error` with the plain sentence
+    "Team doesn't exist in db. Team=<id>. Create team via `/team/new` call." (no dict repr around it).
     """
     with claims.proxy.scenario() as scenario:
         model: Final = scenario.model()

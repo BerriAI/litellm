@@ -26,7 +26,7 @@ import pytest
 
 from tests.integration._support.client import Gateway, gateway_from_environment, held
 from tests.integration._support.database import write_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import OwnedState, owned_proxy
 from tests.integration.authorization.dec1_dbstores_support import (
     DEFAULT_AUTH_CACHE_TTL_SECONDS,
     assert_budget_refused,
@@ -45,11 +45,17 @@ _SHORT_TTL: Final = 2
 _SLACK: Final = 8
 
 
+# Both proxies run on the shared database: `write_rows` changes rows in the database `DATABASE_URL` names, and an
+# owned proxy defaults to a private scratch database (tests/integration/_support/process.py:65-72), where the
+# out-of-band change would never be seen.
 @pytest.fixture(scope="module")
 def short_ttl(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("dec1-dbstores-short-ttl")
     config: Final = config_with_settings(directory, general_settings={"user_api_key_cache_ttl": _SHORT_TTL})
-    with gateway_from_environment() as shared, owned_proxy(shared, directory / "proxy", {}, config=config) as proxy:
+    with (
+        gateway_from_environment() as shared,
+        owned_proxy(shared, directory / "proxy", {}, config=config, state=OwnedState.SHARED_WITH_WORKER) as proxy,
+    ):
         yield proxy
 
 
@@ -59,7 +65,10 @@ def short_management_ttl(tmp_path_factory: pytest.TempPathFactory) -> Iterator[G
     with (
         gateway_from_environment() as shared,
         owned_proxy(
-            shared, directory / "proxy", {"DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL": str(_SHORT_TTL)}
+            shared,
+            directory / "proxy",
+            {"DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL": str(_SHORT_TTL)},
+            state=OwnedState.SHARED_WITH_WORKER,
         ) as proxy,
     ):
         yield proxy

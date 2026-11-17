@@ -17,7 +17,6 @@ import pytest
 
 from tests.integration._support.client import Gateway, list_value, object_value, string_value
 from tests.integration.management.dec1_mgmt_support import (
-    PROXY_ADMIN_ONLY_PREFIX,
     body_of,
     budget_rows,
     caller,
@@ -90,22 +89,20 @@ def test_organization_new_with_a_negative_amount_is_400(gateway: Gateway, field:
 
 @pytest.mark.parametrize("role", ["internal_user", "proxy_admin_viewer"])
 def test_organization_new_is_refused_to_non_admin_roles(gateway: Gateway, role: str) -> None:
-    """Only a proxy admin may create organizations. An internal user gets the route gate 401 naming
-    Route=/organization/new, and a proxy_admin_viewer gets the viewer gate 403; neither writes a row."""
+    """Only a proxy admin may create organizations. Both roles get the organization gate's 401 `auth_error`
+    "Only proxy admins can create new organizations. You are <role>" with param `user_role`
+    (litellm/proxy/auth/auth_checks_organization.py:34-40), which now runs before the route and viewer gates;
+    neither writes a row."""
     with gateway.scenario() as scenario:
         user: Final = caller(scenario, role)
         alias: Final = unique("denied-org")
         response: Final = post(gateway, "/organization/new", {"organization_alias": alias}, key=user.key)
-        if role == "internal_user":
-            assert response.status_code == 401, response.text
-            assert str(proxy_error(response)["message"]).startswith(
-                f"{PROXY_ADMIN_ONLY_PREFIX}Route=/organization/new."
-            )
-        else:
-            assert response.status_code == 403, response.text
-            assert proxy_error(response)["message"] == (
-                "user not allowed to access this route, role= proxy_admin_viewer. Trying to access: /organization/new"
-            )
+        assert response.status_code == 401, response.text
+        error: Final = proxy_error(response)
+        assert (error["message"], error["param"]) == (
+            f"Only proxy admins can create new organizations. You are {role}",
+            "user_role",
+        ), response.text
         assert (
             gateway.rows(
                 'SELECT organization_id FROM "LiteLLM_OrganizationTable" WHERE organization_alias = %s', (alias,)

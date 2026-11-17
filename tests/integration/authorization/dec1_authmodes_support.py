@@ -78,13 +78,18 @@ def marker() -> str:
 
 
 def validation_failure(reason: str) -> str:
-    """The 401 message every PyJWT decode failure other than expiry gets (litellm/proxy/auth/handle_jwt.py:1412)."""
+    """The 401 message every decode failure other than expiry gets: `VerifyDenial::Invalid` renders
+    "Validation fails: {reason}" (litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:109)."""
     return f"Authentication Error, Validation fails: {reason}"
 
 
 def no_matching_key(urls: tuple[str, ...], kid: str | None) -> str:
-    """The 401 for a `kid` no configured JWKS publishes (handle_jwt.py:1003): the URL list is a Python repr."""
-    return f"Authentication Error, No matching public key found. keys={list(urls)!r}, kid={kid}"
+    """The 401 for a `kid` no configured JWKS publishes. The Rust auth core (#51374) renders the URL list as compact
+    JSON and a missing kid as `unset` (litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:202,362)."""
+    return (
+        "Authentication Error, No matching public key found. "
+        f"keys={json.dumps(list(urls), separators=(',', ':'))}, kid={kid if kid is not None else 'unset'}"
+    )
 
 
 @dataclass(frozen=True, slots=True)

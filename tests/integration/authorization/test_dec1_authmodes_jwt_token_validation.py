@@ -57,6 +57,12 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[JwtRig]:
         yield built
 
 
+_ALG_NONE_MESSAGE: Final = (
+    "Authentication Error, JSON error: unknown variant `none`, expected one of `HS256`, `HS384`, `HS512`, `ES256`, "
+    "`ES384`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `EdDSA` at line 1 column 13"
+)
+
+
 def test_a_valid_rs256_token_is_served_and_reaches_the_provider(rig: JwtRig) -> None:
     """A token signed by the published RS256 key with a fresh `sub` is sent on a chat completion.
 
@@ -158,8 +164,9 @@ def test_a_token_signed_by_a_different_key_under_the_published_kid_fails_signatu
 ) -> None:
     """A token carries the published `kid` but is signed by a different RSA private key.
 
-    The proxy must answer 401 `auth_error` "Authentication Error, Validation fails: Signature verification
-    failed" and must not call the provider.
+    The proxy must answer 401 `auth_error` "Authentication Error, Validation fails: InvalidSignature" (the
+    jsonwebtoken error kind the Rust auth core prints, litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:109)
+    and must not call the provider.
     """
     with rig.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -170,7 +177,7 @@ def test_a_token_signed_by_a_different_key_under_the_published_kid_fails_signatu
             refused,
             status=401,
             error_type="auth_error",
-            message=validation_failure("Signature verification failed"),
+            message=validation_failure("InvalidSignature"),
         )
         assert upstream_requests(rig.proxy, text) == []
 
@@ -179,7 +186,8 @@ def test_a_token_with_an_unknown_kid_names_the_jwks_url_and_the_kid(rig: JwtRig)
     """A token signed by the real key but carrying a `kid` the JWKS does not publish is sent.
 
     The proxy must answer 401 `auth_error` with exactly "Authentication Error, No matching public key found.
-    keys=['<JWT_PUBLIC_KEY_URL>'], kid=<kid>" (handle_jwt.py:1003, the URL list is a Python list repr).
+    keys=["<JWT_PUBLIC_KEY_URL>"], kid=<kid>" (litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:202, the
+    URL list is compact JSON).
     """
     with rig.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -198,7 +206,7 @@ def test_an_hs256_token_under_the_published_kid_is_refused_as_a_disallowed_algor
 
     HS* is deliberately absent from `JWTHandler.SUPPORTED_JWT_ALGORITHMS`, which blocks the classic
     "public key as HMAC secret" confusion. The proxy must answer 401 `auth_error` "Authentication Error,
-    Validation fails: The specified alg value is not allowed".
+    Validation fails: InvalidAlgorithm" (gateway-auth-core/src/authn/jwt/verify.rs:1002-1008).
     """
     with rig.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -213,15 +221,17 @@ def test_an_hs256_token_under_the_published_kid_is_refused_as_a_disallowed_algor
             chat_as(rig.proxy, token, model),
             status=401,
             error_type="auth_error",
-            message=validation_failure("The specified alg value is not allowed"),
+            message=validation_failure("InvalidAlgorithm"),
         )
 
 
 def test_an_unsigned_alg_none_token_is_refused_as_a_disallowed_algorithm(rig: JwtRig) -> None:
     """A token with `alg: none`, an empty signature segment and the published `kid` is sent.
 
-    It still has three segments, so it takes the JWT path. The proxy must answer 401 `auth_error`
-    "Authentication Error, Validation fails: The specified alg value is not allowed" and never serve it.
+    It still has three segments, so it takes the JWT path. The Rust auth core reads the header with jsonwebtoken,
+    whose `Algorithm` enum has no `none` variant, so the header itself is malformed (`VerifyDenial::Malformed`,
+    litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:98) and the proxy answers 401 `auth_error` with the
+    serde message and no "Validation fails" prefix. It is never served.
     """
     with rig.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -237,15 +247,17 @@ def test_an_unsigned_alg_none_token_is_refused_as_a_disallowed_algorithm(rig: Jw
             chat_as(rig.proxy, token, model),
             status=401,
             error_type="auth_error",
-            message=validation_failure("The specified alg value is not allowed"),
+            message=_ALG_NONE_MESSAGE,
         )
 
 
 def test_a_three_segment_value_with_an_unparseable_header_is_a_401_with_the_pyjwt_reason(rig: JwtRig) -> None:
     """The bearer value `not-a-jwt.x.y` has three segments but its header is not base64url JSON.
 
-    `auth_jwt` reads the header before its guarded decode, so the proxy must answer 401 `auth_error` with
-    exactly "Authentication Error, Invalid header padding" (no "Validation fails" prefix).
+    The header is read before the guarded decode (`VerifyDenial::Malformed`,
+    litellm/rust/crates/gateway-auth-core/src/error/jwt.rs:98), so the proxy must answer 401 `auth_error` with
+    jsonwebtoken's base64 error, "Authentication Error, Base64 error: Invalid input length: 9" (no "Validation
+    fails" prefix).
     """
     with rig.proxy.scenario() as scenario:
         model: Final = scenario.model()
@@ -253,7 +265,7 @@ def test_a_three_segment_value_with_an_unparseable_header_is_a_401_with_the_pyjw
             chat_as(rig.proxy, "not-a-jwt.x.y", model),
             status=401,
             error_type="auth_error",
-            message="Authentication Error, Invalid header padding",
+            message="Authentication Error, Base64 error: Invalid input length: 9",
         )
 
 
