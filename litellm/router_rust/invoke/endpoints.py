@@ -879,6 +879,29 @@ def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], reque
     validate_router_connection(str(data.get("model")), _generic_provider(data), request)
 
 
+def _normalize_cache_bool(val: object) -> bool | None:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        normalized = val.strip().lower()
+        if normalized in ("false", "0", "no", "off"):
+            return False
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+    return None
+
+
+def _normalize_cache_ttl(val: object) -> int | float | None:
+    if isinstance(val, (int, float)):
+        return val
+    if isinstance(val, str):
+        try:
+            return float(val) if "." in val else int(val)
+        except ValueError:
+            return None
+    return None
+
+
 def _resolve_deployment_cache_policy(
     deployment: Mapping[str, object],
     global_caching: bool,
@@ -887,21 +910,45 @@ def _resolve_deployment_cache_policy(
     """Apply model-level response-cache policy (response_cache, cache_ttl) to kwargs.
 
     Returns the resolved caching boolean (model override > global default).
-    If response_cache is explicitly False, forces caching=False and sets
-    cache={"no-cache": True, "no-store": True} so client requests cannot bypass it.
+    If response_cache is explicitly False, forces caching=False, kwargs["caching"]=False,
+    and sets cache={"no-cache": True, "no-store": True} so client requests cannot bypass it.
     """
     model_info: Final = as_dict(deployment.get("model_info"))
     litellm_params: Final = as_dict(deployment.get("litellm_params"))
 
-    response_cache: object = model_info.get("response_cache")
-    if response_cache is None:
-        response_cache = litellm_params.get("response_cache")
-    if response_cache is None:
-        cache_cfg: Final = as_dict(model_info.get("cache")) or as_dict(litellm_params.get("cache"))
-        if "enabled" in cache_cfg:
-            response_cache = cache_cfg["enabled"]
-        elif cache_cfg.get("no-cache") is True and cache_cfg.get("no-store") is True:
-            response_cache = False
+    raw_response_cache: object = model_info.get("response_cache")
+    if raw_response_cache is None:
+        raw_response_cache = litellm_params.get("response_cache")
+
+    cache_cfg: dict[str, object] = {}
+    if raw_response_cache is None:
+        info_cache: object = model_info.get("cache")
+        params_cache: object = litellm_params.get("cache")
+        if isinstance(info_cache, bool):
+            raw_response_cache = info_cache
+        elif isinstance(params_cache, bool):
+            raw_response_cache = params_cache
+        else:
+            cache_cfg = as_dict(info_cache) or as_dict(params_cache)
+            if "enabled" in cache_cfg:
+                raw_response_cache = cache_cfg["enabled"]
+            elif cache_cfg.get("no-cache") is True and cache_cfg.get("no-store") is True:
+                raw_response_cache = False
+    elif isinstance(raw_response_cache, Mapping):
+        cache_cfg = as_dict(raw_response_cache)
+        raw_response_cache = cache_cfg.get("enabled")
+
+    response_cache: bool | None = _normalize_cache_bool(raw_response_cache)
+
+    raw_cache_ttl: object = model_info.get("cache_ttl")
+    if raw_cache_ttl is None:
+        raw_cache_ttl = litellm_params.get("cache_ttl")
+    if raw_cache_ttl is None:
+        raw_cache_ttl = cache_cfg.get("ttl")
+    cache_ttl: int | float | None = _normalize_cache_ttl(raw_cache_ttl)
+
+    if cache_ttl is not None and cache_ttl <= 0:
+        response_cache = False
 
     caching: bool = global_caching
     if response_cache is False:
@@ -910,17 +957,24 @@ def _resolve_deployment_cache_policy(
         cache_dict["no-cache"] = True
         cache_dict["no-store"] = True
         kwargs["cache"] = cache_dict
+        kwargs["caching"] = False
     elif response_cache is True:
-        caching = True
+        if kwargs.get("caching") is False:
+            caching = False
+        else:
+            caching = True
+            kwargs["caching"] = True
 
-    cache_ttl: object = model_info.get("cache_ttl")
-    if cache_ttl is None:
-        cache_ttl = litellm_params.get("cache_ttl")
-    if cache_ttl is None:
-        cache_cfg_ttl: Final = as_dict(model_info.get("cache")) or as_dict(litellm_params.get("cache"))
-        cache_ttl = cache_cfg_ttl.get("ttl")
+    if cache_cfg.get("no-cache") is True:
+        cache_dict_nc = as_dict(kwargs.get("cache"))
+        cache_dict_nc["no-cache"] = True
+        kwargs["cache"] = cache_dict_nc
+    if cache_cfg.get("no-store") is True:
+        cache_dict_ns = as_dict(kwargs.get("cache"))
+        cache_dict_ns["no-store"] = True
+        kwargs["cache"] = cache_dict_ns
 
-    if cache_ttl is not None:
+    if cache_ttl is not None and cache_ttl > 0:
         cache_dict_ttl = as_dict(kwargs.get("cache"))
         if "ttl" not in cache_dict_ttl:
             cache_dict_ttl["ttl"] = cache_ttl
@@ -2253,7 +2307,8 @@ class RustEndpoints:
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
             kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+        caching: Final = _resolve_deployment_cache_policy(deployment, self._cache_responses, kwargs)
+        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": caching, **kwargs})
 
     async def aadapter_completion(
         self,
