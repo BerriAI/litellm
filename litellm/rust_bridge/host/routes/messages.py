@@ -15,7 +15,7 @@ import socket
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from typing import Final, NoReturn, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
@@ -758,9 +758,11 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     if getattr(error, "messages_unsupported_param", False):
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         return litellm.UnsupportedParamsError(message=str(error))
-    mantle_failure: Final = _mantle_request_failure(request, request_provider)
-    if mantle_failure is not None:
-        return mantle_failure
+    if getattr(error, "messages_provider_resolution", False):
+        model: Final = str(request["model"])
+        return litellm.BadRequestError(
+            message=f"GetLLMProvider Exception - {error}\n\noriginal model: {model}", model=model, llm_provider=""
+        )
     return litellm.BadRequestError(
         message=str(error),
         model=str(request["model"]).removeprefix(f"{request_provider}/"),
@@ -895,86 +897,26 @@ def _signing_failure(kind: str) -> Exception | None:
     return None
 
 
-def _bedrock_credential_failure(error: Exception, request: Mapping[str, object]) -> Exception | None:
+def _bedrock_credential_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str
+) -> Exception | None:
     """The exception Python's bedrock config raises while signing a call whose credentials Rust
     could not acquire, from botocore's `NoCredentialsError` to an STS or `AwsAuthError` failure."""
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
+
     kind: Final = getattr(error, "messages_credential_failure", None)
     if not isinstance(kind, str):
         return None
     known: Final = _signing_failure(kind)
-    if known is not None and not _mantle_route(request, failure_provider(request)):
+    if request_provider == "bedrock_mantle" and not isinstance(known, AwsAuthError):
+        return _raised(ValueError(MANTLE_AUTH_FAILED))
+    if known is not None:
         return _raised(known)
     call: Final = _provider_call(request)
     if call is None:
-        return None if known is None else _raised(known)
-    if known is not None:
-        return _mantle_signing_failure(known, call, request)
-    try:
-        call.config.sign_request(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
-            headers={},
-            optional_params=call.params,
-            request_data={},
-            api_base=_complete_url(call, request),
-            api_key=optional_str(request.get("api_key")),
-            model=call.model,
-            stream=request.get("stream") is True,
-            fake_stream=False,
-        )
-    except Exception as python_failure:  # noqa: BLE001  # the exception Python's signing raises is the answer
-        return python_failure
-    return None
-
-
-def _mantle_signing_failure(known: Exception, call: _ProviderCall, request: Mapping[str, object]) -> Exception:
-    """What Python's Mantle config raises when its AWS signer raises `known`: `bedrock_mantle/`
-    wraps botocore's credential errors in its own ValueError, `bedrock/mantle/` lets them through."""
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-    from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
-
-    if not isinstance(call.config, BedrockMantleAnthropicMessagesConfig):
-        return _raised(known)
-
-    class _FailingSigner(BaseAWSLLM):
-        def _sign_request(  # pyright: ignore[reportIncompatibleMethodOverride]  # raises instead of signing
-            self,
-            service_name: str,
-            headers: Mapping[str, object],
-            optional_params: Mapping[str, object],
-            request_data: Mapping[str, object],
-            api_base: str,
-            model: str | None = None,
-            stream: bool | None = None,
-            fake_stream: bool | None = None,
-            api_key: str | None = None,
-        ) -> NoReturn:
-            raise known
-
-    try:
-        BedrockMantleAnthropicMessagesConfig(aws_signer=_FailingSigner()).sign_request(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
-            headers={},
-            optional_params=call.params,
-            request_data={},
-            api_base=_complete_url(call, request),
-            api_key=optional_str(request.get("api_key")),
-            model=call.model,
-            stream=request.get("stream") is True,
-            fake_stream=False,
-        )
-    except Exception as python_failure:  # noqa: BLE001  # the exception Python's signing raises is the answer
-        return python_failure
-    return _raised(known)
-
-
-def _mantle_request_failure(request: Mapping[str, object], request_provider: str) -> Exception | None:
-    """The exception Python raises resolving, addressing or signing a Mantle call Rust refused before
-    sending it, such as `get_llm_provider`'s BadRequestError or `_get_aws_region_name`'s ValueError for
-    an invalid region."""
-    if not _mantle_route(request, request_provider):
         return None
     try:
-        call: Final = _provider_call(request)
-        if call is None:
-            return None
         call.config.sign_request(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
             headers={},
             optional_params=call.params,
@@ -985,7 +927,7 @@ def _mantle_request_failure(request: Mapping[str, object], request_provider: str
             stream=request.get("stream") is True,
             fake_stream=False,
         )
-    except Exception as python_failure:  # noqa: BLE001  # the exception Python raises is the answer
+    except Exception as python_failure:  # noqa: BLE001  # the exception Python's signing raises is the answer
         return python_failure
     return None
 
@@ -1308,7 +1250,9 @@ def map_failure(
             request_provider,
         )
     credential_failure: Final = (
-        _bedrock_credential_failure(error, request) if request_provider in ("bedrock", "bedrock_mantle") else None
+        _bedrock_credential_failure(error, request, request_provider)
+        if request_provider in ("bedrock", "bedrock_mantle")
+        else None
     )
     if credential_failure is not None:
         _log_resolved_call(request, request_provider)

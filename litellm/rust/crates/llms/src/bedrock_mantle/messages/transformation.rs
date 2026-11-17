@@ -9,7 +9,7 @@ use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
 use crate::{
-    Error,
+    Error, MantleRegionCheck,
     anthropic::{
         common_utils::strip_trailing_slashes,
         messages::{
@@ -21,22 +21,19 @@ use crate::{
         context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
         transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
-    bedrock::{
-        common_utils::validated_region,
-        messages::{
-            invoke_transformations::{
-                anthropic_claude_transformation::{
-                    native_output_fallback_litellm_params,
-                    should_retry_anthropic_messages_without_native_output,
-                },
-                request::{InvokeRequestSettings, clamp_adaptive_reasoning_effort_for_bedrock},
+    bedrock::messages::{
+        invoke_transformations::{
+            anthropic_claude_transformation::{
+                native_output_fallback_litellm_params,
+                should_retry_anthropic_messages_without_native_output,
             },
-            mantle_transformation::{
-                AMAZON_MANTLE_REQUEST_SETTINGS, MANTLE_API_BASE_ENV, MANTLE_MESSAGES_PATH,
-                amazon_mantle_model_id, bearer_environment, mantle_headers, mantle_secret_names,
-                mantle_wire_body, sigv4_environment, transform_mantle_messages_request,
-                with_zero_usage,
-            },
+            request::{InvokeRequestSettings, clamp_adaptive_reasoning_effort_for_bedrock},
+        },
+        mantle_transformation::{
+            AMAZON_MANTLE_REQUEST_SETTINGS, MANTLE_API_BASE_ENV, MANTLE_MESSAGES_PATH,
+            amazon_mantle_model_id, bearer_environment, mantle_headers, mantle_secret_names,
+            mantle_wire_body, sigv4_environment, transform_mantle_messages_request,
+            validated_mantle_region, with_zero_usage,
         },
     },
 };
@@ -194,7 +191,7 @@ fn resolve_mantle_region(
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
     if let Some(region) = configured_region(litellm_params) {
-        return validated_region(region.to_string());
+        return validated_mantle_region(region.to_string(), MantleRegionCheck::ProviderResolution);
     }
     let base = first_non_empty([api_base])
         .map(str::to_string)
@@ -215,12 +212,13 @@ fn dynamic_api_base(
     litellm_params: &LitellmParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    let region = validated_region(
+    let region = validated_mantle_region(
         configured_region(litellm_params)
             .or(split_mantle_region_prefix(model).0)
             .map(str::to_string)
             .or_else(|| env_value(env_lookup, &REGION_ENVS))
             .unwrap_or_else(|| BEDROCK_MANTLE_DEFAULT_REGION.to_string()),
+        MantleRegionCheck::ProviderResolution,
     )?;
     Ok(first_non_empty([api_base])
         .map(str::to_string)
@@ -380,7 +378,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             .collect();
         Ok(sigv4_environment(
             unsigned,
-            validated_region(signing_region)?,
+            validated_mantle_region(signing_region, MantleRegionCheck::Request)?,
             &litellm_params.aws,
             env_lookup,
         ))
@@ -404,6 +402,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        ErrorDetail,
         base_llm::{auth::AuthScheme, messages::context::MessagesModelCapabilities},
         bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
     };
@@ -656,7 +655,10 @@ mod tests {
                 &litellm_params,
                 &[]
             ),
-            Err(Error::InvalidRequest(_))
+            Err(Error::InvalidRequest(ErrorDetail::InvalidMantleRegion {
+                region,
+                check: MantleRegionCheck::Request,
+            })) if region == "US-EAST-1"
         ));
         assert!(
             environment(
@@ -672,19 +674,42 @@ mod tests {
     }
 
     #[rstest]
-    #[case::url_injection("us-east-1.attacker.test/steal?")]
-    #[case::uppercase("US-EAST-1")]
-    fn invalid_configured_regions_are_rejected(#[case] region: &str) {
-        assert!(matches!(
-            BEDROCK_MANTLE_MESSAGES_CONFIG.get_complete_url(
-                None,
-                "claude-test",
-                &params(None, Some(region)),
-                false,
-                &|_| None
-            ),
-            Err(Error::InvalidRequest(_))
-        ));
+    #[case::url_injection(&BEDROCK_MANTLE_MESSAGES_CONFIG, Some("us-east-1.attacker.test/steal?"), &[], MantleRegionCheck::ProviderResolution)]
+    #[case::uppercase(&BEDROCK_MANTLE_MESSAGES_CONFIG, Some("US-EAST-1"), &[], MantleRegionCheck::ProviderResolution)]
+    #[case::environment(&BEDROCK_MANTLE_MESSAGES_CONFIG, None, &[("BEDROCK_MANTLE_REGION", "US-EAST-1")], MantleRegionCheck::ProviderResolution)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, Some("US-EAST-1"), &[], MantleRegionCheck::Request)]
+    #[case::bedrock_mantle_route_environment(&AMAZON_MANTLE_MESSAGES_CONFIG, None, &[("AWS_REGION_NAME", "US-EAST-1")], MantleRegionCheck::Request)]
+    fn invalid_regions_name_where_python_refuses_them(
+        #[case] config: &dyn BaseMessagesConfig,
+        #[case] configured: Option<&str>,
+        #[case] env: &'static [(&'static str, &'static str)],
+        #[case] expected: MantleRegionCheck,
+    ) {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+        };
+        let refused = config.get_complete_url(
+            None,
+            "claude-test",
+            &params(None, configured),
+            false,
+            &lookup,
+        );
+        let Err(Error::InvalidRequest(detail @ ErrorDetail::InvalidMantleRegion { check, .. })) =
+            &refused
+        else {
+            panic!("expected an invalid region, got {refused:?}");
+        };
+        assert_eq!(*check, expected);
+        let region = configured.unwrap_or_else(|| env[0].1);
+        assert_eq!(
+            detail.to_string(),
+            format!(
+                "Invalid AWS region format: '{region}'. Region names must contain only lowercase letters, digits, and hyphens."
+            )
+        );
     }
 
     #[rstest]

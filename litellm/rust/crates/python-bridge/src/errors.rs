@@ -44,6 +44,9 @@ const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
 /// Python's provider config raises the refusal as litellm's `BadRequestError`.
 const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
+/// Python's `get_llm_provider` raised the refusal while resolving the provider, which it wraps
+/// into its own `BadRequestError`.
+const MESSAGES_PROVIDER_RESOLUTION: &str = "messages_provider_resolution";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
 /// when only running Python's signing again gives its exception.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
@@ -206,10 +209,16 @@ pub(crate) fn route_failure(
         (RequestMarker::Messages, Some(rejection))
             if matches!(
                 rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::MissingAzureApiBase)
+                Some(
+                    litellm_llms::ErrorDetail::MissingAzureApiBase
+                        | litellm_llms::ErrorDetail::InvalidMantleRegion {
+                            check: litellm_llms::MantleRegionCheck::Request,
+                            ..
+                        }
+                )
             ) =>
         {
-            // Python raises it from `get_complete_url`, after the provider resolved.
+            // Python raises these from building or signing the call, after the provider resolved.
             let native = PyValueError::new_err(rejection.to_string());
             let value = native.value(py);
             value.setattr(MESSAGES_LATE_REJECTION, true)?;
@@ -234,6 +243,15 @@ pub(crate) fn route_failure(
                 Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::InvalidMantleRegion {
+                    check: litellm_llms::MantleRegionCheck::ProviderResolution,
+                    ..
+                })
+            ) {
+                value.setattr(MESSAGES_PROVIDER_RESOLUTION, true)?;
             }
             if let Some(provider) = provider_rejection(rejection) {
                 value.setattr(MESSAGES_PROVIDER_REJECTION, provider.text)?;
@@ -720,6 +738,34 @@ mod tests {
                 assert!(native.is_instance_of::<PyValueError>(py));
                 assert_eq!(native.value(py).to_string(), rejection);
             }
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::provider_resolution(litellm_llms::MantleRegionCheck::ProviderResolution, true)]
+    #[case::request(litellm_llms::MantleRegionCheck::Request, false)]
+    fn an_invalid_mantle_region_is_flagged_where_python_raises_it(
+        #[case] check: litellm_llms::MantleRegionCheck,
+        #[case] resolving_provider: bool,
+    ) {
+        let error = Error::invalid_request(litellm_llms::ErrorDetail::InvalidMantleRegion {
+            region: "US-EAST-1".into(),
+            check,
+        });
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            assert!(native.is_instance_of::<PyValueError>(py));
+            let value = native.value(py);
+            assert_eq!(
+                value.str().unwrap().to_string(),
+                "Invalid AWS region format: 'US-EAST-1'. Region names must contain only lowercase letters, digits, and hyphens."
+            );
+            let flagged = |name: &str| value.getattr_opt(name).unwrap().is_some();
+            assert_eq!(flagged(MESSAGES_PROVIDER_RESOLUTION), resolving_provider);
+            assert_eq!(flagged(MESSAGES_REQUEST_ERROR), resolving_provider);
+            assert_eq!(flagged(MESSAGES_PYTHON_RAISED), !resolving_provider);
+            assert_eq!(flagged(MESSAGES_LATE_REJECTION), !resolving_provider);
         });
     }
 
