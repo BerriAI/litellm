@@ -26,9 +26,7 @@ describe("provider_info_helpers", () => {
       displayName: "ResetData",
       logo: providerLogoMap[Providers.RESETDATA],
     });
-    expect(getProviderLogoAndName("RESETDATA")).toEqual(
-      getProviderLogoAndName("resetdata"),
-    );
+    expect(getProviderLogoAndName("RESETDATA")).toEqual(getProviderLogoAndName("resetdata"));
     expect(providerLogoMap[Providers.RESETDATA]).toContain("resetdata");
     expect(getPlaceholder(Providers.RESETDATA)).toBe("resetdata/zai/glm-5.3");
   });
