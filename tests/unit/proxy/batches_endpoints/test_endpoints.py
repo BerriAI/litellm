@@ -3722,7 +3722,7 @@ def _azure_like_batch_list(batch_ids_by_api_base: Mapping[str, tuple[str, ...]])
 
 
 @pytest.mark.asyncio
-async def test_list__model_header_on_a_mixed_group_pages_through_its_batch_then_its_chat_resource(list_harness):
+async def test_list__model_header_on_a_mixed_group_pages_through_its_chat_then_its_batch_resource(list_harness):
     provider_list: Final = _azure_like_batch_list(
         {_BATCH_SKU[0]: ("batch-b1", "batch-b2", "batch-b3"), _CHAT_SKU[0]: ("batch-a1", "batch-a2")}
     )
@@ -3740,11 +3740,11 @@ async def test_list__model_header_on_a_mixed_group_pages_through_its_batch_then_
         listed: Final = await pages_from(None)
 
     assert listed == (
+        ("gpt-mixed", "batch-a1", None),
+        ("gpt-mixed", "batch-a2", None),
         ("gpt-mixed", "batch-b1", "batch-id"),
         ("gpt-mixed", "batch-b2", "batch-id"),
         ("gpt-mixed", "batch-b3", "batch-id"),
-        ("gpt-mixed", "batch-a1", None),
-        ("gpt-mixed", "batch-a2", None),
     )
 
 
@@ -3766,8 +3766,8 @@ async def test_retrieve__mixed_group_batch_reaches_the_deployment_its_hint_names
 
     assert _reached(provider_retrieve.call_args.kwargs) == reached
     assert provider_retrieve.call_args.kwargs["litellm_metadata"]["model_info"]["id"] == (kept_hint or "chat-id")
-    assert _decoded(resp.id) == ("gpt-mixed", "batch-provider-id", kept_hint)
-    assert _decoded(resp.output_file_id) == ("gpt-mixed", "file-out", kept_hint)
+    assert resp.id == batch_id
+    assert _decoded(resp.output_file_id) == ("gpt-mixed", "file-out", deployment_hint)
 
 
 @pytest.mark.asyncio
@@ -3783,7 +3783,7 @@ async def test_cancel__mixed_group_batch_reaches_the_deployment_its_hint_names(
         resp: Final = await call_cancel(cancel_harness, batch_id)
 
     assert _reached(cancel_harness.acancel_kwargs()) == reached
-    assert _decoded(resp.id) == ("gpt-mixed", "batch-provider-id", kept_hint)
+    assert resp.id == batch_id
 
 
 _PAUSED_BATCH_DEPLOYMENT: Final = frozenset({"batch-id"})

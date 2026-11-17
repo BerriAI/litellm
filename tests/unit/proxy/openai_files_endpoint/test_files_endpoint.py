@@ -1075,18 +1075,16 @@ def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_up
 _MIXED_GROUP_SKUS: Final = ("chat-sku", "batch-sku", "other-sku")
 
 
-@pytest.fixture
-def mixed_azure_group(monkeypatch, request):
+def _serve_azure_group(monkeypatch, paused_deployment_ids: frozenset[str], batch_resource: str):
     import litellm.proxy.proxy_server as ps
 
-    paused_deployment_ids: Final = getattr(request, "param", frozenset())
     router: Final = Router(
         model_list=[
             {
                 "model_name": model_group,
                 "litellm_params": {
                     "model": f"azure/{sku}",
-                    "api_base": f"https://{sku}.openai.azure.com",
+                    "api_base": f"https://{batch_resource if deployment_id == 'batch-id' else sku}.openai.azure.com",
                     "api_key": f"{sku}-key",
                     "api_version": "2025-04-01-preview",
                 },
@@ -1112,6 +1110,16 @@ def mixed_azure_group(monkeypatch, request):
             yield azure
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.fixture
+def mixed_azure_group(monkeypatch, request):
+    yield from _serve_azure_group(monkeypatch, getattr(request, "param", frozenset()), batch_resource="batch-sku")
+
+
+@pytest.fixture
+def one_resource_azure_group(monkeypatch):
+    yield from _serve_azure_group(monkeypatch, frozenset(), batch_resource="chat-sku")
 
 
 def _azure_upload_routes(azure: respx.MockRouter) -> Mapping[str, respx.Route]:
@@ -1194,18 +1202,18 @@ def test_file_content_of_a_paused_batch_deployment_is_refused_rather_than_read_f
 
 
 @pytest.mark.parametrize(
-    ("headers", "query", "reached_sku"),
+    ("headers", "query", "reached_skus"),
     [
-        ({"x-litellm-model": "gpt-mixed"}, "?purpose=batch", "batch-sku"),
-        ({"x-litellm-model": "gpt-mixed"}, "?purpose=assistants", "chat-sku"),
-        ({"x-litellm-model": "gpt-mixed"}, "", "chat-sku"),
-        ({}, "?target_model_names=gpt-mixed&purpose=batch", "batch-sku"),
-        ({}, "?target_model_names=gpt-mixed", "chat-sku"),
+        ({"x-litellm-model": "gpt-mixed"}, "?purpose=batch", ("chat-sku", "batch-sku")),
+        ({"x-litellm-model": "gpt-mixed"}, "?purpose=assistants", ("chat-sku",)),
+        ({"x-litellm-model": "gpt-mixed"}, "", ("chat-sku",)),
+        ({}, "?target_model_names=gpt-mixed&purpose=batch", ("chat-sku", "batch-sku")),
+        ({}, "?target_model_names=gpt-mixed", ("chat-sku",)),
     ],
     ids=["header-batch", "header-other-purpose", "header-no-purpose", "target-batch", "target-no-purpose"],
 )
-def test_files_listed_from_a_mixed_azure_group_come_from_the_resource_batch_uploads_use(
-    mixed_azure_group: respx.MockRouter, headers: dict[str, str], query: str, reached_sku: str
+def test_batch_files_listed_from_a_mixed_azure_group_come_from_its_chat_resource_then_its_batch_resource(
+    mixed_azure_group: respx.MockRouter, headers: dict[str, str], query: str, reached_skus: tuple[str, ...]
 ):
     listed_file: Final = {
         "object": "file",
@@ -1225,9 +1233,11 @@ def test_files_listed_from_a_mixed_azure_group_come_from_the_resource_batch_uplo
     listing: Final = client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key", **headers})
 
     assert listing.status_code == 200, listing.text
-    assert [get_original_file_id(listed["id"]) for listed in listing.json()["data"]] == [f"file-on-{reached_sku}"]
+    assert [get_original_file_id(listed["id"]) for listed in listing.json()["data"]] == [
+        f"file-on-{sku}" for sku in reached_skus
+    ]
     assert {sku: route.call_count for sku, route in list_routes.items()} == {
-        sku: int(sku == reached_sku) for sku in _MIXED_GROUP_SKUS
+        sku: int(sku in reached_skus) for sku in _MIXED_GROUP_SKUS
     }
 
 
@@ -1240,7 +1250,6 @@ def test_a_batch_file_listed_from_a_mixed_azure_group_opens_on_the_resource_it_w
     mixed_azure_group: respx.MockRouter, headers: dict[str, str], query: str
 ):
     listed_file: Final = {
-        "id": "file-listed",
         "object": "file",
         "bytes": 1,
         "created_at": 0,
@@ -1252,10 +1261,15 @@ def test_a_batch_file_listed_from_a_mixed_azure_group_opens_on_the_resource_it_w
         mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files$").mock(
             return_value=httpx.Response(
                 200,
-                json={"object": "list", "data": [listed_file], "first_id": "file-listed", "last_id": "file-listed"},
+                json={
+                    "object": "list",
+                    "data": [{"id": f"file-on-{sku}", **listed_file}],
+                    "first_id": f"file-on-{sku}",
+                    "last_id": f"file-on-{sku}",
+                },
             )
         )
-        mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files/file-listed/content$").mock(
+        mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=rf"/files/file-on-{sku}/content$").mock(
             return_value=httpx.Response(200, content=f"rows from {sku}".encode())
         )
     caller_headers: Final = {"Authorization": "Bearer test-key", **headers}
@@ -1266,8 +1280,45 @@ def test_a_batch_file_listed_from_a_mixed_azure_group_opens_on_the_resource_it_w
         client.get(f"/v1/files/{file_id}/content", headers=caller_headers).content for file_id in listed_ids
     ]
 
-    assert contents == [b"rows from batch-sku"]
+    assert contents == [b"rows from chat-sku", b"rows from batch-sku"]
     assert (listing["first_id"], listing["last_id"]) == (listed_ids[0], listed_ids[-1])
+
+
+@pytest.mark.parametrize(
+    ("headers", "query"),
+    [({"x-litellm-model": "gpt-mixed"}, "?purpose=batch"), ({}, "?target_model_names=gpt-mixed&purpose=batch")],
+    ids=["header", "target-model-names"],
+)
+def test_batch_files_listed_from_a_group_whose_deployments_share_one_azure_resource_are_listed_once(
+    one_resource_azure_group: respx.MockRouter, headers: dict[str, str], query: str
+):
+    one_resource_azure_group.get(host="chat-sku.openai.azure.com", path__regex=r"/files$").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "id": "file-shared",
+                        "object": "file",
+                        "bytes": 1,
+                        "created_at": 0,
+                        "filename": "batch.jsonl",
+                        "purpose": "batch",
+                        "status": "processed",
+                    }
+                ],
+            },
+        )
+    )
+
+    listing: Final = client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key", **headers})
+
+    assert listing.status_code == 200, listing.text
+    assert [
+        (get_original_file_id(listed["id"]), decode_deployment_from_file_id(listed["id"]))
+        for listed in listing.json()["data"]
+    ] == [("file-shared", "batch-id")]
 
 
 def _batch_row(custom_id: str, model: str) -> bytes:

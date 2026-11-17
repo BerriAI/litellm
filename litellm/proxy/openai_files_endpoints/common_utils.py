@@ -396,7 +396,7 @@ def encode_batch_response_ids(response, model: str, deployment_id: str | None = 
             )
 
 
-def _hinted_listed_file(listed: object, model: str, deployment_id: str) -> object:
+def encode_listed_file(listed: object, model: str, deployment_id: str | None) -> object:
     file_id: Final = attribute_or_none(listed, "id")
     if not isinstance(listed, BaseModel) or not isinstance(file_id, str):
         return listed
@@ -418,7 +418,7 @@ def encode_listed_file_ids(page: object, model: str | None, deployment_id: str |
     )
     listed: Final = as_object_list(attribute_or_none(page, "data")) or ()
     return page.model_copy(
-        update={**hinted_cursors, "data": [_hinted_listed_file(file, model, deployment_id) for file in listed]}
+        update={**hinted_cursors, "data": [encode_listed_file(file, model, deployment_id) for file in listed]}
     )
 
 

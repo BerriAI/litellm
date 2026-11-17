@@ -10,7 +10,7 @@ import functools
 import itertools
 import tempfile
 import traceback
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import IO, Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
 
@@ -26,7 +26,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -37,7 +37,12 @@ from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model, sh
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
+    get_or_create_metadata_bucket,
+    has_attributes,
+    iter_items,
+)
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
@@ -87,9 +92,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     batch_row_model_for_deployment,
     deployment_drop_params,
     encode_file_id_with_model,
+    encode_listed_file,
     encode_listed_file_ids,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
+    get_original_file_id,
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
@@ -1745,6 +1752,64 @@ def _as_file_list_page(response: object) -> object:
     return FileListPage.model_validate(page)
 
 
+def _files_on_page(page: object) -> tuple[object, ...]:
+    return tuple(iter_items(attribute_or_none(page, "data") or ()))
+
+
+def _original_listed_id(listed: object) -> object:
+    listed_id: Final = attribute_or_none(listed, "id")
+    return get_original_file_id(listed_id) if isinstance(listed_id, str) else listed_id
+
+
+def _group_default_then_batch_files(batch_page: object, group_page: object, model: str) -> object:
+    if not isinstance(batch_page, BaseModel):
+        return batch_page
+    batch_files: Final = _files_on_page(batch_page)
+    listed_originals: Final = frozenset(map(_original_listed_id, batch_files))
+    group_files: Final = tuple(
+        encode_listed_file(listed, model, None)
+        for listed in _files_on_page(group_page)
+        if _original_listed_id(listed) not in listed_originals
+    )
+    files: Final = (*group_files, *batch_files)
+    ids: Final = tuple(attribute_or_none(listed, "id") for listed in files)
+    return batch_page.model_copy(
+        update={
+            "data": [*files],
+            "first_id": ids[0] if ids else None,
+            "last_id": ids[-1] if ids else None,
+            "has_more": any(attribute_or_none(page, "has_more") is True for page in (batch_page, group_page)),
+        }
+    )
+
+
+async def _with_group_default_files(
+    batch_page: object,
+    batch_deployment: str | None,
+    *,
+    model: str,
+    purpose: str | None,
+    request_data: Mapping[str, object],
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    list_provider_files: Callable[..., Awaitable[object]],
+) -> object:
+    if batch_deployment is None:
+        return batch_page
+    credentials: Final = await get_authorized_credentials_for_model(
+        llm_router=llm_router,
+        model_id=model,
+        user_api_key_dict=user_api_key_dict,
+        operation_context="file list",
+    )
+    group_data: Final = dict(request_data)
+    prepare_data_with_credentials(data=group_data, credentials=credentials)
+    group_files: Final = await list_provider_files(
+        custom_llm_provider=credentials["custom_llm_provider"], purpose=purpose, **group_data
+    )
+    return _group_default_then_batch_files(batch_page, _as_file_list_page(group_files), model)
+
+
 async def _list_owned_managed_files(
     managed_files_obj: BaseFileEndpoints,
     user_api_key_dict: UserAPIKeyAuth,
@@ -2039,18 +2104,32 @@ async def list_files(
             )
         elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
+            routed_request_data: Final[Mapping[str, object]] = dict(data)
             prepare_data_with_credentials(data=data, credentials=credentials)
             routed_files: Final = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
                 **data,
             )
-            response = encode_listed_file_ids(
-                _as_file_list_page(routed_files),
-                model=model_used,
-                deployment_id=batch_deployment_id(llm_router, model_used)
-                if purpose == "batch" and model_used is not None
-                else None,
+            routed_deployment_id: Final = (
+                batch_deployment_id(llm_router, model_used) if purpose == "batch" and model_used is not None else None
+            )
+            routed_page: Final = encode_listed_file_ids(
+                _as_file_list_page(routed_files), model=model_used, deployment_id=routed_deployment_id
+            )
+            response = (
+                await _with_group_default_files(
+                    routed_page,
+                    routed_deployment_id,
+                    model=model_used,
+                    purpose=purpose,
+                    request_data=routed_request_data,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                    list_provider_files=litellm.afile_list,
+                )
+                if model_used is not None
+                else routed_page
             )
 
             verbose_proxy_logger.debug("Listed files using model: %s", model_used)
@@ -2074,14 +2153,24 @@ async def list_files(
                 operation_context="file list",
                 deployment_id=list_deployment_id,
             )
+            target_request_data: Final[Mapping[str, object]] = dict(data)
             prepare_data_with_credentials(data=data, credentials=credentials)
             target_files: Final = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
                 **data,
             )
-            response = encode_listed_file_ids(
-                _as_file_list_page(target_files), model=target_model_name, deployment_id=list_deployment_id
+            response = await _with_group_default_files(
+                encode_listed_file_ids(
+                    _as_file_list_page(target_files), model=target_model_name, deployment_id=list_deployment_id
+                ),
+                list_deployment_id,
+                model=target_model_name,
+                purpose=purpose,
+                request_data=target_request_data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                list_provider_files=litellm.afile_list,
             )
         else:
             custom_llm_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)

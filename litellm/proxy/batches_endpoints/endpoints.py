@@ -18,7 +18,6 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
-from litellm.litellm_core_utils.batch_utils import model_embedded_payload
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
@@ -162,24 +161,20 @@ async def _list_mixed_group_batches(
     list_page: _ListBatchPage, batch_deployment: str, after: str | None, limit: int | None
 ) -> object:
     page_size: Final = limit or _DEFAULT_BATCH_LIST_LIMIT
-    if (
-        after is not None
-        and model_embedded_payload(after) is not None
-        and decode_deployment_from_file_id(after) is None
-    ):
-        group_page: Final = await list_page(None, get_original_file_id(after), page_size)
-        group_has_more: Final = attribute_or_none(group_page, "has_more") is True
-        return _page_listing(group_page, _listed_batches(group_page), group_has_more)
-    batch_page: Final = await list_page(batch_deployment, get_original_file_id(after) if after else None, page_size)
-    on_batch_deployment: Final = _listed_batches(batch_page)
-    remaining: Final = page_size - len(on_batch_deployment)
-    if attribute_or_none(batch_page, "has_more") is True or remaining <= 0:
-        return _page_listing(batch_page, on_batch_deployment, True)
-    first_group_page: Final = await list_page(None, None, remaining)
+    if after is not None and decode_deployment_from_file_id(after) is not None:
+        batch_page: Final = await list_page(batch_deployment, get_original_file_id(after), page_size)
+        batch_has_more: Final = attribute_or_none(batch_page, "has_more") is True
+        return _page_listing(batch_page, _listed_batches(batch_page), batch_has_more)
+    group_page: Final = await list_page(None, get_original_file_id(after) if after else None, page_size)
+    on_group_default: Final = _listed_batches(group_page)
+    remaining: Final = page_size - len(on_group_default)
+    if attribute_or_none(group_page, "has_more") is True or remaining <= 0:
+        return _page_listing(group_page, on_group_default, True)
+    first_batch_page: Final = await list_page(batch_deployment, None, remaining)
     return _page_listing(
-        first_group_page,
-        (*on_batch_deployment, *_listed_batches(first_group_page)),
-        attribute_or_none(first_group_page, "has_more") is True,
+        first_batch_page,
+        (*on_group_default, *_listed_batches(first_batch_page)),
+        attribute_or_none(first_batch_page, "has_more") is True,
     )
 
 
@@ -829,7 +824,9 @@ async def retrieve_batch(
                 **data,
             )
 
-            encode_batch_response_ids(response, model=model_from_id, deployment_id=retrieve_deployment_id)
+            encode_batch_response_ids(
+                response, model=model_from_id, deployment_id=decode_deployment_from_file_id(batch_id)
+            )
 
             verbose_proxy_logger.debug(
                 "Retrieved batch using model: %s, original_id: %s", model_from_id, original_batch_id
@@ -1245,7 +1242,9 @@ async def cancel_batch(
                 **data,
             )
 
-            encode_batch_response_ids(response, model=model_from_id, deployment_id=cancel_deployment_id)
+            encode_batch_response_ids(
+                response, model=model_from_id, deployment_id=decode_deployment_from_file_id(batch_id)
+            )
 
             verbose_proxy_logger.debug(
                 "Cancelled batch using model: %s, original_id: %s", model_from_id, original_batch_id
