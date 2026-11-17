@@ -6,7 +6,7 @@ use litellm_llms_types::{
     providers::anthropic::BetaProvider,
 };
 use litellm_router_types::LitellmParams;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     Error, MantleRegionCheck,
@@ -36,7 +36,7 @@ use crate::{
             AMAZON_MANTLE_REQUEST_SETTINGS, MANTLE_API_BASE_ENV, MANTLE_MESSAGES_PATH,
             amazon_mantle_model_id, bearer_environment, mantle_headers, mantle_secret_names,
             mantle_wire_body, sigv4_environment, transform_mantle_messages_request,
-            validated_mantle_region, with_zero_usage,
+            unchecked_with_zero_usage, validated_mantle_region, with_zero_usage,
         },
     },
 };
@@ -342,6 +342,13 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
         with_zero_usage(response)
+    }
+
+    fn transform_unchecked_response(
+        &self,
+        body: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        unchecked_with_zero_usage(body)
     }
 
     fn logged_params(
@@ -1056,11 +1063,10 @@ mod tests {
     ) {
         let refused =
             config.transform_anthropic_messages_response("claude-test", replied_usage(Some(usage)));
-        let Err(Error::InvalidResponse(ErrorDetail::NonObjectUsage { actual: named })) = refused
-        else {
+        let Err(Error::InvalidResponse(ErrorDetail::UnbillableUsage { reason })) = refused else {
             panic!("expected a refused usage, got {refused:?}");
         };
-        assert_eq!(named, actual);
+        assert_eq!(reason, format!("got {actual}"));
     }
 
     fn replied_usage(usage: Option<Value>) -> MessagesResponse {

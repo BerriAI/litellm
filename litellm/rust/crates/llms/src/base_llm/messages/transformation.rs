@@ -4,7 +4,7 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
     context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
@@ -73,6 +73,14 @@ pub trait BaseMessagesConfig: Sync {
         _model: &str,
     ) -> bool {
         false
+    }
+
+    /// A reply body that did not parse as a message, such as a 200 error envelope, as the caller gets it.
+    fn transform_unchecked_response(
+        &self,
+        body: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        Ok(body)
     }
 
     /// The requested params the call logs as its model parameters.

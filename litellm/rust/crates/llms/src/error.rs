@@ -234,9 +234,10 @@ pub enum ErrorDetail {
         region: String,
         check: MantleRegionCheck,
     },
-    /// A Mantle reply whose `usage` is present but is not an object, which litellm cannot bill.
-    #[error("Bedrock Mantle returned a `usage` that is not a JSON object (got {actual})")]
-    NonObjectUsage { actual: &'static str },
+    /// A Mantle reply whose `usage` is present but is not an object of token counts, which litellm
+    /// cannot bill.
+    #[error("Bedrock Mantle returned a `usage` litellm cannot bill: {reason}")]
+    UnbillableUsage { reason: String },
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]

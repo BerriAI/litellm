@@ -313,7 +313,7 @@ pub(crate) fn route_failure(
             }
             if matches!(
                 error.refused_response(),
-                Some(litellm_llms::ErrorDetail::NonObjectUsage { .. })
+                Some(litellm_llms::ErrorDetail::UnbillableUsage { .. })
             ) {
                 value.setattr(MESSAGES_REFUSED_REPLY, true)?;
             }

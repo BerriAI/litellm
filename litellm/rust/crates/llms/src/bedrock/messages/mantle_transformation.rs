@@ -14,6 +14,7 @@ use litellm_llms_types::{
     providers::anthropic::BetaProvider,
 };
 use litellm_router_types::LitellmParams;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -52,7 +53,6 @@ pub(crate) const MANTLE_MESSAGES_PATH: &str = "/anthropic/v1/messages";
 pub(crate) const MANTLE_API_BASE_ENV: &str = "BEDROCK_MANTLE_API_BASE";
 const MANTLE_OPENAI_BASE_SUFFIXES: [&str; 2] = ["/openai/v1", "/v1"];
 const DEFAULT_ANTHROPIC_API_VERSION: &str = "2023-06-01";
-const ZERO_USAGE_FIELDS: [&str; 2] = ["input_tokens", "output_tokens"];
 const MANTLE_ALLOWED_TOP_LEVEL_FIELDS: [&str; 1] = ["service_tier"];
 const SECRET_NAMES: [&str; 5] = [
     AWS_BEARER_TOKEN_BEDROCK,
@@ -230,36 +230,62 @@ pub(crate) fn mantle_wire_body(body: Value, model_id: impl Fn(&str) -> String) -
     Value::Object(kept.chain(mantle_fields).collect::<Map<_, _>>())
 }
 
-/// Python's `AmazonMantleMessagesConfig.transform_anthropic_messages_response`: an absent or null
-/// `usage` bills zero tokens, any other non-object `usage` is refused.
-pub(crate) fn with_zero_usage(response: MessagesResponse) -> Result<MessagesResponse, Error> {
-    let existing = match response.usage {
+/// The usage a Mantle reply bills: the two token counts Python zero-fills, every other field as sent.
+#[derive(Debug, Deserialize, Serialize)]
+struct BilledUsage {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+    #[serde(flatten)]
+    other: Map<String, Value>,
+}
+
+fn unbillable(reason: impl ToString) -> Error {
+    Error::InvalidResponse(ErrorDetail::UnbillableUsage {
+        reason: reason.to_string(),
+    })
+}
+
+/// An absent or null `usage` bills zero tokens, an object gets its missing counts zero-filled, and
+/// anything else is refused.
+fn billed_usage(usage: Option<Value>) -> Result<BilledUsage, Error> {
+    let usage = match usage {
         None | Some(Value::Null) => Map::new(),
-        Some(Value::Object(ref usage)) => usage.clone(),
-        Some(ref other) => {
-            return Err(Error::InvalidResponse(ErrorDetail::NonObjectUsage {
-                actual: json_type_name(other),
-            }));
+        Some(Value::Object(usage)) => usage,
+        Some(other) => {
+            return Err(unbillable(format!("got {}", json_type_name(&other))));
         }
     };
-    let zero_filled = ZERO_USAGE_FIELDS.map(|name| {
-        (
-            name.to_string(),
-            existing.get(name).cloned().unwrap_or(Value::from(0)),
-        )
-    });
-    let usage = zero_filled
-        .into_iter()
-        .chain(
-            existing
-                .into_iter()
-                .filter(|(name, _)| !ZERO_USAGE_FIELDS.contains(&name.as_str())),
-        )
-        .collect::<Map<_, _>>();
+    let billed: BilledUsage = serde_json::from_value(Value::Object(usage)).map_err(unbillable)?;
+    Ok(BilledUsage {
+        input_tokens: Some(billed.input_tokens.unwrap_or(0)),
+        output_tokens: Some(billed.output_tokens.unwrap_or(0)),
+        ..billed
+    })
+}
+
+fn usage_value(usage: BilledUsage) -> Result<Value, Error> {
+    serde_json::to_value(usage).map_err(unbillable)
+}
+
+/// Python's `AmazonMantleMessagesConfig.transform_anthropic_messages_response`.
+pub(crate) fn with_zero_usage(response: MessagesResponse) -> Result<MessagesResponse, Error> {
+    let usage = usage_value(billed_usage(response.usage.clone())?)?;
     Ok(MessagesResponse {
-        usage: Some(Value::Object(usage)),
+        usage: Some(usage),
         ..response
     })
+}
+
+/// A reply that is not a message, such as a 200 error envelope, still bills zero-filled usage, as
+/// Python's Mantle response transform fills it on whatever the provider answered.
+pub(crate) fn unchecked_with_zero_usage(
+    mut body: Map<String, Value>,
+) -> Result<Map<String, Value>, Error> {
+    let usage = usage_value(billed_usage(body.remove("usage"))?)?;
+    body.insert("usage".to_string(), usage);
+    Ok(body)
 }
 
 fn json_type_name(value: &Value) -> &'static str {
@@ -432,6 +458,13 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
         with_zero_usage(response)
+    }
+
+    fn transform_unchecked_response(
+        &self,
+        body: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        unchecked_with_zero_usage(body)
     }
 
     fn logged_params(
