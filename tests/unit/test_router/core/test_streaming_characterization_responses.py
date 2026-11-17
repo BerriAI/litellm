@@ -9,13 +9,17 @@ Scripted streams are ``BaseResponsesAPIStreamingIterator`` subclasses
 completion-bridge iterator does.
 """
 
+import asyncio
+import gc
+import weakref
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 import pytest
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.router_core import RouterCore
 from litellm.types.llms.openai import (
@@ -551,3 +555,120 @@ async def test_the_failed_stream_is_closed_before_the_retry_is_opened(make_core:
     core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
     assert await collect_event_types(await open_stream(core)) == [CREATED, TEXT_DELTA, COMPLETED]
     assert closed_when_retry_opens == [True]
+
+
+# --- a finished stream frees its request ------------------------------------------------------------
+
+
+class _RequestState:
+    pass
+
+
+@runtime_checkable
+class _Stream(Protocol):
+    def __aiter__(self) -> "_Stream": ...
+
+    async def __anext__(self) -> object: ...
+
+    async def aclose(self) -> None: ...
+
+
+Ending: TypeAlias = Literal[
+    "read to the end",
+    "fell back mid-stream",
+    "retried in its group mid-stream",
+    "closed mid-stream",
+    "dropped mid-stream without closing",
+]
+
+
+class _FreshlyCutStream(ScriptedResponsesStream):
+    """Raises a new cut: a stream holding one error would pin the request through that error's traceback."""
+
+    async def __anext__(self) -> object:
+        try:
+            return await super().__anext__()
+        except StopAsyncIteration:
+            raise cut() from None
+
+
+def _cut_after_created(**_request: object) -> ScriptedResponsesStream:  # kwargs-ok: the host passes the request kwargs
+    return _FreshlyCutStream([Event(CREATED)], None, "d1", "anthropic", None)
+
+
+def _answer(host: ScriptedHost, ending: Ending) -> None:
+    if ending == "fell back mid-stream":
+        host.answer("openai/a", _cut_after_created)
+        host.answer("openai/b", fallback_ok())
+    elif ending == "retried in its group mid-stream":
+        host.answer("openai/a", _cut_after_created, retried_ok())
+    else:
+        host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA), Event(COMPLETED)))
+
+
+async def _request_after_a_stream(
+    core: RouterCore, host: ScriptedHost, ending: Ending
+) -> "tuple[weakref.ref[_RequestState], weakref.ref[LiteLLMLogging]]":
+    state: Final = _RequestState()
+    stream: Final = await open_stream(core, metadata={"state": state})
+    assert isinstance(stream, BaseResponsesAPIStreamingIterator) and isinstance(stream, _Stream)
+    logging_obj: Final[object] = stream.logging_obj
+    assert isinstance(logging_obj, LiteLLMLogging)
+    if ending in ("closed mid-stream", "dropped mid-stream without closing"):
+        assert getattr(await anext(stream), "type") == CREATED
+        if ending == "closed mid-stream":
+            await stream.aclose()
+    else:
+        assert (await collect_event_types(stream))[-1] == COMPLETED
+    host.calls.clear()
+    host.raised.clear()
+    return weakref.ref(state), weakref.ref(logging_obj)
+
+
+async def _run_pending_loop_callbacks() -> None:
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize(
+    "ending",
+    [
+        "read to the end",
+        "fell back mid-stream",
+        "retried in its group mid-stream",
+        "closed mid-stream",
+        "dropped mid-stream without closing",
+    ],
+)
+async def test_a_dropped_stream_frees_its_request_and_logging_object_without_a_gc_pass(
+    make_core: MakeCore, host: ScriptedHost, ending: Ending
+) -> None:
+    _answer(host, ending)
+    core: Final = build(make_core, num_retries=1)
+    gc.collect()
+    gc.disable()
+    try:
+        state, logging_obj = await _request_after_a_stream(core, host, ending)
+        await _run_pending_loop_callbacks()
+        assert state() is None, "the dropped stream's request stays in a reference cycle until the next gc pass"
+        assert logging_obj() is None, "the dropped stream's logging object waits for the next gc pass"
+    finally:
+        gc.enable()
+
+
+async def test_a_mid_stream_fallback_streams_the_primarys_text_then_the_fallbacks_in_order(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), delta("hel", 1), error=cut("hel")))
+    host.answer("openai/b", fallback_ok(Event(CREATED), delta("lo", 1), delta(" there", 2), Event(COMPLETED)))
+    core: Final = build(make_core)
+    stream: Final = await open_stream(core)
+    assert isinstance(stream, _Stream)
+    events: Final = tuple([event async for event in stream])
+    assert [getattr(event, "delta") for event in events if getattr(event, "type") == TEXT_DELTA] == [
+        "hel",
+        "lo",
+        " there",
+    ]
+    assert getattr(events[-1], "type") == COMPLETED
+    assert host.deployments_called() == ["a", "b"]
