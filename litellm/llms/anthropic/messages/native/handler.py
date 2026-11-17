@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, resolve_beta_provider
 from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
@@ -34,6 +34,7 @@ from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.outcomes import Patch
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
@@ -61,7 +62,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet
+from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet, ProviderSpecificHeader
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
@@ -327,6 +328,56 @@ def _native_messages_config(
     )
 
     return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
+
+
+def filters_betas_through_the_beta_map(model: str, custom_llm_provider: str | None, api_base: str | None) -> bool:
+    affinity_api_base: Final = (
+        AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
+    )
+    if (
+        custom_llm_provider is not None
+        and resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
+    ):
+        return True
+    config: Final = _native_messages_config(
+        model.removeprefix(f"{custom_llm_provider}/"), custom_llm_provider, None, api_base
+    )
+    return config is not None and config.should_filter_anthropic_beta_headers()
+
+
+def _names_a_beta(headers: object) -> bool:
+    return any(name.lower() == "anthropic-beta" for name in as_str_mapping(headers) or {})
+
+
+def _call_provider(model: str, named_provider: object, api_base: str | None) -> str | None:
+    if isinstance(named_provider, str):
+        return named_provider
+    resolved: Final = _resolve_by_model_prefix(model, GenericLiteLLMParams(api_base=api_base))
+    return None if resolved is None else resolved[1]
+
+
+def _carries_betas(request: Mapping[str, object], provider: str | None) -> bool:
+    if request.get("safeguards") is not None or any(
+        map(_names_a_beta, (request.get("headers"), request.get("extra_headers")))
+    ):
+        return True
+    return _names_a_beta(
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=cast(  # cast-ok: the handler hands the caller's value on unvalidated
+                ProviderSpecificHeader | None, request.get("provider_specific_header")
+            ),
+            custom_llm_provider=provider,
+            native_anthropic_messages=True,
+        )
+    )
+
+
+def loads_beta_headers_config(request: Mapping[str, object]) -> bool:
+    model: Final = str(request["model"])
+    api_base: Final = request.get("api_base")
+    base: Final = api_base if isinstance(api_base, str) else None
+    provider: Final = _call_provider(model, request.get("custom_llm_provider"), base)
+    return _carries_betas(request, provider) and filters_betas_through_the_beta_map(model, provider, base)
 
 
 async def _proxy_classifies(model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig | None) -> bool:

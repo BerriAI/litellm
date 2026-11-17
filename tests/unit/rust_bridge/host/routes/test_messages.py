@@ -326,6 +326,16 @@ def test_beta_headers_config_is_the_map_python_loaded_for_a_filtering_call(
     assert carried or config is None
 
 
+def test_beta_headers_config_leaves_an_unloaded_map_unloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+
+    config: Final = messages_host.beta_headers_config("azure_ai/claude-sonnet-4-5", "azure_ai", None)
+
+    assert config is None
+    assert anthropic_beta_headers_manager.loaded_beta_headers_config() is None
+
+
 @pytest.mark.parametrize(
     ("call", "expected"),
     [

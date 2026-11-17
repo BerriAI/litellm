@@ -7,6 +7,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.integrations.custom_logger import CustomLogger
@@ -56,6 +57,28 @@ async def _amessages(call: NativeCall) -> object:
 async def _read(stream: object) -> bytes:
     assert isinstance(stream, AnthropicMessagesStreamingResponse | CachedAnthropicMessagesStreamIterator)
     return b"".join([bytes(chunk) async for chunk in stream])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra", "loaded"),
+    [
+        pytest.param({}, False, id="no_beta"),
+        pytest.param({"extra_headers": {"anthropic-beta": "advisor-tool-2026-03-01"}}, True, id="caller_beta"),
+    ],
+)
+async def test_an_azure_ai_call_loads_the_beta_map_only_when_it_carries_a_beta(
+    monkeypatch: pytest.MonkeyPatch, server: RecordingServer, extra: dict[str, object], loaded: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    server.enqueue(_STREAM)
+    plain: Final = _azure_ai_call(server)
+    call: Final = NativeCall(args=(), kwargs={**plain.kwargs, **extra}, base={**plain.base, **extra})
+
+    await _read(await _amessages(call))
+
+    assert (anthropic_beta_headers_manager.loaded_beta_headers_config() is not None) is loaded
 
 
 @pytest.mark.asyncio

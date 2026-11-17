@@ -210,6 +210,10 @@ async def aload_beta_headers_config() -> None:
         await asyncio.get_running_loop().run_in_executor(_BETA_HEADERS_CONFIG_LOADER, _load_beta_headers_config)
 
 
+def loaded_beta_headers_config() -> Mapping[str, object] | None:
+    return _BETA_HEADERS_CONFIG  # pyright: ignore[reportUnknownVariableType]  # the cache is typed bare dict
+
+
 @cache
 def _bundled_beta_headers_config() -> BetaHeadersConfig:
     return _BETA_HEADERS_CONFIG_ADAPTER.validate_python(GetAnthropicBetaHeadersConfig.load_local_beta_headers_config())

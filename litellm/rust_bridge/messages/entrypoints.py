@@ -4,6 +4,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
+from litellm.anthropic_beta_headers_manager import (
+    _load_beta_headers_config,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the manager's own cached loader, typed bare dict
+    aload_beta_headers_config,
+)
+from litellm.llms.anthropic.messages.native.handler import loads_beta_headers_config
 from litellm.rust_bridge import execution
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
@@ -86,7 +91,13 @@ def _messages_binding(value: object) -> NativeMessages | None:
     if not callable(value):
         return None
     native: Final = execution.synchronous(value)
-    return cast("NativeMessages", native)  # cast-ok: the execution adapter returns the route's result
+
+    def messages(request: NativeCall) -> object:
+        if loads_beta_headers_config(request.resolved):
+            _load_beta_headers_config()
+        return native(request)
+
+    return cast("NativeMessages", messages)  # cast-ok: the execution adapter returns the route's result
 
 
 def _amessages_binding(value: object) -> NativeAmessages | None:
@@ -94,8 +105,10 @@ def _amessages_binding(value: object) -> NativeAmessages | None:
         return None
     native: Final = execution.asynchronous(value, _open_stream)
 
-    def amessages(request: NativeCall) -> Awaitable[object]:
-        return _delivered(native(request))
+    async def amessages(request: NativeCall) -> object:
+        if loads_beta_headers_config(request.resolved):
+            await aload_beta_headers_config()
+        return await _delivered(native(request))
 
     return cast("NativeAmessages", amessages)  # cast-ok: the execution adapter returns the route's result
 
