@@ -442,6 +442,9 @@ class PassThroughStreamingHandler:
                 else agents_turn_start_from_stream(
                     call=agents_call,
                     request_body=_JSON_OBJECT.validate_python(request_body),
+                    request_headers=proxy_request_headers(
+                        as_str_mapping(litellm_logging_obj.model_call_details.get("litellm_params"))
+                    ),
                     raw_bytes=raw_bytes,
                     start_time=start_time,
                 )

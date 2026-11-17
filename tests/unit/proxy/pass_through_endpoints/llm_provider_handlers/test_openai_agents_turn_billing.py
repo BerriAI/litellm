@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
     OpenAIAgentsTurnBiller,
+    TurnClaims,
     live_agents_api_get,
 )
 from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
@@ -110,7 +111,7 @@ class _AgentsApi:
         self.urls: Final[list[str]] = []
         self.turn_polls = 0
 
-    async def get(self, base_url: str, path: str) -> httpx.Response:
+    async def get(self, base_url: str, path: str, scope_headers: Mapping[str, str]) -> httpx.Response:
         url: Final = f"{base_url}/{path}"
         self.urls.append(url)
         request: Final = httpx.Request("GET", url)
@@ -125,6 +126,36 @@ class _AgentsApi:
         if url == f"{SESSIONS_URL}/{SESSION_ID}" and self._session is not None:
             return httpx.Response(200, json=dict(self._session), request=request)
         return httpx.Response(404, json={"error": {"message": "not found"}}, request=request)
+
+
+class _SharedRedis:
+    def __init__(self) -> None:
+        self.values: Final[dict[str, object]] = {}
+
+    async def async_set_cache(self, key: str, value: object, *, nx: bool, ttl: int) -> object:
+        if nx and key in self.values:
+            return None
+        self.values[key] = value
+        return True
+
+    async def async_get_cache(self, key: str) -> object:
+        return self.values.get(key)
+
+
+class _DownRedis:
+    async def async_set_cache(self, key: str, value: object, *, nx: bool, ttl: int) -> object:
+        raise ConnectionError("redis is down")
+
+    async def async_get_cache(self, key: str) -> object:
+        raise ConnectionError("redis is down")
+
+
+class _SwallowingRedis:
+    async def async_set_cache(self, key: str, value: object, *, nx: bool, ttl: int) -> object:
+        return None
+
+    async def async_get_cache(self, key: str) -> object:
+        return None
 
 
 class _SpendRows(CustomLogger):
@@ -149,7 +180,9 @@ class _SpendRows(CustomLogger):
         return self.rows[0]
 
 
-def _logging_obj(rows: _SpendRows, litellm_call_id: str, stream: bool) -> LiteLLMLoggingObj:
+def _logging_obj(
+    rows: _SpendRows, litellm_call_id: str, stream: bool, request_headers: Mapping[str, str] | None = None
+) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="unknown",
         messages=[],
@@ -161,7 +194,11 @@ def _logging_obj(rows: _SpendRows, litellm_call_id: str, stream: bool) -> LiteLL
         dynamic_async_success_callbacks=[rows],
     )
     logging_obj.update_environment_variables(
-        model="unknown", user="unknown", optional_params={}, litellm_params={}, call_type="pass_through_endpoint"
+        model="unknown",
+        user="unknown",
+        optional_params={},
+        litellm_params={"proxy_server_request": {"headers": dict(request_headers or {})}},
+        call_type="pass_through_endpoint",
     )
     logging_obj.model_call_details["custom_llm_provider"] = "openai"
     return logging_obj
@@ -179,11 +216,12 @@ async def _relay_call(
     response_body: dict[str, object] | None,
     litellm_call_id: str,
     status_code: int = 200,
+    request_headers: Mapping[str, str] | None = None,
 ) -> None:
     await PassThroughEndpointLogging(agents_turn_biller=biller).pass_through_async_success_handler(
         httpx_response=httpx.Response(status_code, json=response_body, request=httpx.Request("POST", url_route)),
         response_body=response_body,
-        logging_obj=_logging_obj(rows, litellm_call_id, stream=False),
+        logging_obj=_logging_obj(rows, litellm_call_id, stream=False, request_headers=request_headers),
         url_route=url_route,
         result="",
         start_time=CALL_TIME,
@@ -266,6 +304,88 @@ async def test_two_calls_on_one_session_bill_two_different_turns(local_model_cos
     billed: Final = sorted([(await first.only_row())["total_tokens"], (await second.only_row())["total_tokens"]])
 
     assert billed == sorted([TURN_USAGE["total_tokens"], SECOND_TURN_USAGE["total_tokens"]])
+
+
+@pytest.mark.asyncio
+async def test_two_workers_on_one_session_bill_two_different_turns(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (
+                _turn("turn_2", CALL_STARTED_AT, "completed", SECOND_TURN_USAGE),
+                _turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),
+            ),
+        ),
+        session=_session(),
+    )
+    redis: Final = _SharedRedis()
+    clock: Final = _Clock()
+    first: Final = _SpendRows()
+    second: Final = _SpendRows()
+
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, claims=TurnClaims(lambda: redis)),
+        first,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "3c5e7a9c-1d3f-4a6b-9e2c-4b6d8f0a2c39",
+    )
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, claims=TurnClaims(lambda: redis)),
+        second,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "5e7a9c1e-3f5b-4c8d-ae4c-6d8f0b2c4e5a",
+    )
+    billed: Final = sorted([(await first.only_row())["total_tokens"], (await second.only_row())["total_tokens"]])
+
+    assert billed == sorted([TURN_USAGE["total_tokens"], SECOND_TURN_USAGE["total_tokens"]])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "redis", [pytest.param(_DownRedis(), id="raises"), pytest.param(_SwallowingRedis(), id="swallows_errors")]
+)
+async def test_a_shared_claim_store_outage_still_bills_the_turn(
+    local_model_cost_map: None, redis: _DownRedis | _SwallowingRedis
+):
+    clock: Final = _Clock()
+    rows: Final = _SpendRows()
+    api: Final = _AgentsApi(turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),))
+
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, claims=TurnClaims(lambda: redis)),
+        rows,
+        SESSIONS_URL,
+        {"agent": {"model": AGENT_MODEL}, "input": "Say hi in one word"},
+        _session(),
+        "1f3b5d7f-9a2c-4e6b-8d0f-2b4d6f8a0c13",
+    )
+
+    assert (await rows.only_row())["total_tokens"] == TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_an_agent_named_in_the_events_body_never_sets_the_price(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),), session=_session()
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE], "agent": {"model": "gpt-4o-mini", "service_tier": "flex"}},
+        None,
+        "2a4c6e8a-0c2e-4f4a-9b6d-3d5f7b9d1f24",
+    )
+    row: Final = await rows.only_row()
+
+    assert f"{SESSIONS_URL}/{SESSION_ID}" in api.urls
+    assert row["model"] == AGENT_MODEL
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
 
 
 @pytest.mark.asyncio
@@ -423,7 +543,7 @@ async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed
 
 
 @pytest.mark.asyncio
-async def test_the_turns_poll_sends_the_passthrough_openai_key_and_the_agents_beta_header(
+async def test_the_polls_send_the_passthrough_key_and_the_callers_openai_scope(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -436,19 +556,29 @@ async def test_the_turns_poll_sends_the_passthrough_openai_key_and_the_agents_be
 
     with respx.mock(assert_all_called=True) as upstream:
         turns: Final = upstream.get(TURNS_URL).respond(json=turns_page)
+        session: Final = upstream.get(f"{SESSIONS_URL}/{SESSION_ID}").respond(json=_session())
         await _relay_call(
             OpenAIAgentsTurnBiller(get=live_agents_api_get, sleep=clock.sleep, clock=clock),
             rows,
-            SESSIONS_URL,
-            {"agent": {"model": AGENT_MODEL}, "input": "Say hi in one word"},
-            _session(),
+            EVENTS_URL,
+            {"events": [INPUT_MESSAGE]},
+            None,
             "8c0e2a4c-6e8a-4b0c-9d4e-7c9e1a3c5e68",
+            request_headers={
+                "x-pass-OpenAI-Project": "proj_agents_scoped",
+                "x-pass-openai-organization": "org_agents_scoped",
+                "x-pass-authorization": "Bearer sk-caller-override",
+                "openai-project": "proj_not_forwarded",
+            },
         )
         row: Final = await rows.only_row()
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    assert turns.calls.last.request.headers["authorization"] == "Bearer sk-agents-turns-poll"
-    assert turns.calls.last.request.headers["openai-beta"] == "agents=v1"
+    for poll in (turns.calls.last.request, session.calls.last.request):
+        assert poll.headers["authorization"] == "Bearer sk-agents-turns-poll"
+        assert poll.headers["openai-beta"] == "agents=v1"
+        assert poll.headers["openai-project"] == "proj_agents_scoped"
+        assert poll.headers["openai-organization"] == "org_agents_scoped"
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
 
 
