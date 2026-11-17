@@ -12889,3 +12889,41 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+@pytest.mark.asyncio
+async def test_acompletion_awaits_a_per_request_async_failure_callback() -> None:
+    """An async function passed as failure_callback= must reach the async failure
+    path; before the fix it stayed in dynamic_failure_callbacks and never ran."""
+    calls: Final[list[object]] = []
+
+    async def record_failure(kwargs, response_obj, start_time, end_time) -> None:
+        calls.append(kwargs)
+
+    with pytest.raises(litellm.AuthenticationError, match="bad key"):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+            failure_callback=[record_failure],
+        )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_acompletion_leaves_the_callers_success_callback_list_untouched() -> None:
+    """The dynamic callback split must not pop entries out of the caller's own
+    success_callback list, so reusing one list keeps its async callbacks."""
+    async def record_success(kwargs, response_obj, start_time, end_time) -> None:
+        pass
+
+    success_callbacks: Final = [record_success]
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ok",
+        success_callback=success_callbacks,
+    )
+
+    assert success_callbacks == [record_success]
