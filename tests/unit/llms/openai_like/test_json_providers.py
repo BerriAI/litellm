@@ -5,6 +5,7 @@ Tests for JSON-based provider configuration system.
 import os
 import sys
 from collections.abc import Callable
+from typing import Final
 from unittest.mock import patch
 
 try:
@@ -381,13 +382,13 @@ def test_json_provider_without_its_key_fails_before_sending_the_openai_key(
     import litellm
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-    provider_config = JSONProviderRegistry.get(provider)
+    provider_config: Final = JSONProviderRegistry.get(provider)
     assert provider_config is not None
     monkeypatch.delenv(provider_config.api_key_env, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
 
     with respx.mock(assert_all_called=False) as upstream:
-        route = upstream.route().respond(200, json={})
+        route: Final = upstream.route().respond(200, json={})
         with pytest.raises(litellm.AuthenticationError, match=provider_config.api_key_env):
             call(f"{provider}/some-model")
 
@@ -402,7 +403,7 @@ def test_json_provider_moderation_sends_its_own_env_key(monkeypatch: pytest.Monk
     import litellm
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-    provider_config = JSONProviderRegistry.get("parasail")
+    provider_config: Final = JSONProviderRegistry.get("parasail")
     assert provider_config is not None
     monkeypatch.delenv(provider_config.api_base_env or "", raising=False)
     monkeypatch.setenv(provider_config.api_key_env, "sk-parasail-env")
@@ -410,7 +411,7 @@ def test_json_provider_moderation_sends_its_own_env_key(monkeypatch: pytest.Monk
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with respx.mock() as upstream:
-        route = upstream.post(f"{provider_config.base_url}/moderations").respond(
+        route: Final = upstream.post(f"{provider_config.base_url}/moderations").respond(
             200, json={"id": "modr_1", "model": "some-model", "results": [{"flagged": False}]}
         )
         asyncio.run(litellm.amoderation(model="parasail/some-model", input="hi"))
@@ -429,14 +430,14 @@ def test_json_provider_realtime_call_without_its_key_sends_the_callers_ephemeral
     import litellm
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-    provider_config = JSONProviderRegistry.get("parasail")
+    provider_config: Final = JSONProviderRegistry.get("parasail")
     assert provider_config is not None
     monkeypatch.delenv(provider_config.api_key_env, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with respx.mock() as upstream:
-        route = upstream.route().respond(201, text="v=0", headers={"Location": "/v1/realtime/calls/rtc_1"})
+        route: Final = upstream.route().respond(201, text="v=0", headers={"Location": "/v1/realtime/calls/rtc_1"})
         asyncio.run(
             litellm.arealtime_calls(model="parasail/some-model", openai_ephemeral_key="ek_caller", sdp_body=b"v=0")
         )
