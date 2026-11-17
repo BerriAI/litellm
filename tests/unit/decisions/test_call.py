@@ -66,6 +66,43 @@ def test_systemone_logs_every_request_field_the_caller_sent():
     assert set(logged) == {"state", "questions"}
 
 
+def test_systemone_hook_added_no_log_reaches_retained_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    request_kwargs: Final = dict[str, object](litellm_call_id="systemone-hook-no-log")
+    logging_obj: Final = Logging(
+        model="hosted_vllm/jev-fake",
+        messages="placeholder",
+        stream=False,
+        call_type="asystemone",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="systemone-hook-no-log",
+        function_id="systemone-hook-no-log",
+        kwargs=request_kwargs,
+    )
+    request_kwargs.update({"litellm_logging_obj": logging_obj, "no-log": True})
+
+    call: Final = _prepare_systemone_call(
+        **CONNECTION,
+        state={"message": "My card was charged twice."},
+        questions={"billing": {"type": "noul", "instructions": QUESTION_TEXT}},
+        images=None,
+        assets=None,
+        audio=None,
+        videos=None,
+        kwargs=request_kwargs,
+    )
+
+    assert call.logging_obj is logging_obj
+    assert (
+        logging_obj.should_run_callback(
+            callback="generic",
+            litellm_params=logging_obj.model_call_details["litellm_params"],
+            event_hook="success_handler",
+        )
+        is False
+    )
+
+
 def test_decisions_logs_every_request_field_the_caller_sent():
     logging_obj: Final = _logging_obj("adecisions")
 
