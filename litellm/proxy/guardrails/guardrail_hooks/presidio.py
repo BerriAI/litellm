@@ -1209,17 +1209,30 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
-        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
-            messages: Final[list | None] = kwargs.get("messages", None)
+        import copy
+
+        from litellm.types.utils import CallTypes
+
+        supported_call_types: Final = {
+            CallTypes.completion.value,
+            CallTypes.acompletion.value,
+            CallTypes.anthropic_messages.value,
+            CallTypes.aanthropic_messages.value,
+        }
+        if call_type in supported_call_types or kwargs.get("messages") is not None:
+            raw_messages: Final[list | None] = kwargs.get("messages", None)
+            if raw_messages is None:
+                return kwargs, result
+
+            messages: Final[list] = copy.deepcopy(raw_messages)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
-
-            if messages is None:
-                return kwargs, result
 
             presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs)
 
             for msg_idx, m in enumerate(messages):
+                if not isinstance(m, dict):
+                    continue
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -1235,6 +1248,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     task_mappings.append((msg_idx, None))  # None indicates string content
                 elif isinstance(content, list):
                     for content_idx, c in enumerate(content):
+                        if not isinstance(c, dict):
+                            continue
                         text_str = c.get("text", None)
                         if text_str is None:
                             continue
@@ -1265,6 +1280,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
+
+            standard_logging_object: Final = kwargs.get("standard_logging_object")
+            if isinstance(standard_logging_object, dict) and "messages" in standard_logging_object:
+                from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+                from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+
+                standard_logging_object["messages"] = truncate_base64_in_messages(
+                    StandardLoggingPayloadSetup.append_system_prompt_messages(
+                        kwargs=kwargs, messages=copy.deepcopy(messages)
+                    )
+                )
 
             if (
                 isinstance(result, ModelResponse)

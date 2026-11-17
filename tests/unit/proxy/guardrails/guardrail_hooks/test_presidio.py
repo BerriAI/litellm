@@ -5495,3 +5495,45 @@ async def test_apply_guardrail_records_its_verdict_on_a_request_dict_that_starts
 
     recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [record["guardrail_name"] for record in recorded] == ["presidio-pii"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["completion", "acompletion", "anthropic_messages", "aanthropic_messages"])
+async def test_logging_hook_masks_standard_logging_object_messages(call_type: str) -> None:
+    """
+    Regression test for #52131:
+    When `logging_only=True`, `async_logging_hook` must mask PII not only in
+    `kwargs["messages"]` (LOGGED_INPUT) but also in `kwargs["standard_logging_object"]["messages"]`
+    (SLO_INPUT) across /chat/completions, streaming, and /v1/messages.
+    """
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={"TR_NATIONAL_ID": PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("10000000146", "<TR_NATIONAL_ID>")
+
+    guardrail.check_pii = mock_check_pii
+
+    raw_messages = [{"role": "user", "content": "TC kimlik no 10000000146"}]
+    test_kwargs = {
+        "messages": copy.deepcopy(raw_messages),
+        "model": "mock",
+        "standard_logging_object": {
+            "id": "call-1",
+            "call_type": call_type,
+            "messages": copy.deepcopy(raw_messages),
+        },
+    }
+
+    result_kwargs, _ = await guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result={"choices": [{"message": {"content": "ok"}}]},
+        call_type=call_type,
+    )
+
+    assert result_kwargs["messages"][0]["content"] == "TC kimlik no <TR_NATIONAL_ID>"
+    assert result_kwargs["standard_logging_object"]["messages"][0]["content"] == "TC kimlik no <TR_NATIONAL_ID>"
+    assert raw_messages[0]["content"] == "TC kimlik no 10000000146"
