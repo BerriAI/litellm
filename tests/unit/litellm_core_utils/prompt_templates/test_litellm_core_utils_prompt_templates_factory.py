@@ -2089,6 +2089,110 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     }
 
 
+@pytest.mark.parametrize(
+    "arguments, expected_args",
+    [
+        (None, {}),
+        ('{"location": "Boston"', {"location": "Boston"}),
+        (b'{"location": "Boston"}', {"location": "Boston"}),
+    ],
+    ids=["null_arguments", "truncated_arguments", "bytes_arguments"],
+)
+def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_bytes_arguments(
+    arguments: str | bytes | None, expected_args: dict[str, str]
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    parts: Final = convert_to_gemini_tool_call_invoke(message)
+    assert len(parts) == 1
+    assert parts[0]["function_call"]["name"] == "get_weather"
+    assert parts[0]["function_call"]["args"] == expected_args
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"location": "Boston"}, ["Boston"], 5, False],
+    ids=["object", "list", "number", "false"],
+)
+def test_convert_to_gemini_tool_call_invoke_rejects_arguments_that_are_not_a_json_string(
+    arguments: dict[str, str] | list[str] | int | bool,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError, match="must be a JSON string"):
+        convert_to_gemini_tool_call_invoke(message)
+
+
+@pytest.mark.parametrize("arguments", ['["Boston"]', '"Boston"', "5"], ids=["list", "string", "number"])
+def test_convert_to_gemini_tool_call_invoke_rejects_json_text_that_is_not_an_object(arguments: str) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError, match="must be a JSON object"):
+        convert_to_gemini_tool_call_invoke(message)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"location": "Boston"}, ["Boston"], '["Boston"]', "not json"],
+    ids=["object", "list", "json_list_text", "not_json"],
+)
+@pytest.mark.parametrize("shape", ["tool_calls", "function_call"])
+def test_convert_to_gemini_tool_call_invoke_drops_unusable_arguments_under_drop_params(
+    arguments: object, shape: str
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    function: Final = {"name": "get_weather", "arguments": arguments}
+    message: Final = (
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": function}]}
+        if shape == "tool_calls"
+        else {"role": "assistant", "content": None, "function_call": function}
+    )
+    parts: Final = convert_to_gemini_tool_call_invoke(message, drop_params=True)
+    assert parts == [{"function_call": {"name": "get_weather", "args": {}}}]
+
+
 @pytest.mark.asyncio
 async def test_bedrock_process_image_async_factory():
     """
