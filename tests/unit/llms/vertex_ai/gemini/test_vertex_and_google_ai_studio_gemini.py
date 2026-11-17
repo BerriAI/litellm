@@ -11175,6 +11175,31 @@ def test_calculate_usage_treats_null_usage_metadata_token_counts_as_zero():
     assert usage.total_tokens == 0
 
 
+def test_calculate_usage_uses_modality_details_when_aggregate_counts_are_null():
+    usage = VertexGeminiConfig._calculate_usage(
+        {
+            "candidates": [],
+            "usageMetadata": {
+                "promptTokenCount": None,
+                "candidatesTokenCount": None,
+                "totalTokenCount": None,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 8},
+                    {"modality": "IMAGE", "tokenCount": 2},
+                ],
+                "candidatesTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 5},
+                    {"modality": "IMAGE", "tokenCount": 3},
+                ],
+            },
+        }
+    )
+
+    assert usage.prompt_tokens == 10
+    assert usage.completion_tokens == 8
+    assert usage.total_tokens == 18
+
+
 def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
 

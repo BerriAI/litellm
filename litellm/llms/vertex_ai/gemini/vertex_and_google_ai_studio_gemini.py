@@ -2611,7 +2611,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
         # candidatesTokenCount includes all modalities, so: text = total - (image + audio + video)
-        candidates_token_count: Final = _get_usage_token_count("candidatesTokenCount")
+        candidates_details_token_count: Final = sum(
+            _get_token_count(detail) for detail in usage_metadata.get("candidatesTokensDetails", [])
+        )
+        candidates_token_count: Final = (
+            _get_usage_token_count("candidatesTokenCount")
+            if isinstance(usage_metadata.get("candidatesTokenCount"), int)
+            else candidates_details_token_count
+        )
         if candidates_token_count > 0:
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
@@ -2716,16 +2723,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             tool_use_tokens=tool_use_prompt_tokens,
         )
 
-        completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
+        completion_tokens = response_tokens or candidates_token_count
         if not VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata) and reasoning_tokens:
             completion_tokens = reasoning_tokens + completion_tokens
+        prompt_token_count: Final = (
+            _get_usage_token_count("promptTokenCount")
+            if isinstance(usage_metadata.get("promptTokenCount"), int)
+            else sum(_get_token_count(detail) for detail in usage_metadata.get("promptTokensDetails", []))
+        )
+        total_token_count: Final = (
+            _get_usage_token_count("totalTokenCount")
+            if isinstance(usage_metadata.get("totalTokenCount"), int)
+            else prompt_token_count + completion_tokens
+        )
         ## GET USAGE ##
         usage: Final = Usage(
-            prompt_tokens=(
-                _get_usage_token_count("promptTokenCount") + billable_tool_use_prompt_tokens + cache_creation_tokens
-            ),
+            prompt_tokens=prompt_token_count + billable_tool_use_prompt_tokens + cache_creation_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=_get_usage_token_count("totalTokenCount") + cache_creation_tokens,
+            total_tokens=total_token_count + cache_creation_tokens,
             prompt_tokens_details=prompt_tokens_details,
             cache_read_input_tokens=cached_tokens,
             cache_creation_input_tokens=cache_creation_tokens or None,
