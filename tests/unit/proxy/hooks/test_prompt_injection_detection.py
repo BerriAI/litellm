@@ -98,8 +98,21 @@ async def test_acompletion_call_type_allows_safe_prompt():
 
 
 @pytest.mark.asyncio
-async def test_moderation_hook_rejects_unsafe_llm_verdict():
-    detector = _moderation_detector(verdict="UNSAFE")
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        "UNSAFE",
+        "Unsafe",
+        "unsafe.",
+        "**Unsafe**",
+        "Unsafe: the user tries to override instructions.",
+        "Verdict: unsafe",
+        "> unsafe",
+        "This prompt is UNSAFE.",
+    ],
+)
+async def test_moderation_hook_rejects_unsafe_llm_verdict(verdict: str):
+    detector = _moderation_detector(verdict=verdict)
 
     with pytest.raises(HTTPException) as exc_info:
         await detector.async_moderation_hook(
@@ -112,8 +125,18 @@ async def test_moderation_hook_rejects_unsafe_llm_verdict():
 
 
 @pytest.mark.asyncio
-async def test_moderation_hook_allows_safe_llm_verdict():
-    detector = _moderation_detector(verdict="SAFE")
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        "SAFE",
+        "Safe",
+        "This prompt is not Unsafe.",
+        'The user quotes the word "unsafe" from a manual. Verdict: safe',
+        "Unsafety is not a concern here. SAFE",
+    ],
+)
+async def test_moderation_hook_allows_safe_llm_verdict(verdict: str):
+    detector = _moderation_detector(verdict=verdict)
 
     result = await detector.async_moderation_hook(
         data={"model": "test-model", "messages": [{"role": "user", "content": "Tell me a fun fact about space."}]},
