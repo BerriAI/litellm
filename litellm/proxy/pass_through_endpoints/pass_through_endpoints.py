@@ -4,6 +4,7 @@ import copy
 import json
 import posixpath
 import re
+import sys
 import traceback
 from base64 import b64encode
 from collections.abc import (
@@ -16,6 +17,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -213,6 +215,8 @@ pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
+_RELAY_HEADERS: Final = TypeAdapter(dict[str, str])
+_RELAY_METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
@@ -1198,12 +1202,13 @@ async def _log_passthrough_upstream_failure(
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
     logging_obj: LiteLLMLoggingObj,
+    inspect_body: bool = True,
 ) -> httpx.Response:
     if response.status_code < 400:
         return response
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    preview_text, relay_response = await _error_body_preview_and_relay(response)
+    preview_text, relay_response = await _error_body_preview_and_relay(response) if inspect_body else ("", response)
     upstream_error_body: Final = (
         REDACTED_BY_LITELLM
         if should_redact_message_logging(logging_obj.model_call_details)
@@ -1230,6 +1235,10 @@ async def _log_passthrough_upstream_failure(
             status_code=response.status_code,
             detail=f"Upstream passthrough request failed with status {response.status_code}: {upstream_error_body}",
         )
+        if not inspect_body:
+            await logging_obj.dispatch_failure_handlers(
+                exception=synthetic_exception, traceback_exception="", prefer_async_handlers=True
+            )
         try:
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -1250,16 +1259,24 @@ async def _relay_reporting_failures(
     upstream_status: int,
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+    logging_obj: LiteLLMLoggingObj | None = None,
 ) -> AsyncGenerator[bytes, None]:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     try:
-        async for chunk in stream:
-            yield chunk
+        async with aclosing(stream):
+            async for chunk in stream:
+                yield chunk
     except Exception as e:
         if upstream_status >= 400:
             raise
         try:
+            if logging_obj is not None:
+                await logging_obj.dispatch_failure_handlers(
+                    exception=e,
+                    traceback_exception=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+                    prefer_async_handlers=True,
+                )
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
@@ -1305,6 +1322,43 @@ def _filtered_upstream_request(
 ) -> tuple[dict[str, str], Mapping[str, object] | None]:  # mutable-ok: the relay helpers take a dict of headers
     filtered_headers, filtered_body = upstream_request_filter(headers, body, litellm_params)
     return dict(filtered_headers), filtered_body
+
+
+def _raw_pass_through_body(request: Request) -> str | bytes | None:
+    value: Final[object] = getattr(getattr(request, "state", None), LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return value if isinstance(value, (str, bytes)) else None
+
+
+def _v2_requires_inference_controls(callback: object) -> bool:
+    from litellm.integrations.custom_logger_v2 import HOOK_SPECS, CustomLoggerV2, Hook
+
+    if not isinstance(callback, CustomLoggerV2):
+        return False
+    return any(
+        subscription.may_abort or bool(subscription.writes)
+        for subscription in callback.subscriptions.values()
+        if HOOK_SPECS[subscription.hook].request_path and subscription.hook is not Hook.response_headers
+    )
+
+
+def _check_opaque_content(raw_response: bool) -> None:
+    if not raw_response:
+        return
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.proxy.utils import ProxyLogging
+
+    if get_policy_registry().get_all_policies():
+        raise HTTPException(status_code=403, detail="Opaque passthrough cannot enforce content policies")
+    capabilities: Final = ProxyLogging.callback_capabilities()
+    has_content_hooks: Final = capabilities.has_content_enforcer or capabilities.has_moderation_override
+    if (
+        has_content_hooks
+        or any(_v2_requires_inference_controls(callback) for callback in capabilities.hook_callbacks)
+        or any(isinstance(callback, CustomGuardrail) for callback in capabilities.resolved_callbacks)
+    ):
+        raise HTTPException(status_code=403, detail="Opaque passthrough cannot inspect content for guardrails")
 
 
 def _caller_query_source(
@@ -1426,6 +1480,89 @@ def _prepare_passthrough_client_body(
     return _PassthroughClientBody(scoped_body, eu_jev_body)
 
 
+class _ResponseHeadersHook(Protocol):
+    async def post_call_response_headers_hook(
+        self,
+        data: Mapping[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> Mapping[str, str]: ...
+
+
+class _ResponseHeadersParser(Protocol):
+    def get_response_headers(
+        self,
+        headers: httpx.Headers,
+        litellm_call_id: str | None = None,
+        custom_headers: Mapping[str, str] | None = None,
+    ) -> Mapping[str, str]: ...
+
+
+async def _opaque_passthrough_response(
+    response: httpx.Response,
+    request: Request,
+    user: UserAPIKeyAuth,
+    logging_obj: LiteLLMLoggingObj,
+    owner: AsyncExitStack | None,
+    body: Mapping[str, object] | None,
+    kwargs: Mapping[str, object] | None,
+    failure_payload: Mapping[str, object] | None,
+    start_time: datetime,
+    provider: str | None,
+) -> StreamingResponse:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    if owner is not None:
+        owner.push_async_callback(response.aclose)
+    await _log_passthrough_upstream_failure(
+        response, user, dict(failure_payload or {}), logging_obj, inspect_body=False
+    )
+    custom_headers: Final = _RELAY_HEADERS.validate_python(
+        ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user,
+            call_id=logging_obj.litellm_call_id,
+            model_id=None,
+            cache_key=None,
+            api_base=str(response.url),
+        )
+    )
+    hooks: Final = require_attributes(proxy_logging_obj, _ResponseHeadersHook, "post_call_response_headers_hook")
+    callback_headers: Final = await hooks.post_call_response_headers_hook(
+        data=dict(body or {}),
+        user_api_key_dict=user,
+        response=response,
+        request_headers=dict(redact_credential_headers(request.headers)),
+    )
+    parser: Final = require_attributes(HttpPassThroughEndpointHelpers, _ResponseHeadersParser, "get_response_headers")
+    headers: Final = _RELAY_HEADERS.validate_python(
+        parser.get_response_headers(
+            headers=response.headers,
+            custom_headers={**custom_headers, **_RELAY_HEADERS.validate_python(callback_headers or {})},
+        )
+    )
+    return StreamingResponse(
+        _relay_reporting_failures(
+            stream=_relay_passthrough_response_bytes(
+                response=response,
+                request_body=dict(body or {}),
+                url_route=str(response.url),
+                start_time=start_time,
+                logging_obj=logging_obj,
+                custom_llm_provider=provider,
+                success_handler_kwargs=dict(kwargs or {}),
+                raw_response=True,
+            ),
+            upstream_status=response.status_code,
+            user_api_key_dict=user,
+            request_payload=dict(failure_payload or {}),
+            logging_obj=logging_obj,
+        ),
+        status_code=response.status_code,
+        headers=headers,
+    )
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1445,6 +1582,8 @@ async def pass_through_request(
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
+    raw_response: bool = False,
+    response_owner: AsyncExitStack | None = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1470,6 +1609,8 @@ async def pass_through_request(
             litellm_params the request is logged with
         operation: Optional GenAI operation the route reports, unless the upstream names its own
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
+        raw_response: Relay opaque response bytes without parsing, buffering or following redirects
+        response_owner: Request-scoped owner that closes the upstream even if streaming never starts
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1517,19 +1658,7 @@ async def pass_through_request(
             str(url), custom_llm_provider
         )
 
-        # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
-        # signed via request.state; we must send those instead of re-encoding the
-        # parsed dict (hooks mutate it, breaking the signature / Content-Length).
-        # Tolerate request objects without `state` (test fixtures) and only honor
-        # values httpx accepts for `content=`.
-        _request_state: Final[object] = getattr(request, "state", None)
-        state_raw_body: str | bytes | None = (
-            getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
-            if _request_state is not None
-            else None
-        )
-        if state_raw_body is not None and not isinstance(state_raw_body, (str, bytes, bytearray)):
-            state_raw_body = None
+        state_raw_body: Final = _raw_pass_through_body(request)
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
@@ -1614,6 +1743,8 @@ async def pass_through_request(
         )
         typed_body: Final[Mapping[str, object]] = cast(Mapping[str, object], _parsed_body)  # cast-ok: json
         _parsed_body = guardrail_request_data_with_streaming(typed_body, is_streaming=is_streaming_pass_through)
+
+        _check_opaque_content(raw_response)
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
@@ -1970,7 +2101,9 @@ async def pass_through_request(
                 params=requested_query_params,
                 content=state_raw_body,
             )
-            response = await async_client.send(raw_body_request, stream=True)
+            response = await async_client.send(
+                raw_body_request, stream=True, follow_redirects=False if raw_response else httpx.USE_CLIENT_DEFAULT
+            )
         else:
             response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
                 request=request,
@@ -1992,6 +2125,31 @@ async def pass_through_request(
             headers=response.headers,
         )
         apply_upstream_reported_operation(logging_obj, response.headers)
+
+        if raw_response:
+            return await _opaque_passthrough_response(
+                response,
+                request,
+                user_api_key_dict,
+                logging_obj,
+                response_owner,
+                _RELAY_METADATA.validate_python(_parsed_body),
+                _RELAY_METADATA.validate_python(kwargs),
+                _RELAY_METADATA.validate_python(
+                    _build_passthrough_failure_request_payload(
+                        parsed_body=_parsed_body,
+                        kwargs=kwargs,
+                        logging_obj=logging_obj,
+                        custom_llm_provider=custom_llm_provider,
+                        upstream_usage=upstream_usage,
+                        url=url,
+                        builtin_provider_route=builtin_provider_route,
+                        upstream_model=upstream_model,
+                    )
+                ),
+                start_time,
+                custom_llm_provider,
+            )
 
         if _is_streaming_response(response) is True:
             logging_obj.stream = True
@@ -3885,6 +4043,7 @@ async def _relay_passthrough_response_bytes(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: str | None,
     success_handler_kwargs: dict,
+    raw_response: bool = False,
 ) -> AsyncGenerator[bytes, None]:
     """
     Yield upstream bytes to the client without accumulating them, then fire the
@@ -3908,23 +4067,28 @@ async def _relay_passthrough_response_bytes(
                 url_route,
                 bytes_relayed,
             )
+        stream_exception: Final = sys.exc_info()[1]
         await response.aclose()
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                httpx_response=response,
-                response_body=None,
-                url_route=url_route,
-                result="",
-                start_time=start_time,
-                end_time=datetime.now(),
-                logging_obj=logging_obj,
-                cache_hit=False,
-                request_body=request_body,
-                custom_llm_provider=custom_llm_provider,
-                **success_handler_kwargs,
-            )
+        stream_finished: Final = upstream_fully_relayed or isinstance(
+            stream_exception, (GeneratorExit, asyncio.CancelledError)
         )
-        bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
+        if response.status_code < 400 and (not raw_response or stream_finished):
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+                    httpx_response=response,
+                    response_body=None,
+                    url_route=url_route,
+                    result="",
+                    start_time=start_time,
+                    end_time=datetime.now(),
+                    logging_obj=logging_obj,
+                    cache_hit=False,
+                    request_body=request_body,
+                    custom_llm_provider=custom_llm_provider,
+                    **success_handler_kwargs,
+                )
+            )
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) -> str | None:

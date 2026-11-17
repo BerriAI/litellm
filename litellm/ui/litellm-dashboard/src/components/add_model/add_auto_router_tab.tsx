@@ -50,6 +50,7 @@ import {
   getKeywordTierRulesError,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
+  getHeuristicFirstConfigError,
   getReminderMarkersError,
   getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
@@ -137,6 +138,7 @@ export const getSubmitBlockedReason = (
       : null) ??
     getClassifierModelError(config) ??
     getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
+    getHeuristicFirstConfigError(config) ??
     getReminderMarkersError(config.reminder_markers) ??
     getClassifierPluginTimeoutError(config.classifier_type, config.classifier_plugin_timeout_ms) ??
     (heuristicScoringRole(config) === "decides" ? customDimensionsError(config.custom_dimensions) : null) ??

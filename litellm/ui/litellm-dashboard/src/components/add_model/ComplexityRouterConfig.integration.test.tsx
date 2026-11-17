@@ -1924,3 +1924,43 @@ describe("classifier vision settings", () => {
     expect(screen.queryByText("Use images for classification")).not.toBeInTheDocument();
   });
 });
+
+describe("heuristic-first conversation limit", () => {
+  it("shows saved limits and carries edits, invalid drafts, and clearing into form state", () => {
+    const initial: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "heuristic_first",
+      heuristic_first_max_tier: "SIMPLE",
+      classifier_llm_config: { model: "gpt-4" },
+      heuristic_first_max_context_tokens: 8000,
+    };
+    const onChange = vi.fn();
+    function Editor() {
+      const [value, setValue] = React.useState(initial);
+      return (
+        <ComplexityRouterConfig
+          {...baseProps}
+          value={value}
+          onChange={(next) => {
+            setValue(next);
+            onChange(next);
+          }}
+        />
+      );
+    }
+    renderWithProviders(<Editor />);
+    fireEvent.click(screen.getByRole("button", { name: /^Advanced settings/ }));
+    const input = screen.getByRole("textbox", { name: "Max conversation tokens before judge" });
+    expect(input).toHaveValue("8000");
+    fireEvent.change(input, { target: { value: "12000" } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ heuristic_first_max_context_tokens: 12000 }));
+    fireEvent.change(input, { target: { value: "invalid" } });
+    expect(screen.getByText("Conversation limit must be a positive whole number")).toBeInTheDocument();
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ heuristic_first_max_context_tokens: NaN }));
+    fireEvent.change(input, { target: { value: "" } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ heuristic_first_max_context_tokens: undefined }),
+    );
+    expect(screen.queryByText("Conversation limit must be a positive whole number")).not.toBeInTheDocument();
+  });
+});
