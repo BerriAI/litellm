@@ -903,6 +903,8 @@ def _bedrock_credential_failure(
 
         sts_failure: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
         return _raised(sts_failure if sts_failure is not None else NoCredentialsError())
+    # TODO: Rust migration: this reruns Python's signing on Bedrock invoke to produce the exception for credential
+    # failures Rust does not name yet. Have Rust name each kind (as it does for `profile_not_found`) and drop the replay.
     call: Final = _provider_call(request)
     if call is None:
         return None
