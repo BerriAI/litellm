@@ -846,52 +846,56 @@ def test_invalid_app_configuration_fails_closed(override: Mapping[str, object]) 
         )
 
 
-@pytest.mark.parametrize("empty_stored_key", ("", "   "))
-def test_valid_key_ref_with_empty_stored_key(empty_stored_key: str) -> None:
+@pytest.mark.parametrize("blank_stored_key", ("", "   "))
+def test_key_ref_is_accepted_with_blank_stored_key(blank_stored_key: str) -> None:
     config: Final = app_config(
         {
             "github_copilot_auth_type": "github_app",
             "github_copilot_app_id": _CONFIG.app_id,
             "github_copilot_app_installation_id": _CONFIG.installation_id,
             "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
-            "github_copilot_app_private_key": empty_stored_key,
+            "github_copilot_app_private_key": blank_stored_key,
         }
     )
     assert config == _CONFIG
 
 
+@pytest.mark.parametrize("blank", ("", "   "))
+def test_blank_app_fields_without_app_auth_type_are_not_app_auth(blank: str) -> None:
+    assert app_config({key: blank for key in APP_FIELDS}) is None
+
+
+@pytest.mark.parametrize("value", (False, 0, "123"))
+def test_non_blank_app_field_without_app_auth_type_fails_closed(value: object) -> None:
+    with pytest.raises(BadRequestError, match="GitHub App authentication requires"):
+        app_config({"github_copilot_app_installation_id": value})
+
+
+@pytest.mark.parametrize("blank_key_ref", ("", "   "))
+def test_uploaded_key_is_accepted_with_blank_key_ref(private_key: str, blank_key_ref: str) -> None:
+    config: Final = app_config(
+        {
+            "github_copilot_auth_type": "github_app",
+            "github_copilot_app_id": _CONFIG.app_id,
+            "github_copilot_app_installation_id": _CONFIG.installation_id,
+            "github_copilot_app_private_key_ref": blank_key_ref,
+            "github_copilot_app_private_key": private_key,
+        },
+        validate_stored_key=True,
+    )
+    assert config is not None
+    assert (config.app_id, config.installation_id) == (_CONFIG.app_id, _CONFIG.installation_id)
+
+
 @pytest.mark.parametrize(
-    "empty_fields",
+    "override",
     [
-        {
-            "github_copilot_app_id": "",
-            "github_copilot_app_installation_id": "",
-            "github_copilot_app_private_key_ref": "",
-            "github_copilot_app_private_key": "",
-        },
-        {
-            "github_copilot_app_id": "   ",
-            "github_copilot_app_installation_id": False,
-            "github_copilot_app_private_key_ref": "",
-            "github_copilot_app_private_key": "",
-        },
+        {"github_copilot_app_private_key": 12345},
+        {"github_copilot_app_private_key": False},
+        {"github_copilot_app_private_key_ref": 12345},
     ],
 )
-def test_non_app_auth_with_empty_or_boolean_app_fields_returns_none(
-    empty_fields: Mapping[str, object],
-) -> None:
-    assert (
-        app_config(
-            {
-                "github_copilot_auth_type": "personal_access_token",
-                **empty_fields,
-            }
-        )
-        is None
-    )
-
-
-def test_invalid_non_string_stored_key_fails_closed() -> None:
+def test_non_string_key_source_fails_closed(private_key: str, override: Mapping[str, object]) -> None:
     with pytest.raises(BadRequestError, match="GitHub App authentication requires"):
         app_config(
             {
@@ -899,8 +903,10 @@ def test_invalid_non_string_stored_key_fails_closed() -> None:
                 "github_copilot_app_id": _CONFIG.app_id,
                 "github_copilot_app_installation_id": _CONFIG.installation_id,
                 "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
-                "github_copilot_app_private_key": 12345,
-            }
+                "github_copilot_app_private_key": private_key,
+                **override,
+            },
+            validate_stored_key=True,
         )
 
 
