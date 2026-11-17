@@ -39,8 +39,10 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     cast_exception_status_to_int,
     get_cooldown_deployments,
+    is_deployment_stream_ttft_expiry,
     is_failure_outside_selected_deployment,
     is_response_lookup_not_found,
+    is_stream_stall,
     is_stream_ttft_expiry,
     mark_advisor_orchestration_failure,
     set_cooldown_deployments,
@@ -77,6 +79,46 @@ def test_stream_ttft_expiry_requires_the_exact_marker(marker: object, wrapped: b
         else timeout
     )
     assert is_stream_ttft_expiry(exception) is (marker is True)
+
+
+@pytest.mark.parametrize(
+    "expired, client_side, expected",
+    ((None, None, True), (True, None, False), (True, False, False), (True, True, True)),
+    ids=("read-stall", "deployment-implicit", "deployment-explicit", "caller"),
+)
+def test_stream_stall_preserves_exemption_only_for_read_stalls_and_caller_ttft(
+    expired: bool | None, client_side: bool | None, expected: bool
+) -> None:
+    timeout: Final = litellm.Timeout(message="timeout", model="test-model", llm_provider="openai")
+    if expired is not None:
+        setattr(timeout, "stream_ttft_expired", expired)
+    if client_side is not None:
+        setattr(timeout, "stream_ttft_client_side", client_side)
+    cause: Final = MidStreamFallbackError(
+        message="stream failed", model="test-model", llm_provider="openai", original_exception=timeout
+    )
+    with pytest.raises(litellm.Timeout) as caught:
+        raise timeout from cause
+    assert is_stream_stall(caught.value) is expected
+
+
+@pytest.mark.parametrize(
+    "expired, client_side, expected",
+    ((None, None, False), (True, None, True), (True, False, True), (True, True, False)),
+    ids=("provider-error", "deployment-implicit", "deployment-explicit", "caller"),
+)
+def test_deployment_stream_ttft_expiry_reads_markers_from_wrapped_error(
+    expired: bool | None, client_side: bool | None, expected: bool
+) -> None:
+    timeout: Final = litellm.Timeout(message="timeout", model="test-model", llm_provider="openai")
+    if expired is not None:
+        setattr(timeout, "stream_ttft_expired", expired)
+    if client_side is not None:
+        setattr(timeout, "stream_ttft_client_side", client_side)
+    wrapped: Final = MidStreamFallbackError(
+        message="stream failed", model="test-model", llm_provider="openai", original_exception=timeout
+    )
+    assert is_deployment_stream_ttft_expiry(wrapped) is expected
 
 
 @pytest.mark.parametrize("stream", (False, True), ids=("non-stream", "sync-stream"))

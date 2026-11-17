@@ -2047,6 +2047,7 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
             message=f"No model output within stream_ttft_timeout={seconds}s", model=model, llm_provider=provider
         )
         timeout.stream_ttft_expired = True  # pyright: ignore[reportAttributeAccessIssue]  # router-owned expiry marker
+        timeout.stream_ttft_client_side = attempt.kwargs.get("client_side_stream_ttft_timeout") is True  # pyright: ignore[reportAttributeAccessIssue]  # who chose the deadline that fired
         return _stream_pre_content_error(timeout, model, provider)
 
     if attempt.op == "acompletion" and isinstance(response, CustomStreamWrapper):

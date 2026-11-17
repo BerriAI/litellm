@@ -850,6 +850,16 @@ def is_stream_ttft_expiry(exception: BaseException | None) -> bool:
     )
 
 
+def is_deployment_stream_ttft_expiry(exception: BaseException | None) -> bool:
+    """The router's TTFT timer fired on a deadline the deployment configured, not one the caller chose."""
+    expiry: Final = (
+        exception.original_exception
+        if isinstance(exception, MidStreamFallbackError) and exception.original_exception is not None
+        else exception
+    )
+    return is_stream_ttft_expiry(expiry) and getattr(expiry, "stream_ttft_client_side", None) is not True
+
+
 def is_caller_timeout_408(
     model_call_details: Mapping[str, object],
     exception_status: str | int,
@@ -880,7 +890,11 @@ def is_caller_timeout_408(
 
 
 def is_stream_stall(exception: BaseException) -> bool:
-    return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
+    return (
+        isinstance(exception, litellm.Timeout)
+        and isinstance(exception.__cause__, MidStreamFallbackError)
+        and not is_deployment_stream_ttft_expiry(exception)
+    )
 
 
 def is_caller_entra_credential_failure(

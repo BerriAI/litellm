@@ -31,6 +31,7 @@ from litellm.router_utils.cooldown_handlers import is_caller_timeout_408, is_str
 from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX, as_converted_stream
 from litellm.types.llms.openai import AllMessageValues
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
+from tests.unit.test_router.core.streaming_helpers import request_logging
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -1377,6 +1378,65 @@ async def test_stream_ttft_responses_holds_lifecycle_until_output_and_exempts_ba
         "primary" if background else "fallback",
     )
     assert route.call_count == (1 if background else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", (False, True), ids=("deployment", "caller"))
+async def test_stream_ttft_middle_hop_cools_only_deployment_deadline_with_shared_logging(
+    caller: bool,
+    stream_clock: _ManualClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+) -> None:
+    route: Final = respx_mock.post("https://ttft.invalid/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(500, json={"error": {"message": "provider failed", "type": "server_error"}}),
+            httpx.Response(
+                200,
+                stream=_TTFTByteStream(
+                    stream_clock,
+                    (
+                        (0.0, b": ping\n\n"),
+                        (0.04, b": ping\n\n"),
+                        (0.04, b": ping\n\n"),
+                        (0.3, _ttft_chat_chunk({"content": "mid"}, "stop")),
+                    ),
+                ),
+            ),
+            httpx.Response(200, content=_ttft_chat_chunk({"content": "last"}, "stop") + b"data: [DONE]\n\n"),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": f"openai/ttft-{name}",
+                    "api_key": "fake",
+                    "api_base": "https://ttft.invalid/v1",
+                    "stream_timeout": 5,
+                    **({"stream_ttft_timeout": 0.1} if name == "mid" and not caller else {}),
+                },
+                "model_info": {"id": f"ttft-{name}"},
+            }
+            for name in ("primary", "mid", "last")
+        ],
+        fallbacks=[{"primary": ["mid"]}, {"mid": ["last"]}],
+        num_retries=0,
+        allowed_fails=0,
+    )
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        litellm_logging_obj=request_logging("primary"),
+        **({"stream_ttft_timeout": 0.1, "client_side_stream_ttft_timeout": True} if caller else {}),
+    )
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "last"
+    assert router.health().failures_this_minute("ttft-mid") == (0 if caller else 1)
+    cooldowns: Final = await router.health().cooldowns.async_get_active_cooldowns(["ttft-mid"], parent_otel_span=None)
+    assert tuple(deployment_id for deployment_id, _ in cooldowns) == (() if caller else ("ttft-mid",))
+    assert route.call_count == 3
 
 
 @pytest.mark.asyncio
