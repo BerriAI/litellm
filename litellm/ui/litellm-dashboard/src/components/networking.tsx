@@ -551,23 +551,44 @@ registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
 registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
 registerErrorHandler(handleError);
 
-export const makeModelGroupPublic = async (
+const postPublicModelGroups = (
   accessToken: string,
-  modelGroups: string[],
-  previousModelGroups: string[],
-) => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
-  const response = await fetch(url, {
+  body: { model_groups: string[]; previous_model_groups?: string[] },
+) =>
+  fetch(proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`, {
     method: "POST",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model_groups: modelGroups,
-      previous_model_groups: previousModelGroups,
-    }),
+    body: JSON.stringify(body),
   });
+
+const rejectsField = async (response: Response, field: string) => {
+  if (response.status !== 422) return false;
+  const body: unknown = await response
+    .clone()
+    .json()
+    .catch(() => null);
+  const errors = typeof body === "object" && body !== null && "detail" in body ? body.detail : null;
+  return (
+    Array.isArray(errors) &&
+    errors.some((error) => error?.type === "extra_forbidden" && Array.isArray(error?.loc) && error.loc.at(-1) === field)
+  );
+};
+
+export const makeModelGroupPublic = async (
+  accessToken: string,
+  modelGroups: string[],
+  previousModelGroups: string[],
+) => {
+  const withPrevious = await postPublicModelGroups(accessToken, {
+    model_groups: modelGroups,
+    previous_model_groups: previousModelGroups,
+  });
+  const response = (await rejectsField(withPrevious, "previous_model_groups"))
+    ? await postPublicModelGroups(accessToken, { model_groups: modelGroups })
+    : withPrevious;
   if (!response.ok) {
     const errorData = await response.text();
     handleError(errorData);

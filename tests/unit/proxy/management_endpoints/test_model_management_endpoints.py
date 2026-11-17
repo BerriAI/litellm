@@ -2204,6 +2204,40 @@ async def test_update_useful_links_from_the_dashboard_keeps_a_link_another_admin
             },
             id="a link added at a taken position goes after the last link",
         ),
+        pytest.param(
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "Y": {"url": "https://y.example.com", "index": 2},
+            },
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "C": {"url": "https://c.example.com", "index": 2},
+            },
+            {
+                "C": {"url": "https://c.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "A": {"url": "https://a.example.com", "index": 2},
+            },
+            {
+                "A": {"url": "https://a.example.com", "index": 3},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "Y": {"url": "https://y.example.com", "index": 2},
+            },
+            id="a link moved to a taken position goes after the last link",
+        ),
+        pytest.param(
+            {"A": {"url": "https://a.example.com", "index": 0}, "Y": {"url": "https://y.example.com", "index": 1}},
+            {"A": {"url": "https://a.example.com", "index": 0}, "C": {"url": "https://c.example.com", "index": 1}},
+            {"A": {"url": "https://a.example.com", "index": 0}, "C": {"url": "https://c.example.com/v2", "index": 1}},
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "Y": {"url": "https://y.example.com", "index": 1},
+                "C": {"url": "https://c.example.com/v2", "index": 2},
+            },
+            id="a link edited at a taken position goes after the last link",
+        ),
     ],
 )
 @pytest.mark.asyncio

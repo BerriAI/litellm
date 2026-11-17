@@ -3826,16 +3826,14 @@ def _merged_useful_links(
     }
     removed: Final = frozenset(previous).difference(requested)
     kept: Final = {name: link for name, link in stored.items() if name not in removed}
-    return _added_links_after_taken_positions(
-        {**kept, **moved, **edited}, added=frozenset(requested).difference(previous)
-    )
+    return _changed_links_after_taken_positions({**kept, **moved, **edited}, changed=frozenset(moved).union(edited))
 
 
-def _added_links_after_taken_positions(
-    links: Mapping[str, JsonValue], *, added: frozenset[str]
+def _changed_links_after_taken_positions(
+    links: Mapping[str, JsonValue], *, changed: frozenset[str]
 ) -> Mapping[str, JsonValue]:
-    taken: Final = frozenset(_link_index(link) for name, link in links.items() if name not in added)
-    tied: Final = tuple(name for name, link in links.items() if name in added and _link_index(link) in taken)
+    taken: Final = frozenset(_link_index(link) for name, link in links.items() if name not in changed)
+    tied: Final = tuple(name for name, link in links.items() if name in changed and _link_index(link) in taken)
     after_last: Final = max((_link_index(link) for link in links.values()), default=-1) + 1
     return {**links, **{name: _at_index(links[name], after_last + offset) for offset, name in enumerate(tied)}}
 
