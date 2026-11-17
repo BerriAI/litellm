@@ -512,7 +512,10 @@ fn query_option<T>(
     name: &str,
     parse: impl Fn(Option<&Value>, &str) -> Result<Option<T>, Error>,
 ) -> Result<Option<T>, Error> {
-    let top_level_value = parse(arguments.get(name).filter(|value| !is_unset(value)), name)?;
+    let top_level_value = match parse(arguments.get(name).filter(|value| !is_unset(value)), name) {
+        Err(_) if drops_unsupported_params(arguments) => Ok(None),
+        parsed => parsed,
+    }?;
     resolve_query_option(
         arguments,
         name,
@@ -1403,6 +1406,19 @@ mod tests {
     #[case::output(json!({"output": "figures"}))]
     fn drop_params_drops_an_invalid_extra_body_query_option(#[case] extra_body: Value) {
         let mapped = map(json!({"drop_params": true, "extra_body": extra_body})).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), json!({}));
+    }
+
+    #[rstest]
+    #[case::bad_locale(json!({"drop_params": true, "locale": 5}))]
+    #[case::locale_list(json!({"drop_params": true, "locale": ["en-US", "fr-FR"]}))]
+    #[case::bad_query_fields(json!({"drop_params": true, "queryFields": "Total,,Vendor"}))]
+    #[case::bad_string_index_type(json!({"drop_params": true, "stringIndexType": "bytes"}))]
+    #[case::bad_format(json!({"drop_params": true, "outputContentFormat": "html"}))]
+    #[case::output(json!({"drop_params": true, "output": "figures"}))]
+    fn drop_params_drops_an_invalid_top_level_analyze_option(#[case] options: Value) {
+        let mapped = map(options).unwrap();
 
         assert_eq!(serde_json::to_value(mapped).unwrap(), json!({}));
     }

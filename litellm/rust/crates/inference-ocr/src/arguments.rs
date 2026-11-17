@@ -94,6 +94,7 @@ pub fn consumed_optional_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn consumed_params_include_provider_options_and_mark_credentials() {
@@ -107,13 +108,6 @@ mod tests {
         assert!(vertex.contains(&"vertex_credentials"));
         assert!(!vertex.contains(&"pages"));
 
-        let document_intelligence =
-            consumed_optional_param_names("azure_ai/doc-intelligence/prebuilt-layout", None)
-                .unwrap();
-        for name in ["locale", "queryFields", "stringIndexType", "output"] {
-            assert!(document_intelligence.contains(&name), "{name}");
-        }
-
         let azure = consumed_optional_params("model", Some("azure_ai")).unwrap();
         assert!(
             azure
@@ -125,5 +119,18 @@ mod tests {
                 .iter()
                 .any(|spec| spec.name == "tenant_id" && !spec.secret)
         );
+    }
+
+    #[rstest]
+    #[case::locale("locale")]
+    #[case::query_fields("queryFields")]
+    #[case::string_index_type("stringIndexType")]
+    #[case::output("output")]
+    fn document_intelligence_consumes_azure_analyze_options(#[case] name: &str) {
+        let consumed =
+            consumed_optional_param_names("azure_ai/doc-intelligence/prebuilt-layout", None)
+                .unwrap();
+
+        assert!(consumed.contains(&name));
     }
 }

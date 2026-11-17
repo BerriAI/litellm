@@ -65,19 +65,19 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 }
 
 #[rstest]
-#[case(json!({"pages": [true]}), Error::Pages(PagesFault::Mixed))]
-#[case(json!({"pages": [1, "2"]}), Error::Pages(PagesFault::Mixed))]
-#[case(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
-#[case(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
-#[case(json!({"features": "languages&pages=1"}), Error::Features)]
-#[case(json!({"req_format": "azure"}), Error::RequestFormat)]
-#[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
-#[case(json!({"extra_body": {"outputContentFormat": "html"}}), Error::OutputContentFormat)]
-#[case(json!({"extra_body": {"pages": [-1]}}), Error::Pages(PagesFault::Negative))]
-#[case(json!({"extra_body": {"pages": [0]}}), Error::Pages(PagesFault::BelowFirstPage))]
-#[case(json!({"extra_body": {"features": 5}}), Error::Features)]
-#[case(json!({"pages": "abc", "extra_body": {"pages": "2"}}), Error::Pages(PagesFault::Range))]
-#[case(
+#[case::boolean_page(json!({"pages": [true]}), Error::Pages(PagesFault::Mixed))]
+#[case::mixed_pages(json!({"pages": [1, "2"]}), Error::Pages(PagesFault::Mixed))]
+#[case::negative_page(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
+#[case::injected_pages(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
+#[case::injected_features(json!({"features": "languages&pages=1"}), Error::Features)]
+#[case::bad_req_format(json!({"req_format": "azure"}), Error::RequestFormat)]
+#[case::bad_format(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
+#[case::extra_body_bad_format(json!({"extra_body": {"outputContentFormat": "html"}}), Error::OutputContentFormat)]
+#[case::extra_body_negative_page(json!({"extra_body": {"pages": [-1]}}), Error::Pages(PagesFault::Negative))]
+#[case::extra_body_zero_page(json!({"extra_body": {"pages": [0]}}), Error::Pages(PagesFault::BelowFirstPage))]
+#[case::extra_body_bad_features(json!({"extra_body": {"features": 5}}), Error::Features)]
+#[case::bad_top_level_pages_under_extra_body_pages(json!({"pages": "abc", "extra_body": {"pages": "2"}}), Error::Pages(PagesFault::Range))]
+#[case::extra_body_bad_query_fields(
     json!({"extra_body": {"queryFields": 5}}),
     Error::RequestField { path: "extra_body.queryFields".into(), cause: None }
 )]
