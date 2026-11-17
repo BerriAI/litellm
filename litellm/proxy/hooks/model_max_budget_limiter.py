@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.batch_utils import (
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_budget_shared_windows import (
@@ -587,16 +588,56 @@ def entry_names_model(entry: str, model: str) -> bool:
     return entry in _budget_model_candidates(model)
 
 
-def _budget_model_candidates(model: str) -> tuple[str, ...]:
+def _proxy_model_group_aliases() -> Mapping[str, object]:
+    router: Final = _proxy_router()
+    if router is None:
+        return MappingProxyType({})
+    return router.registry().aliases()
+
+
+def _resolve_global_model_alias_chain(
+    model: str,
+    model_group_aliases: Mapping[str, object] | None = None,
+) -> tuple[str, ...]:
+    aliases: Final = _proxy_model_group_aliases() if model_group_aliases is None else model_group_aliases
+    if not aliases:
+        return (model,)
+    chain: list[str] = [model]
+    seen: set[str] = {model}
+    current = model
+    while (target := resolve_model_group_alias(aliases, current)) is not None and target not in seen:
+        chain.append(target)
+        seen.add(target)
+        current = target
+    return tuple(chain)
+
+
+def _single_model_candidates(model: str) -> tuple[str, ...]:
+    return (model, model.split("/")[-1], *_bedrock_candidates(model))
+
+
+def _budget_model_candidates(
+    model: str,
+    model_group_aliases: Mapping[str, object] | None = None,
+) -> tuple[str, ...]:
     """Names a budget may be configured under for a request on `model`, most specific first.
 
-    Beyond the model as sent, a budget may be keyed on the model without its
+    Beyond the model as sent, a budget may be keyed on the target of a global
+    ``router_settings.model_group_alias`` entry, on the model without its
     ``{custom_llm_provider}/`` prefix (``gpt-4o`` governs ``openai/gpt-4o``), on
     the Bedrock base model (``anthropic.claude-opus-4-8`` governs the
     cross-region ``us.anthropic.claude-opus-4-8``), or on the bare family name
     that Bedrock id shares with its direct-provider twin (``claude-opus-4-8``).
     """
-    return tuple(dict.fromkeys((model, model.split("/")[-1], *_bedrock_candidates(model))))
+    resolved_names: Final = _resolve_global_model_alias_chain(
+        model=model,
+        model_group_aliases=model_group_aliases,
+    )
+    return tuple(
+        dict.fromkeys(
+            itertools.chain.from_iterable(_single_model_candidates(name) for name in resolved_names)
+        )
+    )
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:

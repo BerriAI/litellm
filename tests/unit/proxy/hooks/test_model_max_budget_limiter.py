@@ -1031,3 +1031,108 @@ async def test_concurrent_first_charges_on_one_replica_both_count():
         shared_windows=_WindowSpendDatabase().replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
+
+
+def test_global_model_group_alias_resolves_to_target_budget_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    target: Final = "claude-bedrock-fable-5-2"
+    aliases: Final = {
+        "fable": target,
+        "claude-fable-5-2": target,
+    }
+    fake_router: Final = SimpleNamespace(registry=lambda: SimpleNamespace(aliases=lambda: aliases))
+    monkeypatch.setattr(
+        "litellm.proxy.hooks.model_max_budget_limiter._proxy_router",
+        lambda: fake_router,
+    )
+    budget: Final = {target: {"max_budget": 1000.0, "budget_duration": "30d"}}
+
+    expected: Final = resolve_model_budget(
+        model=target,
+        model_max_budget=budget,
+        model_access_groups=lambda _model, _team_id: frozenset(),
+    )
+    assert expected is not None
+    assert expected.budget_model == target
+    for alias in aliases:
+        assert (
+            resolve_model_budget(
+                model=alias,
+                model_max_budget=budget,
+                model_access_groups=lambda _model, _team_id: frozenset(),
+            )
+            == expected
+        )
+
+
+def test_global_model_group_alias_cycle_does_not_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    aliases: Final = {"alias-a": "alias-b", "alias-b": "alias-a"}
+    fake_router: Final = SimpleNamespace(registry=lambda: SimpleNamespace(aliases=lambda: aliases))
+    monkeypatch.setattr(
+        "litellm.proxy.hooks.model_max_budget_limiter._proxy_router",
+        lambda: fake_router,
+    )
+
+    assert (
+        resolve_model_budget(
+            model="alias-a",
+            model_max_budget={"other-model": {"max_budget": 10.0, "budget_duration": "1d"}},
+            model_access_groups=lambda _model, _team_id: frozenset(),
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_global_model_group_alias_shares_single_team_member_spend_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target: Final = "claude-bedrock-fable-5-2"
+    aliases: Final = {
+        "fable": target,
+        "claude-fable-5-2": target,
+    }
+    fake_router: Final = SimpleNamespace(registry=lambda: SimpleNamespace(aliases=lambda: aliases))
+    monkeypatch.setattr(
+        "litellm.proxy.hooks.model_max_budget_limiter._proxy_router",
+        lambda: fake_router,
+    )
+
+    budget: Final = {target: {"max_budget": 0.0025, "budget_duration": "30d"}}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(),
+        model_access_groups=lambda _model, _team_id: frozenset(),
+        shared_windows=DatabaseSharedWindows(prisma_client_source=lambda: None),
+    )
+
+    for requested_model in (target, "fable", "claude-fable-5-2"):
+        event: dict[str, object] = {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "response_cost": CHAT_COST,
+                "guardrail_information": (),
+                "model": f"bedrock/invoke/global.anthropic.{target}",
+                "model_group": requested_model,
+                "metadata": {
+                    "user_api_key_hash": KEY_HASH,
+                    "user_api_key_user_id": USER_ID,
+                    "user_api_key_team_id": TEAM_ID,
+                },
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_team_member_model_max_budget": budget,
+                }
+            },
+        }
+        await _log_success(limiter, event)
+
+    # 3 requests * 0.001 = 0.003 > 0.0025 limit -> blocked across all three names
+    for requested_model in (target, "fable", "claude-fable-5-2"):
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_team_member_within_model_budget(
+                user_id=USER_ID,
+                team_id=TEAM_ID,
+                team_member_model_max_budget=budget,
+                model=requested_model,
+            )
