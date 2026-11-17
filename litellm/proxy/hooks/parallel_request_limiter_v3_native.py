@@ -958,8 +958,8 @@ def limiter_policy(limiter: "ParallelRequestLimiterHook") -> Mapping[str, object
         _force_redis_hash_tag_grouping_from_litellm_settings,  # pyright: ignore[reportPrivateUsage]  # the default resolver reads the raw setting
     )
 
-    fail_closed: Final = limiter.fail_closed_resolver  # read live per call like the Python limiter
-    force_grouping: Final = limiter.force_hash_tag_grouping_resolver  # read live per call like the Python limiter
+    fail_closed: Final = limiter.fail_closed_resolver
+    force_grouping: Final = limiter.force_hash_tag_grouping_resolver
     return policy(
         None if fail_closed is _fail_closed_rate_limit_enforcement_from_general_settings else fail_closed,
         None if force_grouping is _force_redis_hash_tag_grouping_from_litellm_settings else force_grouping,

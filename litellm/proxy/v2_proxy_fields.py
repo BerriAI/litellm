@@ -2,10 +2,11 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import ValidationError
 
+from litellm.integrations.custom_guardrail import get_session_id_from_request_data
 from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
 from litellm.integrations.custom_logger_v2.derivations import (
     DERIVED_AUTH_FIELDS,
@@ -16,6 +17,7 @@ from litellm.integrations.custom_logger_v2.derivations import (
 )
 from litellm.integrations.custom_logger_v2.enums import Field
 from litellm.integrations.custom_logger_v2.field_sources import FieldSource, HookArgs, derived, mapped
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.integrations.custom_logger_v2 import LimiterRequest, OutputCap, RateLimitStatuses, coerce_record
 
 
@@ -91,22 +93,12 @@ def _fallback_on_saturation(request: Mapping[str, object]) -> tuple[Mapping[str,
     return {"fallback_on_saturation": enabled, "fallback_walk_armed": saturation_fallback_walk_armed()}, ()
 
 
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 def _metadata_get(request: Mapping[str, object], bucket: str, name: str) -> object:
-    # The limiter read these buckets with ``.get``, so a bucket that is not a mapping raises the same error.
-    found: Final[object] = getattr(request.get(bucket) or {}, "get")(name)  # noqa: B009  # the bucket's own ``get``, raising as the limiter did
-    return found
-
-
-def request_session_id(request: Mapping[str, object]) -> str | None:
-    """The agent session a request belongs to: ``litellm_session_id``, else the session id in its metadata."""
-    session_id: Final = request.get("litellm_session_id")
-    if session_id:
-        return str(session_id)
-    for bucket in ("metadata", "litellm_metadata"):
-        metadata_session_id = _metadata_get(request, bucket, "session_id")
-        if metadata_session_id:
-            return str(metadata_session_id)
-    return None
+    return require_attributes(request.get(bucket) or {}, _SupportsGet, "get").get(name)
 
 
 def resolved_agent_id(auth: object, request: Mapping[str, object]) -> object:
@@ -123,7 +115,7 @@ def limiter_request(args: HookArgs) -> LimiterRequest | None:
     request: Final = mapping(args.request)
     if request is None:
         return None
-    session_id, session_error = _attempt(lambda: request_session_id(request))
+    session_id, session_error = _attempt(lambda: get_session_id_from_request_data(request))
     agent_id, agent_error = _attempt(lambda: resolved_agent_id(args.auth, request))
     saturation, saturation_rejected = _fallback_on_saturation(request)
     return coerce_record(
@@ -200,7 +192,6 @@ __all__ = [
     "post_call_facts",
     "proxy_call_facts",
     "rate_limit_statuses",
-    "request_session_id",
     "resolved_agent_id",
     "write_rate_limit_statuses",
 ]
