@@ -154,6 +154,9 @@ pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.mess
 const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
 /// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
 const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
+/// The provider litellm's error names when it is not the route's: none for a call refused while
+/// resolving its provider, as Python's `get_llm_provider` raises it.
+const MESSAGES_PROVIDER: &str = "messages_provider";
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
 const REPLAYED_CREDENTIAL_FAILURE: &str = "replay";
 /// No usable credentials, which the host raises as botocore's `NoCredentialsError` unless an STS call failed.
@@ -951,11 +954,19 @@ impl MessagesPythonHost {
                 ))?;
             return Ok(PyErr::from_value(raised));
         }
+        let unresolved_provider = refused_resolving_provider(&error);
         route_failure(py, error, RequestMarker::Messages, |native| {
             if self.stream_opened {
                 native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
             }
-            if let Some(model) = self.mantle_model(py)? {
+            if unresolved_provider {
+                // Python never resolved the provider, so its error names the model as requested.
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER, "")?;
+                if let Some(model) = self.view.request(py)?.get_item("model")? {
+                    value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                }
+            } else if let Some(model) = self.mantle_model(py)? {
                 let value = native.value(py);
                 value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
                 // The Mantle routes map a credential Rust could not acquire from a fixed class
@@ -970,6 +981,20 @@ impl MessagesPythonHost {
             Ok(self.map_failure(py, native))
         })
     }
+}
+
+/// Whether Rust refused the call where Python's `get_llm_provider` refuses it, before any provider
+/// is resolved: a `bedrock_mantle/` region that is not a valid AWS region.
+fn refused_resolving_provider(error: &Error) -> bool {
+    matches!(
+        error
+            .rejected_request()
+            .and_then(|rejection| rejection.downcast_ref::<litellm_llms::ErrorDetail>()),
+        Some(litellm_llms::ErrorDetail::InvalidMantleRegion {
+            check: litellm_llms::MantleRegionCheck::ProviderResolution,
+            ..
+        })
+    )
 }
 
 impl MessagesPythonHost {
