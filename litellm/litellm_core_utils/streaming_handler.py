@@ -97,6 +97,7 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 _STREAMING_CHOICE_KEYS: Final = frozenset({"finish_reason", "index", "delta", "logprobs", "message"})
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = GChunk.__required_keys__
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
     {LlmProviders.OPENROUTER.value, LlmProviders.OPENCODE_GO.value}
@@ -1621,6 +1622,11 @@ class CustomStreamWrapper:
                     generic_chunk is None or "provider_specific_fields" not in generic_chunk
                 ):
                     raise StopIteration
+            shape_error: Final = generic_chunk_shape_error(chunk)
+            if shape_error is not None:
+                raise ValueError(
+                    f"Streaming chunk from {self.custom_llm_provider} is not a GenericStreamingChunk: {shape_error}"
+                )
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             generic_finish_reason: Final = anthropic_response_obj.get("finish_reason", "")
             completion_obj["content"] = anthropic_response_obj.get("text", "")
@@ -3241,6 +3247,17 @@ def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
     :return: True if the chunk has no keys outside GenericStreamingChunk, False otherwise.
     """
     return all(key in _GCHUNK_FIELDS for key in chunk)
+
+
+def generic_chunk_shape_error(chunk: object) -> str | None:
+    fields: Final = as_str_mapping(chunk)
+    if fields is None:
+        return f"expected a dict, got {type(chunk).__name__}"
+    unexpected: Final = sorted(key for key in fields if key not in _GCHUNK_FIELDS)
+    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))
+    if not unexpected or not missing:
+        return None
+    return f"missing {missing}, unexpected {unexpected}"
 
 
 def convert_generic_chunk_to_model_response_stream(

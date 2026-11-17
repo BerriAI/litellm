@@ -4602,6 +4602,55 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
 
 
 @pytest.mark.parametrize(
+    ("chunk", "message"),
+    [
+        pytest.param(
+            {"content": "hello"},
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected ['content']",
+            id="content-key",
+        ),
+        pytest.param(
+            {"choices": [{"delta": {"content": "hello"}}], "usage": None},
+            "missing ['finish_reason', 'is_finished', 'text'], unexpected ['choices']",
+            id="openai-shaped",
+        ),
+    ],
+)
+def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
+    monkeypatch: pytest.MonkeyPatch, chunk: dict[str, object], message: str
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([chunk]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        list(wrapper)
+
+    assert f"from my-custom-llm is not a GenericStreamingChunk: {message}" in str(excinfo.value)
+
+
+def test_custom_provider_stream_keeps_complete_chunks_with_extra_keys(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(
+            [{"text": "hello", "is_finished": True, "finish_reason": "stop", "usage": None, "id": "chunk-1"}]
+        ),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "hello"
+    assert assembled.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
     ("chunk", "content", "finish_reason"),
     [
         pytest.param({"text": "hi"}, "hi", None, id="text-only"),
