@@ -7001,6 +7001,15 @@ def build_custom_logger_compatible_class(
         anthropic_cache_control_hook: Final = AnthropicCacheControlHook()
         _in_memory_loggers.append(anthropic_cache_control_hook)
         return anthropic_cache_control_hook
+    elif logging_integration == "prefix_block_hashes":
+        from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrefixBlockHashes):
+                return callback
+        prefix_block_hashes: Final = PrefixBlockHashes()
+        _in_memory_loggers.append(prefix_block_hashes)
+        return prefix_block_hashes
     elif logging_integration == "vector_store_pre_call_hook":
         from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
             VectorStorePreCallHook,
@@ -7501,6 +7510,12 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "prefix_block_hashes":
+            from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrefixBlockHashes):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (

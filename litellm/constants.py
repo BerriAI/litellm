@@ -15,6 +15,9 @@ from litellm.litellm_core_utils.env_utils import (
 )
 
 MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
+PREFIX_BLOCK_HASHES_BLOCK_SIZE: Final = get_env_int_in_range(
+    "LITELLM_PREFIX_BLOCK_HASHES_BLOCK_SIZE", 512, minimum=1, maximum=sys.maxsize
+)
 OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
@@ -574,6 +577,12 @@ TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
     default=4,
     minimum=1,
     maximum=256,
+)
+PREFIX_BLOCK_HASHES_MAX_CHARS: Final = get_env_int_in_range(
+    "LITELLM_PREFIX_BLOCK_HASHES_MAX_CHARS",
+    default=min(65_536, TOKEN_COUNTER_MAX_EXACT_CHARS),
+    minimum=1,
+    maximum=TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 MAX_TILE_WIDTH: Final = get_env_int("MAX_TILE_WIDTH", 512)
 MAX_TILE_HEIGHT: Final = get_env_int("MAX_TILE_HEIGHT", 512)
