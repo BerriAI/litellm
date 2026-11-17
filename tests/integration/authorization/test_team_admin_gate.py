@@ -600,7 +600,7 @@ def _admin_only_route(route: str) -> tuple[int, JsonValue]:
             "message": "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
             f"keys/users/teams. Route={route}. Your role=internal_user. Your user_id=<caller>",
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }

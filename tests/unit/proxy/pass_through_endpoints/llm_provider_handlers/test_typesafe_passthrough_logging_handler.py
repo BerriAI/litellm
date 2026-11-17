@@ -323,6 +323,35 @@ def test_openrouter_decisions_response_uses_provider_cost_without_cost_map_row(
     assert response["kwargs"]["combined_usage_object"].total_tokens == 302
 
 
+@pytest.mark.parametrize("reported_cost", [float("nan"), float("inf")])
+def test_openrouter_non_finite_cost_logs_the_token_price(monkeypatch: pytest.MonkeyPatch, reported_cost: float) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/typesafe/jev-1.13",
+        {"input_cost_per_token": 1.0, "output_cost_per_token": 3.0, "litellm_provider": "openrouter", "mode": "chat"},
+    )
+    logging_obj: Final = _logging_obj()
+
+    result: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+        httpx_response=_response(),
+        response_body={
+            "model": "typesafe/jev-1.13-20260917",
+            "usage": {"input_tokens": 2, "output_tokens": 1, "cost": reported_cost},
+        },
+        logging_obj=logging_obj,
+        url_route="https://openrouter.ai/api/alpha/decisions",
+        result='{"answers": {}}',
+        start_time=datetime(2000, 1, 1),
+        end_time=datetime(2000, 1, 1),
+        cache_hit=False,
+        request_body={"model": "typesafe/jev-1.13"},
+        custom_llm_provider="openrouter",
+    )
+
+    assert result["kwargs"]["response_cost"] == pytest.approx(5.0)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(5.0)
+
+
 def test_success_handler_dispatches_openrouter_to_the_shared_handler():
     logging_obj = _logging_obj()
     normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(

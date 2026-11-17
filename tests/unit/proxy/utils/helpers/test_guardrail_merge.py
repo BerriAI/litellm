@@ -362,7 +362,17 @@ def test_merge_guardrails_with_existing_creates_metadata_when_missing():
     }
 
 
-def test_merge_guardrails_with_existing_raises_on_unhashable_guardrail():
-    data = {"metadata": {"guardrails": [{"unhashable": True}]}}
-    with pytest.raises(TypeError):
-        _merge_guardrails_with_existing(data, ["g1"])
+def test_merge_guardrails_with_existing_keeps_a_selected_guardrail_s_settings_over_the_model_s_plain_entry():
+    configured = {"pii-redact": {"extra_body": {"threshold": 0.9}}}
+
+    result = _merge_guardrails_with_existing({"metadata": {"guardrails": [configured]}}, ["pii-redact", "toxic-filter"])
+
+    assert result["metadata"]["guardrails"] == [configured, "toxic-filter"]
+
+
+def test_merge_guardrails_with_existing_keeps_a_selected_guardrail_s_settings_listed_after_the_key_s_plain_entry():
+    configured = {"pii-redact": {"extra_body": {"threshold": 0.9}}}
+
+    result = _merge_guardrails_with_existing({"metadata": {"guardrails": ["pii-redact", configured]}}, ["toxic-filter"])
+
+    assert result["metadata"]["guardrails"] == [configured, "toxic-filter"]

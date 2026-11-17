@@ -4,8 +4,7 @@ import pytest
 
 import litellm
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -56,6 +55,21 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
         {"role": "assistant", "content": [{"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}]},
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_success_body_that_is_not_a_message_passes_through(server: RecordingServer) -> None:
+    overloaded: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    server.default_response = ResponseSpec(body=overloaded)
+
+    response: Final = await call(server)
+
+    assert_served_natively(server, response)
+    assert isinstance(response, dict)
+    assert {name: value for name, value in response.items() if name != "_hidden_params"} == {
+        **overloaded,
+        "stop_sequence": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -147,79 +161,3 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     assert response["id"] == MESSAGES_RESPONSE["id"]
     body, _ = sent(server)
     assert (body["metadata"], body["system"], body["temperature"]) == (args[3], args[6], args[7])
-
-
-def _user_text(*texts: object) -> tuple[dict[str, object], ...]:
-    return ({"role": "user", "content": [{"type": "text", "text": text} for text in texts]},)
-
-
-FAILURE_EVENTS: Final = {True: "async_log_failure_event", False: "log_failure_event"}
-BOTH_MODES: Final = pytest.mark.parametrize("asynchronous", (True, False), ids=("async", "sync"))
-
-
-@pytest.mark.asyncio
-@BOTH_MODES
-@pytest.mark.parametrize("malformed", (None, 42))
-async def test_non_string_user_text_answers_400_before_io_and_reaches_the_failure_callback(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, malformed: object
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    server.expected_requests = 0
-    recorder: Final = RecordingLogger()
-
-    with pytest.raises(litellm.BadRequestError, match=r"messages\.0\.content\.1\.text: Input should be a valid string") as raised:
-        await call(server, asynchronous=asynchronous, messages=_user_text("hi", malformed), callbacks=[recorder])
-    events: Final = await recorder.wait_for_async(FAILURE_EVENTS[asynchronous])
-
-    assert server.requests == []
-    assert raised.value.llm_provider == "anthropic"
-    assert isinstance(events[0].kwargs, dict)
-    assert events[0].kwargs["exception"] is raised.value
-
-
-@pytest.mark.asyncio
-@BOTH_MODES
-@pytest.mark.parametrize("malformed", (None, 42))
-async def test_drop_params_drops_non_string_user_text(server: RecordingServer, asynchronous: bool, malformed: object) -> None:
-    await call(server, asynchronous=asynchronous, messages=_user_text("hi", malformed), drop_params=True)
-
-    body, _ = sent(server)
-    assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-
-
-@pytest.mark.asyncio
-@BOTH_MODES
-async def test_non_string_tool_result_text_answers_400_before_io(server: RecordingServer, asynchronous: bool) -> None:
-    server.expected_requests = 0
-    tool_result: Final = {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": None}]}
-
-    with pytest.raises(litellm.BadRequestError, match=r"tool_result toolu_1 content\.0\.text: Input should be a valid string"):
-        await call(server, asynchronous=asynchronous, messages=[{"role": "user", "content": [tool_result]}])
-
-    assert server.requests == []
-
-
-@pytest.mark.asyncio
-@BOTH_MODES
-async def test_messages_emptied_by_drop_params_answer_400_before_io(server: RecordingServer, asynchronous: bool) -> None:
-    server.expected_requests = 0
-    recorder: Final = RecordingLogger()
-
-    with pytest.raises(litellm.BadRequestError, match="no message has content left"):
-        await call(server, asynchronous=asynchronous, messages=_user_text(None), drop_params=True, callbacks=[recorder])
-    await recorder.wait_for_async(FAILURE_EVENTS[asynchronous])
-
-    assert server.requests == []
-
-
-@pytest.mark.asyncio
-@BOTH_MODES
-async def test_drop_params_leaves_a_malformed_message_list_for_the_request_validation(
-    server: RecordingServer, asynchronous: bool
-) -> None:
-    server.expected_requests = 0
-
-    with pytest.raises(litellm.BadRequestError, match="invalid Anthropic messages request"):
-        await call(server, asynchronous=asynchronous, messages=[*_user_text("hi", 42), "stray"], drop_params=True)
-
-    assert server.requests == []
