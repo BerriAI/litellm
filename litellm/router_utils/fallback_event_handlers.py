@@ -277,7 +277,7 @@ def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupporte
         (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError, litellm.UnsupportedEndpointError),
     ):
         return False
-    return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
+    return exception.status_code in (400, 413, 422) and bool(getattr(exception, "llm_provider", ""))
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:

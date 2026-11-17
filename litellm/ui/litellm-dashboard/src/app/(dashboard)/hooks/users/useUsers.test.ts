@@ -1,11 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { keepPreviousData, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useInfiniteUsers, useUserEmailLookup, useUserLookup } from "./useUsers";
+import {
+  useInfiniteUsers,
+  useUserEmailLookup,
+  useUserLookup,
+  useUserIdentityLookup,
+  userIdentityLabel,
+} from "./useUsers";
 import { userGetInfoV2, userListCall } from "@/components/networking";
 import type { UserInfoV2Response, UserListResponse } from "@/components/networking";
 import { ApiError } from "@/lib/http/client";
+import type { CurrentUser } from "../currentUser/useCurrentUser";
 
 vi.mock("@/components/networking", () => ({
   userGetInfoV2: vi.fn(),
@@ -25,6 +32,11 @@ vi.mock("../common/queryKeysFactory", () => ({
 const mockUseAuthorized = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => mockUseAuthorized(),
+}));
+
+const mockUseCurrentUser = vi.fn<(accessToken: string | null) => { data?: CurrentUser; isPlaceholderData?: boolean }>();
+vi.mock("../currentUser/useCurrentUser", () => ({
+  useCurrentUser: (accessToken: string | null) => mockUseCurrentUser(accessToken),
 }));
 
 const DEFAULT_AUTH = {
@@ -48,6 +60,12 @@ const buildUserListResponse = (page: number, totalPages: number, userCount = 2):
     user_email: `user-${page}-${i}@example.com`,
     user_alias: null,
     user_role: "Internal User",
+    allowed_cache_controls: [],
+    model_max_budget: {},
+    model_spend: {},
+    models: [],
+    policies: [],
+    teams: [],
     spend: 0,
     max_budget: null,
     key_count: 0,
@@ -447,4 +465,129 @@ describe("useUserEmailLookup", () => {
     expect(result.current.fetchStatus).toBe("idle");
     expect(userListCall).not.toHaveBeenCalled();
   });
+});
+
+describe("useUserIdentityLookup", () => {
+  let queryClient: QueryClient;
+  const adminScope = { accessToken: "admin-token", userRole: "Admin" };
+  const admin: CurrentUser = { user_id: "admin-id", user_email: "admin@example.com", user_role: "proxy_admin" };
+  const member: CurrentUser = { user_id: "member-id", user_email: "member@example.com", user_role: "internal_user" };
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+  const lookup = (
+    ids: Parameters<typeof useUserIdentityLookup>[0],
+    scope: Parameters<typeof useUserIdentityLookup>[1] = adminScope,
+  ) => renderHook(() => useUserIdentityLookup(ids, scope), { wrapper });
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, placeholderData: keepPreviousData } } });
+    vi.clearAllMocks();
+    mockUseCurrentUser.mockReturnValue({ data: admin });
+    vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
+    vi.mocked(userListCall).mockRejectedValue(new ApiError("Forbidden", 403, {}));
+  });
+
+  afterEach(() => queryClient.clear());
+
+  it.each([
+    [" alice@example.com ", "Alice", "alice@example.com"],
+    [null, " Alice ", "Alice"],
+    [" ", " ", "id"],
+  ])("labels by email, alias, then id", (user_email, user_alias, expected) => {
+    expect(userIdentityLabel("id", { id: { user_email, user_alias } })).toBe(expected);
+  });
+
+  it("matches singleton by exact id, never email", async () => {
+    vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response("different-id"));
+    const { result } = lookup(["alice@example.com"]);
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(result.current).toEqual({});
+    expect(userGetInfoV2).toHaveBeenCalledExactlyOnceWith("admin-token", "alice@example.com");
+  });
+
+  it.each([undefined, 403, 404])("resolves exact ids across batches, retaining successes after %s", async (status) => {
+    const ids = Array.from({ length: 201 }, (_, index) => `user-${String(index).padStart(3, "0")}`);
+    const template = buildUserListResponse(1, 1, 1);
+    vi.mocked(userListCall).mockImplementation(async (_token, batch) => ({
+      ...template,
+      users: [...(batch ?? []), "unrequested-id"].map((user_id) => ({ ...template.users[0], user_id })),
+    }));
+    if (status) vi.mocked(userListCall).mockRejectedValueOnce(new ApiError("Unavailable", status, {}));
+    vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response(ids[200]));
+    const { result } = lookup([...ids, ids[0]]);
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(Object.keys(result.current)).toEqual(status ? ids.slice(100) : ids);
+    expect(userIdentityLabel(ids[0], result.current)).toBe(status ? ids[0] : template.users[0].user_email);
+    expect(userListCall).toHaveBeenCalledTimes(2);
+    expect(userListCall).toHaveBeenNthCalledWith(1, "admin-token", ids.slice(0, 100), 1, 100);
+    expect(userListCall).toHaveBeenNthCalledWith(2, "admin-token", ids.slice(100, 200), 1, 100);
+    expect(userGetInfoV2).toHaveBeenCalledExactlyOnceWith("admin-token", ids[200]);
+  });
+
+  it.each([200, 403])("enriches only self, keeping authenticated email after status %s", async (status) => {
+    mockUseCurrentUser.mockReturnValue({ data: member });
+    if (status === 200) vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response("member-id"));
+    const { result } = lookup(["member-id", "other-id"], { accessToken: "member-token" });
+    expect(userIdentityLabel("member-id", result.current)).toBe(member.user_email);
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(result.current).toEqual({
+      "member-id": { user_email: member.user_email, user_alias: status === 200 ? "Alice" : null },
+    });
+    expect(userGetInfoV2).toHaveBeenCalledExactlyOnceWith("member-token", "member-id");
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...adminScope, userRole: "Internal User", ids: ["other-id"] },
+    { accessToken: "member-token", userRole: undefined, ids: ["member@example.com", "other-id"] },
+    { ...adminScope, ids: [null, undefined, ""] },
+    { ...adminScope, accessToken: null, ids: ["admin-id", "other-id"] },
+  ])("does not query outside scope $accessToken / $userRole / $ids", ({ ids, ...scope }) => {
+    if (scope.accessToken === "member-token") mockUseCurrentUser.mockReturnValue({ data: member });
+    const { result } = lookup(ids, scope);
+    expect(result.current).toEqual({});
+    expect(mockUseCurrentUser).toHaveBeenCalledWith(scope.accessToken);
+    expect(mockUseAuthorized).not.toHaveBeenCalled();
+    expect(userListCall).not.toHaveBeenCalled();
+    expect(userGetInfoV2).not.toHaveBeenCalled();
+  });
+
+  it.each(["supplied-role", "server-role", "read-only", "ids", "account", "logout"])(
+    "clears privileged data immediately after a %s transition, including placeholders",
+    async (change) => {
+      const id = change === "account" ? "admin-id" : "other-id";
+      vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response(id));
+      const initialProps: Parameters<typeof useUserIdentityLookup>[1] & { ids: string[] } = {
+        ...adminScope,
+        userRole: change === "account" ? undefined : adminScope.userRole,
+        isViewOnly: false,
+        ids: [id],
+      };
+      const { result, rerender } = renderHook(({ ids, ...scope }) => useUserIdentityLookup(ids, scope), {
+        wrapper,
+        initialProps,
+      });
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(userIdentityLabel(id, result.current)).toBe(change === "account" ? admin.user_email : "alice@example.com");
+      vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Forbidden", 403, {}));
+      if (change === "server-role")
+        mockUseCurrentUser.mockReturnValue({ data: { ...admin, user_role: "internal_user" } });
+      if (change === "account") mockUseCurrentUser.mockReturnValue({ data: admin, isPlaceholderData: true });
+      const nextToken = change === "account" ? "member-token" : initialProps.accessToken;
+      const nextProps = {
+        accessToken: change === "logout" ? null : nextToken,
+        userRole: change === "supplied-role" ? "Internal User" : initialProps.userRole,
+        isViewOnly: change === "read-only",
+        ids: change === "ids" ? ["new-id"] : initialProps.ids,
+      };
+      rerender(nextProps);
+      expect(result.current).toEqual({});
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      mockUseCurrentUser.mockReturnValue({ data: member });
+      rerender(nextProps);
+      expect(result.current).toEqual({});
+      expect(userListCall).not.toHaveBeenCalled();
+      if (change === "logout") expect(userGetInfoV2).toHaveBeenCalledTimes(1);
+    },
+  );
 });

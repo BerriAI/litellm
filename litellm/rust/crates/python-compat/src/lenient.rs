@@ -5,6 +5,7 @@
 //! |---|---|
 //! | [`IsTrue`] | `value is True` |
 //! | [`Truthy`] | `bool(value)` |
+//! | [`StrBool`] | a bool as is, or `str_to_bool(text) is True` for text |
 //! | [`Lenient`] | the value when it has the expected shape, otherwise ignored |
 //! | [`LaxBoolOr`] | `TypeAdapter(bool).validate_python(value)`, or the fallback where pydantic raises |
 //!
@@ -18,7 +19,7 @@ use serde::{
 };
 use serde_with::DeserializeAs;
 
-use crate::{Value, pydantic::lax_bool};
+use crate::{Value, flags::str_to_bool, pydantic::lax_bool};
 
 /// `value is True`: only a boolean `true` is true. `"true"`, `1` and anything else are false.
 pub struct IsTrue;
@@ -121,6 +122,28 @@ impl<'de> Visitor<'de> for TruthyVisitor {
         let non_empty = map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some();
         while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
         Ok(non_empty)
+    }
+}
+
+/// A flag the proxy also accepts as text: a bool as is, text that [`str_to_bool`] reads as true,
+/// and anything else false.
+pub struct StrBool;
+
+impl<'de> DeserializeAs<'de, bool> for StrBool {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Text(String),
+            Other(IgnoredAny),
+        }
+
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Bool(flag) => flag,
+            Raw::Text(text) => str_to_bool(&text) == Some(true),
+            Raw::Other(_) => false,
+        })
     }
 }
 

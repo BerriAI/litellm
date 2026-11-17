@@ -58,6 +58,7 @@ from litellm.constants import (
     FAILED_PROMPT_TOKEN_ESTIMATE_KEY,
     INTERNAL_CALLBACK_NAMES,
     KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     PROVIDER_REQUEST_ID_HEADERS,
     REALTIME_METERED_USAGE_KEY,
@@ -186,6 +187,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
+    redacted_standard_logging_payload,
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.served_output_texts import (
@@ -423,6 +425,11 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInformation] = {
+    "error_code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
+    "error_message": "Client disconnected the request",
+    "error_class": "ClientDisconnected",
+}
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
@@ -935,6 +942,23 @@ _SYNC_CALL_TYPES: Final = frozenset(
 )
 
 
+def _router_model_infos(litellm_params: object) -> Iterator[Mapping[str, object]]:
+    params: Final = as_str_mapping(litellm_params) or {}
+    for key in ("litellm_metadata", "metadata"):
+        yield as_str_mapping((as_str_mapping(params.get(key)) or {}).get("model_info")) or {}
+
+
+def _priced_router_model_id(litellm_params: object) -> str | None:
+    info: Final = next((info for info in _router_model_infos(litellm_params) if info.get("id") is not None), None)
+    if info is None:
+        return None
+    model_id: Final = str(info["id"])
+    original_model_id: Final = info.get("original_model_id")
+    if model_id in litellm.model_cost or not isinstance(original_model_id, str):
+        return model_id
+    return original_model_id if original_model_id in litellm.model_cost else model_id
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -1042,6 +1066,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
+        self.passthrough_model_parameters: Mapping[str, object] | None = None
+        self.passthrough_stream: bool | None = None
         self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -1407,16 +1433,18 @@ class Logging(LiteLLMLoggingBaseClass):
         Checks both litellm_metadata and metadata for model_info.id.
         Used by cost calculators to look up custom pricing registered
         under the deployment's model_info.id in litellm.model_cost.
+
+        A request-scoped deployment created for forwarded client credentials
+        keeps the configured deployment's id in ``original_model_id`` and gets
+        a new ``id`` that the router never registers. When the new id has no
+        cost-map entry, return the original id so the configured pricing is
+        still found.
         """
         if not hasattr(self, "litellm_params"):
             return None
-        for key in ("litellm_metadata", "metadata"):
-            meta = self.litellm_params.get(key, {}) or {}
-            info = meta.get("model_info", {}) or {}
-            model_id = info.get("id")
-            if model_id is not None:
-                return model_id
-        return None
+        return _priced_router_model_id(
+            self.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
 
     def get_router_pricing_provider(self) -> str | None:
         """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
@@ -1518,6 +1546,22 @@ class Logging(LiteLLMLoggingBaseClass):
         self.applied_timeout = timeout
         self.litellm_params["timeout"] = timeout
         self.model_call_details["litellm_params"] = self.litellm_params
+
+    def record_client_disconnect(self) -> None:
+        litellm_params: Final[object] = self.model_call_details.get("litellm_params")
+        if not is_str_keyed_dict(litellm_params):
+            return
+        request_metadata: Final = tuple(
+            (key, metadata)
+            for key in ("metadata", "litellm_metadata")
+            if is_str_keyed_dict(metadata := litellm_params.get(key))
+        )
+        for key, existing in request_metadata or (("metadata", {}),):
+            litellm_params[key] = {
+                **existing,
+                "client_disconnected": True,
+                "error_information": dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION),
+            }
 
     def update_from_kwargs(
         self,
@@ -1635,7 +1679,8 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
         injected_for_every_deployment: bool = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+        template_applied: bool = False,
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
         custom_logger: Final = prompt_management_logger or self.get_custom_logger_for_prompt_management(
@@ -1644,6 +1689,7 @@ class Logging(LiteLLMLoggingBaseClass):
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
             dynamic_callback_params=self.standard_callback_dynamic_params,
+            template_applied=template_applied,
         )
 
         if custom_logger:
@@ -1686,7 +1732,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
         injected_for_every_deployment: bool = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
         custom_logger: Final = prompt_management_logger or self.get_custom_logger_for_prompt_management(
@@ -1789,6 +1835,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: str | None = None,
         prompt_spec: PromptSpec | None = None,
         dynamic_callback_params: StandardCallbackDynamicParams | None = None,
+        template_applied: bool = False,
     ) -> CustomLogger | None:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
@@ -1799,10 +1846,57 @@ class Logging(LiteLLMLoggingBaseClass):
             tools: Optional tools passed to the completion call
             prompt_id: Optional prompt ID to auto-detect which system owns this prompt
             dynamic_callback_params: Dynamic callback parameters for should_run_prompt_management checks
+            template_applied: An earlier layer of this request already applied its prompt template, so only the
+                cache control and vector store passes may still run
 
         Returns:
             A CustomLogger instance if one is found, None otherwise
         """
+        if (
+            not template_applied
+            and (
+                template_logger := self._get_custom_logger_for_prompt_template(
+                    model=model,
+                    prompt_id=prompt_id,
+                    prompt_spec=prompt_spec,
+                    dynamic_callback_params=dynamic_callback_params,
+                )
+            )
+            is not None
+        ):
+            return template_logger
+
+        if (
+            anthropic_cache_control_logger
+            := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
+        ):
+            self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
+            return anthropic_cache_control_logger
+
+        #########################################################
+        # Vector Store / Knowledge Base hooks
+        #########################################################
+        if litellm.vector_store_registry is not None:
+            vector_store_custom_logger: Final = _init_custom_logger_compatible_class(
+                logging_integration="vector_store_pre_call_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            self.model_call_details["prompt_integration"] = vector_store_custom_logger.__class__.__name__
+            # Add to global callbacks so post-call hooks are invoked
+            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
+                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
+            return vector_store_custom_logger
+
+        return None
+
+    def _get_custom_logger_for_prompt_template(
+        self,
+        model: str,
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
+        dynamic_callback_params: StandardCallbackDynamicParams | None,
+    ) -> CustomLogger | None:
         # First check if model starts with a known custom logger compatible callback
         # This takes precedence for backward compatibility
         for callback_name in litellm._known_custom_logger_compatible_callbacks:
@@ -1840,28 +1934,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 continue
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
-
-        if (
-            anthropic_cache_control_logger
-            := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
-        ):
-            self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
-            return anthropic_cache_control_logger
-
-        #########################################################
-        # Vector Store / Knowledge Base hooks
-        #########################################################
-        if litellm.vector_store_registry is not None:
-            vector_store_custom_logger: Final = _init_custom_logger_compatible_class(
-                logging_integration="vector_store_pre_call_hook",
-                internal_usage_cache=None,
-                llm_router=None,
-            )
-            self.model_call_details["prompt_integration"] = vector_store_custom_logger.__class__.__name__
-            # Add to global callbacks so post-call hooks are invoked
-            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
-                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
-            return vector_store_custom_logger
 
         return None
 
@@ -3321,7 +3393,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if request_params.get("no-log", False) is True:
             # proxy cost tracking cal backs should run
 
-            if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
+            if not (
+                isinstance(callback, CustomLogger)
+                and (callback.runs_on_no_log_requests or "_PROXY_" in callback.__class__.__name__)
+            ):
                 verbose_logger.debug("no-log request, skipping logging for %s event", event_hook)
                 return False
 
@@ -5203,7 +5278,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## STANDARDIZED LOGGING PAYLOAD
 
-        self.model_call_details["standard_logging_object"] = get_standard_logging_object_payload(
+        failure_payload: Final = get_standard_logging_object_payload(
             kwargs=self.model_call_details,
             init_response_obj={},
             start_time=start_time,
@@ -5213,6 +5288,11 @@ class Logging(LiteLLMLoggingBaseClass):
             error_str=redact_string(str(exception)),
             original_exception=exception,
             standard_built_in_tools_params=self.standard_built_in_tools_params,
+        )
+        self.model_call_details["standard_logging_object"] = (
+            redacted_standard_logging_payload(failure_payload)
+            if failure_payload is not None and should_redact_message_logging(self.model_call_details)
+            else failure_payload
         )
         return start_time, end_time
 
@@ -5629,7 +5709,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 return
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.async_log_failure_event(
-                    kwargs=self.model_call_details,
+                    kwargs=redacted_model_call_details_for_custom_logger(
+                        model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=self.model_call_details
+                        ),
+                        custom_logger=callback,
+                    ),
                     response_obj=result,
                     start_time=start_time,
                     end_time=end_time,
@@ -6988,6 +7073,15 @@ def build_custom_logger_compatible_class(
         anthropic_cache_control_hook: Final = AnthropicCacheControlHook()
         _in_memory_loggers.append(anthropic_cache_control_hook)
         return anthropic_cache_control_hook
+    elif logging_integration == "prefix_block_hashes":
+        from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrefixBlockHashes):
+                return callback
+        prefix_block_hashes: Final = PrefixBlockHashes()
+        _in_memory_loggers.append(prefix_block_hashes)
+        return prefix_block_hashes
     elif logging_integration == "vector_store_pre_call_hook":
         from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
             VectorStorePreCallHook,
@@ -7488,6 +7582,12 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "prefix_block_hashes":
+            from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrefixBlockHashes):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
@@ -8730,7 +8830,7 @@ def get_standard_logging_object_payload(
             kwargs=kwargs,
         )
 
-        stream: bool | None = None
+        stream: bool | None = logging_obj.passthrough_stream
         if (
             kwargs.get("complete_streaming_response") is not None
             or kwargs.get("async_complete_streaming_response") is not None
@@ -8875,9 +8975,10 @@ def get_standard_logging_object_payload(
                 )
             ),
             response=final_response_obj,
-            model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
-                kwargs.get("optional_params", None) or {}
-            ),
+            model_parameters={
+                **ModelParamHelper.get_standard_logging_model_parameters(kwargs.get("optional_params", None) or {}),
+                **(logging_obj.passthrough_model_parameters or {}),
+            },
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,

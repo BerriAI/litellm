@@ -249,7 +249,7 @@ fn defers_to_regular_fallbacks(error: &Error) -> bool {
 }
 
 /// `is_bad_request_without_fallback` with `fallback_on_unsupported_params` off: an unsupported
-/// params error, or a provider's plain 400 bad request.
+/// params error, or a provider's plain 400, 413 or 422 bad request.
 fn is_bad_request_without_fallback(failure: &AttemptError) -> bool {
     if !failure.is_a("BadRequestError") {
         return false;
@@ -267,7 +267,7 @@ fn is_bad_request_without_fallback(failure: &AttemptError) -> bool {
     {
         return false;
     }
-    failure.status == Some(400) && failure.names_provider
+    matches!(failure.status, Some(400 | 413 | 422)) && failure.names_provider
 }
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -338,8 +338,8 @@ impl Core {
 
     /// The level after its own failure: the no-fallback checks, weighted failover, then the
     /// fallback targets. A level that fails raises its own error, whatever its fallbacks raised,
-    /// except an order chain's failure on any error but a context window one, which raises what
-    /// the chain's last hop raised ([`RouterEvent::OrderChainFailed`]).
+    /// except an order chain's failure on any error but a context window or content policy one,
+    /// which raises what the chain's last hop raised ([`RouterEvent::OrderChainFailed`]).
     /// A stream that fails before content re-enters here (`fallback_stream`), so the group's
     /// retry loop does not run again.
     #[allow(clippy::too_many_arguments)]
@@ -454,10 +454,12 @@ impl Core {
             return Err(error);
         }
         // The order path's `raise`, outside the `try` that re-raises the original error: only a
-        // context window error stays the one the caller sees.
-        let context_window = retried_failure(&error)
-            .is_some_and(|failure| failure.is_a("ContextWindowExceededError"));
-        let raised = last_hop_error.filter(|_| !context_window);
+        // context window or content policy error stays the one the caller sees.
+        let keeps_original = retried_failure(&error).is_some_and(|failure| {
+            failure.is_a("ContextWindowExceededError")
+                || failure.is_a("ContentPolicyViolationError")
+        });
+        let raised = last_hop_error.filter(|_| !keeps_original);
         self.host.observe(&RouterEvent::OrderChainFailed {
             level: at.level,
             last_hop: raised.is_some(),
@@ -782,12 +784,18 @@ impl Core {
         let fallbacks_of = |targets: Vec<FallbackTarget>| {
             targets.into_iter().map(Next::Fallback).collect::<Vec<_>>()
         };
-        // `context_window_fallback_model_group`: only a chain the group matched takes precedence.
-        let context_window_targets = is_a("ContextWindowExceededError")
-            .then(|| lists.context_window?.lookup_groups(&lookup, lists.keys))
-            .flatten();
-        let skip_order = is_a("ContentPolicyViolationError") || context_window_targets.is_some();
-        if !skip_order {
+        // Only an error-specific chain the group matched takes precedence; an unmatched one falls
+        // through to the order tiers and the regular fallbacks.
+        let error_specific_list = if is_a("ContextWindowExceededError") {
+            lists.context_window
+        } else if is_a("ContentPolicyViolationError") {
+            lists.content_policy
+        } else {
+            None
+        };
+        let error_specific_targets =
+            error_specific_list.and_then(|list| list.lookup_groups(&lookup, lists.keys));
+        if error_specific_targets.is_none() {
             // A routing group's members, with a priority group's priorities as their order.
             let listing_team = request.listing_team_id.as_deref();
             let members: Vec<_> = group_members(snapshot, order_group, listing_team)
@@ -821,24 +829,13 @@ impl Core {
                 }
             }
         }
-        if let Some(list) = lists.fallbacks
-            && list.is_client_side(lists.keys)
-            && context_window_targets.is_none()
-        {
-            return (Some(fallbacks_of(list.as_chain())), false);
-        }
-        if let Some(targets) = context_window_targets {
+        if let Some(targets) = error_specific_targets {
             return (Some(fallbacks_of(targets)), false);
         }
-        // A context window list with no match falls through to the regular fallbacks; a content
-        // policy list with no match raises.
-        if is_a("ContentPolicyViolationError")
-            && let Some(list) = lists.content_policy
+        if let Some(list) = lists.fallbacks
+            && list.is_client_side(lists.keys)
         {
-            return (
-                list.lookup_groups(&lookup, lists.keys).map(fallbacks_of),
-                false,
-            );
+            return (Some(fallbacks_of(list.as_chain())), false);
         }
         (
             lists

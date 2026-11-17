@@ -9,6 +9,7 @@ import time
 import weakref
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
+from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence, TypeAlias, TypeVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -43,11 +44,13 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
+from litellm.litellm_core_utils.core_helpers import FinishEvidence
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.total_deadline import current_total_deadline
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.vertex_ai.gemini.long_decode import AsyncStreamResume
 from litellm.proxy._types import Litellm_EntityType, LitellmUserRoles, ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck
@@ -59,7 +62,6 @@ from litellm.proxy.common_request_processing import (
     FirstChunkSseFraming,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
-    await_llm_call_cancelling_on_disconnect,
     _bill_partial_streamed_spend_on_disconnect,
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
@@ -73,6 +75,7 @@ from litellm.proxy.common_request_processing import (
     _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     attach_guardrail_information,
+    await_llm_call_cancelling_on_disconnect,
     create_response,
     include_guardrail_response_requested,
     is_azure_model_router_request,
@@ -95,6 +98,10 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
+from litellm.router_config import build_router_config
+from litellm.router_python_host import python_host
+from litellm.router_rust.core import RustCore
+from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, SpecialEnums, StreamingChoices
 from litellm.utils import ModelResponseListIterator
@@ -8804,7 +8811,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 proxy_logging_obj=MagicMock(),
                 user_api_key_dict=ProxyUserAPIKeyAuth(),
                 version=None,
-                proxy_config=_proxy_config(),
+                proxy_config=_proxy_config({"model_group_alias": {"embed-alias": "embed-only"}}),
                 user_model=None,
                 user_temperature=None,
                 user_request_timeout=None,
@@ -9021,6 +9028,55 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert processor.data["model"] == "claude-3-haiku"
 
     @pytest.mark.asyncio
+    async def test_a_client_sent_model_group_alias_does_not_authorize_a_fallback_the_key_may_not_call(
+        self, monkeypatch
+    ):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4", "router_settings_override": {"model_group_alias": {"gpt-3.5-turbo": "gpt-4"}}}
+        )
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        async def only_the_requested_model(*, model, valid_token, llm_router):
+            return model == "gpt-4"
+
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "enforce_fallback_model_access", True)
+        monkeypatch.setattr(
+            "litellm.proxy.auth.fallback_model_access.is_model_authorized_for_token", only_the_requested_model
+        )
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with (
+            patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic),
+            pytest.raises(ProxyRateLimitError),
+        ):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+    @pytest.mark.asyncio
     async def test_an_agent_owned_key_never_leaves_the_model_it_asked_for(self):
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -9158,11 +9214,11 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             ProxyRateLimitError,
             saturation_fallbacks_exhausted,
         )
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache, hash_token
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
         cache = DualCache()
-        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        limiter = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
         key = ProxyKey(api_key=hash_token("sk-one-at-a-time"), max_parallel_requests=1)
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         refusal = HTTPException(status_code=400, detail="guardrail refused the fallback")
@@ -9345,7 +9401,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 proxy_logging_obj=MagicMock(),
                 user_api_key_dict=ProxyKey(),
                 version=None,
-                proxy_config=_proxy_config(),
+                proxy_config=_proxy_config({"model_group_alias": {"gpt-3.5-turbo": "pricey"}}),
                 user_model=None,
                 user_temperature=None,
                 user_request_timeout=None,
@@ -9394,7 +9450,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 proxy_logging_obj=MagicMock(),
                 user_api_key_dict=ProxyKey(),
                 version=None,
-                proxy_config=_proxy_config(),
+                proxy_config=_proxy_config({"model_group_alias": {"gpt-3.5-turbo": "roomy"}}),
                 user_model=None,
                 user_temperature=None,
                 user_request_timeout=None,
@@ -10203,11 +10259,11 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         from litellm.caching.caching import DualCache
         from litellm.proxy import proxy_server
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
         monkeypatch.setattr(proxy_server, "prisma_client", None)
-        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+        limiter = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter_models: list[str] = []
 
         async def run_limiter(
@@ -11045,6 +11101,616 @@ class TestStreamingClientDisconnectBilling:
             litellm.token_counter(model=model, messages=messages),
             litellm.token_counter(model=model, text=text, count_response_tokens=True),
         )
+
+    @staticmethod
+    def _recorded_logging_obj(
+        model: str,
+        messages: list[dict[str, str]],
+        call_id: str,
+        recorder: _RecordingSuccessLogger,
+        call_type: str = "acompletion",
+    ) -> LiteLLMLoggingObj:
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type=call_type,
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id=call_id,
+            function_id=call_id,
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": call_id}
+        )
+        return logging_obj
+
+    @pytest.mark.asyncio
+    async def test_disconnect_before_the_finish_frame_records_an_unspecified_finish_reason(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+        text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(model, messages, "unfinished-disconnect-call", recorder)
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-unfinished", created=1741037890, model=model, choices=choices)
+                    for choices in (
+                        [StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        first_chunk: Final = await response.__aiter__().__anext__()
+        assert first_chunk.choices[0].finish_reason is None
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, response)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["finish_reason_unspecified"]
+        assert (partial_response.usage.prompt_tokens, partial_response.usage.completion_tokens) == (
+            litellm.token_counter(model=model, messages=messages),
+            litellm.token_counter(model=model, text=text, count_response_tokens=True),
+        )
+
+    @pytest.mark.parametrize(
+        "provider_frames",
+        [
+            pytest.param(
+                (
+                    [StreamingChoices(index=0, delta=Delta(role="assistant", content="partial answer"))],
+                    [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="length")],
+                ),
+                id="finish-on-its-own-frame",
+            ),
+            pytest.param(
+                (
+                    [
+                        StreamingChoices(
+                            index=0, delta=Delta(role="assistant", content="partial answer"), finish_reason="length"
+                        )
+                    ],
+                ),
+                id="finish-on-the-content-frame",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_disconnect_after_the_provider_finished_keeps_the_received_finish_reason(
+        self, provider_frames: tuple[list[StreamingChoices], ...]
+    ):
+        model: Final = "gpt-4o"
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(
+            model, [{"role": "user", "content": "hi"}], "finished-disconnect-call", recorder
+        )
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-finished", created=1741037890, model=model, choices=choices)
+                    for choices in provider_frames
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        stream_iter: Final = response.__aiter__()
+        for _ in provider_frames:
+            await stream_iter.__anext__()
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, response)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.fixture
+    def stream_attempt(self) -> Iterator[StreamAttempt]:
+        core: Final = RustCore.build(build_router_config(MappingProxyType({"model_list": []})), python_host)
+        yield StreamAttempt(
+            core=core,
+            op="acompletion",
+            request=MappingProxyType({}),
+            kwargs=MappingProxyType({}),
+            group="gpt-4o",
+            order=None,
+            depth=0,
+            level=0,
+            deployment_id=None,
+            attempted_retries=0,
+        )
+        core.retire()
+
+    async def _router_stream(
+        self,
+        recorder: _RecordingSuccessLogger,
+        frames: Sequence[Sequence[StreamingChoices]],
+        stream_attempt: StreamAttempt,
+    ) -> CustomStreamWrapper:
+        model: Final = "gpt-4o"
+        logging_obj: Final = self._recorded_logging_obj(
+            model, [{"role": "user", "content": "hi"}], "router-held-finish-call", recorder
+        )
+        provider_stream: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-held", created=1741037890, model=model, choices=list(choices))
+                    for choices in frames
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        routed: Final = await open_attempt_stream(stream_attempt, provider_stream)
+        assert isinstance(routed, CustomStreamWrapper)
+        return routed
+
+    async def _router_stream_holding_a_length_finish(
+        self, recorder: _RecordingSuccessLogger, stream_attempt: StreamAttempt
+    ) -> CustomStreamWrapper:
+        return await self._router_stream(
+            recorder,
+            [
+                [
+                    StreamingChoices(
+                        index=0, delta=Delta(role="assistant", content="partial answer"), finish_reason="length"
+                    )
+                ]
+            ],
+            stream_attempt,
+        )
+
+    async def _assert_disconnect_bills_length(
+        self, recorder: _RecordingSuccessLogger, logging_obj: LiteLLMLoggingObj, streamed: object
+    ) -> None:
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, streamed)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_router_chat_stream_keeps_the_finish_reason_held_on_the_last_content_frame(
+        self, stream_attempt: StreamAttempt
+    ):
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream_holding_a_length_finish(recorder, stream_attempt)
+
+        delivered: Final = await routed.__aiter__().__anext__()
+        assert (delivered.choices[0].delta.content, delivered.choices[0].finish_reason) == ("partial answer", None)
+
+        await self._assert_disconnect_bills_length(recorder, routed.logging_obj, routed)
+
+    @pytest.mark.parametrize("through_response_cache", [False, True], ids=["uncached", "response-cache-writer"])
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_stream_keeps_the_finish_reason_held_on_the_last_content_frame(
+        self, through_response_cache: bool, stream_attempt: StreamAttempt
+    ):
+        from litellm.caching.caching_handler import LLMCachingHandler
+        from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicSSEStream
+        from litellm.llms.anthropic.messages.adapters.transformation import AnthropicAdapter
+        from litellm.llms.anthropic.messages.native import handler
+        from litellm.llms.anthropic.messages.native.response_cache import AnthropicMessagesStreamCacheWriter
+        from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream
+
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream_holding_a_length_finish(recorder, stream_attempt)
+        adapted: Final = AnthropicAdapter().translate_completion_output_params_streaming(
+            routed, model="gpt-4o", is_async=True, litellm_logging_obj=routed.logging_obj
+        )
+        assert isinstance(adapted, AnthropicSSEStream)
+        source_iterator: Final = (
+            AnthropicMessagesStreamCacheWriter(
+                stream=adapted,
+                caching_handler=LLMCachingHandler(
+                    original_function=handler.anthropic_messages,
+                    request_kwargs={},
+                    start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+                ),
+            )
+            if through_response_cache
+            else adapted
+        )
+        async for frame in source_iterator:
+            if isinstance(frame, bytes) and b"partial answer" in frame:
+                break
+
+        async def _sse_frames() -> AsyncGenerator[bytes, None]:
+            yield b"event: message_start\n\n"
+
+        await self._assert_disconnect_bills_length(
+            recorder,
+            routed.logging_obj,
+            prepare_response_for_header_attachment(
+                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator, stream_attempt)
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bills_a_partial_text_completion_without_inventing_a_finish_reason(self):
+        from litellm.types.utils import TextChoices, TextCompletionResponse
+
+        model: Final = "gpt-3.5-turbo-instruct"
+        messages: Final = [{"role": "user", "content": "Say something long"}]
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(
+            model, messages, "text-completion-disconnect-call", recorder, call_type="atext_completion"
+        )
+        collected_stream: Final = SimpleNamespace(
+            chunks=[
+                TextCompletionResponse(
+                    id="cmpl-partial", created=1741037890, model=model, choices=[TextChoices(index=0, text=text)]
+                )
+                for text in ("partial ", "answer")
+            ],
+            messages=messages,
+            model=model,
+        )
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj}, collected_stream
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [(choice.text, choice.finish_reason) for choice in partial_response.choices] == [
+            ("partial answer", None)
+        ]
+        assert partial_response.usage.completion_tokens == litellm.token_counter(
+            model=model, text="partial answer", count_response_tokens=True
+        )
+
+    @staticmethod
+    def _content_choice(index: int, text: str, finish_reason: str | None = None) -> StreamingChoices:
+        return StreamingChoices(index=index, delta=Delta(role="assistant", content=text), finish_reason=finish_reason)
+
+    @pytest.mark.parametrize(
+        ("frames", "expected"),
+        [
+            pytest.param(
+                (((0, "zero ", None),), ((1, "one ", None),), ((0, "done", "length"),)),
+                {0: "length", 1: "finish_reason_unspecified"},
+                id="choice-0-finished",
+            ),
+            pytest.param(
+                (((0, "zero ", None),), ((1, "one ", None),), ((1, "done", "length"),)),
+                {0: "finish_reason_unspecified", 1: "length"},
+                id="choice-1-finished",
+            ),
+            pytest.param(
+                (((1, "one", "stop"),), ((0, "zero", "length"),)),
+                {0: "length", 1: "stop"},
+                id="both-finished-out-of-order",
+            ),
+            pytest.param(
+                (((2, "two", "length"),), ((0, "zero", "stop"),)),
+                {0: "stop", 2: "length"},
+                id="sparse-indexes",
+            ),
+            pytest.param(
+                (((2, "partial answer", "length"),),),
+                {0: "length"},
+                id="single-choice-nonzero-index",
+            ),
+            pytest.param(
+                (((0, "zero", "length"), (1, "one", "stop")),),
+                {0: "length", 1: "stop"},
+                id="one-frame-two-finishes",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_router_stream_keeps_each_choice_finish_reason_held_on_its_content_frame(
+        self,
+        frames: tuple[tuple[tuple[int, str, str | None], ...], ...],
+        expected: Mapping[int, str],
+        stream_attempt: StreamAttempt,
+    ):
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream(
+            recorder,
+            [tuple(self._content_choice(*choice) for choice in frame) for frame in frames],
+            stream_attempt,
+        )
+        stream_iter: Final = routed.__aiter__()
+        delivered: Final = [await stream_iter.__anext__() for _ in frames]
+        delivered_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in delivered))
+        assert [choice.finish_reason for choice in delivered_choices] == [None] * sum(map(len, frames))
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": routed.logging_obj}, routed
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert {choice.index: choice.finish_reason for choice in partial_response.choices} == expected
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.parametrize(
+        ("frames", "expected"),
+        [
+            pytest.param(
+                (((0, "zero ", None),), ((1, "one ", None),), ((1, "", "length"),)),
+                {0: "finish_reason_unspecified", 1: "length"},
+                id="choice-1-terminal-frame",
+            ),
+            pytest.param(
+                (((0, "zero ", None), (1, "one ", None)), ((0, "", "length"), (1, "", "stop"))),
+                {0: "length", 1: "stop"},
+                id="one-terminal-frame-two-finishes",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_disconnect_after_a_terminal_frame_bills_each_choice_its_own_finish_reason(
+        self,
+        frames: tuple[tuple[tuple[int, str, str | None], ...], ...],
+        expected: Mapping[int, str],
+        stream_attempt: StreamAttempt,
+    ):
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream(
+            recorder,
+            [tuple(self._content_choice(*choice) for choice in frame) for frame in frames],
+            stream_attempt,
+        )
+        stream_iter: Final = routed.__aiter__()
+        for _ in frames:
+            await stream_iter.__anext__()
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": routed.logging_obj}, routed
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert {choice.index: choice.finish_reason for choice in partial_response.choices} == expected
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.parametrize(
+        ("candidate", "expected"),
+        [
+            pytest.param(
+                {"content": {"parts": [{"text": "partial answer"}], "role": "model"}, "index": 0},
+                "finish_reason_unspecified",
+                id="no-finish-reason",
+            ),
+            pytest.param(
+                {
+                    "content": {"parts": [{"text": "partial answer"}], "role": "model"},
+                    "finishReason": "FINISH_REASON_UNSPECIFIED",
+                },
+                "finish_reason_unspecified",
+                id="finish-reason-unspecified-sentinel",
+            ),
+            pytest.param(
+                {"content": {"parts": [{"text": "partial answer"}], "role": "model"}, "finishReason": "MAX_TOKENS"},
+                "length",
+                id="max-tokens",
+            ),
+            pytest.param(
+                {"content": {"parts": [{"text": "full answer"}], "role": "model"}, "finishReason": "STOP"},
+                "stop",
+                id="stop",
+            ),
+            pytest.param(
+                {
+                    "content": {"parts": [{"functionCall": {"name": "lookup", "args": {"q": "fox"}}}], "role": "model"},
+                    "finishReason": "STOP",
+                },
+                "tool_calls",
+                id="stop-after-a-tool-call",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_gemini_stream_bills_only_the_finish_reason_the_candidate_sent(
+        self, candidate: Mapping[str, object], expected: str, stream_attempt: StreamAttempt
+    ):
+        partial_response: Final = await self._billed_after_the_first_gemini_frame(
+            stream_attempt, {"candidates": [candidate]}
+        )
+
+        assert [choice.finish_reason for choice in partial_response.choices] == [expected]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_gemini_frame_that_plans_a_continuation_hop_is_not_billed_as_finished(
+        self, stream_attempt: StreamAttempt
+    ):
+        from litellm.types.llms.vertex_ai import GenerationConfig, RequestBody
+
+        async def _hop_must_not_open(request_body: RequestBody) -> httpx.Response:
+            pytest.fail(f"the client disconnected before the hop, yet it opened with {request_body}")
+
+        partial_response: Final = await self._billed_after_the_first_gemini_frame(
+            stream_attempt,
+            {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": "hello"}]},
+                        "finishReason": "CONTINUATION",
+                        "continuationToken": "dG9rLTE=",
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 30, "totalTokenCount": 40},
+            },
+            AsyncStreamResume(
+                request_body=RequestBody(
+                    contents=[{"role": "user", "parts": [{"text": "Prove it"}]}],
+                    generationConfig=GenerationConfig(max_output_tokens=100),
+                ),
+                open_hop=_hop_must_not_open,
+            ),
+        )
+
+        assert [choice.finish_reason for choice in partial_response.choices] == ["finish_reason_unspecified"]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.parametrize("evidence", ["length", ((0, None),), ((0, "length", "stop"),)])
+    @pytest.mark.asyncio
+    async def test_unreadable_provider_finish_evidence_bills_unspecified_instead_of_the_synthesized_stop(
+        self, evidence: object, stream_attempt: StreamAttempt
+    ):
+        from litellm.constants import PROVIDER_FINISH_REASONS_HIDDEN_PARAM
+        from litellm.litellm_core_utils.hidden_params import set_hidden_param
+
+        frame: Final = ModelResponseStream(
+            id="chatcmpl-unreadable",
+            created=1741037890,
+            model="gemini-3.8-flash",
+            choices=[self._content_choice(0, "partial answer", "stop")],
+        )
+        set_hidden_param(frame, "is_finished", False)
+        set_hidden_param(frame, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, evidence)
+
+        partial_response: Final = await self._billed_after_the_first_frame(
+            stream_attempt, lambda _: ModelResponseListIterator(model_responses=[frame])
+        )
+
+        assert [choice.finish_reason for choice in partial_response.choices] == ["finish_reason_unspecified"]
+
+    async def _billed_after_the_first_gemini_frame(
+        self, stream_attempt: StreamAttempt, frame: Mapping[str, object], resume: AsyncStreamResume | None = None
+    ) -> litellm.ModelResponse:
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+        async def _gemini_sse() -> AsyncGenerator[str, None]:
+            yield f"data: {json.dumps(frame)}"
+
+        return await self._billed_after_the_first_frame(
+            stream_attempt,
+            lambda logging_obj: ModelResponseIterator(
+                streaming_response=_gemini_sse(), sync_stream=False, logging_obj=logging_obj, resume=resume
+            ),
+        )
+
+    async def _billed_after_the_first_frame(
+        self, stream_attempt: StreamAttempt, completion_stream: Callable[[LiteLLMLoggingObj], object]
+    ) -> litellm.ModelResponse:
+        model: Final = "gemini-3.8-flash"
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(
+            model, [{"role": "user", "content": "hi"}], "first-frame-disconnect-call", recorder
+        )
+        provider_stream: Final = CustomStreamWrapper(
+            completion_stream=completion_stream(logging_obj),
+            model=model,
+            custom_llm_provider="gemini",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        routed: Final = await open_attempt_stream(stream_attempt, provider_stream)
+        assert isinstance(routed, CustomStreamWrapper)
+        delivered: Final = await routed.__aiter__().__anext__()
+        assert delivered.choices[0].finish_reason is None
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, routed)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        return recorder.success_events[0]["response_obj"]
+
+    @pytest.mark.asyncio
+    async def test_disconnect_uses_a_finish_reason_received_without_a_choice_index_for_a_single_choice(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "hi"}]
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(model, messages, "unindexed-finish-call", recorder)
+        collected_stream: Final = SimpleNamespace(
+            chunks=[
+                ModelResponseStream(
+                    id="chatcmpl-unindexed",
+                    created=1741037890,
+                    model=model,
+                    choices=[self._content_choice(0, "partial answer")],
+                )
+            ],
+            messages=messages,
+            model=model,
+            finish_evidence=FinishEvidence(by_choice=MappingProxyType({}), unindexed="length"),
+        )
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj}, collected_stream
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
+
+    @pytest.mark.asyncio
+    async def test_disconnect_marks_only_the_unfinished_choice_unspecified(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "look both up"}]
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(model, messages, "two-choice-disconnect-call", recorder)
+
+        def tool_call_delta(call_id: str) -> Delta:
+            return Delta(
+                role="assistant",
+                tool_calls=[
+                    {"id": call_id, "type": "function", "index": 0, "function": {"name": "lookup", "arguments": "{}"}}
+                ],
+            )
+
+        collected_stream: Final = SimpleNamespace(
+            chunks=[
+                ModelResponseStream(id="chatcmpl-two", created=1741037890, model=model, choices=choices)
+                for choices in (
+                    [
+                        StreamingChoices(index=0, delta=tool_call_delta("call_a")),
+                        StreamingChoices(index=1, delta=tool_call_delta("call_b")),
+                    ],
+                    [StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")],
+                )
+            ],
+            messages=messages,
+            model=model,
+            finish_evidence=FinishEvidence(by_choice=MappingProxyType({}), unindexed="tool_calls"),
+        )
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj}, collected_stream
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert {choice.index: choice.finish_reason for choice in partial_response.choices} == {
+            0: "tool_calls",
+            1: "finish_reason_unspecified",
+        }
+        assert [len(choice.message.tool_calls) for choice in partial_response.choices] == [1, 1]
+        assert partial_response.usage.total_tokens > 0
 
     @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
@@ -14987,18 +15653,16 @@ async def test_completed_synthetic_stream_reuses_capacity_without_freeing_anothe
     )
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.utils import InternalUsageCache, hash_token
     from litellm.redis.stores.rate_limits import RateLimitScope
     from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+    from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
     def clock() -> datetime.datetime:
         return datetime.datetime(2026, 1, 1)
 
     cache: Final = DualCache()
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(cache), time_provider=clock
-    )
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache), time_provider=clock)
     logger: Final = ProxyLogging(user_api_key_cache=cache)
     logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
     auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-synthetic-stream"), max_parallel_requests=2)
