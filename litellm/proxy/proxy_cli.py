@@ -32,6 +32,7 @@ from litellm.proxy.db.pgbouncer import (
     start_in_container_pgbouncer,
 )
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+from litellm.proxy.middleware.guard_middleware import server_proxy_header_overrides
 from litellm.proxy.server_listener import PrivateListener, gunicorn_overrides
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -438,6 +439,7 @@ class ProxyInitializationHelpers:
             "h11_max_incomplete_event_size": (
                 max_request_header_size if max_request_header_size is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE
             ),
+            **server_proxy_header_overrides(),
         }
         if log_config is not None:
             print_startup_message(f"Using log_config: {log_config}")

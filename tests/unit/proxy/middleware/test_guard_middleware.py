@@ -307,3 +307,50 @@ def test_credential_headers_are_redacted_from_guard_logs(monkeypatch):
     redacted: Final = _StubSecurityMiddleware.instances[-1].config.kwargs["log_sensitive_headers"]
     assert SpecialHeaders.litellm_credential_header_names() <= redacted
     assert "x-custom-key" in redacted
+
+
+def _server_config(server, monkeypatch, guard_on):
+    """The uvicorn.Config the proxy builds for the uvicorn and gunicorn
+    worker start paths."""
+    from unittest.mock import MagicMock
+
+    import uvicorn
+    from starlette.responses import PlainTextResponse
+
+    from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+
+    if guard_on:
+        monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    else:
+        monkeypatch.delenv("LITELLM_GUARD_ENABLED", raising=False)
+    app: Final = PlainTextResponse("ok")
+    if server == "uvicorn":
+        args: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args("127.0.0.1", 4000)
+        return uvicorn.Config(**{**args, "app": app, "log_config": None})
+
+    import os
+
+    import gunicorn.config
+    import gunicorn.glogging
+
+    from litellm.proxy.shutdown.graceful_uvicorn_worker import build_graceful_shutdown_uvicorn_worker
+
+    gunicorn_config: Final = gunicorn.config.Config()
+    worker: Final = build_graceful_shutdown_uvicorn_worker(7.5, None)(
+        0, os.getpid(), [], MagicMock(), 30, gunicorn_config, gunicorn.glogging.Logger(gunicorn_config)
+    )
+    worker.config.app = app
+    return worker.config
+
+
+@pytest.mark.parametrize("server", ["uvicorn", "gunicorn"])
+def test_server_client_ip_rewriting_is_off_when_guard_enabled(server, monkeypatch):
+    """Uvicorn rewrites scope["client"] from X-Forwarded-For (by
+    FORWARDED_ALLOW_IPS) before guard runs, which would defeat guard's own
+    trusted_proxies policy. With the guard on, the server must not do it."""
+    assert _server_config(server, monkeypatch, guard_on=True).proxy_headers is False
+
+
+@pytest.mark.parametrize("server", ["uvicorn", "gunicorn"])
+def test_server_client_ip_rewriting_is_untouched_when_guard_disabled(server, monkeypatch):
+    assert _server_config(server, monkeypatch, guard_on=False).proxy_headers is True

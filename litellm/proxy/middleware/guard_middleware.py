@@ -30,7 +30,15 @@ Design constraints honored here:
   (guard ignores forwarded headers from unlisted peers), so a caller
   cannot spoof its way past allowlists, limits, or bans by setting the
   header. Deployments behind a load balancer must list their ingress
-  addresses there.
+  addresses there. The proxy's uvicorn and gunicorn start paths turn off
+  uvicorn's own ``proxy_headers`` client rewriting when ``LITELLM_GUARD_ENABLED``
+  is in the process environment at startup (``server_proxy_header_overrides``),
+  so the server cannot pre-empt that policy. Not covered, set it yourself:
+  a flag that only comes from the YAML ``environment_variables`` (read after
+  the server is already running), hypercorn and granian (configure them not to
+  rewrite the client address), and the Rust forward mode, whose
+  ``RustPeerMiddleware`` runs uvicorn's ``ProxyHeadersMiddleware`` with the
+  ``FORWARDED_ALLOW_IPS`` trust (set that so it trusts no peer).
 - Rejections guard itself builds use guard's response shapes; the one
   rejection this wrapper builds (guard unavailable) uses litellm's
   OpenAI-error JSON shape (the ``AdmissionControlMiddleware`` model), so
@@ -80,6 +88,20 @@ def guard_enabled() -> bool:
     """Read lazily per request so YAML ``environment_variables`` entries are
     seen (the ``LITELLM_ENABLE_HSTS`` pattern)."""
     return _env_bool(GUARD_ENABLED_ENV)
+
+
+def server_proxy_header_overrides() -> Mapping[str, bool]:
+    """Uvicorn settings for the proxy's own server start paths (``uvicorn.run``
+    and the gunicorn ``UvicornWorker``).
+
+    Uvicorn defaults to ``proxy_headers=True``: it rewrites ``scope["client"]``
+    from ``X-Forwarded-For`` for peers in ``FORWARDED_ALLOW_IPS`` (loopback by
+    default, or everything with ``*``) before any middleware runs. Guard would
+    then see a client the caller chose, and its ``trusted_proxies`` policy
+    would never apply. With the guard enabled the server leaves the peer alone
+    so guard alone decides who the client is. Nothing changes when it is off.
+    """
+    return {"proxy_headers": False} if guard_enabled() else {}
 
 
 def _credential_header_names() -> frozenset[str]:
