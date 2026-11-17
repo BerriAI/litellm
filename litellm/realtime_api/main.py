@@ -265,9 +265,6 @@ def _get_realtime_http_provider_config(
     raw_api_base: Final = dynamic_api_base or litellm_params.api_base
     raw_api_key: Final = dynamic_api_key or litellm_params.api_key
 
-    if missing_key_error := missing_json_provider_key_error(custom_llm_provider, "", raw_api_key, False):
-        raise missing_key_error
-
     if provider_config is not None:
         resolved_api_base = provider_config.get_api_base(api_base=raw_api_base)
         resolved_api_key = provider_config.get_api_key(api_key=raw_api_key)
@@ -355,6 +352,10 @@ async def acreate_realtime_client_secret(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    if missing_key_error := missing_json_provider_key_error(
+        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False
+    ):
+        raise missing_key_error
     provider_config, resolved_api_base, resolved_api_key = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
         dynamic_api_base=dynamic_api_base,
@@ -541,6 +542,10 @@ async def acreate_realtime_transcription_session(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    if missing_key_error := missing_json_provider_key_error(
+        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False
+    ):
+        raise missing_key_error
     (
         provider_config,
         resolved_api_base,
