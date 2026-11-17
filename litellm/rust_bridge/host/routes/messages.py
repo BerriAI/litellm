@@ -874,12 +874,6 @@ def _complete_url(call: _ProviderCall, request: Mapping[str, object]) -> str:
     )
 
 
-def _bedrock_url(request: Mapping[str, object]) -> str | None:
-    """The URL Python's bedrock Messages config builds for the call."""
-    call: Final = _provider_call(request)
-    return None if call is None else _complete_url(call, request)
-
-
 def _signing_failure(kind: str) -> Exception | None:
     """The exception Python's AWS signing raises for a credential failure whose outcome needs no STS,
     IMDS or secret manager call. botocore's environment provider raises `PartialCredentialsError`
@@ -956,9 +950,11 @@ def _bedrock_credential_failure(
     return None
 
 
-def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
+def _sent_base(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
     """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
-    to send it, anthropic's to its default and bedrock's to the URL its config builds."""
+    to send it, anthropic's to its default and bedrock's to the origin Rust could not connect to."""
     api_base: Final = request.get("api_base")
     if isinstance(api_base, str) and (api_base or request_provider != "azure_ai"):
         return api_base
@@ -967,14 +963,15 @@ def _sent_base(request: Mapping[str, object], request_provider: str, secrets_rea
     if request_provider == "azure_ai":
         return dict(secrets_read).get("AZURE_API_BASE")
     if request_provider in ("bedrock", "bedrock_mantle"):
-        return _bedrock_url(request)
+        return optional_str(getattr(error, "messages_connect_origin", None))
     return None
 
 
 def _connect_failure(
-    native: str, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
 ) -> str | None:
-    base: Final = _sent_base(request, request_provider, secrets_read)
+    native: Final = str(error)
+    base: Final = _sent_base(error, request, request_provider, secrets_read)
     if base is None:
         return None
     refused: Final = "tcp connect error: Connection refused" in native
@@ -1034,7 +1031,7 @@ def _transport_failure(
         return "Server disconnected without sending a response." if closed else native
     if not native.startswith(_UNREACHABLE):
         return None
-    connect: Final = _connect_failure(native, request, request_provider, secrets_read)
+    connect: Final = _connect_failure(error, request, request_provider, secrets_read)
     return native if connect is None else connect
 
 

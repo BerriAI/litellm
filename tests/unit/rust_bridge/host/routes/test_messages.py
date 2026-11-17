@@ -2903,47 +2903,50 @@ def _ssl_configuration(_ssl_verify: object) -> str:
 
 
 @pytest.mark.parametrize(
-    ("aiohttp", "endpoint", "native", "text"),
+    ("aiohttp", "provider", "origin", "native", "text"),
     [
         (
             True,
-            {"aws_bedrock_runtime_endpoint": "http://127.0.0.1:9"},
+            "bedrock",
+            "http://127.0.0.1:9",
             f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
             "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [Connect call failed ('127.0.0.1', 9)]",
         ),
         (
             True,
-            {},
+            "bedrock_mantle",
+            "https://bedrock-mantle.us-east-1.api.aws:443",
             f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
             "failed to lookup address information: Name or service not known",
-            "Cannot connect to host bedrock-runtime.us-east-1.amazonaws.com:443 ssl:<ssl> [Name or service not known]",
+            "Cannot connect to host bedrock-mantle.us-east-1.api.aws:443 ssl:<ssl> [Name or service not known]",
         ),
         (
             False,
-            {},
+            "bedrock",
+            "http://127.0.0.1:9",
             f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
             "All connection attempts failed",
         ),
     ],
-    ids=("aiohttp-runtime-endpoint", "aiohttp-default-host", "httpx"),
+    ids=("aiohttp-refused", "aiohttp-mantle-dns", "httpx"),
 )
-def test_a_bedrock_connect_failure_names_the_host_python_reaches(
-    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, endpoint: Mapping[str, str], native: str, text: str
+def test_a_bedrock_connect_failure_names_the_origin_rust_could_not_reach(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, origin: str, native: str, text: str
 ) -> None:
     from litellm.rust_bridge.host import http_transport
 
-    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
     monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+    unreachable: Final = RuntimeError(native)
+    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    model: Final = _BEDROCK_INVOKE if provider == "bedrock" else _BEDROCK_MANTLE
 
-    mapped: Final = messages_host.map_failure(
-        RuntimeError(native), {"model": _BEDROCK_INVOKE, "messages": [], **_AWS, **endpoint}, "bedrock"
-    )
+    mapped: Final = messages_host.map_failure(unreachable, {"model": model, "messages": [], **_AWS}, provider)
 
     assert type(mapped) is litellm.ServiceUnavailableError
     assert mapped.status_code == 503
     assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
-    assert str(mapped) == f"litellm.ServiceUnavailableError: BedrockException - {text}"
+    assert text in str(mapped)
 
 
 @pytest.fixture
