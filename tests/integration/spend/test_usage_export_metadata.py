@@ -330,13 +330,20 @@ def _export(
     key: str | None = None,
     export_type: str = "daily_with_keys",
     file_format: str = "json",
+    include_metadata: bool = True,
 ) -> httpx.Response:
     prefix, parameter, identity = route
     return gateway.request(
         "GET",
         f"{prefix}/daily/activity/export",
         key=key,
-        params={**usage.dates, parameter: identity, "export_type": export_type, "format": file_format},
+        params={
+            **usage.dates,
+            parameter: identity,
+            "export_type": export_type,
+            "format": file_format,
+            "include_metadata": "true" if include_metadata else "false",
+        },
     )
 
 
@@ -396,6 +403,10 @@ def test_admin_viewer_sees_metadata_and_non_admin_callers_get_empty_objects(
     assert _metadata_of(_json_rows(viewer)) == [(dict(_KEY_METADATA_EXPORTED), dict(_USER_METADATA_EXPORTED))], (
         viewer.text
     )
+
+    not_opted_in: Final = _export(gateway, usage, user_route, include_metadata=False)
+    assert _metadata_of(_json_rows(not_opted_in)) == [({}, {})], not_opted_in.text
+    _assert_no_secret(not_opted_in.text)
 
     own: Final = _export(gateway, usage, user_route, key=usage.key)
     own_rows: Final = _json_rows(own)
@@ -461,7 +472,13 @@ def test_unauthenticated_and_invalid_export_requests_are_rejected_without_metada
         prefix, parameter, identity = route
         anonymous = gateway.client.get(
             f"{prefix}/daily/activity/export",
-            params={**usage.dates, parameter: identity, "export_type": "daily_with_keys", "format": "json"},
+            params={
+                **usage.dates,
+                parameter: identity,
+                "export_type": "daily_with_keys",
+                "format": "json",
+                "include_metadata": "true",
+            },
         )
         unknown = _export(gateway, usage, route, key="sk-not-a-key")
         assert (anonymous.status_code, unknown.status_code) == (401, 401), (anonymous.text, unknown.text)

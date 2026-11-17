@@ -42,6 +42,7 @@ class UsageExportParams(BaseModel, frozen=True):
     user_id: str | None = None
     export_type: str = "daily_with_keys"
     format: str = "json"
+    include_metadata: bool = True
 
 
 class UsageExportKeyMetadata(BaseModel, frozen=True):
