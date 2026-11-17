@@ -9,6 +9,7 @@ from openai import OpenAI
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy.auth.model_checks import get_provider_models
 
 MERAGPT_API_BASE: Final = "https://meragpt.com/v1"
@@ -207,5 +208,24 @@ async def test_missing_meragpt_key_fails_moderation_locally_instead_of_sending_t
         route: Final = upstream.post(f"{MERAGPT_API_BASE}/moderations").respond(200, json={})
         with pytest.raises(litellm.AuthenticationError, match="MERAGPT_API_KEY"):
             await litellm.amoderation(model="meragpt/restyler-1", input="hello")
+
+    assert route.calls.call_count == 0
+
+
+@pytest.mark.parametrize("base_llm_http_handler", ["true", "false"])
+@pytest.mark.usefixtures("openai_key_but_no_meragpt_key")
+def test_missing_meragpt_key_fails_locally_with_a_bare_transport_client(
+    monkeypatch: pytest.MonkeyPatch, base_llm_http_handler: str
+):
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", base_llm_http_handler)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{MERAGPT_API_BASE}/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="MERAGPT_API_KEY"):
+            litellm.completion(
+                model="meragpt/restyler-1",
+                messages=[{"role": "user", "content": "hello"}],
+                client=HTTPHandler(),
+            )
 
     assert route.calls.call_count == 0
