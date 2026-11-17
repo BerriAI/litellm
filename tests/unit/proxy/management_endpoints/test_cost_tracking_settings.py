@@ -1203,10 +1203,10 @@ class TestEstimateCostCacheAndReasoningTokens:
                 "output_cost_per_token": 15e-6,
                 "cache_read_input_token_cost": 3e-7,
                 "cache_creation_input_token_cost": 3.75e-6,
-                "input_cost_per_token_above_200k_tokens": 6e-6,
-                "output_cost_per_token_above_200k_tokens": 3e-5,
-                "cache_read_input_token_cost_above_200k_tokens": 6e-7,
-                "cache_creation_input_token_cost_above_200k_tokens": 7.5e-6,
+                "input_cost_per_token_above_272k_tokens": 6e-6,
+                "output_cost_per_token_above_272k_tokens": 3e-5,
+                "cache_read_input_token_cost_above_272k_tokens": 6e-7,
+                "cache_creation_input_token_cost_above_272k_tokens": 7.5e-6,
                 "litellm_provider": "openai",
                 "mode": "chat",
             },
@@ -1215,7 +1215,7 @@ class TestEstimateCostCacheAndReasoningTokens:
         response = await _estimate(
             None,
             model=A_MAPPED_MODEL,
-            input_tokens=250_000,
+            input_tokens=300_000,
             cache_read_input_tokens=200_000,
             cache_creation_input_tokens=10_000,
             output_tokens=1_000,
@@ -1233,7 +1233,7 @@ class TestEstimateCostCacheAndReasoningTokens:
         )
         assert response.reasoning_cost_per_request == pytest.approx(200 * response.output_cost_per_reasoning_token)
         assert response.input_cost_per_request == pytest.approx(
-            40_000 * response.input_cost_per_token
+            90_000 * response.input_cost_per_token
             + response.cache_read_cost_per_request
             + response.cache_creation_cost_per_request
         )
