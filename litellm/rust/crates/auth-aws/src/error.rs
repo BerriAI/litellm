@@ -18,6 +18,10 @@ pub enum Error {
         #[source]
         source: Source,
     },
+    /// The named profile is in neither the AWS config nor the credentials file, which botocore
+    /// raises as `ProfileNotFound`.
+    #[error("the AWS profile {profile} is not in the AWS config or credentials files")]
+    ProfileNotFound { profile: String },
     #[error(
         "the AWS web identity token must name a secret or an oidc/ provider, not an environment variable"
     )]

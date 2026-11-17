@@ -54,6 +54,9 @@ const MESSAGES_REFUSED_REPLY: &str = "messages_refused_reply";
 /// when the Bedrock invoke host runs Python's signing again for its exception. The Mantle routes
 /// turn `replay` into `unavailable`, which maps from a fixed class list.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
+/// The AWS profile no config or credentials file defines, for the `profile_not_found` credential
+/// failure that botocore raises as `ProfileNotFound`.
+const MESSAGES_MISSING_PROFILE: &str = "messages_missing_profile";
 
 struct ProviderRejection {
     text: String,
@@ -89,6 +92,16 @@ fn innermost_aws_error<'a>(
         .last()
 }
 
+fn missing_profile(error: &Error) -> Option<&str> {
+    let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
+        return None;
+    };
+    match innermost_aws_error(auth)? {
+        litellm_auth_aws::Error::ProfileNotFound { profile } => Some(profile),
+        _ => None,
+    }
+}
+
 fn sts_failure(error: &Error) -> Option<(&'static str, &'static str, String, String)> {
     let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
         return None;
@@ -112,6 +125,7 @@ fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
     match innermost_aws_error(error) {
         Some(litellm_auth_aws::Error::WebIdentityTokenReference) => "web_identity_reference",
         Some(litellm_auth_aws::Error::MissingWebIdentityToken) => "missing_web_identity_token",
+        Some(litellm_auth_aws::Error::ProfileNotFound { .. }) => "profile_not_found",
         Some(failure) if failure.is_empty_default_chain() => "no_credentials",
         _ => "replay",
     }
@@ -311,6 +325,9 @@ pub(crate) fn route_failure(
             }
             if let Some(failure) = sts_failure(&error) {
                 value.setattr(MESSAGES_STS_FAILURE, failure)?;
+            }
+            if let Some(profile) = missing_profile(&error) {
+                value.setattr(MESSAGES_MISSING_PROFILE, profile)?;
             }
             native
         }
@@ -603,6 +620,10 @@ mod tests {
         },
         "replay"
     )]
+    #[case::missing_profile(
+        litellm_auth_aws::Error::ProfileNotFound { profile: "absent".into() },
+        "profile_not_found"
+    )]
     #[case::expired(litellm_auth_aws::Error::ExpiredCredentials, "replay")]
     fn an_aws_credential_failure_names_what_python_signing_raises(
         #[case] failure: litellm_auth_aws::Error,
@@ -625,6 +646,15 @@ mod tests {
                 .extract::<String>()
                 .unwrap();
             assert_eq!(marked, expected);
+            let profile = native
+                .value(py)
+                .getattr_opt(MESSAGES_MISSING_PROFILE)
+                .unwrap()
+                .map(|value| value.extract::<String>().unwrap());
+            assert_eq!(
+                profile.as_deref(),
+                (expected == "profile_not_found").then_some("absent")
+            );
         });
     }
 
