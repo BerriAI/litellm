@@ -74,7 +74,7 @@ class TestTopxAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="gpt-6.1-sol",
+            model="gpt-6.2-sol",
             custom_llm_provider=None,
             api_base=TOPXAI_BASE_URL,
             api_key=None,
@@ -114,7 +114,7 @@ class TestTopxAIProviderConfig:
     @pytest.mark.parametrize(
         "model",
         (
-            "gpt-6.1-sol",
+            "gpt-6.2-sol",
             "gpt-6.1-terra",
             "kimi-k3.1-pro",
             "deepseek-flash-Abliterated",
@@ -195,9 +195,9 @@ class TestTopxAIModelMetadata:
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-2",
-        "topxai/gpt-6.1-sol",
+        "topxai/gpt-6.2-sol",
         "topxai/gpt-6.1-terra",
-        "topxai/gpt-6-astra",
+        "topxai/gpt-6.2-astra",
         "topxai/grok-4.7",
         "topxai/kimi-k3.1-pro",
         "topxai/GLM-5.3-Abliterated",
@@ -212,21 +212,21 @@ class TestTopxAIModelMetadata:
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-2",
-        "topxai/gpt-6.1-sol",
+        "topxai/gpt-6.2-sol",
         "topxai/gpt-6.1-terra",
-        "topxai/gpt-6-astra",
+        "topxai/gpt-6.2-astra",
     )
     # The catalogue publishes no output limit for these
     NO_OUTPUT_LIMIT_MODELS: Final = ("topxai/grok-4.7",)
-    # First premium token and output multiplier, verified 2026-09-30:
-    # https://api.topxai.xyz/pricing/gpt-6.1-sol
+    # First premium token and output multiplier:
+    # https://api.topxai.xyz/pricing/gpt-6.2-sol (2026-11-18)
     # https://api.topxai.xyz/pricing/gpt-6.1-terra (verified 2026-11-09)
-    # https://api.topxai.xyz/pricing/gpt-6-astra
+    # https://api.topxai.xyz/pricing/gpt-6.2-astra (2026-11-18)
     # https://api.topxai.xyz/pricing/grok-4.7
     TIERED_MODELS: Final = (
-        ("topxai/gpt-6.1-sol", 272_001, 1.5),
+        ("topxai/gpt-6.2-sol", 272_001, 1.5),
         ("topxai/gpt-6.1-terra", 272_001, 1.5),
-        ("topxai/gpt-6-astra", 272_001, 1.5),
+        ("topxai/gpt-6.2-astra", 272_001, 1.5),
         ("topxai/grok-4.7", 200_000, 2.0),
     )
     # Fixed prices at all hours (2026-11-08):
