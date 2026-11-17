@@ -1,10 +1,11 @@
 # What is this?
 ## Tests if 'get_end_user_object' works as expected
 
-import sys, os, asyncio, time, random, uuid
+import asyncio
 import hashlib
 import json
-import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,47 +17,47 @@ from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest, litellm
-
-from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
-import httpx
+import pytest
 from fastapi import HTTPException, Request, status
 from prisma import Prisma
+
+import litellm
+import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm._service_logger import ServiceTypes
-from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
-from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_reservation_cache_key
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import (
-    LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
-    LiteLLM_UserTable,
-    LiteLLM_TeamTable,
     LiteLLM_TeamMembership,
     LiteLLM_ProjectTableCachedObj,
+    LiteLLM_EndUserTable,
     Litellm_EntityType,
+    LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyException,
+    UserAPIKeyAuth,
 )
-from litellm.proxy.utils import PrismaClient
-import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
+    _team_soft_budget_check,
     can_team_access_model,
     check_opaque_inference_controls,
+    common_checks,
     delete_cache_key_objects,
+    get_end_user_object,
+    get_org_object,
+    get_user_object,
     is_model_cost_zero,
     virtual_key_soft_budget_check,
-    _team_soft_budget_check,
-    common_checks,
 )
-from litellm.proxy.utils import InternalUsageCache, ProxyLogging
-from litellm.proxy.utils import CallInfo
+from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 
 @pytest.mark.parametrize("container", ["mapping", "list"])
@@ -672,7 +673,7 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     # UserApiKeyCache applies model_type on get/set; plain DualCache returns raw dicts
     # and breaks get_end_user_object's typed async_get_cache path.
     _cache = UserApiKeyCache()
-    _key = "end_user_id:{}".format(end_user_id)
+    _key = f"end_user_id:{end_user_id}"
     await _cache.async_set_cache(
         key=_key,
         value=end_user_obj,
@@ -742,8 +743,8 @@ async def test_can_key_call_model(model, expect_to_work):
     """
     If wildcard model + specific model is used, choose the specific model settings
     """
+
     from litellm.proxy.auth.auth_checks import can_key_call_model
-    from fastapi import HTTPException
 
     llm_model_list = [
         {
@@ -795,8 +796,8 @@ async def test_can_key_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_team_call_model(model, expect_to_work):
+
     from litellm.proxy.auth.auth_checks import model_in_access_group
-    from fastapi import HTTPException
 
     llm_model_list = [
         {
@@ -1087,8 +1088,8 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
 
 @pytest.mark.asyncio
 async def test_is_valid_fallback_model():
-    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
     from litellm import Router
+    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
 
     router = Router(
         model_list=[
@@ -1238,7 +1239,7 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
     except Exception as e:
         if expect_to_work:
             pytest.fail(
-                f"Expected model access check to work for model={model}, team_models={team_models}. Got error: {str(e)}"
+                f"Expected model access check to work for model={model}, team_models={team_models}. Got error: {e!s}"
             )
 
 
@@ -1409,9 +1410,9 @@ async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata
 
 @pytest.mark.asyncio
 async def test_can_user_call_model():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
-    from litellm.proxy._types import ProxyException
     from litellm import Router
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_user_call_model
 
     router = Router(
         model_list=[
@@ -1449,9 +1450,10 @@ async def test_can_user_call_model():
 
 @pytest.mark.asyncio
 async def test_can_user_call_model_with_no_default_models():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
-    from litellm.proxy._types import ProxyException, SpecialModelNames
     from unittest.mock import MagicMock
+
+    from litellm.proxy._types import ProxyException, SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_user_call_model
 
     args = {
         "model": "anthropic-claude",
@@ -1473,8 +1475,9 @@ async def test_can_user_call_model_with_no_default_models():
 
 @pytest.mark.asyncio
 async def test_get_fuzzy_user_object() -> None:
-    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
     from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
 
     # Setup mock Prisma client
     mock_prisma = MagicMock()
@@ -1608,8 +1611,8 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
 @pytest.mark.asyncio
 async def test_cache_access_object():
     """Test _cache_access_object stores access group in cache with correct key."""
-    from litellm.proxy.auth.auth_checks import cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import cache_access_object
 
     cache = DualCache()
     ag_id = "ag-test-123"
@@ -1636,8 +1639,8 @@ async def test_cache_access_object():
 @pytest.mark.asyncio
 async def test_delete_cache_access_object():
     """Test _delete_cache_access_object removes access group from in-memory cache."""
-    from litellm.proxy.auth.auth_checks import delete_cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import delete_cache_access_object
 
     cache = DualCache()
     ag_id = "ag-delete-test"
@@ -1760,8 +1763,8 @@ async def test_can_team_access_model_access_group_ids_denied():
     """Test can_team_access_model denies when neither team models nor access_group_ids grant access."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import can_team_access_model
     from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_team_access_model
 
     team_object = LiteLLM_TeamTable(
         team_id="test-team",

@@ -2462,14 +2462,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         return ChoiceLogprobs(content=logprobs_list)
 
-    def _handle_blocked_response(
+    def _content_filter_response(
         self,
         model_response: ModelResponse,
         completion_response: GenerateContentResponseBody,
+        provider_specific_fields: Mapping[str, str],
     ) -> ModelResponse:
-        # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
-        model_response.choices[0].finish_reason = "content_filter"
-
         chat_completion_message: Final[ChatCompletionResponseMessage] = {
             "role": "assistant",
             "content": None,
@@ -2481,45 +2479,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=chat_completion_message,
             logprobs=None,
             enhancements=None,
+            provider_specific_fields=dict(provider_specific_fields),
         )
 
         model_response.choices = [choice]
 
-        ## GET USAGE ##
-        usage: Final = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
-
-        setattr(model_response, "usage", usage)
-
-        return model_response
-
-    def _handle_content_policy_violation(
-        self,
-        model_response: ModelResponse,
-        completion_response: GenerateContentResponseBody,
-    ) -> ModelResponse:
-        ## CONTENT POLICY VIOLATION ERROR
-        model_response.choices[0].finish_reason = "content_filter"
-
-        _chat_completion_message: Final = {
-            "role": "assistant",
-            "content": None,
-        }
-
-        choice: Final = litellm.Choices(
-            finish_reason="content_filter",
-            index=0,
-            message=_chat_completion_message,
-            logprobs=None,
-            enhancements=None,
-        )
-
-        model_response.choices = [choice]
-
-        ## GET USAGE ##
         usage: Final = Usage(
             prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
             completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
@@ -2816,7 +2780,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ModelResponseStream with content_filter finish_reason if blocked, None otherwise.
 
         Note:
-            This is consistent with non-streaming _handle_blocked_response() behavior.
+            This is consistent with non-streaming _content_filter_response() behavior.
             Candidate-level content filtering (SAFETY, RECITATION, etc.) is handled
             separately via _process_candidates() → _check_finish_reason().
         """
@@ -2831,7 +2795,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 prompt_feedback.get("blockReasonMessage"),
             )
 
-            # Create a content_filter response (consistent with non-streaming _handle_blocked_response)
+            # Create a content_filter response (consistent with non-streaming _content_filter_response)
             choice: Final = StreamingChoices(
                 finish_reason="content_filter",
                 index=0,
@@ -3349,18 +3313,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response and "blockReason" in completion_response["promptFeedback"]:
-            return self._handle_blocked_response(
+            return self._content_filter_response(
                 model_response=model_response,
                 completion_response=completion_response,
+                provider_specific_fields={"block_reason": completion_response["promptFeedback"]["blockReason"]},
             )
 
         _candidates: Final = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
             content_policy_violations: Final = VertexGeminiConfig().get_flagged_finish_reasons()
             if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations:
-                return self._handle_content_policy_violation(
+                return self._content_filter_response(
                     model_response=model_response,
                     completion_response=completion_response,
+                    provider_specific_fields={"native_finish_reason": _candidates[0]["finishReason"]},
                 )
 
         model_response.choices = []

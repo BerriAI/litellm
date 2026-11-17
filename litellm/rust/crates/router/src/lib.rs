@@ -65,6 +65,11 @@ impl Router {
                                 additional_drop_params: additional_drop_params(
                                     &litellm_params.extra,
                                 ),
+                                base_model: litellm_params
+                                    .extra
+                                    .get("base_model")
+                                    .and_then(|value| value.as_str())
+                                    .map(str::to_owned),
                                 ..MessagesSettings::default()
                             },
                             capabilities: anthropic_model_capabilities(

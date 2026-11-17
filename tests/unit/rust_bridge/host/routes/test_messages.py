@@ -5,11 +5,13 @@ import functools
 import json
 import logging
 import os
+import queue
 import socket
 import ssl
 import struct
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -299,31 +301,59 @@ def test_filters_beta_headers_is_what_the_provider_config_says(model: str, provi
     assert messages_host.filters_beta_headers(model, provider, None) is expected
 
 
-@pytest.mark.parametrize(
-    ("model", "provider", "api_base", "carried"),
-    [
-        pytest.param("anthropic/claude-sonnet-4-5", "anthropic", None, False, id="anthropic"),
-        pytest.param(
-            "anthropic/claude-sonnet-4-5",
-            "anthropic",
-            "https://example-resource.services.ai.azure.com/anthropic",
-            True,
-            id="anthropic_foundry",
-        ),
-        pytest.param("azure_ai/claude-sonnet-4-5", "azure_ai", None, True, id="azure_ai"),
-        pytest.param(_BEDROCK_INVOKE, "bedrock", None, True, id="bedrock_invoke"),
-    ],
-)
-def test_beta_headers_config_is_the_map_python_loaded_for_a_filtering_call(
-    monkeypatch: pytest.MonkeyPatch, model: str, provider: str, api_base: str | None, carried: bool
+def test_the_beta_map_stays_unloaded_until_a_filter_asks_and_then_loads_off_the_calling_thread(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    loaded: Final = {"provider_aliases": {}, "azure_ai": {"advisor-tool-2026-03-01": "advisor-tool-2026-03-01"}}
-    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", loaded)
+    remote: Final[dict[str, object]] = {"provider_aliases": {}, "azure_ai": {"advisor-tool-2026-03-01": None}}
+    fetched_on: Final = queue.SimpleQueue[str]()
+    release: Final = threading.Event()
 
-    config: Final = messages_host.beta_headers_config(model, provider, api_base)
+    def fetch(url: str) -> dict[str, object]:
+        fetched_on.put(threading.current_thread().name)
+        assert release.wait(timeout=10)
+        return remote
 
-    assert (config is loaded) is carried
-    assert carried or config is None
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "get_beta_headers_config", fetch)
+
+    assert messages_host.loaded_beta_headers_config() is None
+    assert fetched_on.empty()
+
+    messages_host.load_beta_headers_config_in_background()
+
+    assert fetched_on.get(timeout=10) != threading.current_thread().name
+    assert messages_host.loaded_beta_headers_config() is None
+    release.set()
+    assert anthropic_beta_headers_manager.get_provider_name("azure_ai") == "azure_ai"
+    assert messages_host.loaded_beta_headers_config() is remote
+    assert fetched_on.empty()
+
+
+def test_repeated_load_requests_during_a_slow_download_queue_a_single_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    release: Final = threading.Event()
+    submitted: Final = queue.SimpleQueue[str]()
+    loader: Final = ThreadPoolExecutor(max_workers=1)
+
+    class RecordingLoader:
+        def submit(self, load: Callable[[], None]) -> Future[None]:
+            submitted.put(load.__name__)
+            return loader.submit(load)
+
+    def fetch(url: str) -> dict[str, object]:
+        assert release.wait(timeout=10)
+        return {"provider_aliases": {}}
+
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "get_beta_headers_config", fetch)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG_LOADER", RecordingLoader())
+
+    for _ in range(20):
+        messages_host.load_beta_headers_config_in_background()
+    release.set()
+    loader.shutdown(wait=True)
+
+    assert submitted.qsize() == 1
+    assert messages_host.loaded_beta_headers_config() is not None
 
 
 @pytest.mark.parametrize(

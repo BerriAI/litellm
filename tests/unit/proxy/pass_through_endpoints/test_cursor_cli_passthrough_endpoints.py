@@ -38,7 +38,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints import agent_registry
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -265,16 +264,13 @@ def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
 ) -> None:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwks_url: Final = "https://identity.invalid/cursor/jwks"
-    keys: Final = DualCache()
-    keys.set_cache(
-        key=f"litellm_jwt_auth_keys_{jwks_url}",
-        value=[json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))],
+    respx_mock.get(jwks_url).respond(
+        json={"keys": [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))]},
     )
-    handler: Final = JWTHandler()
-    handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=keys,
-        litellm_jwtauth=LiteLLM_JWTAuth(
+    monkeypatch.setattr(
+        proxy_server,
+        "litellm_jwtauth",
+        LiteLLM_JWTAuth(
             team_ids_jwt_field="groups",
             team_id_jwt_field="team",
             end_user_id_jwt_field=None,
@@ -289,7 +285,6 @@ def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
     monkeypatch.delenv("JWT_ISSUER", raising=False)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
-    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
     monkeypatch.setattr(
@@ -317,12 +312,13 @@ def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
         private_key,
         algorithm="RS256",
     )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"native-response")
     response: Final = client.post(
         f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-api-key": token}, content=b"\xff"
     )
     assert response.status_code == 403
     assert "virtual key or master key" in response.text
-    assert not respx_mock.calls
+    assert not upstream.called
 
 
 @pytest.mark.parametrize(
