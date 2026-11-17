@@ -38,6 +38,15 @@ fn inference_for(config: &Config) -> Arc<Gateway> {
     litellm_gateway::build_inference(config, &Resources::build(config).unwrap()).unwrap()
 }
 
+fn global(router: axum::Router) -> axum::Router {
+    litellm_gateway::middleware::global(
+        router,
+        &litellm_gateway::middleware::Settings::default(),
+        Arc::new(litellm_license::Entitlements::Community),
+        &litellm_gateway::middleware::InFlight::new(),
+    )
+}
+
 #[fixture]
 fn inference() -> Arc<Gateway> {
     inference_for(&Config::from_yaml("model_list: []").unwrap())
@@ -96,7 +105,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            litellm_gateway::router(without_stores(inference), &config),
+            global(litellm_gateway::router(without_stores(inference), &config)),
         )
         .with_graceful_shutdown(async move {
             let _ = stopped.await;
@@ -157,7 +166,9 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
     let logger = Logger::new(LogSink(sender));
 
     let response = logger
-        .instrument(litellm_gateway::router(without_stores(inference), &config).oneshot(request))
+        .instrument(
+            global(litellm_gateway::router(without_stores(inference), &config)).oneshot(request),
+        )
         .await
         .unwrap();
 
@@ -183,7 +194,7 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
-    let app = litellm_gateway::router(without_stores(inference), &config);
+    let app = global(litellm_gateway::router(without_stores(inference), &config));
 
     let response = app
         .oneshot(
@@ -236,7 +247,7 @@ async fn readiness_reports_a_configured_database_it_cannot_reach(inference: Arc<
     };
     let config = Config::from_yaml("model_list: []").unwrap();
 
-    let response = litellm_gateway::router(state, &config)
+    let response = global(litellm_gateway::router(state, &config))
         .oneshot(
             Request::get("/health/readiness")
                 .body(Body::empty())
@@ -288,10 +299,13 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
-        .oneshot(request)
-        .await
-        .unwrap();
+    let response = global(litellm_gateway::router(
+        without_stores(inference_for(&config)),
+        &config,
+    ))
+    .oneshot(request)
+    .await
+    .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap()
@@ -380,10 +394,13 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
         .body(Body::from(Value::Object(body).to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
-        .oneshot(request)
-        .await
-        .unwrap();
+    let response = global(litellm_gateway::router(
+        without_stores(inference_for(&config)),
+        &config,
+    ))
+    .oneshot(request)
+    .await
+    .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     let forwarded: Value =

@@ -1,4 +1,4 @@
-use litellm_python_compat::number;
+use litellm_python_compat::{number, unicode::isspace};
 use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Deserializer};
 
@@ -7,6 +7,14 @@ use serde::{Deserialize, Deserializer};
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Environment {
+    pub litellm_enable_hsts: Flag,
+    pub litellm_cors_origins: Option<String>,
+    pub litellm_cors_allow_credentials: Option<Flag>,
+    pub server_root_path: String,
+    pub server_root_paths: Option<String>,
+    pub max_decompressed_request_body_size_mb: Option<f64>,
+    pub max_request_body_decompression_ratio: Option<u64>,
+    pub max_decompressed_request_bodies_in_flight_mb: Option<f64>,
     pub litellm_license: Option<SecretValue>,
     #[serde(deserialize_with = "int_or_unset")]
     pub non_llm_connection_timeout: Option<u64>,
@@ -19,9 +27,21 @@ fn int_or_unset<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64
     Ok(number::int(&raw).and_then(|value| u64::try_from(value).ok()))
 }
 
+/// The proxy's `os.getenv(name).strip().lower() == "true"`: anything but `true` is off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Flag(pub bool);
+
+impl<'de> Deserialize<'de> for Flag {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self(raw.trim_matches(isspace).eq_ignore_ascii_case("true")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
 
@@ -36,6 +56,14 @@ mod tests {
     #[rstest]
     fn the_proxy_environment_is_read_by_variable_name() {
         let environment = from_variables(&[
+            ("LITELLM_ENABLE_HSTS", " True "),
+            ("LITELLM_CORS_ORIGINS", "https://a.example"),
+            ("LITELLM_CORS_ALLOW_CREDENTIALS", "yes"),
+            ("SERVER_ROOT_PATH", "/api"),
+            ("SERVER_ROOT_PATHS", "/tenant-a,/tenant-b"),
+            ("MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB", "1.5"),
+            ("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", "10"),
+            ("MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", "20"),
             ("LITELLM_LICENSE", "license-key"),
             ("NON_LLM_CONNECTION_TIMEOUT", "40"),
         ])
@@ -44,6 +72,14 @@ mod tests {
         assert_eq!(
             environment,
             Environment {
+                litellm_enable_hsts: Flag(true),
+                litellm_cors_origins: Some("https://a.example".into()),
+                litellm_cors_allow_credentials: Some(Flag(false)),
+                server_root_path: "/api".into(),
+                server_root_paths: Some("/tenant-a,/tenant-b".into()),
+                max_decompressed_request_body_size_mb: Some(1.5),
+                max_request_body_decompression_ratio: Some(10),
+                max_decompressed_request_bodies_in_flight_mb: Some(20.0),
                 litellm_license: Some("license-key".into()),
                 non_llm_connection_timeout: Some(40),
             }
@@ -71,5 +107,37 @@ mod tests {
         let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", raw)]).unwrap();
 
         assert_eq!(environment.non_llm_connection_timeout, expected);
+    }
+
+    #[rstest]
+    fn a_decompression_limit_that_is_not_a_number_fails_startup() {
+        assert!(from_variables(&[("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", "many")]).is_err());
+    }
+
+    #[rstest]
+    #[case::lowercase("true", true)]
+    #[case::any_case_with_spaces(" TRUE ", true)]
+    #[case::python_only_whitespace("\u{1c}True\u{1f}", true)]
+    #[case::false_word("false", false)]
+    #[case::one("1", false)]
+    #[case::yes("yes", false)]
+    #[case::empty("", false)]
+    fn a_flag_is_on_only_when_it_reads_true(#[case] value: &str, #[case] expected: bool) {
+        assert_eq!(
+            serde_json::from_value::<Flag>(json!(value)).unwrap(),
+            Flag(expected)
+        );
+    }
+
+    #[rstest]
+    fn an_unset_flag_is_told_apart_from_one_that_is_off() {
+        let environment: Environment =
+            serde_json::from_value(json!({"litellm_cors_allow_credentials": "no"})).unwrap();
+        assert_eq!(
+            environment.litellm_cors_allow_credentials,
+            Some(Flag(false))
+        );
+        assert_eq!(Environment::default().litellm_cors_allow_credentials, None);
+        assert_eq!(environment.litellm_enable_hsts, Flag(false));
     }
 }
