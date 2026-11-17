@@ -17680,6 +17680,16 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_embedding_image_input": true
     },
+    "eu.cohere.embed-v4:0": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 128000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1536,
+        "supports_embedding_image_input": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "us.cohere.embed-v4:0": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "bedrock",
