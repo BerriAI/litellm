@@ -3399,3 +3399,47 @@ def test_a_mantle_refusal_python_would_send_keeps_the_native_bad_request(
     assert type(mapped) is litellm.BadRequestError
     assert mapped.status_code == 400
     assert mapped.llm_provider == "bedrock_mantle"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+def _mantle_logger() -> Logging:
+    return Logging(
+        model=_MANTLE_ROUTE,
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="mantle-failure",
+        function_id="mantle-failure",
+    )
+
+
+def test_a_mantle_route_refusal_logs_and_raises_the_model_id_rust_names() -> None:
+    text: Final = "Bedrock does not support Anthropic's server-side web search tool"
+    native: Final = _refused(
+        text,
+        messages_provider_rejection=text,
+        messages_provider_bad_request=True,
+        messages_provider_model="anthropic.claude-sonnet-5-5",
+    )
+    logger: Final = _mantle_logger()
+
+    mapped: Final = messages_host.map_failure(
+        native, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
+    )
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.model == "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert logger.model == "anthropic.claude-sonnet-5-5"
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_mantle_route_credential_failure_logs_the_model_id_rust_names() -> None:
+    native: Final = _credential_failure("no_credentials")
+    native.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    logger: Final = _mantle_logger()
+
+    messages_host.map_failure(
+        native, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
+    )
+
+    assert logger.model == "anthropic.claude-sonnet-5-5"

@@ -716,15 +716,16 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
         except ValidationError as invalid:
             return invalid
     provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
+    model: Final = _provider_model(error, request, request_provider)
     if isinstance(provider_rejection, str):
-        _log_resolved_call(request, request_provider)
+        _log_resolved_call(request, request_provider, model)
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         rejection: Final = _provider_rejection(
             provider_rejection,
             getattr(error, "messages_provider_bad_request", False) is True,
             request,
             request_provider,
-            optional_str(getattr(error, "messages_provider_model", None)),
+            model,
         )
         if isinstance(rejection, litellm.BadRequestError):
             return rejection
@@ -733,19 +734,17 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         return litellm.UnsupportedParamsError(message=str(error))
     if getattr(error, "messages_provider_resolution", False):
-        model: Final = str(request["model"])
+        requested: Final = str(request["model"])
         return litellm.BadRequestError(
-            message=f"GetLLMProvider Exception - {error}\n\noriginal model: {model}", model=model, llm_provider=""
+            message=f"GetLLMProvider Exception - {error}\n\noriginal model: {requested}",
+            model=requested,
+            llm_provider="",
         )
-    return litellm.BadRequestError(
-        message=str(error),
-        model=str(request["model"]).removeprefix(f"{request_provider}/"),
-        llm_provider=request_provider,
-    )
+    return litellm.BadRequestError(message=str(error), model=model, llm_provider=request_provider)
 
 
 def _provider_rejection(
-    text: str, bad_request: bool, request: Mapping[str, object], request_provider: str, model: str | None
+    text: str, bad_request: bool, request: Mapping[str, object], request_provider: str, model: str
 ) -> Exception:
     """The Bedrock invoke config raises its own `BadRequestError`, which other configs' HTTP handler
     maps into their error class by its text."""
@@ -753,12 +752,8 @@ def _provider_rejection(
         return _config_error(400, text, (), request, request_provider)
     if request_provider == "bedrock_mantle":
         # Python's Mantle config inherits the Bedrock invoke transform, which raises naming `bedrock`.
-        return litellm.BadRequestError(message=text, model=model or "", llm_provider="bedrock")
-    raised: Final = litellm.BadRequestError(
-        message=text,
-        model=str(request["model"]).removeprefix(f"{request_provider}/"),
-        llm_provider=request_provider,
-    )
+        return litellm.BadRequestError(message=text, model=model, llm_provider="bedrock")
+    raised: Final = litellm.BadRequestError(message=text, model=model, llm_provider=request_provider)
     if request_provider == "bedrock":
         return raised
     return _config_error(400, str(raised), (), request, request_provider)
@@ -1096,7 +1091,13 @@ def _public_provider_error(
         return mapped
 
 
-def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> None:
+def _provider_model(error: Exception, request: Mapping[str, object], request_provider: str) -> str:
+    """The model the provider config resolved the call to: the one Rust names, else the request's own."""
+    named: Final = optional_str(getattr(error, "messages_provider_model", None))
+    return named if named is not None else str(request["model"]).removeprefix(f"{request_provider}/")
+
+
+def _log_resolved_call(request: Mapping[str, object], request_provider: str, model: str | None = None) -> None:
     """Tells the logger the resolved call, as Python's handler does before its provider config
     transforms the request."""
     logger: Final = request.get("litellm_logging_obj")
@@ -1105,7 +1106,7 @@ def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> 
     callbacks_legacy_python.update_logging(
         logger,
         kwargs={name: value for name, value in request.items() if name != "metadata"},
-        model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        model=model if model is not None else str(request["model"]).removeprefix(f"{request_provider}/"),
         optional_params=dict(_body_fields(request)),
         litellm_params={"model_info": request.get("model_info"), **_body_fields(request)},
         custom_llm_provider=request_provider,
@@ -1225,7 +1226,7 @@ def map_failure(
         chained: Final = transport_timeout(str(error))
         error.__context__ = chained  # rebind-ok: Python chains the transport timeout as the exception context
     if getattr(error, "messages_late_rejection", False):
-        _log_resolved_call(request, request_provider)
+        _log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
     if getattr(error, "messages_python_raised", False):
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
@@ -1255,7 +1256,7 @@ def map_failure(
         else None
     )
     if credential_failure is not None:
-        _log_resolved_call(request, request_provider)
+        _log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
