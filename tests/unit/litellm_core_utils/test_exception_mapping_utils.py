@@ -1507,6 +1507,46 @@ def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() ->
     assert openai_error_type(excinfo.value, 401) == "authentication_error"
 
 
+def _openai_sdk_403(message: str) -> Exception:
+    return _openai_sdk_error(openai.PermissionDeniedError, 403, {"message": message, "type": "permission_denied"})
+
+
+def _openai_like_403(message: str) -> Exception:
+    return OpenAIError(status_code=403, message=message, headers={})
+
+
+@pytest.mark.parametrize("make_error", [_openai_sdk_403, _openai_like_403], ids=["openai_sdk", "openai_like_httpx"])
+@pytest.mark.parametrize(
+    ("provider", "exception_provider"),
+    [("openai", "OpenAIException"), ("deepseek", "DeepseekException"), ("hostinger_router", "Hostinger_routerException")],
+)
+def test_an_openai_style_403_maps_to_permission_denied(
+    provider: str, exception_provider: str, make_error: Callable[[str], Exception], quiet_exception_mapping
+) -> None:
+    with pytest.raises(litellm.PermissionDeniedError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=make_error("Invalid API key"),
+            custom_llm_provider=provider,
+        )
+
+    assert (
+        type(raised.value),
+        raised.value.status_code,
+        raised.value.message,
+        raised.value.llm_provider,
+        raised.value.model,
+        raised.value.response.status_code,
+    ) == (
+        litellm.PermissionDeniedError,
+        403,
+        f"litellm.PermissionDeniedError: {exception_provider} - Invalid API key",
+        provider,
+        "test-model",
+        403,
+    )
+
+
 class _UpstreamHTTPError(Exception):
     def __init__(self, status_code: int, message: str = "upstream failure") -> None:
         super().__init__(message)
@@ -1518,11 +1558,13 @@ class _UpstreamHTTPError(Exception):
 
 UPSTREAM_STATUS_CODES = (400, 401, 402, 403, 404, 408, 422, 429, 500, 503)
 
+PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
+
 OPENAI_SHAPED = {
     400: (litellm.BadRequestError, 400),
     401: (litellm.AuthenticationError, 401),
     402: (litellm.PaymentRequiredError, 402),
-    403: (litellm.APIError, 403),
+    403: PERMISSION_DENIED,
     404: (litellm.NotFoundError, 404),
     408: (litellm.Timeout, 408),
     422: (litellm.BadRequestError, 422),
@@ -1530,10 +1572,6 @@ OPENAI_SHAPED = {
     500: (litellm.InternalServerError, 500),
     503: (litellm.ServiceUnavailableError, 503),
 }
-
-PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
-
-STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
 
 OPENAI_MAPPED: Final = {
     402: (litellm.APIError, 402),
@@ -1543,31 +1581,25 @@ OPENAI_MAPPED: Final = {
 
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "ai21": OPENAI_MAPPED,
-    "anthropic": {403: PERMISSION_DENIED},
-    "azure": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "azure": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
     "azure_ai": OPENAI_MAPPED,
     "bedrock": {
-        403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
     },
-    "cloudflare": {403: PERMISSION_DENIED},
-    "cohere": {403: PERMISSION_DENIED},
     "databricks": {
-        403: PERMISSION_DENIED,
         422: (litellm.BadRequestError, 400),
     },
     "deepseek": OPENAI_MAPPED,
     "fireworks_ai": OPENAI_MAPPED,
-    "gemini": {403: PERMISSION_DENIED},
     "groq": OPENAI_MAPPED,
     "huggingface": {
         402: (litellm.APIError, 402),
+        403: (litellm.APIError, 403),
         404: (litellm.APIError, 404),
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
     },
     "inferenceapis": {
-        403: PERMISSION_DENIED,
         422: (litellm.BadRequestError, 400),
     },
     "mistral": OPENAI_MAPPED,
@@ -1579,9 +1611,8 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         500: (litellm.APIError, 500),
         503: (litellm.APIError, 503),
     },
-    "ollama": {403: PERMISSION_DENIED},
     "openai": OPENAI_MAPPED,
-    "openrouter": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "openrouter": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
     "perplexity": OPENAI_MAPPED,
     "replicate": {
         403: (litellm.APIError, 500),
@@ -1593,12 +1624,9 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     },
     "runwayml": OPENAI_MAPPED,
     "sagemaker": {
-        403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
     },
     "together_ai": OPENAI_MAPPED,
-    "vertex_ai": {403: PERMISSION_DENIED},
-    "vllm": {403: PERMISSION_DENIED},
     "xai": OPENAI_MAPPED,
 }
 
@@ -1762,7 +1790,7 @@ def test_an_anthropic_500_carries_its_own_status_as_the_provider_status(quiet_ex
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
 @pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
 def test_a_provider_without_a_handler_maps_by_the_upstream_status(provider, status_code, quiet_exception_mapping):
-    expected_class, expected_status = STATUS_KEYED[status_code]
+    expected_class, expected_status = OPENAI_SHAPED[status_code]
 
     with pytest.raises(openai.APIError) as raised:
         exception_type(

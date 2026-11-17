@@ -175,6 +175,10 @@ def _reject_overlapping_credential_values(credential: UpdateCredentialItem) -> N
         )
 
 
+def _without_keys(credential_values: Mapping[str, object], keys: tuple[str, ...]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in credential_values.items() if key not in keys})
+
+
 def _without_null_values(credential_values: Mapping[str, object]) -> dict[str, object]:
     """A null carries no credential, and the federation resolver refuses a foreign variant's field by
     KEY, so a stored ``{"anthropic_issuer_url": null}`` wedges every deployment that names this
@@ -343,6 +347,7 @@ async def create_credential(
     Stores credential in DB.
     Reloads credentials in memory.
     """
+    from litellm.llms.github_copilot.app_auth import blank_app_fields
     from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
@@ -364,11 +369,12 @@ async def create_credential(
         credential_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
             credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
         )
-        normalized_values: Final = _normalized_github_copilot_values(
+        copilot_values: Final = _normalized_github_copilot_values(
             _CREDENTIAL_DICT_ADAPTER.validate_python(credential_values),
             credential_info,
         )
-        _reject_non_admin_wif_fields(server_owned_wif_fields_written(normalized_values), user_api_key_dict)
+        _reject_non_admin_wif_fields(server_owned_wif_fields_written(copilot_values), user_api_key_dict)
+        normalized_values: Final = _without_keys(copilot_values, blank_app_fields(copilot_values))
         _validate_github_app_values(normalized_values)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
@@ -1007,6 +1013,7 @@ async def update_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
+    from litellm.llms.github_copilot.app_auth import blank_app_fields
     from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
@@ -1040,7 +1047,9 @@ async def update_credential(
             decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
                 decrypted_stored_credential.credential_values
             )
-            incoming_values: Final = _without_masked_read_backs(requested_values, _stored_objects(decrypted_values))
+            unmasked_values: Final = _without_masked_read_backs(requested_values, _stored_objects(decrypted_values))
+            cleared_app_fields: Final = blank_app_fields(unmasked_values)
+            incoming_values: Final = _without_keys(unmasked_values, cleared_app_fields)
             patch: Final = CredentialItem(
                 credential_name=credential_name,
                 display_name=(
@@ -1050,7 +1059,7 @@ async def update_credential(
                 ),
                 credential_info=_CREDENTIAL_DICT_ADAPTER.validate_python(credential.credential_info),
                 credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(incoming_values),
-                credential_values_to_delete=credential.credential_values_to_delete,
+                credential_values_to_delete=(*(credential.credential_values_to_delete or ()), *cleared_app_fields),
             )
             stored_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
                 db_credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
