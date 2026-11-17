@@ -67,7 +67,6 @@ _PENDING_AUTH_CODE: Final = TypeAdapter(_PendingAuthCode)
 _byok_auth_codes: Final[dict[str, _PendingAuthCode]] = {}
 _AUTH_CODE_CACHE_PREFIX: Final = "mcp_byok_auth_code:"
 _AUTH_CODE_CLAIM_PREFIX: Final = "mcp_byok_auth_code_claim:"
-# Counted per user, so one user's abandoned flows cannot block sign-in for everyone else.
 _AUTH_CODE_USER_WINDOW_PREFIX: Final = "mcp_byok_auth_code_window:"
 
 # Authorization codes expire after 5 minutes.
@@ -168,13 +167,13 @@ async def _discard_auth_code(code: str) -> None:
         verbose_proxy_logger.warning("byok token: pending code not deleted: %s", e)
 
 
-async def _reserve_auth_code_slot(user_id: str) -> Literal["ok", "user_limit", "unavailable"]:
+async def _reserve_auth_code_slot(user_id: str) -> Literal["ok", "user_limit", "store_full", "unavailable"]:
     """Whether ``user_id`` may be issued another pending code. In memory the whole dict is capped;
     with the shared store each user gets an atomic per-window counter, and a store that cannot
     count refuses (fail closed)."""
     shared: Final = _shared_code_store()
     if shared is None:
-        return "ok" if len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE else "unavailable"
+        return "ok" if len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE else "store_full"
     try:
         issued: Final = await shared.async_increment(
             _AUTH_CODE_USER_WINDOW_PREFIX + user_id, 1, ttl=_AUTH_CODE_TTL_SECONDS
@@ -971,8 +970,10 @@ async def byok_authorize_post(
             pass
         case "user_limit":
             raise HTTPException(status_code=429, detail="Too many pending authorization flows for this user")
-        case "unavailable":
+        case "store_full":
             raise HTTPException(status_code=503, detail="Too many pending authorization flows")
+        case "unavailable":
+            raise HTTPException(status_code=503, detail="Authorization is temporarily unavailable")
         case _:
             assert_never(reservation)
 
