@@ -24,6 +24,7 @@ from litellm.llms.anthropic.messages.native.utils import (
 )
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
+from litellm.llms.custom_httpx.stream_close import SupportsAclose
 from litellm.responses.streaming_iterator import (
     map_stream_error_to_exception,
     partial_responses_incomplete_event_on_disconnect,
@@ -646,8 +647,6 @@ class AnthropicResponsesStreamWrapper:
                 self._close_sync_upstream_unless_reading(upstream)
 
     async def aclose_upstream(self) -> None:
-        from litellm.llms.anthropic.messages.native.streaming_iterator import SupportsAclose
-
         upstream: Final = self.responses_stream
         if isinstance(upstream, SupportsAclose):
             await upstream.aclose()
