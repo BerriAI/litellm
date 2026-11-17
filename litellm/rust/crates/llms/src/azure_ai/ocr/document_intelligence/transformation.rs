@@ -630,6 +630,7 @@ fn is_unset(value: &Value) -> bool {
     match value {
         Value::Null => true,
         Value::String(value) => value.trim().is_empty(),
+        Value::Array(items) => items.is_empty(),
         _ => false,
     }
 }
@@ -1279,6 +1280,7 @@ mod tests {
     #[case::empty(json!({"outputContentFormat": ""}), None, None)]
     #[case::blank(json!({"outputContentFormat": "  "}), None, None)]
     #[case::null(json!({"outputContentFormat": null}), None, None)]
+    #[case::empty_list(json!({"outputContentFormat": []}), None, None)]
     #[case::omitted(json!({}), None, None)]
     fn output_content_format_maps_to_query_fields(
         #[case] options: Value,
@@ -1459,6 +1461,19 @@ mod tests {
         json!({"features": "languages"})
     )]
     #[case::blank_locale(json!({"extra_body": {"locale": ""}}), json!({}))]
+    #[case::empty_locale(
+        json!({"locale": "en-US", "extra_body": {"locale": []}}),
+        json!({"locale": "en-US"})
+    )]
+    #[case::empty_string_index_type(
+        json!({"stringIndexType": "textElements", "extra_body": {"stringIndexType": []}}),
+        json!({"stringIndexType": "textElements"})
+    )]
+    #[case::empty_format(
+        json!({"outputContentFormat": "text", "extra_body": {"outputContentFormat": []}}),
+        json!({"outputContentFormat": "text"})
+    )]
+    #[case::empty_output(json!({"output": [], "extra_body": {"output": []}}), json!({}))]
     fn unset_or_dropped_extra_body_option_falls_back_to_the_top_level_value(
         #[case] options: Value,
         #[case] expected: Value,
