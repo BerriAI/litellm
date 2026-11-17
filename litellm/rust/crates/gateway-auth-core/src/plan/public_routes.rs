@@ -7,9 +7,9 @@ use crate::routes::{RouteGroup, RouteGroups, matches_wildcard, table::METRICS};
 pub struct PublicRoutes {
     route_groups: RouteGroups,
     /// [`general_settings.public_routes`](GeneralSettings::public_routes), exact or ending in `*`.
-    /// Empty without an enterprise license (`HostFacts::premium`).
+    /// Empty without an enterprise license ([`HostFacts::premium`](crate::HostFacts::premium)).
     configured: Box<[String]>,
-    /// `litellm.require_auth_for_metrics_endpoint` (`HostFacts::metrics_require_auth`)
+    /// `litellm.require_auth_for_metrics_endpoint` ([`HostFacts::metrics_require_auth`](crate::HostFacts::metrics_require_auth))
     /// keeps `/metrics` behind auth even when `public_routes` lists it.
     metrics_require_auth: bool,
 }

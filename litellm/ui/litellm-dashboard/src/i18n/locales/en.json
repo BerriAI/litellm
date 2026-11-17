@@ -1767,6 +1767,7 @@
         "securityScan": "Security scan"
       },
       "notRecorded": "Not recorded",
+      "identitySortHelp": "Sort by user ID. Emails are display labels only.",
       "scanHelp": "Yes means this published version has a completed scan with no findings and a risk score of 0. No means it has not passed a recorded scan."
     },
     "addForm": {
@@ -1790,12 +1791,16 @@
         "keywords": "Tags (Optional)",
         "version": "Version (Optional)",
         "authorName": "Author Name (Optional)",
-        "authorEmail": "Author Email (Optional)"
+        "authorEmail": "Author Email (Optional)",
+        "homepage": "Homepage (Optional)"
       },
       "hints": {
         "archive": "Choose a ZIP from your computer, up to 10 MiB. Include SKILL.md at the root or inside one skill folder, along with any supporting files. The skill will use the same visibility settings as skills added by URL.",
         "sourceUrl": "Link to a Git repository, a skill folder, or a ZIP archive containing SKILL.md and any supporting files. For private repositories, use an SSH clone URL with access configured in your agent.",
-        "subPath": "Path within the repository where the skill lives (e.g., skills/my-skill). Leave empty if the skill is at the repo root.",
+        "subPath": "Optional directory within the repository, such as skills/my-skill.",
+        "skill": "Match the name inside SKILL.md. If you also select a path, both must match. Clear this field to select by path only.",
+        "skillFromUrl": "This skills.sh URL supplies the skill name. Change the URL to select a different skill.",
+        "ref": "For browser URLs, match the ref in the URL, including any slashes. For clone URLs, choose a branch, tag, or 40-character commit SHA.",
         "sha256": "Optional SHA-256 digest for verifying the ZIP archive’s integrity.",
         "name": "Unique identifier in kebab-case format (e.g., my-skill)",
         "domain": "Top-level grouping in the Skills Hub (e.g., Productivity)",
@@ -1829,12 +1834,15 @@
         "zipRequired": "Please choose a .zip file",
         "zipTooLarge": "The ZIP file must be 10 MiB or smaller",
         "urlRequired": "Please enter a repository or zip archive URL",
+        "browserRefRequired": "Enter the full Git ref from this URL, including any slashes, to confirm where the repository path starts",
+        "importUrlInvalid": "Use a public GitHub repository, tree or SKILL.md URL, or a skills.sh skill URL. Check the ref and remove query parameters and fragments.",
         "subPathInvalid": "Subfolder must be a relative path like skills/my-skill (letters, numbers, dots, hyphens, underscores)",
         "sha256Invalid": "SHA-256 must be a 64-character hex digest",
         "nameRequired": "Please enter skill name",
         "nameInvalid": "Name must be kebab-case (lowercase, numbers, hyphens only)",
         "emailInvalid": "Please enter a valid email",
-        "descriptionTooLong": "Description must be 1024 characters or fewer"
+        "metadataNameRequired": "Enter a registry name to register a source or set custom metadata",
+        "authorNameRequired": "Enter an author name when providing an email"
       },
       "toasts": {
         "noToken": "No access token available",
@@ -1857,21 +1865,35 @@
       "versionOverrideHint": "Leave blank to assign the next patch version when this change is published",
       "modes": {
         "upload": "Upload ZIP",
-        "import": "Import URL",
-        "metadata": "Edit metadata"
+        "metadata": "Edit metadata",
+        "register": "Add from URL",
+        "replace": "Replace source"
       },
       "neutralLabels": {
         "url": "Source URL",
         "skill": "Skill selector (optional)",
-        "ref": "Git ref (optional)",
+        "ref": "Git ref",
         "path": "Path (optional)",
         "domain": "Domain (optional)",
         "namespace": "Namespace (optional)",
         "keywords": "Tags (optional)"
       },
-      "uploadHint": "Choose a ZIP up to 10 MiB containing SKILL.md. Its frontmatter supplies the skill name and description.",
-      "replacementHint": "The replacement SKILL.md supplies the description. Domain, namespace, and keywords are preserved.",
-      "importHint": "Enter the original source URL. Use a skill selector or path when the repository contains several skills. Leave the ref blank to use HEAD.",
+      "uploadHint": "Choose a ZIP up to 10 MiB containing SKILL.md. Its frontmatter supplies the skill name and description. For a legacy ZIP without frontmatter, enter a registry name below.",
+      "replacementHint": "The replacement SKILL.md updates its default description. Custom descriptions and other metadata are preserved.",
+      "urlStorage": "URL storage",
+      "urlModes": {
+        "register": "Use the external source",
+        "import": "Store a copy in LiteLLM"
+      },
+      "urlStorageHint": "Store public GitHub or skills.sh content in LiteLLM, or let clients install from an external repository or archive. skills.sh links require a stored copy.",
+      "importHint": "Store a portable skill from public GitHub or skills.sh for downloads and installation across supported agents. Use a selector or path for repositories with several skills. Browser URLs supply their revision; repository URLs use HEAD unless you set a ref.",
+      "registerHint": "Register a Git repository, subfolder, or HTTPS ZIP for clients to install. LiteLLM stores the reference without downloading its contents.",
+      "replaceHint": "Replace the published source with this reference. This removes the current managed archive and portable descriptor when published. Previous versions remain available.",
+      "registryName": "Registry name",
+      "optionalRegistryName": "Registry name (optional)",
+      "registryNameHint": "Use a unique kebab-case name. An explicit name is required for custom metadata and legacy ZIPs. It does not change the files.",
+      "advancedMetadata": "Advanced metadata (optional)",
+      "authorOverrideHint": "Leave author fields empty to use the submitter's profile. Fill them in to credit a different author. The submitter is recorded automatically from the authenticated account.",
       "saving": "Saving..."
     },
     "scanning": {
@@ -1917,7 +1939,8 @@
       "noCurrent": "No currently published skill is available for comparison",
       "pendingNotice": "Awaiting admin approval. The published skill remains unchanged",
       "submittedBy": "Submitted by {{name}}",
-      "reviewedBy": "Reviewed by {{name}} on {{date}}",
+      "approvedBy": "Approved by {{name}} on {{date}}",
+      "rejectedBy": "Rejected by {{name}} on {{date}}",
       "rejectionReason": "Rejection reason: {{reason}}",
       "reasonLabel": "Rejection reason (optional)",
       "approve": "Approve and publish",
@@ -1949,7 +1972,6 @@
         "category": "Category",
         "domain": "Domain",
         "namespace": "Namespace",
-        "installation_preference": "Installation preference",
         "agent_skill": "Portable skill descriptor"
       },
       "nextPatchVersion": "Next patch version on approval",
@@ -1973,7 +1995,7 @@
       "allScans": "All scan statuses",
       "scanned": "Security scan: Yes",
       "notScanned": "Security scan: No",
-      "search": "Search skills, tags, or people…",
+      "search": "Search skills, tags, or user IDs…",
       "clear": "Clear filters"
     }
   },
@@ -2045,6 +2067,7 @@
         "namespace": "Namespace",
         "version": "Version",
         "author": "Author",
+        "authorEmail": "Author email",
         "added": "Added"
       },
       "overview": {
@@ -8675,10 +8698,6 @@
       "plugin": "Plugin",
       "configure": "Configure the plugin URL in settings"
     },
-    "dashboardShell": {
-      "navigation": "Navigation",
-      "openNavigation": "Open navigation"
-    },
     "telemetryEnvNotice": {
       "vetoed": "Telemetry is turned off by an environment variable",
       "set": "Telemetry environment variables are set",
@@ -8878,6 +8897,11 @@
     },
     "sheet": {
       "close": "Close"
+    },
+    "sidebar": {
+      "title": "Sidebar",
+      "description": "Displays the mobile sidebar.",
+      "toggle": "Toggle Sidebar"
     },
     "spinner": {
       "loading": "Loading"
@@ -9389,10 +9413,7 @@
       "organizationLogo": "Organization logo",
       "settings": "Settings",
       "signOut": "Sign out",
-      "chatNavigation": "Chat navigation",
-      "openChatNavigation": "Open chat navigation",
-      "sheetTitle": "LiteLLM Chat",
-      "sheetDescription": "Conversations and chat workspace navigation"
+      "chatNavigation": "Chat navigation"
     },
     "conversationList": {
       "yesterday": "Yesterday",
