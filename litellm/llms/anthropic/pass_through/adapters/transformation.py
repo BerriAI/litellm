@@ -229,6 +229,7 @@ class ChatRouteInputs:
     api_base: str | None = None
     thinking: Mapping[str, object] | None = None
     reasoning_summary: object | None = None
+    base_model: str | None = None
 
 
 _NO_ROUTE_INPUTS: Final = ChatRouteInputs()
@@ -274,6 +275,7 @@ def _keeps_encrypted_reasoning_for_responses(
         reasoning_effort=route.reasoning_effort,
         reasoning_summary=route.reasoning_summary,
         api_base=route.api_base,
+        base_model=route.base_model,
     )
 
 
@@ -321,6 +323,7 @@ class AnthropicAdapter:
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
         reasoning_summary: object | None = None,
+        base_model: str | None = None,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -356,6 +359,7 @@ class AnthropicAdapter:
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             reasoning_summary=reasoning_summary,
+            base_model=base_model,
         )
 
         return translated_body, tool_name_mapping
@@ -1305,6 +1309,7 @@ class LiteLLMAnthropicMessagesAdapter:
         api_base: str | None = None,
         reasoning_summary: object | None = None,
         preserve_midturn_system: bool = False,
+        base_model: str | None = None,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1359,6 +1364,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 api_base=api_base,
                 thinking=anthropic_message_request.get("thinking"),
                 reasoning_summary=reasoning_summary,
+                base_model=base_model,
             ),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES

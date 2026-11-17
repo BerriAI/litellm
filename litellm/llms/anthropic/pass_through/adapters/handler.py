@@ -787,6 +787,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
+            base_model=base_model if isinstance(base_model, str) else None,
         )
 
         if openai_request is None:

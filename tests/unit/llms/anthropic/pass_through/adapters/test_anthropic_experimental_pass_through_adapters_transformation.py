@@ -701,6 +701,32 @@ def test_encrypted_reasoning_is_kept_when_the_request_tools_route_it_to_response
 
 
 @pytest.mark.parametrize(
+    ("base_model", "kept"),
+    [
+        pytest.param("azure_ai/gpt-5.6-terra", True, id="gpt_5_6_base_model_bridges_to_responses"),
+        pytest.param("azure_ai/gpt-5.5", False, id="gpt_5_5_base_model_stays_on_chat"),
+        pytest.param(None, False, id="no_base_model_stays_on_chat"),
+    ],
+)
+def test_encrypted_reasoning_is_kept_when_a_custom_foundry_name_base_model_routes_it_to_responses(
+    base_model: str | None, kept: bool
+) -> None:
+    request: Final = AnthropicMessagesRequest(
+        **{**_replayed_reasoning_request([{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]),
+           "model": "azure_ai/qa-prod-reasoner", "thinking": {"type": "enabled", "budget_tokens": 2048}}
+    )
+    openai_request, _mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request,
+        custom_llm_provider="azure_ai",
+        api_base="https://myproject.services.ai.azure.com",
+        base_model=base_model,
+    )
+
+    assistant: Final = openai_request["messages"][1]
+    assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
     ("deployment_params", "kept"),
     [
         pytest.param({"reasoning_summary": "auto"}, True, id="deployment_summary_bridges_to_responses"),

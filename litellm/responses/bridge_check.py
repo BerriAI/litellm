@@ -213,6 +213,7 @@ def chat_completion_ends_in_responses_api(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
+    base_model: str | None = None,
 ) -> bool:
     """Whether chat completion for this model is served by a Responses API.
 
@@ -236,5 +237,6 @@ def chat_completion_ends_in_responses_api(
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
         api_base=api_base,
+        base_model=base_model,
     )
     return model_info.get("mode") == "responses"
