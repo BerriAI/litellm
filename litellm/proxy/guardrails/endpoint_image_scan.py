@@ -7,7 +7,12 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
-from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail, bedrock_error_type
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+    BedrockGuardrail,
+    BedrockGuardrailAPIError,
+    bedrock_error_type,
+    overrides_bedrock_call,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -18,7 +23,7 @@ async def scan_images(
     input_type: Literal["request", "response"],
 ) -> None:
     """Raise unless the guardrail evaluated every image and blocked none of them."""
-    if not isinstance(guardrail, BedrockGuardrail) or guardrail.checks is not None:
+    if not isinstance(guardrail, BedrockGuardrail) or guardrail.checks is not None or overrides_bedrock_call(guardrail):
         raise _not_scanned(f"Guardrail '{guardrail.guardrail_name}' does not support image scanning.")
     message: Final = {
         "role": "user",
@@ -30,15 +35,23 @@ async def scan_images(
     if attachments.unscannable:
         raise _not_scanned(
             f"Guardrail '{guardrail.guardrail_name}' cannot scan this image: "
-            f"{', '.join(sorted(frozenset(attachments.unscannable)))}."
+            f"{', '.join(sorted(frozenset(attachments.unscannable)))}. "
+            "Send it inline as a base64 PNG or JPEG data URL under 4 MB."
         )
     is_response: Final = input_type == "response"
-    answer: Final = await guardrail.async_scan_images(
-        attachments.images,
-        request_data=request_data,
-        source="OUTPUT" if is_response else "INPUT",
-        event_type=GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
-    )
+    try:
+        answer: Final = await guardrail.async_scan_images(
+            attachments.images,
+            request_data=request_data,
+            source="OUTPUT" if is_response else "INPUT",
+            event_type=GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
+        )
+    except BedrockGuardrailAPIError as error:
+        if error.status_code != 400:
+            raise
+        raise _not_scanned(
+            f"Guardrail '{guardrail.guardrail_name}' could not evaluate the image: {error.detail}"
+        ) from error
     error_type: Final = bedrock_error_type(answer)
     if error_type is not None:
         raise HTTPException(

@@ -35,13 +35,14 @@ _BLOCKED: Final = {
 
 
 class _Bedrock:
-    def __init__(self, answer: Mapping[str, object]) -> None:
+    def __init__(self, answer: Mapping[str, object], status_code: int = 200) -> None:
         self.answer: Final = answer
+        self.status_code: Final = status_code
         self.requests: Final[list[httpx.Request]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        return httpx.Response(200, json=self.answer)
+        return httpx.Response(self.status_code, json=self.answer)
 
 
 def _apply_guardrail_api(bedrock: _Bedrock) -> BedrockGuardrail:
@@ -69,6 +70,23 @@ def _guardrail_checks_api(bedrock: _Bedrock) -> BedrockGuardrail:
 
 def _another_provider(bedrock: _Bedrock) -> CustomGuardrail:
     return CustomGuardrail(guardrail_name="image-guard")
+
+
+class _OwnBedrockCall(BedrockGuardrail):
+    async def make_bedrock_api_request(self, source, messages=None, response=None, request_data=None, **kwargs):
+        return {"action": "NONE"}
+
+
+def _subclass_with_its_own_bedrock_call(bedrock: _Bedrock) -> CustomGuardrail:
+    return _OwnBedrockCall(
+        guardrail_name="image-guard",
+        guardrailIdentifier="gr-1",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+    )
 
 
 @pytest.mark.asyncio
@@ -123,12 +141,13 @@ async def test_unreadable_image_is_refused_without_a_scan_or_a_recorded_block(im
         await scan_images(_apply_guardrail_api(bedrock), (image,), request_data, "request")
 
     assert refused.value.status_code == 422
+    assert "base64 PNG or JPEG data URL" in refused.value.detail
     assert bedrock.requests == []
     assert request_data == {}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guardrail", [_guardrail_checks_api, _another_provider])
+@pytest.mark.parametrize("guardrail", [_guardrail_checks_api, _another_provider, _subclass_with_its_own_bedrock_call])
 async def test_guardrail_that_cannot_scan_images_refuses_them(
     guardrail: Callable[[_Bedrock], CustomGuardrail],
 ) -> None:
@@ -162,3 +181,17 @@ async def test_image_bedrock_did_not_confirm_evaluating_is_not_reported_as_passe
     assert refused.value.status_code == status_code
     assert reason in refused.value.detail
     assert [record["guardrail_status"] for record in request_data["metadata"][_RECORDS_KEY]] == [recorded_status]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("bedrock_status", "status_code"), [(400, 422), (503, 503)])
+async def test_image_bedrock_rejects_answers_unscanned_while_its_outages_pass_through(
+    bedrock_status: int, status_code: int
+) -> None:
+    bedrock: Final = _Bedrock({"message": "The images contained in the request are not supported"}, bedrock_status)
+
+    with pytest.raises(HTTPException) as refused:
+        await scan_images(_apply_guardrail_api(bedrock), (_PNG,), {}, "request")
+
+    assert refused.value.status_code == status_code
+    assert "The images contained in the request are not supported" in refused.value.detail

@@ -161,6 +161,10 @@ _CONTENT_TYPE_TO_QUALIFIER: Final[dict[str, BedrockGuardrailQualifier]] = {
 _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
 
 
+class BedrockGuardrailAPIError(HTTPException):
+    pass
+
+
 class QualifiedTextBlock(NamedTuple):
     """A piece of message text paired with its Bedrock grounding qualifier (if any)."""
 
@@ -268,6 +272,10 @@ def _allowed_dynamic_body_params(params: Mapping[str, object]) -> Mapping[str, o
 
 def _overridden(guardrail: object, name: str) -> bool:
     return getattr(getattr(guardrail, name, None), "__func__", None) is not getattr(BedrockGuardrail, name)
+
+
+def overrides_bedrock_call(guardrail: object) -> bool:
+    return _overridden(guardrail, "apply_guardrail") or _overridden(guardrail, "make_bedrock_api_request")
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -1364,7 +1372,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             httpx_response.status_code,
             httpx_response.text,
         )
-        raise HTTPException(status_code=status_code, detail=detail_message)
+        raise BedrockGuardrailAPIError(status_code=status_code, detail=detail_message)
 
     def _log_apply_guardrail_attempt(
         self,
@@ -1883,7 +1891,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
                             event_type=event_type,
                         )
-                    raise HTTPException(status_code=status_code, detail=detail_message) from e
+                    raise BedrockGuardrailAPIError(status_code=status_code, detail=detail_message) from e
                 except HTTPException:
                     raise
             # Endpoint down, timeout, or other HTTP/network errors
@@ -2577,7 +2585,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None:
-        if _overridden(self, "apply_guardrail") or _overridden(self, "make_bedrock_api_request"):
+        if overrides_bedrock_call(self):
             return
         attachments: Final = find_request_attachments(
             data,
