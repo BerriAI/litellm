@@ -126,15 +126,34 @@ def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows
 
 
 @pytest.mark.parametrize("model", ("anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5"))
-def test_claude_5_5_costs_the_same_on_both_bedrock_mantle_prefixes(
+def test_claude_5_5_costs_the_same_on_both_govcloud_bedrock_prefixes(
     model: str, local_model_cost_map: None, prices: dict
 ) -> None:
-    litellm.register_model({f"bedrock/mantle/{model}": prices[f"bedrock/mantle/{model}"]})
-    litellm.register_model({f"bedrock_mantle/{model}": prices[f"bedrock_mantle/{model}"]})
+    litellm.register_model({f"bedrock/us-gov-west-1/{model}": prices[f"bedrock/us-gov-west-1/{model}"]})
+    litellm.register_model({f"bedrock_mantle/us-gov-west-1/{model}": prices[f"bedrock_mantle/us-gov-west-1/{model}"]})
     tokens: Final = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
-    assert litellm.cost_per_token(model=f"bedrock/mantle/{model}", **tokens) == litellm.cost_per_token(
-        model=f"bedrock_mantle/{model}", **tokens
+    assert litellm.cost_per_token(model=f"bedrock/us-gov-west-1/{model}", **tokens) == litellm.cost_per_token(
+        model=f"bedrock_mantle/us-gov-west-1/{model}", **tokens
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+        ("bedrock", "ap-southeast-1", "apac.amazon.nova-lite-v1:0"),
+        ("azure", None, "us-gov/o3-mini-2025-01-31"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_region(
+    provider: str, region: str | None, model: str, local_model_cost_map: None, prices: dict
+) -> None:
+    key: Final = f"{provider}/{region}/{model}" if region is not None else f"{provider}/{model}"
+    row: Final = prices[key]
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider=provider, region_name=region, prompt_tokens=1, completion_tokens=1
+    ) == pytest.approx((row["input_cost_per_token"], row["output_cost_per_token"]))
 
 
 def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
