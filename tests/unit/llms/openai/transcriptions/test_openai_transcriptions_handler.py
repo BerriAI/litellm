@@ -106,22 +106,36 @@ def test_openai_compatible_transcription_is_billed_from_its_providers_cost_row(
     )
 
 
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("model", ("helicone/whisper-1", "vercel_ai_gateway/openai/whisper-1"))
-def test_openai_compatible_transcription_without_its_own_cost_row_is_billed_at_openais_price(
-    monkeypatch: pytest.MonkeyPatch, model: str
+@pytest.mark.parametrize("model", ("helicone/whisper-1", "vercel_ai_gateway/openai/whisper-1", "hosted_vllm/whisper-1"))
+@pytest.mark.parametrize("through_router", (False, True))
+async def test_openai_compatible_transcription_without_its_own_cost_row_is_billed_at_openais_price(
+    monkeypatch: pytest.MonkeyPatch, model: str, through_router: bool
 ):
     import respx
 
     import litellm
 
-    monkeypatch.setenv("HELICONE_API_KEY", "sk-helicone-test")
-    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "vck-test")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm_params: Final = {"model": model, "api_key": "sk-gateway-test", "api_base": "https://gateway.example/v1"}
+    clip: Final = ("clip.wav", _silent_wav(seconds=2))
 
     with respx.mock() as upstream:
         upstream.route().respond(200, json={"text": "four score"})
-        response = litellm.transcription(model=model, file=("clip.wav", _silent_wav(seconds=2)))
+        response = (
+            await litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "speech",
+                        "litellm_params": litellm_params,
+                        "model_info": {"mode": "audio_transcription"},
+                    }
+                ]
+            ).atranscription(model="speech", file=clip)
+            if through_router
+            else await litellm.atranscription(**litellm_params, file=clip)
+        )
 
     assert response._hidden_params["response_cost"] == pytest.approx(
         2 * litellm.model_cost["whisper-1"]["input_cost_per_second"]
