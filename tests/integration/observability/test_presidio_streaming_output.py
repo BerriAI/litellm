@@ -2,7 +2,7 @@ import json
 import re
 import threading
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.process import OwnedProxy, owned_proxy_process
@@ -455,6 +456,96 @@ def test_anthropic_messages_per_request_guardrails_selects_masking(gateway: Gate
         assert guarded.status == 200, guarded.text
         assert anthropic_text(guarded) == f"{MASK} designed it."
         assert len(rig.analyzer.drain()) == 1
+
+
+READ_TOOL_USE_ID: Final = "toolu_presidio_read"
+READ_INPUT: Final = {"path": "/work/report.txt"}
+
+
+def anthropic_tool_turn_stream(identity: str, text: str, delta: Mapping[str, object]) -> tuple[bytes, ...]:
+    opening, text_start, text_delta, text_stop, _, closing = anthropic_stream(identity, text)
+    tool_use: Final = {"type": "tool_use", "id": READ_TOOL_USE_ID, "name": "Read", "input": {}}
+    return (
+        opening,
+        text_start,
+        text_delta,
+        text_stop,
+        anthropic_frame("content_block_start", {"type": "content_block_start", "index": 1, "content_block": tool_use}),
+        anthropic_frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(READ_INPUT)},
+            },
+        ),
+        anthropic_frame("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        anthropic_frame("message_delta", {"type": "message_delta", "delta": delta, "usage": {"output_tokens": 4}}),
+        closing,
+    )
+
+
+def read_verdicts(verdict: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {READ_TOOL_USE_ID: verdict}}}]
+
+
+def anthropic_deltas(received: Received, event_type: str) -> tuple[Mapping[str, object], ...]:
+    events: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in received.text.split("\n") if line.startswith("data: ")
+    )
+    return tuple(event["delta"] for event in events if event.get("type") == event_type)
+
+
+def anthropic_message_delta(received: Received) -> Mapping[str, object]:
+    deltas: Final = anthropic_deltas(received, "message_delta")
+    assert len(deltas) == 1, received.text
+    return deltas[0]
+
+
+def anthropic_text_deltas(received: Received) -> str:
+    deltas: Final = anthropic_deltas(received, "content_block_delta")
+    return "".join(str(delta["text"]) for delta in deltas if delta.get("type") == "text_delta")
+
+
+@pytest.mark.parametrize(
+    ("delta", "field", "kept"),
+    [
+        (
+            {
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "safeguard_results": read_verdicts(
+                    {"type": "evaluated", "outcome": "flagged", "explanation": f"{PERSON} asked for the report"}
+                ),
+            },
+            "safeguard_results",
+            read_verdicts({"type": "evaluated", "outcome": "flagged"}),
+        ),
+        (
+            {
+                "stop_reason": "refusal",
+                "stop_sequence": None,
+                "stop_details": {"type": "refusal", "category": "cyber", "explanation": f"declined for {PERSON}"},
+            },
+            "stop_details",
+            {"type": "refusal", "category": "cyber", "explanation": None},
+        ),
+    ],
+    ids=["verdict_explanation", "stop_details_explanation"],
+)
+def test_anthropic_messages_masked_stream_keeps_upstream_safeguard_fields_without_explanations(
+    gateway: Gateway, tmp_path: Path, delta: Mapping[str, object], field: str, kept: object
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    provider: Final = anthropic_provider(anthropic_tool_turn_stream(identity, f"{PERSON} designed it.", delta))
+    with presidio_rig(gateway, tmp_path, provider) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert anthropic_text_deltas(received) == f"{MASK} designed it.", received.text
+        assert anthropic_message_id(received) == identity, received.text
+        assert anthropic_message_delta(received).get(field) == kept, received.text
+        assert PERSON not in received.text, received.text
+        assert len(rig.upstream.drain()) == 1
 
 
 def openai_provider(identity: str) -> Callable[[Request], Reply]:

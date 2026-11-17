@@ -88,3 +88,42 @@ def test_sync_router_reads_base_model_to_replay_redacted_thinking_to_an_applicat
         assistant: Final = next(message for message in received[-1].messages if message.role == "assistant")
         redacted: Final = ({"reasoningContent": {"redactedContent": REDACTED}},) if replays_redacted else ()
         assert assistant.content == (*redacted, {"text": FIRST_ANSWER})
+
+
+def test_sync_router_replays_a_block_in_content_and_thinking_blocks_once() -> None:
+    redacted: Final[dict[str, JsonValue]] = {"type": "redacted_thinking", "data": REDACTED}
+    with wire_server(_respond) as wire:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "claude-profile",
+                    "litellm_params": {
+                        "model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}",
+                        "api_base": wire.url,
+                        "api_key": "synthetic-bedrock-bearer",
+                        "aws_region_name": "us-east-1",
+                    },
+                    "model_info": {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"},
+                }
+            ],
+            num_retries=0,
+        )
+
+        response: Final = router.completion(
+            model="claude-profile",
+            max_tokens=256,
+            messages=[
+                {"role": "user", "content": "What's the weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": [redacted, {"type": "text", "text": FIRST_ANSWER}],
+                    "thinking_blocks": [redacted],
+                },
+                {"role": "user", "content": "Reply with the word ok."},
+            ],
+        )
+
+        assert response.choices[0].message.content == FINAL_ANSWER
+        received: Final = tuple(_ConverseRequest.model_validate_json(request.body) for request in wire.drain())
+        assistant: Final = next(message for message in received[-1].messages if message.role == "assistant")
+        assert assistant.content == ({"reasoningContent": {"redactedContent": REDACTED}}, {"text": FIRST_ANSWER})

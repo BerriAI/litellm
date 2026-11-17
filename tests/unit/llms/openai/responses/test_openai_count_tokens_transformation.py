@@ -2,9 +2,15 @@ from typing import Final
 
 import pytest
 
+from litellm.llms.anthropic.messages.responses_adapters.transformation import (
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
+from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
+    native_count_request,
 )
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 def test_transform_basic_request():
@@ -201,6 +207,23 @@ def test_messages_to_responses_input_with_tool():
         "type": "function_call_output",
         "call_id": "call_123",
         "output": "72°F",
+    }
+
+
+def test_messages_to_responses_input_reads_a_tool_call_that_forwards_its_fields():
+    tool_call: Final = {"id": "call_123", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    messages: Final = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": None, "tool_calls": [AttributeForwarder(tool_call)]},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[1] == {
+        "type": "function_call",
+        "call_id": "call_123",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
     }
 
 
@@ -484,3 +507,161 @@ def test_get_required_headers():
 
     assert headers["Authorization"] == "Bearer sk-test-key"
     assert headers["Content-Type"] == "application/json"
+
+
+PDF_BASE64: Final = "JVBERi0xLjcK"
+PNG_BASE64: Final = "iVBORw0KGgo="
+
+ANTHROPIC_AGENT_TURN: Final[list[dict[str, object]]] = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the indemnity terms."},
+            {
+                "type": "document",
+                "title": "contract.pdf",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": PDF_BASE64},
+            },
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_BASE64}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me pull clause 14."},
+            {"type": "tool_use", "id": "toolu_01", "name": "lookup_clause", "input": {"id": "14"}},
+        ],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "14. Indemnification."}],
+    },
+]
+
+ANTHROPIC_TOOLS: Final[list[dict[str, object]]] = [
+    {
+        "name": "lookup_clause",
+        "description": "Fetch a clause by id",
+        "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}},
+    }
+]
+
+
+@pytest.mark.parametrize(
+    "system",
+    [None, "You review contracts.", [{"type": "text", "text": "You review contracts."}]],
+)
+def test_anthropic_messages_convert_exactly_as_v1_messages_inference_converts_them(system: object) -> None:
+    inference_request: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": ANTHROPIC_AGENT_TURN,
+        "tools": ANTHROPIC_TOOLS,
+        **({"system": system} if system is not None else {}),
+    }
+    inference: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
+        inference_request, include_encrypted_reasoning=False
+    )
+
+    counted: Final = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+        model="gpt-4o", messages=ANTHROPIC_AGENT_TURN, system=system, tools=ANTHROPIC_TOOLS
+    )
+
+    assert counted == (
+        tuple(inference["input"]),
+        inference.get("instructions"),
+        tuple(inference["tools"]),
+        inference.get("text"),
+    )
+
+
+def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
+    input_items, _, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+        model="gpt-4o", messages=ANTHROPIC_AGENT_TURN, system=None, tools=None
+    )
+
+    assert input_items == (
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize the indemnity terms."},
+                {
+                    "type": "input_file",
+                    "filename": "contract.pdf",
+                    "file_data": f"data:application/pdf;base64,{PDF_BASE64}",
+                },
+                {"type": "input_image", "image_url": f"data:image/png;base64,{PNG_BASE64}", "detail": "auto"},
+            ],
+        },
+        {"type": "function_call", "call_id": "toolu_01", "name": "lookup_clause", "arguments": '{"id": "14"}'},
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Let me pull clause 14."}],
+        },
+        {"type": "function_call_output", "call_id": "toolu_01", "output": "14. Indemnification."},
+    )
+
+
+def test_anthropic_list_system_becomes_joined_instruction_text() -> None:
+    _, instructions, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        system=[{"type": "text", "text": "First rule."}, {"type": "text", "text": "Second rule."}],
+        tools=None,
+    )
+
+    assert instructions == "First rule.\nSecond rule."
+
+
+def test_a_saved_conversation_with_a_null_created_by_is_counted_without_it() -> None:
+    compaction: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"}
+    tool_output: Final = {"type": "function_call_output", "call_id": "call_1", "output": "42"}
+    sent_created_by: Final = {
+        "type": "function_call_output",
+        "call_id": "call_2",
+        "output": "7",
+        "created_by": "user_1",
+    }
+    request: Final = {
+        "model": "gpt-5.6",
+        "input": [{**compaction, "created_by": None}, {**tool_output, "created_by": None}, sent_created_by],
+    }
+
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    body: Final = native_count_request(request, "gpt-5.6", policy)
+
+    assert body["input"] == [compaction, tool_output, sent_created_by]
+
+
+
+def test_a_set_created_by_is_counted_without_it_under_drop_params() -> None:
+    tool_output: Final = {"type": "function_call_output", "call_id": "call_1", "output": "42"}
+    request: Final = {"model": "gpt-5.6", "input": [{**tool_output, "created_by": "user_1"}]}
+    policy: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
+
+    body: Final = native_count_request(request, "gpt-5.6", policy)
+
+    assert body["input"] == [tool_output]
+
+
+def test_a_text_input_is_counted_as_sent() -> None:
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    body: Final = native_count_request({"model": "gpt-5.6", "input": "Hello"}, "gpt-5.6", policy)
+
+    assert body["input"] == "Hello"
+
+
+def test_a_reasoning_item_is_counted_without_its_null_fields() -> None:
+    reasoning: Final = {"id": "rs_1", "type": "reasoning", "summary": []}
+    request: Final = {
+        "model": "gpt-5.6",
+        "input": [{**reasoning, "status": None, "content": None, "encrypted_content": None}],
+    }
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    body: Final = native_count_request(request, "gpt-5.6", policy)
+
+    assert body["input"] == [reasoning]

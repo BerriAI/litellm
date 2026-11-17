@@ -17,12 +17,12 @@ import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 from integration.providers._vertex_batch_rows import (
     Route,
     chat_row,
-    closed_port,
     encoded,
     error_of,
     gcs_peer,
@@ -97,8 +97,8 @@ def _config(gateway: Gateway, directory: Path, vertex_port: int, openai_port: in
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("vertex-batch-row-lines")
-    vertex_port: Final = closed_port()
-    openai_port: Final = closed_port()
+    vertex_port: Final = allocate_port()
+    openai_port: Final = allocate_port()
     with gateway_from_environment() as shared:
         config: Final = _config(shared, directory, vertex_port, openai_port)
         with owned_proxy_process(shared, directory, {}, config=config, workers=2) as owned:
@@ -185,7 +185,7 @@ def test_guardrail_dropped_and_blank_rows_never_reach_openai(
         assert response.status_code == 200, response.text
         uploads: Final = tuple(request for request in wire.drain() if is_openai_upload(request))
         assert len(uploads) == 1, uploads
-        sent_model: Final = OPENAI if route == "model" else "gpt-4o-mini"
+        sent_model: Final = "gpt-4o-mini"
         rows: Final = tuple(json.loads(line) for line in openai_uploaded_lines(uploads[0]))
         assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [
             ("first", sent_model),

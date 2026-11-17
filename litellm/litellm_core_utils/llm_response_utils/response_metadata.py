@@ -4,6 +4,7 @@ from functools import reduce
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
@@ -24,6 +25,15 @@ def _timing_window_start(
     if isinstance(received_at, datetime.datetime):
         return received_at, True
     return start_time, False
+
+
+def response_ms_since_logging_start(logging_obj: LiteLLMLoggingObject) -> float | None:
+    reported_ms: Final = logging_obj.response_timing_metrics.get("_response_ms")
+    if reported_ms is None:
+        return None
+    logging_start: Final = logging_obj.start_time
+    window_start: Final = _timing_window_start(logging_start, logging_obj)[0]
+    return reported_ms - max(0.0, logging_start.timestamp() - window_start.timestamp()) * 1000
 
 
 def _union_duration_ms(windows: object, lower: float, upper: float) -> float | None:
@@ -101,6 +111,32 @@ def response_timing_metrics(
     return {"_response_ms": total_response_time_ms, "litellm_overhead_time_ms": overhead_ms}
 
 
+_HIDDEN_PARAMS_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _hidden_params_mapping(hidden_params: object) -> Mapping[str, object]:
+    try:
+        return _HIDDEN_PARAMS_DICT.validate_python(hidden_params)
+    except ValidationError:
+        return {}
+
+
+def _existing_provider_response_model(result: object) -> str | None:
+    """The pricing model a response already carries, like the decisions path sets, wins over the response model."""
+    hidden_params: Final[object] = getattr(result, "_hidden_params", None)
+    carried: Final[object] = _hidden_params_mapping(hidden_params).get("provider_response_model") or getattr(
+        hidden_params, "provider_response_model", None
+    )
+    return carried if isinstance(carried, str) and carried else None
+
+
+def _provider_response_model(result: object) -> str | None:
+    """The model the provider answered with, kept because the proxy later rewrites ``result.model`` to the alias the
+    client asked for and cost-map lookups for the standard logging payload would otherwise miss."""
+    model: Final = getattr(result, "model", None) if isinstance(result, ModelResponse) else None
+    return model if isinstance(model, str) and model else None
+
+
 class ResponseMetadata:
     """
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
@@ -147,6 +183,8 @@ class ResponseMetadata:
                 preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
+            "provider_response_model": _existing_provider_response_model(self.result)
+            or _provider_response_model(self.result),
         }
         self._update_hidden_params(new_params)
 
@@ -261,7 +299,7 @@ def update_response_metadata(
         # cannot hold ``_hidden_params``: keep only the timing on the logging object (no cost
         # recompute) so the proxy headers and the standard logging payload can still read it.
         logging_obj.set_response_timing_metrics(
-            response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+            _logging_obj_timing_metrics(start_time, end_time, logging_obj, include_overhead)
         )
         return
 
@@ -269,3 +307,24 @@ def update_response_metadata(
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
     metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
     metadata.apply()
+    if logging_obj.stream is True:
+        # the response assembled from the chunks never inherits the stream wrapper's
+        # ``_hidden_params``, so the logging payload reads the timing from the logging object
+        logging_obj.set_response_timing_metrics(
+            _logging_obj_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+        )
+
+
+def _logging_obj_timing_metrics(
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    logging_obj: LiteLLMLoggingObject,
+    include_overhead: bool,
+) -> Mapping[str, float]:
+    """A stream read to completion keeps the overhead stamped when the stream was handed back."""
+    timing_metrics: Final = response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+    stamped: Final[Mapping[str, float]] = getattr(logging_obj, "response_timing_metrics", None) or {}
+    stamped_overhead_ms: Final = stamped.get("litellm_overhead_time_ms")
+    if include_overhead or stamped_overhead_ms is None:
+        return timing_metrics
+    return {**timing_metrics, "litellm_overhead_time_ms": stamped_overhead_ms}

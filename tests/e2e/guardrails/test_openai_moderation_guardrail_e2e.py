@@ -128,7 +128,7 @@ class TestOpenAIModerationGuardrail:
                 )
 
         allowed = unwrap(
-            client.messages(scoped_key, model, BENIGN_PROMPT, guardrails=[name], max_tokens=64)
+            client.messages(scoped_key, model, BENIGN_PROMPT, guardrails=[name], max_tokens=512)
         )
         assert allowed.content or allowed.choices, (
             "the same moderation guardrail must let a benign /v1/messages prompt through, but "

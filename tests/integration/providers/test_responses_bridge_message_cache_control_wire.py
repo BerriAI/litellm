@@ -809,7 +809,10 @@ def test_provider_error_on_a_marked_request_reaches_the_caller(gateway: Gateway,
         model: Final = _anthropic_deployment(scenario, wire)
         answer: Final = _send(gateway, _marked_system(model, marker))
         labels: Final = anthropic_labels(_only_request(wire))
-        assert answer.status == 500, answer.text
+        assert answer.status == 503, answer.text
+        error: Final = object_value(_JSON_OBJECT.validate_json(answer.text)["error"])
+        assert error["type"] == "service_unavailable_error", answer.text
+        assert error["code"] == "server_is_overloaded", answer.text
         assert "overloaded_error" in answer.text, answer.text
         assert labels == [SYSTEM_LABEL]
         spend.landed(model, answer.call_id, None, status="failure")
@@ -1118,6 +1121,7 @@ def test_input_tokens_counts_marked_items_without_their_marks(gateway: Gateway) 
     assert _JSON_OBJECT.validate_json(response.text) == {
         "object": "response.input_tokens",
         "input_tokens": _COUNTED_TOKENS,
+        "litellm_count_source": "provider",
     }
     assert counted.target.endswith("/count_tokens"), counted.target
     assert anthropic_labels(counted) == []
@@ -1199,6 +1203,7 @@ def test_input_tokens_reads_each_input_shape_without_item_marks(gateway: Gateway
     assert _JSON_OBJECT.validate_json(response.text) == {
         "object": "response.input_tokens",
         "input_tokens": _COUNTED_TOKENS,
+        "litellm_count_source": "provider",
     }
     assert [anthropic_labels(request) for request in counted] == [[]]
 

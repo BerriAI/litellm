@@ -1,13 +1,17 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-
 from litellm.exceptions import AuthenticationError
-from litellm.llms.github_copilot.common_utils import GetAPIKeyError
+from litellm.llms.github_copilot.common_utils import GetAccessTokenError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
+)
+from litellm.llms.github_copilot.per_user_auth import (
+    GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
+    GithubCopilotUserSession,
 )
 
 
@@ -185,13 +189,35 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
     assert "context-management-2025-06-27" in validated_headers["anthropic-beta"]
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_github_copilot_safeguards_do_not_derive_the_dangerous_tool_use_beta() -> None:
+    session: Final = GithubCopilotUserSession(token="gh.test-key", api_base="https://api.githubcopilot.com")
+
+    validated_headers, _ = GithubCopilotAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "safeguards": ({"type": "dangerous_tool_use"},),
+            "context_management": {"edits": ({"type": "clear_tool_uses_20250919"},)},
+        },
+        litellm_params={GITHUB_COPILOT_USER_SESSION_KWARG_KEY: session},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert validated_headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
 def test_github_copilot_anthropic_messages_validate_environment_auth_error():
     """Test error handling when authentication fails."""
     config = GithubCopilotAnthropicMessagesConfig()
 
     # Mock the authenticator to raise an error
     config.authenticator = MagicMock()
-    config.authenticator.get_api_key.side_effect = GetAPIKeyError(status_code=401, message="No valid API key found")
+    config.authenticator.get_api_key.side_effect = GetAccessTokenError(
+        status_code=401, message="No valid API key found"
+    )
 
     with pytest.raises(AuthenticationError):
         config.validate_anthropic_messages_environment(
@@ -309,7 +335,7 @@ def test_github_copilot_config_does_not_handle_web_search_natively():
     interception handler short-circuiting Copilot instead of routing to it, even
     though Copilot now has a BaseAnthropicMessagesConfig. The base Anthropic
     config (bedrock/vertex/anthropic path) must report True."""
-    from litellm.llms.anthropic.pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 

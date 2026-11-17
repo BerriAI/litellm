@@ -11,6 +11,7 @@ from litellm.types.llms.openai import ChatCompletionToolMessage
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 OPENAI_CHAT_COMPLETIONS_URL: Final = "https://api.openai.com/v1/chat/completions"
+ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
 WEATHER_TOOLS: Final = (
     {
         "type": "function",
@@ -248,6 +249,219 @@ def test_stream_rejected_before_any_request(respx_mock: respx.MockRouter) -> Non
     assert route.call_count == 0
 
 
+_ALLOWED_WEATHER_ONLY: Final = {
+    "type": "allowed_tools",
+    "mode": "auto",
+    "tools": [{"type": "function", "name": "get_weather"}],
+}
+_EMPTY_ALLOWED_TOOLS: Final = {"type": "allowed_tools", "mode": "auto", "tools": []}
+_TIME_CALL: Final = _tool_call("call_1", "get_time", {})
+
+
+def _anthropic_message(*content: dict[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_tool_loop",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": list(content),
+            "stop_reason": "tool_use" if content[0]["type"] == "tool_use" else "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    )
+
+
+def _anthropic_tool_use(name: str) -> httpx.Response:
+    return _anthropic_message({"type": "tool_use", "id": "toolu_1", "name": name, "input": {}})
+
+
+def _tools_run_before_the_refusal(
+    tool_choice: dict[str, object], **completion_kwargs: object
+) -> list[ChatCompletionMessageToolCall]:
+    executed: Final[list[ChatCompletionMessageToolCall]] = []
+
+    def execute(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tool_call)
+        return _tool_result(tool_call)
+
+    with pytest.raises(litellm.BadRequestError, match="LiteLLM did not run the call"):
+        litellm.run_tool_loop(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=execute,
+            tool_choice=tool_choice,
+            api_key="sk-test",
+            **completion_kwargs,
+        )
+    return executed
+
+
+def test_a_tool_the_dropped_choice_excludes_never_runs(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(ANTHROPIC_MESSAGES_URL).mock(return_value=_anthropic_tool_use("get_time"))
+
+    assert not _tools_run_before_the_refusal(
+        _ALLOWED_WEATHER_ONLY, model="anthropic/claude-haiku-4-5", drop_params=True
+    )
+    assert "tool_choice" not in _request_bodies(respx_mock)[0]
+
+
+def test_a_tool_the_dropped_choice_lists_still_runs(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[_anthropic_tool_use("get_weather"), _anthropic_message({"type": "text", "text": "done"})]
+    )
+
+    assert (
+        litellm.run_tool_loop(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=_tool_result,
+            tool_choice=_ALLOWED_WEATHER_ONLY,
+            drop_params=True,
+            api_key="sk-test",
+        )
+        == "done"
+    )
+
+
+def test_a_tool_the_choice_excludes_never_runs_when_the_model_ignored_the_choice(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_openai_response(None, [_TIME_CALL]))
+    )
+
+    assert not _tools_run_before_the_refusal(_ALLOWED_WEATHER_ONLY, model="openai/gpt-5-mini")
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [_EMPTY_ALLOWED_TOOLS, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}],
+)
+def test_a_malformed_choice_is_refused_before_any_request(
+    tool_choice: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
+        litellm.run_tool_loop(
+            model="openai/gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=_tool_result,
+            tool_choice=tool_choice,
+            api_key="sk-test",
+        )
+
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [_EMPTY_ALLOWED_TOOLS, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}],
+)
+def test_a_malformed_choice_under_drop_params_runs_the_loop_as_if_never_sent(
+    tool_choice: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_response(None, [_TIME_CALL])),
+            httpx.Response(200, json=_openai_response("done")),
+        ]
+    )
+    executed: Final[list[str | None]] = []
+
+    def execute(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tool_call.function.name)
+        return _tool_result(tool_call)
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=execute,
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_key="sk-test",
+    )
+
+    assert (answer, executed) == ("done", ["get_time"])
+    assert all("tool_choice" not in body for body in _request_bodies(respx_mock))
+
+
+def test_a_choice_on_a_model_alias_reaches_the_loop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_alias_map", {"the-alias": "openai/gpt-5-mini"})
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_openai_response("done"))
+    )
+
+    assert (
+        litellm.run_tool_loop(
+            model="the-alias",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=_tool_result,
+            tool_choice=_ALLOWED_WEATHER_ONLY,
+            api_key="sk-test",
+        )
+        == "done"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_loop_never_runs_a_tool_the_choice_excludes(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler())
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_openai_response(None, [_TIME_CALL]))
+    )
+    executed: Final[list[ChatCompletionMessageToolCall]] = []
+
+    async def execute(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tool_call)
+        return _tool_result(tool_call)
+
+    with pytest.raises(litellm.BadRequestError, match="LiteLLM did not run the call"):
+        await litellm.arun_tool_loop(
+            model="openai/gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=execute,
+            tool_choice=_ALLOWED_WEATHER_ONLY,
+            drop_params=True,
+            api_key="sk-test",
+        )
+
+    assert not executed
+
+
+def test_allowed_tools_choice_the_provider_enforces_reaches_it_every_round(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_response(None, [_tool_call("call_1", "get_weather", {"city": "Paris"})])),
+            httpx.Response(200, json=_openai_response("done")),
+        ]
+    )
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=_tool_result,
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_weather"}]},
+        api_key="sk-test",
+    )
+
+    assert answer == "done"
+    assert [body["tool_choice"]["type"] for body in _request_bodies(respx_mock)] == ["allowed_tools", "allowed_tools"]
+
+
 def test_custom_tool_call_raises_type_error_without_executing(respx_mock: respx.MockRouter) -> None:
     custom_response: Final = _openai_response(
         None,
@@ -481,7 +695,6 @@ async def test_arun_tool_loop_two_rounds(respx_mock: respx.MockRouter, monkeypat
     assert messages == messages_snapshot
 
 
-ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
 TOOL_SEARCH_CALL: Final = {
     "type": "server_tool_use",
     "id": "srvtoolu_01Search",
@@ -606,3 +819,69 @@ def test_client_tool_turn_is_replayed_without_its_provider_specific_fields(respx
     replayed_assistant: Final = _request_bodies(respx_mock)[1]["messages"][1]
     assert replayed_assistant["tool_calls"][0]["id"] == "call_1"
     assert "provider_specific_fields" not in replayed_assistant
+
+
+def test_responses_bridge_replays_commentary_reasoning_and_tool_call_in_order(respx_mock: respx.MockRouter) -> None:
+    round_one: Final = _responses_payload(
+        "resp_1",
+        [
+            {
+                "type": "message",
+                "id": "msg_commentary",
+                "status": "completed",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "Checking Paris.", "annotations": []}],
+            },
+            {"type": "reasoning", "id": "rs_abc123", "summary": [], "encrypted_content": "enc_xyz"},
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_weather_paris",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        ],
+    )
+    round_two: Final = _responses_payload(
+        "resp_2",
+        [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "Paris is 72F", "annotations": []}],
+            }
+        ],
+    )
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)]
+    )
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=_tool_result,
+        api_key="sk-test",
+    )
+
+    assert answer == "Paris is 72F"
+    assert _request_bodies(respx_mock)[1]["input"][1:] == [
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Checking Paris."}],
+            "phase": "commentary",
+        },
+        {"type": "reasoning", "id": "rs_abc123", "summary": [], "encrypted_content": "enc_xyz"},
+        {"type": "function_call", "call_id": "call_weather_paris", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+        {
+            "type": "function_call_output",
+            "call_id": "call_weather_paris",
+            "output": [{"type": "input_text", "text": '{"temp": "72F"}'}],
+        },
+    ]

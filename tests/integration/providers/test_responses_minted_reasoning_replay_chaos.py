@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import time
 import uuid
@@ -19,12 +18,14 @@ import pytest
 import websockets
 import yaml
 from integration._support import claude_code as cc
+from integration._support import device_login as dl
 from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 _GPT: Final = "gpt-5.6"
@@ -226,12 +227,6 @@ def _assert_each_lands_once(
         assert by_status[match] == "success", rows
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _health_counts(gateway: Gateway, model: str) -> tuple[int, int]:
     response: Final = gateway.request("GET", f"/health?model={model}", None)
     assert response.status_code in (200, 503), response.text
@@ -249,7 +244,7 @@ def _marked(received: tuple[Request, ...]) -> dict[str, Request]:
 async def test_vendor_outage_fails_each_replay_cleanly_and_the_recovered_vendor_gets_them_without_minted_items(
     gateway: Gateway,
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(15, ("responses", "chat", "messages"))
     after: Final = _calls(15, ("responses", "chat", "messages"))
     with gateway.scenario() as scenario:
@@ -371,6 +366,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_dropping_the_minted_i
 @dataclass(frozen=True, slots=True)
 class _Rig:
     wire: Wire
+    copilot_wire: Wire
     proxy: OwnedProxy
     cert: Path
     key: Path
@@ -384,12 +380,12 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     chatgpt: Final = directory / "chatgpt"
     copilot.mkdir()
     chatgpt.mkdir()
-    with gateway_from_environment() as gateway, wire_server(rv.ResponsesVendor().respond) as wire:
-        (copilot / "api-key.json").write_text(
-            json.dumps(
-                {"token": "synthetic-copilot-token", "expires_at": time.time() + 3600, "endpoints": {"api": wire.url}}
-            )
-        )
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(rv.ResponsesVendor().respond) as wire,
+        dl.device_login_peers(directory, provider=rv.ResponsesVendor().respond) as peers,
+    ):
+        dl.write_copilot_access(copilot, "synthetic-copilot-token")
         (chatgpt / "auth.json").write_text(
             json.dumps(
                 {
@@ -400,15 +396,15 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
             )
         )
         overrides: Final = {
+            **peers.environment(),
             "GITHUB_COPILOT_TOKEN_DIR": str(copilot),
             "CHATGPT_TOKEN_DIR": str(chatgpt),
             "CHATGPT_API_BASE": wire.url,
-            "SSL_CERT_FILE": str(cert),
             "HTTP_PROXY": wire.url,
             "NO_PROXY": "127.0.0.1,localhost",
         }
         with owned_proxy_process(gateway, directory, overrides, workers=2) as owned:
-            yield _Rig(wire, owned, cert, key)
+            yield _Rig(wire, peers.api.secure, owned, cert, key)
 
 
 def _replay(gateway: Gateway, model: str, history: list[dict[str, JsonValue]], stream: bool) -> httpx.Response:
@@ -425,7 +421,7 @@ class _LoginDeployment:
 _LOGIN_DEPLOYMENTS: Final = (
     _LoginDeployment("github_copilot", f"github_copilot/{_CODEX}", None),
     _LoginDeployment("chatgpt", f"chatgpt/{_CODEX}", None),
-    _LoginDeployment("azure_ai-foundry-host", "azure_ai/deepseek-v3", "synthetic-azure-key"),
+    _LoginDeployment("azure_ai-foundry-host", "azure_ai/deepseek-v3.2", "synthetic-azure-key"),
 )
 
 
@@ -440,13 +436,14 @@ def test_login_backed_and_foundry_deployments_forward_the_minted_item_unchanged(
     history: Final = rv.agents_sdk_history(marker, minted)
     api_base: Final = _FOUNDRY_BASE if deployment.label.startswith("azure_ai") else rig.wire.url
     rig.wire.drain()
+    rig.copilot_wire.drain()
     with rig.proxy.gateway.scenario() as scenario:
         parameters: Final[dict[str, JsonValue]] = {"model": deployment.model, "api_base": api_base}
         model: Final = scenario.model(
             **parameters, **({} if deployment.api_key is None else {"api_key": deployment.api_key})
         )
         response: Final = _replay(rig.proxy.gateway, model, history, stream)
-        received: Final = rig.wire.drain()
+        received: Final = (*rig.wire.drain(), *rig.copilot_wire.drain())
         assert len(received) == 1, [(request.method, request.target) for request in received]
         target: Final = urlsplit(received[0].target)
         assert target.path.endswith("/responses"), received[0].target

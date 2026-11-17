@@ -3,9 +3,8 @@ import base64
 import json
 import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -1709,7 +1708,7 @@ async def test_one_text_masked_two_ways_blocks(akto_pre_call):
 
 @pytest.mark.asyncio
 async def test_masking_a_payload_too_deep_to_map_back_blocks(akto_pre_call):
-    from litellm.proxy._experimental.mcp_server.utils import MAX_STRUCTURED_CONTENT_SCAN_DEPTH
+    from litellm.proxy.mcp_server.utils import MAX_STRUCTURED_CONTENT_SCAN_DEPTH
 
     deep: object = CARD
     for _ in range(MAX_STRUCTURED_CONTENT_SCAN_DEPTH + 1):
