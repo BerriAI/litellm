@@ -2667,17 +2667,20 @@ async def test_cancel__db_write_receives_caller_auth(cancel_harness):
 
 @pytest.mark.asyncio
 async def test_cancel__keeps_the_endpoint_the_batch_was_created_for(cancel_harness: CancelHarness) -> None:
-    stored_row: Final = MagicMock(status="in_progress")
     stored: Final = make_batch(id="batch-unified-blob", status="in_progress").model_copy(
         update={"endpoint": "/v1/embeddings"}
     )
+    stored_row: Final = MagicMock(status="in_progress", file_object=stored.model_dump(mode="json"))
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = stored_row
     provider_batch: Final = make_batch(id="batch-raw-xyz", status="cancelling")
     cancel_harness.router.acancel_batch.return_value = provider_batch
     cancel_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
+    cancel_harness.logging.get_proxy_hook.return_value = object()
 
     with (
         patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
-        patch.object(endpoints, "get_batch_from_database", AsyncMock(return_value=(stored_row, stored))),
+        patch.object(proxy_server, "prisma_client", prisma_client),
     ):
         resp: Final = await call_cancel(cancel_harness, "batch-unified-blob")
 
