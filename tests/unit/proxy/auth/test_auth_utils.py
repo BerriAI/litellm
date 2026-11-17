@@ -4221,6 +4221,36 @@ class TestIsRequestBodySafeBlocksFireworksForwardUserId:
         )
 
 
+class TestIsRequestBodySafeBlocksForwardPayloadFields:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"forward_payload_fields": ["qualifier"]}, id="root"),
+            pytest.param({"extra_body": {"forward_payload_fields": ["qualifier"]}}, id="extra_body"),
+            pytest.param({"metadata": {"forward_payload_fields": ["qualifier"]}}, id="metadata"),
+        ],
+    )
+    def test_forward_payload_fields_in_request_body_is_rejected(self, body: dict[str, object]) -> None:
+        with pytest.raises(ValueError, match="forward_payload_fields"):
+            is_request_body_safe(
+                request_body={"model": "agentcore-model", "context": {"document": "note"}, **body},
+                general_settings={},
+                llm_router=None,
+                model="agentcore-model",
+            )
+
+    def test_forwarded_value_without_the_list_is_allowed(self) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "agentcore-model", "context": {"document": "note"}},
+                general_settings={},
+                llm_router=None,
+                model="agentcore-model",
+            )
+            is True
+        )
+
+
 class TestIsRequestBodySafeBlocksRustOptIn:
     """``rust`` hands the whole call to the Rust core, which signs and sends
     with its own HTTP client rather than the one the deployment configured, and

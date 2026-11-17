@@ -13,6 +13,7 @@ import json
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 
 from typing import Final
@@ -1365,3 +1366,68 @@ def test_get_complete_url_sends_a_non_string_runtime_endpoint_to_that_endpoint()
     )
 
     assert url.startswith(f"{vpc_endpoint}/runtimes/")
+
+
+def _payload_sent_to_agentcore(respx_mock: respx.Router, **params: object) -> object:
+    route: Final = respx_mock.post(_AGENTCORE_RUNTIME_URL).mock(
+        return_value=httpx.Response(200, json={"result": "done"}, headers={"content-type": "application/json"})
+    )
+    litellm.completion(
+        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/"
+        "hosted_agent_13sf6-cALnp38iZD",
+        messages=[{"role": "user", "content": "Summarize the document"}],
+        aws_access_key_id="AKIAAGENTCOREKEY",
+        aws_secret_access_key="agentcore-secret",
+        client=HTTPHandler(),
+        **params,
+    )
+    request: Final[httpx.Request] = route.calls.last.request
+    return TypeAdapter(object).validate_json(request.content)
+
+
+DOCUMENT_CONTEXT: Final = {"document": "Q3 revenue grew 4 percent.", "sections": [{"id": 1, "flags": [True, None]}]}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_agentcore_payload_holds_only_the_prompt_when_no_fields_are_forwarded(respx_mock: respx.Router) -> None:
+    assert _payload_sent_to_agentcore(respx_mock, context=DOCUMENT_CONTEXT) == {"prompt": "Summarize the document"}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_agentcore_payload_carries_each_forwarded_request_param(respx_mock: respx.Router) -> None:
+    payload: Final = _payload_sent_to_agentcore(
+        respx_mock,
+        forward_payload_fields=["context", "trace_label", "not_sent"],
+        context=DOCUMENT_CONTEXT,
+        trace_label="run-7",
+        unlisted_param="stays out",
+    )
+
+    assert payload == {
+        "prompt": "Summarize the document",
+        "context": DOCUMENT_CONTEXT,
+        "trace_label": "run-7",
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_agentcore_never_forwards_the_prompt_or_aws_credentials(respx_mock: respx.Router) -> None:
+    payload: Final = _payload_sent_to_agentcore(
+        respx_mock,
+        forward_payload_fields=["prompt", "aws_secret_access_key", "aws_access_key_id", "context"],
+        prompt="replaced prompt",
+        context=DOCUMENT_CONTEXT,
+    )
+
+    assert payload == {"prompt": "Summarize the document", "context": DOCUMENT_CONTEXT}
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_agentcore_rejects_a_forwarded_param_that_is_not_json(respx_mock: respx.Router) -> None:
+    secret_marker: Final = "do-not-echo-this-value"
+
+    with pytest.raises(litellm.BadRequestError, match="forward_payload_fields: context") as raised:
+        _payload_sent_to_agentcore(respx_mock, forward_payload_fields=["context"], context={secret_marker: {1, 2}})
+
+    assert secret_marker not in str(raised.value)
+    assert not respx_mock.calls
