@@ -679,4 +679,39 @@ async def test_a_fallback_streams_error_frame_after_any_frame_past_message_start
     host.answer("openai/b", anthropic_stream(MESSAGE_START, *content, FALLBACK_FRAME_DOWN))
     core = with_router_debug(make_core, host)
     frames = await collect_bytes(await open_stream(core))
-    assert frames == [MESSAGE_START, *content, FALLBACK_FRAME_DOWN]
+    assert b"".join(frames) == b"".join((MESSAGE_START, *content, FALLBACK_FRAME_DOWN))
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (MESSAGE_START, text_delta("B") + FALLBACK_FRAME_DOWN),
+        (MESSAGE_START + text_delta("B") + FALLBACK_FRAME_DOWN,),
+    ],
+    ids=["delta_and_error_in_one_chunk", "start_delta_and_error_in_one_chunk"],
+)
+async def test_a_fallback_streams_error_frame_sharing_a_chunk_with_content_is_forwarded_verbatim(
+    make_core: MakeCore, host: ScriptedHost, chunks: tuple[bytes, ...]
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(*chunks))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert b"".join(frames) == MESSAGE_START + text_delta("B") + FALLBACK_FRAME_DOWN
+
+
+@pytest.mark.parametrize("cut_at", [5, 25, 50])
+async def test_a_fallback_streams_error_frame_split_across_chunks_carries_the_primarys_error(
+    make_core: MakeCore, host: ScriptedHost, cut_at: int
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer(
+        "openai/b",
+        anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN[:cut_at], FALLBACK_FRAME_DOWN[cut_at:]),
+    )
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert event_names(frames) == [b"message_start", b"error"]
+    message = frame_error_message(frames[1])
+    assert message.startswith(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
+    assert "fallback down" in message.removeprefix(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")

@@ -641,3 +641,15 @@ async def test_a_fallback_stream_cut_after_output_without_generated_text_raises_
     with pytest.raises(litellm.InternalServerError) as raised:
         await collect_event_types(await open_stream(core))
     assert raised.value.message == FALLBACK_BOOM
+
+
+async def test_a_primary_cut_after_text_whose_continuation_fallback_fails_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA, delta="hi"), error=cut("hi")))
+    host.answer("openai/b", server_error())
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == "litellm.RateLimitError: stream cut"
+    assert host.deployments_called() == ["a", "b"]

@@ -514,13 +514,36 @@ def _raise_fallback_failure(error: Exception) -> NoReturn:
     raise error
 
 
-def _raise_stream_failure(attempt: StreamAttempt, error: Exception, before_content: bool) -> NoReturn:
+def _walk_outcome(error: Exception, trigger_message: str | None) -> str:
+    from litellm.litellm_core_utils.routing_common_utils import carries_fallback_failure
+
+    if not isinstance(error, MidStreamFallbackError) or error.original_exception is None or trigger_message is None:
+        return ""
+    if not error.message.startswith(trigger_message):
+        return ""
+    outcome: Final = error.message[len(trigger_message) :]
+    return outcome if carries_fallback_failure(outcome) else ""
+
+
+def _failure_message(
+    attempt: StreamAttempt, error: Exception, surfaced: BaseException, trigger_message: str | None
+) -> str | None:
+    if attempt.explain_failure is not None:
+        return attempt.explain_failure(surfaced)
+    outcome: Final = _walk_outcome(error, trigger_message)
+    surfaced_message: Final[object] = getattr(surfaced, "message", None)
+    if not outcome or not isinstance(surfaced_message, str):
+        return None
+    return surfaced_message + outcome
+
+
+def _raise_stream_failure(
+    attempt: StreamAttempt, error: Exception, before_content: bool, trigger_message: str | None = None
+) -> NoReturn:
     surfaced: Final = provider_error(error)
-    explained: Final = (
-        attempt.explain_failure(surfaced) if before_content and attempt.explain_failure is not None else None
-    )
-    if explained is not None and hasattr(surfaced, "message"):
-        surfaced.message = explained  # pyright: ignore[reportAttributeAccessIssue]  # checked above
+    message: Final = _failure_message(attempt, error, surfaced, trigger_message) if before_content else None
+    if message is not None and hasattr(surfaced, "message"):
+        surfaced.message = message  # pyright: ignore[reportAttributeAccessIssue]  # checked above
     if surfaced is error:
         raise error
     raise surfaced from error
@@ -1356,10 +1379,12 @@ def wrap_anthropic_stream(
         aclose_superseded_attempt,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
+        sse_frames,
     )
     from litellm.llms.anthropic.messages.native.utils import safeguard_refusal_error
 
     source_iterator: Final = response
+    framed_source: Final = sse_frames(source_iterator) if attempt.explain_failure is not None else source_iterator
     replays_a_finished_agentic_turn: Final = isinstance(source_iterator, FakeAnthropicMessagesStreamIterator)
     model: Final = attempt.group
     usage: Final = _AnthropicStreamUsage()
@@ -1367,6 +1392,7 @@ def wrap_anthropic_stream(
 
     async def close_source() -> None:
         with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+            await aclose_if_supported(framed_source)
             await aclose_if_supported(source_iterator)
 
     async def close_superseded() -> None:
@@ -1381,7 +1407,7 @@ def wrap_anthropic_stream(
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
         content_seen = False  # rebind-ok: set at the first chunk past message_start and pings
         try:
-            async for chunk in _areported(attempt, source_iterator, usage.total_tokens, usage.observe):
+            async for chunk in _areported(attempt, framed_source, usage.total_tokens, usage.observe):
                 if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                     yield chunk
                     continue
@@ -1550,6 +1576,7 @@ async def _anthropic_fallback_attempt(
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )
+    trigger_message: Final = trigger.message if isinstance(trigger, MidStreamFallbackError) else None
     content_seen = False  # rebind-ok: set at the fallback's first chunk past message_start and pings
     try:
         fallback_response: Final = await attempt.fallback(trigger)
@@ -1558,7 +1585,7 @@ async def _anthropic_fallback_attempt(
             yield fallback_item
     except Exception as fallback_error:  # noqa: BLE001  # as the Python wrapper: logged, then the stream's error raises
         verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
-        _raise_stream_failure(attempt, fallback_error, before_content=not content_seen)
+        _raise_stream_failure(attempt, fallback_error, not content_seen, trigger_message)
 
 
 # --- Responses API ------------------------------------------------------------------------------
@@ -2000,6 +2027,7 @@ async def _responses_fallback_attempt(
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )
+    trigger_message: Final = trigger.message if isinstance(trigger, MidStreamFallbackError) else None
     fallback_response: object = None  # rebind-ok: set once a fallback answered, closed at the end
     fallback_yielded = False  # rebind-ok: flipped on the first fallback item
     try:
@@ -2025,7 +2053,7 @@ async def _responses_fallback_attempt(
             for held_event in held:
                 yield held_event
         _raise_stream_failure(
-            attempt, fallback_error, before_content=not output_started and continued is None and not fallback_yielded
+            attempt, fallback_error, not output_started and continued is None and not fallback_yielded, trigger_message
         )
     finally:
         if fallback_response is not None and hasattr(fallback_response, "aclose"):

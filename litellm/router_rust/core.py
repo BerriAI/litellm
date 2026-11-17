@@ -5612,14 +5612,13 @@ class _Driver:
             return self._core._failure_error(  # pyright: ignore[reportPrivateUsage]  # see above
                 step, model, self._last_error, request=self._request, has_input=self._has_input(), tags=not self._sync
             )
-        surfaced: Final = provider_error(primary)
         if (
             self._base_level == 0
             and self._explains_failure
             and self._core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # see above
-            and hasattr(surfaced, "message")
+            and hasattr(primary, "message")
         ):
-            surfaced.message += self._explanation(primary, model)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+            primary.message += self._explanation(primary, model)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
         return primary
 
     def _hop_failure_explainer(self, step: Mapping[str, object]) -> "Callable[[BaseException], str | None] | None":
