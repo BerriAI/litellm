@@ -147,11 +147,15 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     )
 
 
+def _lists_served_model_ids(provider: str) -> bool:
+    model_info: Final = _provider_model_info(provider)
+    return litellm.check_provider_endpoint and model_info is not None and model_info.lists_served_model_ids()
+
+
 def _routable_served_ids(
     provider: str, custom_llm_provider: str | None, provider_models: Sequence[str]
 ) -> Sequence[str]:
-    model_info: Final = _provider_model_info(provider)
-    if not litellm.check_provider_endpoint or model_info is None or not model_info.lists_served_model_ids():
+    if not _lists_served_model_ids(provider):
         return provider_models
     provider_id_prefix: Final = f"{provider}/"
     if custom_llm_provider not in (None, provider):
@@ -606,7 +610,23 @@ def _ids_routing_through_catch_all(
 
 def _catch_all_catalog(litellm_params: LiteLLM_Params | None) -> Sequence[str]:
     pinned_provider: Final = litellm_params.custom_llm_provider if litellm_params is not None else None
-    return get_provider_models(provider=pinned_provider or "*", litellm_params=litellm_params) or ()
+    catalog_ids: Final = get_provider_models(provider=pinned_provider or "*", litellm_params=litellm_params) or ()
+    if pinned_provider is None or not _lists_served_model_ids(pinned_provider):
+        return catalog_ids
+    provider_id_prefix: Final = f"{pinned_provider}/"
+    return tuple(
+        f"{provider_id_prefix}{served_model_id}" if served_model_id.startswith(provider_id_prefix) else served_model_id
+        for served_model_id in catalog_ids
+    )
+
+
+def _pins_a_catch_all(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> bool:
+    return (
+        wildcard_model != "*"
+        and litellm_params is not None
+        and litellm_params.model == "*"
+        and bool(litellm_params.custom_llm_provider)
+    )
 
 
 def _catalog_ids_a_wider_name_matches(
@@ -765,6 +785,7 @@ def _custom_llm_provider_prefix(wildcard_model: str, litellm_params: LiteLLM_Par
         or not litellm_params.custom_llm_provider
         or "/" in wildcard_model
         or wildcard_model == "*"
+        or litellm_params.model == "*"
         or "/" in litellm_params.model
         or not _check_wildcard_routing(litellm_params.model)
     ):
@@ -796,7 +817,8 @@ def _known_models_from_wildcard(
         else _deployment_pattern_naming_listed_ids(wildcard_model, litellm_params)
     )
     wildcard_provider_prefix, has_provider_prefix, wildcard_suffix = wildcard_model_to_expand.partition("/")
-    if not has_provider_prefix and deployment_pattern_naming_listed_ids is None:
+    pins_a_catch_all: Final = _pins_a_catch_all(wildcard_model, litellm_params)
+    if not has_provider_prefix and deployment_pattern_naming_listed_ids is None and not pins_a_catch_all:
         return ()
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
@@ -816,7 +838,7 @@ def _known_models_from_wildcard(
         if litellm_params is not None and litellm_params.model == "*"
         else None
     )
-    if routes_through_catch_all is not None and not _names_whole_models(wildcard_model):
+    if routes_through_catch_all is not None and (pins_a_catch_all or not _names_whole_models(wildcard_model)):
         return _ids_routing_through_catch_all(
             wildcard_model, _catch_all_catalog(litellm_params), routes_through_catch_all
         )

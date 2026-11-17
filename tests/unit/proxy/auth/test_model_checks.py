@@ -3173,7 +3173,58 @@ def test_every_id_a_live_listing_lists_reaches_the_id_the_server_serves(
     model_info_names: Final = [
         str(row["model_name"])
         for row in expand_wildcard_deployments_for_model_info(
-            [dict(deployment) for deployment in router.get_model_list() or []], router
+            [dict(deployment) for deployment in router.registry().deployments() or []], router
+        )
+    ]
+
+    assert {
+        listed_id: _model_the_server_received(router, openai_compatible_server, listed_id) for listed_id in v1_models
+    } == served_id_by_listed_id
+    assert sorted(model_info_names) == sorted(v1_models)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "served_id_by_listed_id"),
+    [
+        pytest.param(
+            "openai/*",
+            {"openai/openai/openai/gpt-oss-20b": _SERVED_ORG_ID, "openai/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="provider-name",
+        ),
+        pytest.param(
+            "vllm-box/*",
+            {"vllm-box/openai/openai/gpt-oss-20b": _SERVED_ORG_ID, "vllm-box/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="custom-prefix-name",
+        ),
+        pytest.param(
+            "my-*",
+            {"my-openai/openai/gpt-oss-20b": _SERVED_ORG_ID, "my-Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="slashless-name",
+        ),
+        pytest.param(
+            "team/gpt-*",
+            {"team/gpt-openai/openai/gpt-oss-20b": _SERVED_ORG_ID, "team/gpt-Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="partial-name",
+        ),
+    ],
+)
+def test_every_id_a_catch_all_pinned_to_a_live_listing_lists_reaches_the_id_the_server_serves(
+    openai_compatible_server: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_name: str,
+    served_id_by_listed_id: dict[str, str],
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-pinned-catch-all")
+    router: Final = _wildcard_router(model_name, "*", custom_llm_provider="openai")
+    v1_models: Final = _v1_models(router, model_name)
+    model_info_names: Final = [
+        str(row["model_name"])
+        for row in expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.registry().deployments() or []], router
         )
     ]
 
