@@ -847,6 +847,33 @@ class TestPerformRedaction:
         assert redacted.model_dump(include=set(prompt_fields)) == dict.fromkeys(prompt_fields)
         assert prompt_fields.keys().isdisjoint(details["standard_logging_object"]["response"])
 
+    def test_drops_the_vllm_prompt_fields_a_text_completion_carries_on_each_choice(self):
+        prompt_fields = {
+            "prompt_token_ids": [45764, 59249],
+            "prompt_logprobs": [None, {"59249": {"logprob": -1.5, "rank": 1, "decoded_token": SECRET}}],
+        }
+
+        def response():
+            return litellm.TextCompletionResponse(
+                choices=[litellm.utils.TextChoices(index=0, text="ok", finish_reason="stop", **prompt_fields)]
+            )
+
+        details = {
+            "stream": True,
+            "complete_streaming_response": response(),
+            "standard_logging_object": {"response": {"choices": [{"index": 0, "text": "ok", **prompt_fields}]}},
+        }
+        client_response = response()
+
+        redacted = perform_redaction(details, client_response)
+
+        assert redacted.choices[0].model_dump(include=set(prompt_fields)) == dict.fromkeys(prompt_fields)
+        assert details["complete_streaming_response"].choices[0].model_dump(
+            include=set(prompt_fields)
+        ) == dict.fromkeys(prompt_fields)
+        assert prompt_fields.keys().isdisjoint(details["standard_logging_object"]["response"]["choices"][0])
+        assert client_response.choices[0].model_dump(include=set(prompt_fields)) == prompt_fields
+
     def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
         details = {
             "stream": True,

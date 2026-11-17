@@ -3777,6 +3777,10 @@ _VLLM_PROMPT_FIELDS: Final = MappingProxyType(
     }
 )
 
+_VLLM_ASKED_FOR_PROMPT_FIELDS: Final = MappingProxyType(
+    {"extra_body": {"return_token_ids": True, "return_prompt_text": True, "prompt_logprobs": 1}}
+)
+
 
 async def _log_vllm_response_through_a_logging_only_guardrail(
     is_async: bool,
@@ -3784,7 +3788,9 @@ async def _log_vllm_response_through_a_logging_only_guardrail(
     masks: bool,
     user_message: Mapping[str, object],
     earlier_chunks: tuple[ModelResponseStream, ...] = (),
-) -> tuple[Mapping[str, object], object, ModelResponse]:
+    optional_params: Mapping[str, object] = _VLLM_ASKED_FOR_PROMPT_FIELDS,
+    text_completion: bool = False,
+) -> tuple[Mapping[str, object], object, ModelResponse | TextCompletionResponse]:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3812,22 +3818,28 @@ async def _log_vllm_response_through_a_logging_only_guardrail(
         LoggingOnlyGuardrail(guardrail_name="mask", default_on=True, event_hook=GuardrailEventHooks.logging_only),
         RecordingLogger(),
     ]
-    client_response: Final = ModelResponse(
-        choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
-        **_VLLM_PROMPT_FIELDS,
+    client_response: Final = (
+        TextCompletionResponse(choices=[{"text": "ok", "finish_reason": "stop", "index": 0, **_VLLM_PROMPT_FIELDS}])
+        if text_completion
+        else ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
+            **_VLLM_PROMPT_FIELDS,
+        )
     )
     logging_obj: Final = LitellmLogging(
         model="hosted_vllm/Qwen/Qwen3-0.6B",
         messages=[dict(user_message)],
         stream=stream,
-        call_type="acompletion" if is_async else "completion",
+        call_type=("a" if is_async else "") + ("text_completion" if text_completion else "completion"),
         start_time=datetime.datetime.now(),
         litellm_call_id="vllm-prompt-fields",
         function_id="vllm-prompt-fields",
         dynamic_success_callbacks=None if is_async else callbacks,
         dynamic_async_success_callbacks=callbacks if is_async else None,
     )
-    logging_obj.update_environment_variables(litellm_params={"acompletion": is_async}, optional_params={})
+    logging_obj.update_environment_variables(
+        litellm_params={"acompletion": is_async}, optional_params=copy.deepcopy(dict(optional_params))
+    )
 
     for result in (*earlier_chunks, client_response):
         if is_async:
@@ -3897,6 +3909,44 @@ async def test_a_logging_only_guardrail_still_masks_and_drops_vllm_prompt_fields
     assert _VLLM_PHONE not in json.dumps(logged_response, default=str)
     assert _VLLM_PHONE not in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)
     assert client_response.model_dump(include=set(_VLLM_PROMPT_FIELDS)) == dict(_VLLM_PROMPT_FIELDS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("optional_params", "asked"),
+    [
+        ({}, False),
+        ({"extra_body": {"return_token_ids": False}}, False),
+        ({"extra_body": {"prompt_logprobs": 0}}, True),
+        ({"return_prompt_text": True}, True),
+    ],
+)
+async def test_a_logging_only_guardrail_that_does_not_mask_keeps_vllm_prompt_fields_only_when_the_request_asked_for_them(
+    is_async: bool, optional_params: Mapping[str, object], asked: bool
+) -> None:
+    logged_kwargs, logged_response, client_response = await _log_vllm_response_through_a_logging_only_guardrail(
+        is_async, False, False, {"role": "user", "content": "hello"}, optional_params=optional_params
+    )
+
+    assert (_VLLM_PHONE in json.dumps(logged_response, default=str)) is asked
+    assert (_VLLM_PHONE in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)) is asked
+    assert client_response.model_dump(include=set(_VLLM_PROMPT_FIELDS)) == dict(_VLLM_PROMPT_FIELDS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("masks", [True, False])
+async def test_a_logging_only_guardrail_drops_the_vllm_prompt_fields_on_each_text_completion_choice_only_when_it_masks(
+    is_async: bool, masks: bool
+) -> None:
+    logged_kwargs, logged_response, client_response = await _log_vllm_response_through_a_logging_only_guardrail(
+        is_async, False, masks, {"role": "user", "content": f"My phone is {_VLLM_PHONE}"}, text_completion=True
+    )
+
+    assert (_VLLM_PHONE in json.dumps(logged_response, default=str)) is not masks
+    assert (_VLLM_PHONE in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)) is not masks
+    assert client_response.choices[0].model_dump(include=set(_VLLM_PROMPT_FIELDS)) == dict(_VLLM_PROMPT_FIELDS)
 
 
 def test_get_user_agent_tags():

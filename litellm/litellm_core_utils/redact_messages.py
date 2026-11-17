@@ -18,7 +18,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_json
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM, VLLM_PROMPT_DERIVED_FIELDS
+from litellm.constants import REDACTED_BY_LITELLM, VLLM_PROMPT_DERIVED_FIELDS, VLLM_PROMPT_FIELD_REQUEST_PARAMS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
@@ -219,6 +219,7 @@ def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices, litellm.utils.TextChoices)):
         drop_token_ids(choice)
+        _drop_prompt_derived_fields(choice)
         _redact_provider_specific_fields(choice)
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
@@ -427,30 +428,70 @@ def _drop_prompt_derived_fields(response: object) -> None:
             _drop_field_when_present(response, field)
 
 
-def _carries_prompt_derived_fields(response: object) -> bool:
-    mapping: Final = _as_mapping(response)
+def _carries_own_prompt_derived_fields(item: object) -> bool:
+    mapping: Final = _as_mapping(item)
     return any(
-        (mapping.get(field) if mapping is not None else attribute_or_none(response, field)) is not None
+        (mapping.get(field) if mapping is not None else attribute_or_none(item, field)) is not None
         for field in VLLM_PROMPT_DERIVED_FIELDS
+    )
+
+
+def _carries_prompt_derived_fields(response: object) -> bool:
+    return _carries_own_prompt_derived_fields(response) or any(
+        _carries_own_prompt_derived_fields(choice) for choice in stream_item_items(response, "choices")
     )
 
 
 _CallDetails: Final = TypeVar("_CallDetails", bound=Mapping[str, object])
 
 
-def _without_prompt_derived_fields(response: object) -> object:
-    if not _carries_prompt_derived_fields(response):
-        return response
-    if (mapping := _as_mapping(response)) is not None:
-        return {key: value for key, value in mapping.items() if key not in VLLM_PROMPT_DERIVED_FIELDS}
-    if not isinstance(response, BaseModel):
-        return response
-    logged_copy: Final = response.model_copy()
+def _mapping_without_prompt_derived_fields(mapping: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in mapping.items() if key not in VLLM_PROMPT_DERIVED_FIELDS}
+
+
+def _without_own_prompt_derived_fields(item: object) -> object:
+    if not _carries_own_prompt_derived_fields(item):
+        return item
+    if (mapping := _as_mapping(item)) is not None:
+        return _mapping_without_prompt_derived_fields(mapping)
+    if not isinstance(item, BaseModel):
+        return item
+    logged_copy: Final = item.model_copy()
     _drop_prompt_derived_fields(logged_copy)
     return logged_copy
 
 
+def _without_prompt_derived_fields(response: object) -> object:
+    if not _carries_prompt_derived_fields(response):
+        return response
+    logged_choices: Final = [
+        _without_own_prompt_derived_fields(choice) for choice in stream_item_items(response, "choices")
+    ]
+    choices_update: Final = {"choices": logged_choices} if logged_choices else {}
+    if (mapping := _as_mapping(response)) is not None:
+        return {**_mapping_without_prompt_derived_fields(mapping), **choices_update}
+    if not isinstance(response, BaseModel):
+        return response
+    logged_copy: Final = response.model_copy(update=choices_update)
+    _drop_prompt_derived_fields(logged_copy)
+    return logged_copy
+
+
+def _sets_prompt_field_param(params: Mapping[str, object]) -> bool:
+    return any(
+        params.get(name) is not None and params.get(name) is not False for name in VLLM_PROMPT_FIELD_REQUEST_PARAMS
+    )
+
+
+def _requests_prompt_derived_fields(model_call_details: Mapping[str, object]) -> bool:
+    optional_params: Final = _as_mapping(model_call_details.get("optional_params")) or {}
+    extra_body: Final = _as_mapping(optional_params.get("extra_body")) or {}
+    return _sets_prompt_field_param(optional_params) or _sets_prompt_field_param(extra_body)
+
+
 def logged_content_fingerprint(model_call_details: Mapping[str, object], result: object) -> bytes | None:
+    if not _requests_prompt_derived_fields(model_call_details):
+        return None
     try:
         return to_json((model_call_details.get("messages"), result), fallback=repr)
     except PydanticSerializationError:
@@ -690,6 +731,7 @@ def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str:
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
+            _drop_prompt_derived_fields(choice)
             if choice.get("token_ids") is not None:
                 choice["token_ids"] = None
             if (
