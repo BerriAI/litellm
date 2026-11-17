@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -26,8 +27,8 @@ _CHAT_COMPLETION: Final = {
 }
 _EXPECTED_ENDPOINTS: Final = {
     "chat_completions": True,
-    "messages": False,
-    "responses": False,
+    "messages": True,
+    "responses": True,
     "embeddings": False,
     "image_generations": False,
     "audio_transcriptions": False,
@@ -227,7 +228,7 @@ def test_bineric_chat_completion_request():
     ids=("reported_cost_is_billed", "no_reported_cost"),
 )
 def test_bineric_per_request_model_without_a_cost_row_still_routes(
-    usage_extra: dict[str, float],
+    usage_extra: Mapping[str, float],
     expected_cost: float | None,
 ):
     assert "bineric/speech-to-text" not in litellm.model_cost
