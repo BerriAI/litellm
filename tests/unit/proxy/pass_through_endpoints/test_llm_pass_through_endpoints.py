@@ -7821,8 +7821,12 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         ids=["key_pin", "team_pin", "empty_key_pin", "no_pin"],
     )
     async def test_server_credential_sends_the_pinned_user_profile_id_over_the_callers(
-        self, monkeypatch, metadata: Mapping[str, str], team_metadata: Mapping[str, str], sent_profile_id: str
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        metadata: Mapping[str, str],
+        team_metadata: Mapping[str, str],
+        sent_profile_id: str,
+    ) -> None:
         self._clear_anthropic_env(monkeypatch)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
 
@@ -7834,7 +7838,7 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         assert sent["anthropic-user-profile-id"] == sent_profile_id
 
     @pytest.mark.asyncio
-    async def test_byok_caller_keeps_its_own_user_profile_id_over_a_key_pin(self, monkeypatch):
+    async def test_byok_caller_keeps_its_own_user_profile_id_over_a_key_pin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._clear_anthropic_env(monkeypatch)
 
         sent: Final = await self._upstream_headers(
@@ -7851,8 +7855,8 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         ids=["key_pin", "no_pin"],
     )
     async def test_server_credential_pin_wins_over_an_x_pass_user_profile_id(
-        self, monkeypatch, metadata: Mapping[str, str], sent_profile_id: str
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, metadata: Mapping[str, str], sent_profile_id: str
+    ) -> None:
         self._clear_anthropic_env(monkeypatch)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
 
@@ -7895,12 +7899,12 @@ class TestRouterModelRelayUnderAUserProfilePin:
     )
     async def test_a_pinned_key_sends_its_pin_to_a_claude_router_model_only(
         self,
-        monkeypatch,
+        monkeypatch: pytest.MonkeyPatch,
         respx_mock: respx.MockRouter,
         model_group: str,
         metadata: Mapping[str, str],
         forwarded_profile_id: str | None,
-    ):
+    ) -> None:
         import litellm.proxy.proxy_server as proxy_server
 
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

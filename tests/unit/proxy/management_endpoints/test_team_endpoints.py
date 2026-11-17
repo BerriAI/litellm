@@ -704,7 +704,9 @@ async def test_update_team_rejects_a_duration_that_never_advances(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["new", "update"])
 @pytest.mark.parametrize("bad_pin", ["\n", " ", "\t", "uprof_\x00x", "uprof_x ", "uprof_\u00e9", "uprof_\u2603"])
-async def test_team_management_rejects_unsafe_profile_metadata(mock_db_client, mock_admin_auth, operation, bad_pin):
+async def test_team_management_rejects_unsafe_profile_metadata(
+    mock_admin_auth: UserAPIKeyAuth, operation: str, bad_pin: str
+) -> None:
     metadata: Final = {"anthropic_user_profile_id": bad_pin}
     operation_call: Final = (
         new_team(
