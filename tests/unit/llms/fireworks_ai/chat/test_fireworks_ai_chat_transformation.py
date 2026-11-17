@@ -23,6 +23,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
+from tests.unit.llms.fireworks_ai.latest_router_aliases import LATEST_ROUTER_ALIAS_TARGETS
 
 
 def test_validate_environment_sets_session_affinity_from_litellm_session_id():
@@ -366,6 +367,21 @@ def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     assert "tools" in supported_params
     assert "parallel_tool_calls" in supported_params
     assert "tool_choice" not in supported_params
+
+
+@pytest.mark.parametrize(("alias", "target"), LATEST_ROUTER_ALIAS_TARGETS)
+def test_latest_router_alias_accepts_the_same_params_as_the_model_it_points_to(alias: str, target: str) -> None:
+    config: Final = FireworksAIConfig()
+    alias_params: Final = set(config.get_supported_openai_params(alias))
+    target_params: Final = set(config.get_supported_openai_params(target))
+    excluded_params: Final = (
+        {"reasoning_effort", "reasoning_history", "thinking"}
+        if alias == "accounts/fireworks/routers/glm-flash-latest"
+        else set()
+    )
+
+    assert alias_params - excluded_params == target_params - excluded_params
+    assert "tool_choice" in alias_params
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):

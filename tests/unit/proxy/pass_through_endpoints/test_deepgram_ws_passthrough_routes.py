@@ -2,6 +2,7 @@
 target URL."""
 
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
@@ -17,7 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import WEBSOCKET_CLOSE_REASON_MAX_BYTES
-from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, install_model_cost_map
 from litellm.llms.deepgram.common_utils import DeepgramSpeakMeter
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
@@ -546,7 +547,9 @@ async def test_deepgram_speak_bills_at_the_connect_time_rate_after_a_cost_map_re
 
     relay: Final = await _serve_speak(_FakeWebSocket("/deepgram/v1/speak", "model=aura-2-thalia-en"))
     meters: Final = [call.meter for call in relay.calls if isinstance(call.meter, DeepgramSpeakMeter)]
-    adopt_model_cost_map({key: row for key, row in litellm.model_cost.items() if key != "deepgram/aura-2"})
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    reloaded: Final = {key: row for key, row in litellm.model_cost.items() if key != "deepgram/aura-2"}
+    assert isinstance(install_model_cost_map(json.dumps(reloaded).encode()), ModelCostMapReloaded)
 
     assert [meter.price(47).response_cost for meter in meters] == [47 * rate]
 

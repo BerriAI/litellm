@@ -894,6 +894,55 @@ class TestRestoration:
         assert result.choices[0].message.content == "a@b.com"
 
     @pytest.mark.asyncio
+    async def test_server_tool_call_arguments_are_restored(self):
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@b.com", "[URL_1]": "https://b.com/a"})
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "[EMAIL_1] persimmon"}'},
+                                },
+                                {
+                                    "id": "srvtoolu_02",
+                                    "type": "function",
+                                    "function": {"name": "web_fetch", "arguments": '{"url": "[URL_1]"}'},
+                                },
+                            ]
+                        },
+                    ),
+                )
+            ]
+        )
+
+        result: Final = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
+
+        assert result.choices[0].message.provider_specific_fields == {
+            "server_tool_calls": [
+                {
+                    "id": "srvtoolu_01",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": '{"query": "a@b.com persimmon"}'},
+                },
+                {
+                    "id": "srvtoolu_02",
+                    "type": "function",
+                    "function": {"name": "web_fetch", "arguments": '{"url": "https://b.com/a"}'},
+                },
+            ]
+        }
+
+    @pytest.mark.asyncio
     async def test_responses_api_shape_is_restored(self):
         """The Responses API reply carries output items, not choices.
 
@@ -1693,6 +1742,48 @@ class TestResponsesStreamRestoration:
         out = await _restore_stream(guardrail, [self._text_delta("see [EMAIL_1] a[", 1)])
 
         assert "".join(e.delta for e in out) == "see a@example.com a["
+
+    @pytest.mark.asyncio
+    async def test_a_flushed_delta_takes_the_done_events_number_and_later_events_move_up(self):
+        guardrail, _ = _shielded(self.VAULT)
+        done = OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            text="Mail [EMAIL_1] x[",
+            sequence_number=3,
+        )
+
+        out = await _restore_stream(
+            guardrail,
+            [
+                self._text_delta("Mail [EMA", 1),
+                self._text_delta("IL_1] x[", 2),
+                done,
+                self._text_delta("next", 4, content_index=1),
+            ],
+        )
+
+        assert [(e.type, e.sequence_number) for e in out] == [
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 1),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 2),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 3),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE, 4),
+            (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, 5),
+        ]
+        assert out[2].delta == "["
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_stream_flush_continues_after_the_last_number(self):
+        guardrail, _ = _shielded(self.VAULT)
+
+        out = await _restore_stream(
+            guardrail, [self._text_delta("see [EMAIL_1] a[", 7), self._text_delta(" b", 8, content_index=1)]
+        )
+
+        assert [e.sequence_number for e in out] == [7, 8, 9]
+        assert out[-1].delta == "["
 
     @pytest.mark.asyncio
     async def test_completed_response_is_restored(self):

@@ -19,74 +19,40 @@ import pytest
 
 from litellm.caching import DualCache
 from litellm.proxy import proxy_server
-
-
-class _FlakyRedisCache:
-    def __init__(self) -> None:
-        self._store: dict = {}
-        self._increment_calls = 0
-
-    async def async_increment(self, key, value, **kwargs):
-        self._increment_calls += 1
-        if self._increment_calls == 1:
-            raise Exception("Redis timeout")
-        self._store[key] = float(self._store.get(key, 0.0)) + float(value)
-        return self._store[key]
-
-    async def async_get_cache(self, key, *args, **kwargs):
-        return self._store.get(key)
-
-    async def async_delete_cache(self, key, *args, **kwargs):
-        self._store.pop(key, None)
-
-    async def async_set_cache(self, key, value, *args, **kwargs):
-        self._store[key] = float(value)
-        return True
-
-    async def async_increment_pipeline(self, increment_list, **kwargs):
-        results = []
-        for op in increment_list:
-            results.append(await self.async_increment(op["key"], op["increment_value"]))
-        return results
-
-    def get_ttl(self, **kwargs):
-        return None
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores.connection import RedisStores, connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.rust_bridge._native import NativeRedisStoreError
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation, refused_redis_client
 
 
 @pytest.mark.asyncio
 async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failure(
     monkeypatch,
+    native_budgets_on,
 ):
     hashed_token = "hashed_test_token"
     counter_key = f"spend:key:{hashed_token}"
     reserved_cost = 0.5
     response_cost = 1.0
 
-    flaky_redis = _FlakyRedisCache()
-    flaky_redis._store[counter_key] = reserved_cost
+    spend = SpendCounterStore(connect(None).spend_counters())
+    spend.set_local(counter_key, 0.0)
 
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
-    monkeypatch.setattr(proxy_server.spend_counter_cache, "redis_cache", flaky_redis)
-    proxy_server.spend_counter_cache.in_memory_cache.set_cache(
-        key=counter_key, value=reserved_cost
+    monkeypatch.setattr(proxy_server, "spend_counter_store", spend)
+
+    budget_reservation = await native_reservation(
+        spend,
+        UserAPIKeyAuth(token=hashed_token),
+        [{"counter_key": counter_key, "entity_type": "Key", "entity_id": hashed_token}],
+        reserved_cost,
     )
+    assert spend.get_local(counter_key) == pytest.approx(reserved_cost)
+    spend.attach_redis(RedisStores(refused_redis_client()))
 
-    budget_reservation = {
-        "reserved_cost": reserved_cost,
-        "finalized": False,
-        "entries": [
-            {
-                "counter_key": counter_key,
-                "entity_type": "Key",
-                "entity_id": hashed_token,
-                "reserved_cost": reserved_cost,
-                "applied_adjustment": 0.0,
-            }
-        ],
-    }
-
-    with pytest.raises(Exception, match="Redis timeout"):
+    with pytest.raises(NativeRedisStoreError, match="transport"):
         await proxy_server.increment_spend_counters(
             token=hashed_token,
             team_id=None,
@@ -95,5 +61,4 @@ async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failu
             budget_reservation=budget_reservation,
         )
 
-    assert await flaky_redis.async_get_cache(key=counter_key) is None
-    assert proxy_server.spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+    assert spend.get_local(counter_key) is None

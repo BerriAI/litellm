@@ -44,6 +44,8 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
+from litellm.llms.base_llm.auth.types import MintedToken
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
@@ -230,13 +232,13 @@ def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
 
 
 def _drop_streaming_anchor(_handler: object) -> None:
-    """Release a handler anchored to a streaming response. See ``_anchor_handler_to``.
+    """Release a handler anchored to a streaming response. See ``anchor_handler_to``.
 
     The work is the reference held until this point, so there is nothing to do here.
     """
 
 
-def _anchor_handler_to(response: httpx.Response, handler: object) -> None:
+def anchor_handler_to(response: httpx.Response, handler: object) -> None:
     """Keep the handler alive for as long as a streaming response can still read.
 
     A body still arriving reads through the handler's connection pool, and closing
@@ -314,6 +316,52 @@ def _prepare_request_data_and_content(
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
 _ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
+_rsa_key_exchange_and_chacha20_excluded: Final = threading.Event()
+
+
+def _set_ciphers(
+    context: ssl.SSLContext, ssl_security_level: str | None, rsa_key_exchange_and_chacha20_excluded: bool
+) -> None:
+    """
+    Offer TLS 1.2 and up with SSL_SECURITY_LEVEL's cipher string if set, else DEFAULT_SSL_CIPHERS.
+    With RSA key exchange and ChaCha20 excluded, drop their TLS 1.2 suites, or offer only TLS 1.3 and log a warning
+    when the string has no other TLS 1.2 suite. TLS 1.3 suites come from OpenSSL's config, which set_ciphers can't
+    change.
+    """
+    ciphers: Final = (
+        ssl_security_level if ssl_security_level and isinstance(ssl_security_level, str) else DEFAULT_SSL_CIPHERS
+    )
+    context.minimum_version = ssl.TLSVersion.TLSv1_2  # rebind-ok: sets up the caller's context in place
+    context.set_ciphers(ciphers)
+    if rsa_key_exchange_and_chacha20_excluded:
+        try:
+            context.set_ciphers(f"{ciphers}:!kRSA:!CHACHA20")
+        except ssl.SSLError:
+            context.minimum_version = ssl.TLSVersion.TLSv1_3  # rebind-ok: sets up the caller's context in place
+            verbose_logger.warning(
+                "fips_mode: cipher list '%s' has no TLS 1.2 suite without RSA key exchange or ChaCha20, "
+                "so outbound TLS offers only TLS 1.3 and TLS 1.2-only servers will fail.",
+                ciphers,
+            )
+
+
+def rsa_key_exchange_and_chacha20_excluded() -> bool:
+    return _rsa_key_exchange_and_chacha20_excluded.is_set()
+
+
+def exclude_rsa_key_exchange_and_chacha20(excluded: bool) -> None:
+    """
+    Turn RSA key exchange and TLS 1.2 ChaCha20 off or back on for new SSL contexts and every cached one, which clients
+    already hold.
+    """
+    if excluded == _rsa_key_exchange_and_chacha20_excluded.is_set():
+        return
+    if excluded:
+        _rsa_key_exchange_and_chacha20_excluded.set()
+    else:
+        _rsa_key_exchange_and_chacha20_excluded.clear()
+    for (_, ssl_security_level, _, _), context in list(_ssl_context_cache.items()):
+        _set_ciphers(context, ssl_security_level, excluded)
 
 
 def _create_ssl_context(
@@ -327,18 +375,7 @@ def _create_ssl_context(
     """
     custom_ssl_context: Final = ssl.create_default_context(cafile=cafile)
 
-    # Optimize SSL handshake performance
-    # Set minimum TLS version to 1.2 for better performance
-    custom_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-
-    # Configure cipher suites for optimal performance
-    if ssl_security_level and isinstance(ssl_security_level, str):
-        # User provided custom cipher configuration (e.g., via SSL_SECURITY_LEVEL env var)
-        custom_ssl_context.set_ciphers(ssl_security_level)
-    else:
-        # Use optimized cipher list that strongly prefers fast ciphers
-        # but falls back to widely compatible ones
-        custom_ssl_context.set_ciphers(DEFAULT_SSL_CIPHERS)
+    _set_ciphers(custom_ssl_context, ssl_security_level, _rsa_key_exchange_and_chacha20_excluded.is_set())
 
     # Configure ECDH curve for key exchange (e.g., to disable PQC and improve performance)
     # Set SSL_ECDH_CURVE env var or litellm.ssl_ecdh_curve to 'X25519' to disable PQC
@@ -586,6 +623,28 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
+def _same_origin(first: httpx.URL, second: httpx.URL) -> bool:
+    return (first.scheme, first.host, first.port) == (second.scheme, second.host, second.port)
+
+
+async def _with_current_bearer(
+    headers: Mapping[str, str] | None, url: str, engine: JwtBearerTokenExchangeEngine
+) -> Mapping[str, str] | None:
+    auth_key: Final = next((key for key in headers or () if key.lower() == "authorization"), None)
+    if headers is None or auth_key is None:
+        return headers
+    auth_value: Final = headers[auth_key]
+    if not auth_value.startswith("Bearer "):
+        return headers
+    spec: Final = engine.spec_for_access_token(auth_value.removeprefix("Bearer "))
+    if spec is None or not _same_origin(httpx.URL(spec.token_url), httpx.URL(url)):
+        return headers
+    current: Final = await engine.aget_token(spec)
+    if not isinstance(current, MintedToken):
+        return headers
+    return MappingProxyType({**headers, auth_key: f"Bearer {current.access_token.get_secret_value()}"})
+
+
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
@@ -639,7 +698,9 @@ class HTTPResponseLimitError(ValueError):
 
 
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
-    def __init__(self, original_error, message: str | None = None, text: str | None = None):
+    def __init__(
+        self, original_error: httpx.HTTPStatusError, message: str | None = None, text: str | None = None
+    ) -> None:
         # Create a new error with the masked URL
         masked_url: Final = mask_sensitive_info(str(original_error.request.url))
         # Mask the original exception message too (it contains the full URL)
@@ -702,12 +763,14 @@ class AsyncHTTPHandler:
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
         http2: bool = False,
+        token_exchange_engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.ssl_verify = ssl_verify
         self.shared_session = shared_session
         self.transport = transport
+        self.token_exchange_engine = token_exchange_engine
         self.follow_redirects = follow_redirects
         self.http2 = http2
         self._owns_client = True
@@ -868,7 +931,7 @@ class AsyncHTTPHandler:
                 stream=True,
                 follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
             )
-            _anchor_handler_to(response, self)
+            anchor_handler_to(response, self)
             response.raise_for_status()
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
@@ -965,7 +1028,7 @@ class AsyncHTTPHandler:
             )
             response: Final = await self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.ConnectError:
@@ -1037,7 +1100,7 @@ class AsyncHTTPHandler:
                     data=retry_data,
                     json=json,
                     params=params,
-                    headers=headers,
+                    headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
                     timeout=timeout,
                     content=retry_content,
                 )
@@ -1142,7 +1205,7 @@ class AsyncHTTPHandler:
             )
             response: Final = await self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -1193,7 +1256,7 @@ class AsyncHTTPHandler:
             data=request_data,
             json=json,
             params=params,
-            headers=headers,
+            headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
             content=request_content,
         )
         response: Final = await client.send(req, stream=stream)
@@ -1608,6 +1671,7 @@ class HTTPHandler:
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
+        max_response_bytes: int | None = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
@@ -1616,6 +1680,16 @@ class HTTPHandler:
         if stream:
             return self._send_streaming_get(
                 url, params=query, headers=headers, follow_redirects=follow_redirects, timeout=timeout
+            )
+
+        if max_response_bytes is not None:
+            return self._get_with_response_limit(
+                url,
+                params=query,
+                headers=headers,
+                max_bytes=max_response_bytes,
+                follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
+                timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
             )
 
         response: Final = self.client.get(
@@ -1627,6 +1701,67 @@ class HTTPHandler:
         )
 
         return response
+
+    def _get_with_response_limit(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: Mapping[str, str] | None,
+        timeout: httpx.Timeout,
+        max_bytes: int,
+        follow_redirects: bool,
+    ) -> httpx.Response:
+        request: Final = self.client.build_request(
+            "GET",
+            url,
+            headers=MappingProxyType({**(headers or {}), "accept-encoding": "identity"}),
+            params=params,
+            timeout=timeout,
+        )
+        response: Final = self.client.send(request, stream=True, follow_redirects=False)
+        return self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
+
+    def _next_redirect_hop(self, hop: httpx.Response) -> httpx.Response:
+        if hop.next_request is None:
+            return hop
+        hop.close()
+        return self.client.send(hop.next_request, auth=None, stream=True, follow_redirects=False)
+
+    def _last_redirect_hop(self, response: httpx.Response, *, follow_redirects: bool) -> httpx.Response:
+        hop = response  # rebind-ok: walks the redirect chain without recursion
+        for _ in range(10):
+            if hop.next_request is None or not follow_redirects:
+                return hop
+            hop = self._next_redirect_hop(hop)
+        if hop.next_request is None or not follow_redirects:
+            return hop
+        hop.close()
+        raise ValueError("Too many redirects")
+
+    def _read_with_response_limit(
+        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool
+    ) -> httpx.Response:
+        final: Final = self._last_redirect_hop(response, follow_redirects=follow_redirects)
+        try:
+            if final.is_redirect or final.is_error:
+                return httpx.Response(final.status_code, headers=final.headers, request=final.request)
+            content_encoding: Final = header_value(final.headers, "content-encoding")
+            if ("identity" if content_encoding is None else content_encoding).lower() != "identity":
+                raise HTTPResponseLimitError("Response size limits require an uncompressed response")
+            content_length: Final = header_value(final.headers, "content-length")
+            if int("0" if content_length is None else content_length) > max_bytes:
+                raise HTTPResponseLimitError("Response exceeds the configured size limit")
+            with BytesIO() as body:
+                for chunk in final.iter_bytes(chunk_size=65536):
+                    if body.tell() + len(chunk) > max_bytes:
+                        raise HTTPResponseLimitError("Response exceeds the configured size limit")
+                    body.write(chunk)
+                return httpx.Response(
+                    final.status_code, headers=final.headers, content=body.getvalue(), request=final.request
+                )
+        finally:
+            final.close()
 
     def _send_streaming_get(
         self,
@@ -1647,7 +1782,7 @@ class HTTPHandler:
                 stream=True,
                 follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
             )
-            _anchor_handler_to(response, self)
+            anchor_handler_to(response, self)
             response.raise_for_status()
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
@@ -1712,7 +1847,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
@@ -1761,7 +1896,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
@@ -1810,7 +1945,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             return response
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
@@ -1858,7 +1993,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
