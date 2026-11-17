@@ -1283,19 +1283,39 @@ from litellm.passthrough.timeout_utils import (
     resolve_pass_through_request_timeout,
 )
 
+_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
 
-def _with_pinned_profile_id_where_sent(pinned_profile_id: str | None, headers: Mapping[str, str]) -> Mapping[str, str]:
-    if pinned_profile_id is None or all(name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers):
+
+def _with_pinned_profile_id_where_sent(
+    pinned_profile_id: str | None, caller_credentials: Mapping[str, str], headers: Mapping[str, str]
+) -> Mapping[str, str]:
+    sends_profile_id: Final = any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers)
+    sends_caller_credential: Final = any(
+        caller_credentials.get(name.lower()) == value for name, value in headers.items()
+    )
+    if pinned_profile_id is None or not sends_profile_id or sends_caller_credential:
         return headers
     return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id})
 
 
 def _upstream_headers_filter_or_pin(
-    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None, user_api_key_dict: UserAPIKeyAuth
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str],
 ) -> Callable[[Mapping[str, str]], Mapping[str, str]]:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
+
     if upstream_headers_filter is not None:
         return upstream_headers_filter
-    return partial(_with_pinned_profile_id_where_sent, pinned_anthropic_user_profile_id(user_api_key_dict))
+    caller_credentials: Final = {
+        name: value
+        for name in _UPSTREAM_CREDENTIAL_HEADERS
+        if (value := request_headers.get(name)) is not None
+        and not is_authenticated_caller_secret(value, user_api_key_dict)
+    }
+    return partial(
+        _with_pinned_profile_id_where_sent, pinned_anthropic_user_profile_id(user_api_key_dict), caller_credentials
+    )
 
 
 UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
@@ -1517,7 +1537,9 @@ async def pass_through_request(
             forward_headers=forward_headers,
         )
         upstream_headers: Final = _with_trace_context(
-            _upstream_headers_filter_or_pin(upstream_headers_filter, user_api_key_dict)(forwarded_headers),
+            _upstream_headers_filter_or_pin(upstream_headers_filter, user_api_key_dict, request.headers)(
+                forwarded_headers
+            ),
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
