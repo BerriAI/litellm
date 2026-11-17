@@ -1998,3 +1998,146 @@ async def test_responses_pinned_chat_completion_with_web_search_options_and_a_we
     assert [tool.get("name", tool.get("type")) for tool in first_round_tools] == [INTERNAL_TOOL_NAME]
     assert perplexity_search.call_count == 1
     assert await _answer_text(response) == "Argentina won the 2022 World Cup."
+
+
+@pytest.mark.asyncio
+async def test_responses_pinned_chat_completion_with_web_search_options_still_answers_400_when_nothing_allows_them(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_searches_until(1)
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="web_search_options"):
+        await litellm.acompletion(
+            model="openai/responses/gpt-5.6",
+            messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+            web_search_options={},
+            api_key="sk-test",
+            api_base=OPENAI_COMPATIBLE_API_BASE,
+        )
+
+    assert responses_route.call_count == 0
+    assert perplexity_search.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop_settings",
+    [
+        {"drop_params": True},
+        {"allowed_openai_params": ["web_search_options"], "additional_drop_params": ["web_search_options"]},
+    ],
+    ids=["drop_params", "additional_drop_params"],
+)
+async def test_responses_pinned_chat_completion_drops_web_search_options_the_deployment_drops_without_searching(
+    drop_settings: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_searches_until(0)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        web_search_options={},
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        **drop_settings,
+    )
+
+    assert await _answer_text(response) == "Argentina won the 2022 World Cup."
+    assert json.loads(responses_route.calls[0].request.content).get("tools") in (None, [])
+    assert perplexity_search.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_bridged_for_a_reasoning_summary_stops_web_search_options_searches_at_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        web_search_options={},
+        allowed_openai_params=["web_search_options"],
+        reasoning_effort="low",
+        reasoning_summary="auto",
+        max_agentic_loops=1,
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+    )
+    await _answer_text(response)
+
+    assert perplexity_search.call_count == 1
+    assert responses_route.call_count == 2
+
+
+def _tool_names(tools: object) -> list[object]:
+    return [tool["function"]["name"] if "function" in tool else tool.get("type") for tool in tools]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "deployment", "routes_all_openai_chat_to_responses"),
+    [
+        ("azure", {"model": "azure/responses/gpt-5.6"}, False),
+        ("chatgpt", {"model": "chatgpt/gpt-5.6"}, False),
+        ("openai", {"model": "openai/gpt-5.6", "model_info": {"mode": "responses"}}, False),
+        ("openai", {"model": "openai/gpt-5.6"}, True),
+    ],
+    ids=["azure responses model", "chatgpt", "deployment pinned to mode responses", "route_all_chat_openai_to_responses"],
+)
+async def test_chat_completion_ending_in_a_responses_api_turns_web_search_options_into_the_search_tool(
+    provider: str,
+    deployment: dict[str, object],
+    routes_all_openai_chat_to_responses: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", routes_all_openai_chat_to_responses)
+
+    converted: Final = await WebSearchInterceptionLogger(enabled_providers=[provider]).async_pre_call_deployment_hook(
+        {
+            **deployment,
+            "custom_llm_provider": provider,
+            "messages": [{"role": "user", "content": "Who won the last World Cup?"}],
+            "web_search_options": {},
+            "allowed_openai_params": ["web_search_options"],
+        },
+        CallTypes.acompletion,
+    )
+
+    assert converted is not None
+    assert "web_search_options" not in converted
+    assert _tool_names(converted["tools"]) == [INTERNAL_TOOL_NAME]
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_that_stays_on_chat_keeps_its_web_search_options():
+    converted: Final = await WebSearchInterceptionLogger(enabled_providers=["openai"]).async_pre_call_deployment_hook(
+        {
+            "model": "openai/gpt-5.6",
+            "messages": [{"role": "user", "content": "Who won the last World Cup?"}],
+            "web_search_options": {},
+            "allowed_openai_params": ["web_search_options"],
+        },
+        CallTypes.acompletion,
+    )
+
+    assert converted is None

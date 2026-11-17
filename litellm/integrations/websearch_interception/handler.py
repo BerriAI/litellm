@@ -43,7 +43,9 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_kept_on_follow_up,
     allowed_tools_tool_choice_with_builtin_as_function,
 )
-from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, qualify_provider_stripped_model
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
@@ -112,6 +114,7 @@ WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 _RESPONSE_CONTENT_FIELD: Final = "content"
 
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_PARAM_NAMES: Final = TypeAdapter(list[str])
 
 _CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX: Final = "Perform a web search for the query:"
 
@@ -309,22 +312,46 @@ def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _web_search_options_pass_the_param_check(
+    kwargs: Mapping[str, object], model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    additional_drop_params: Final = kwargs.get("additional_drop_params")
+    if isinstance(additional_drop_params, list) and "web_search_options" in additional_drop_params:
+        return False
+    if "web_search_options" in allowed_openai_param_names(kwargs.get("allowed_openai_params")):
+        return True
+    resolved_model, provider = resolve_model_and_provider_for_metadata(model, custom_llm_provider)
+    deployment_base_model: Final = model_info.get("base_model") if model_info is not None else None
+    supported: Final = _PARAM_NAMES.validate_python(
+        litellm.get_supported_openai_params(
+            model=resolved_model.removeprefix("responses/"),
+            custom_llm_provider=provider,
+            base_model=_optional_str(kwargs.get("base_model")) or _optional_str(deployment_base_model),
+        )
+        or []
+    )
+    return "web_search_options" in supported
+
+
 def _searches_through_web_search_options_on_the_responses_api(
     kwargs: Mapping[str, object], tools: Sequence[Mapping[str, object]], custom_llm_provider: str
 ) -> bool:
-    if kwargs.get("web_search_options") is None:
+    model: Final = _optional_str(kwargs.get("model"))
+    if kwargs.get("web_search_options") is None or model is None:
         return False
+    model_info: Final = str_keyed_mapping(kwargs.get("model_info"))
     reasoning_effort: Final = kwargs.get("reasoning_effort")
     return chat_completion_ends_in_responses_api(
-        _optional_str(kwargs.get("model")),
+        model,
         custom_llm_provider,
-        str_keyed_mapping(kwargs.get("model_info")),
+        model_info,
         tools=tools,
         reasoning_effort=bridge_reasoning_effort(
             _optional_str(reasoning_effort) or str_keyed_mapping(reasoning_effort), kwargs.get("extra_body")
         ),
+        reasoning_summary=peek_reasoning_summary_aliases(kwargs),
         api_base=_optional_str(kwargs.get("api_base")),
-    )
+    ) and _web_search_options_pass_the_param_check(kwargs, model, custom_llm_provider, model_info)
 
 
 def _with_web_search_options_as_a_web_search_tool(
@@ -1442,7 +1469,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         return max_tokens
 
     @staticmethod
-    def _prepare_followup_kwargs(kwargs: dict) -> dict:
+    def _prepare_followup_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
         """Build kwargs for the follow-up call, excluding internal keys.
 
         ``litellm_logging_obj`` MUST be excluded so the follow-up call creates
