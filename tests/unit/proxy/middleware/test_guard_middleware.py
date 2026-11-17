@@ -793,6 +793,24 @@ async def test_websocket_with_depth_below_one_does_not_reach_the_app(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("depth", ["0", "-1"])
+async def test_probe_with_depth_below_one_and_no_ip_lists_does_not_reach_the_app(monkeypatch, depth):
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", depth)
+    with pytest.raises(ValueError, match="trusted_proxy_depth must be at least 1"):
+        await _run_probe(_probe_scope("/health/readiness"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", ["0", "-1"])
+async def test_websocket_with_depth_below_one_and_no_ip_lists_does_not_reach_the_app(monkeypatch, depth):
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", depth)
+    with pytest.raises(ValueError, match="trusted_proxy_depth must be at least 1"):
+        await _run_websocket(_ws_scope("203.0.113.7"))
+
+
+@pytest.mark.asyncio
 async def test_probe_with_only_invalid_allowlist_entries_does_not_reach_the_app(monkeypatch):
     monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
     monkeypatch.setenv("LITELLM_GUARD_ALLOWED_IPS", "not-a-cidr")

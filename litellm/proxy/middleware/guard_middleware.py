@@ -51,8 +51,10 @@ Design constraints honored here:
   those routes still go through key auth.
 - Only the unauthenticated k8s probes (``/health/liveliness``,
   ``/health/liveness``, ``/health/readiness``) bypass guard by default, matched
-  by exact path under the root path, with the IP lists still enforced as guard
-  does on its own exclusions. ``LITELLM_GUARD_EXCLUDED_PATHS`` replaces that
+  by exact path under the root path. The probes keep the IP lists. The bans,
+  rate limits, country and cloud-provider blocks that guard applies to its own
+  exclusions do not apply to them, on purpose: a ban or a 429 on a liveness
+  probe restarts the pod. ``LITELLM_GUARD_EXCLUDED_PATHS`` replaces that
   default and is handed to guard, which matches each entry as a subtree.
 - Rejections guard itself builds use guard's response shapes; the one
   rejection this wrapper builds (guard unavailable) uses litellm's
@@ -244,14 +246,17 @@ def _ip_lists_permit(scope: Scope) -> bool:
     screens HTTP scopes) and on the exact-path probes. The rules are guard's:
     the allowlist alone when it is set, the blocklist otherwise, and an invalid
     entry or a proxy depth below 1 is refused with a ``ValueError`` as guard's
-    config refuses it. Rate limits, bans and payload inspection do not apply
-    to either."""
+    config refuses it, even when no list is set. Rate limits, bans and payload
+    inspection do not apply to either."""
     blocked: Final = _validated_entries("LITELLM_GUARD_BLOCKED_IPS")
     allowed: Final = _validated_entries("LITELLM_GUARD_ALLOWED_IPS")
     trusted: Final = _validated_entries("LITELLM_GUARD_TRUSTED_PROXIES", allow_unix=True)
+    depth: Final = _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1)
+    if depth < 1:
+        raise ValueError("trusted_proxy_depth must be at least 1")
     if not blocked and not allowed:
         return True
-    client: Final = _resolve_client(scope, _networks(trusted), _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1))
+    client: Final = _resolve_client(scope, _networks(trusted), depth)
     listed: Final = client is not None and _listed(client, allowed or blocked)
     permitted: Final = listed if allowed else not listed
     if not permitted and _env_bool("LITELLM_GUARD_PASSIVE_MODE"):
