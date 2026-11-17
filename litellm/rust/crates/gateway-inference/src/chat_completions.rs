@@ -6,12 +6,14 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use litellm_inference_chat::types::ChatCompletionsCall;
+use litellm_cache_response::CachePolicy;
+use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsCall};
 use serde_json::{Map, Value};
 
 use crate::{
     Error, Gateway, JsonObject,
-    request::{self, Path},
+    request::Path,
+    routing::{self, Target},
 };
 
 pub(crate) async fn create(
@@ -19,7 +21,7 @@ pub(crate) async fn create(
     identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body).await
+    handle(gateway, &identity, body).await
 }
 
 pub(crate) async fn create_from_model_path(
@@ -35,16 +37,14 @@ pub(crate) async fn create_from_model_path(
             .collect(),
         Some(_) => body,
     };
-    handle(&gateway, &identity, body).await
+    handle(gateway, &identity, body).await
 }
 
 async fn handle(
-    gateway: &Gateway,
+    gateway: Arc<Gateway>,
     identity: &AuthenticatedRequest,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, "/chat/completions", &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.chat_completions.clone();
     let route = match &gateway.cache {
@@ -54,25 +54,49 @@ async fn handle(
         )),
         None => route,
     };
+    let policy = cache_options.policy;
+    routing::call(
+        gateway,
+        identity,
+        "acompletion",
+        "/chat/completions",
+        body,
+        move |target| attempt(route.clone(), policy, target),
+    )
+    .await
+}
 
+async fn attempt(
+    route: ChatCompletionsRoute,
+    policy: CachePolicy,
+    target: Target,
+) -> Result<Response, Error> {
+    let api_key = target.api_key();
+    let Target {
+        deployment,
+        body,
+        timeout,
+        ..
+    } = target;
+    let params = &deployment.params;
     let messages = body.get("messages").cloned().unwrap_or_default();
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
         route.machine(
             ChatCompletionsCall {
-                model: deployment.model.clone(),
+                model: params.model.clone(),
                 messages,
                 optional_params: body
                     .into_iter()
                     .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
                     .collect(),
-                api_key: deployment.api_key.clone(),
-                api_base: deployment.api_base.clone(),
-                custom_llm_provider: deployment.custom_llm_provider.clone(),
+                api_key,
+                api_base: params.api_base.clone(),
+                custom_llm_provider: params.custom_llm_provider.clone(),
                 extra_headers: None,
-                timeout: deployment.timeout,
+                timeout,
             },
-            cache_options.policy,
+            policy,
         ),
         (),
         headers.clone(),

@@ -10,12 +10,18 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
+use litellm_cache_response::CachePolicy;
 use litellm_host_http::Sse;
-use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
+use litellm_inference_messages::{MessagesCall, MessagesRoute, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
+use litellm_router_core::Deployment;
+
+use crate::{
+    Error, Gateway, JsonObject, RequestId,
+    routing::{self, Target},
+};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
@@ -59,20 +65,18 @@ pub async fn create(
     body: Result<JsonObject, Error>,
 ) -> impl IntoResponse {
     let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
+        Ok(JsonObject(body)) => handle(gateway, &identity, &headers, body).await,
         Err(error) => Err(error),
     };
     result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
 }
 
 async fn handle(
-    gateway: &Gateway,
+    gateway: Arc<Gateway>,
     identity: &AuthenticatedRequest,
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, "/v1/messages", &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
@@ -82,9 +86,27 @@ async fn handle(
         )),
         None => route,
     };
+    let policy = cache_options.policy;
+    let forwarded = anthropic_api_headers(headers);
+    routing::call(
+        gateway,
+        identity,
+        "aanthropic_messages",
+        "/v1/messages",
+        body,
+        move |target| attempt(route.clone(), policy, forwarded.clone(), target),
+    )
+    .await
+}
 
-    let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
+async fn attempt(
+    route: MessagesRoute,
+    policy: CachePolicy,
+    forwarded: Option<ProviderSpecificHeaders>,
+    target: Target,
+) -> Result<Response, Error> {
+    let call = project(target, forwarded)?;
+    let machine = route.machine(call, policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();
@@ -93,30 +115,37 @@ async fn handle(
 }
 
 fn project(
-    deployment: &Deployment,
-    body: Map<String, Value>,
-    headers: &HeaderMap,
+    target: Target,
+    forwarded: Option<ProviderSpecificHeaders>,
 ) -> Result<MessagesCall, Error> {
+    let api_key = target.api_key();
+    let Target {
+        deployment,
+        body,
+        timeout,
+        shaping,
+    } = target;
+    let params = &deployment.params;
     let tools =
-        merged_tools(deployment, body.get("tools")).map(|tools| ("tools".to_owned(), tools));
+        merged_tools(&deployment, body.get("tools")).map(|tools| ("tools".to_owned(), tools));
     let client_params = body.into_iter().map(|(name, value)| match name.as_str() {
-        "model" => (name, Value::from(deployment.model.as_str())),
+        "model" => (name, Value::from(params.model.as_str())),
         _ => (name, value),
     });
-    let body = deployment_default_params(deployment)
+    let body = deployment_default_params(&deployment)
         .chain(client_params)
         .chain(tools)
         .collect();
     Ok(MessagesCall {
         body: messages_body(body)?,
-        api_key: deployment.api_key.clone(),
-        api_base: deployment.api_base.clone(),
-        custom_llm_provider: deployment.custom_llm_provider.clone(),
-        litellm_params: deployment.litellm_params.clone(),
+        api_key,
+        api_base: params.api_base.clone(),
+        custom_llm_provider: params.custom_llm_provider.clone(),
+        litellm_params: params.clone(),
         extra_headers: None,
-        provider_specific_header: anthropic_api_headers(headers),
-        timeout: deployment.timeout,
-        shaping: deployment.shaping.clone(),
+        provider_specific_header: forwarded,
+        timeout,
+        shaping,
     })
 }
 
@@ -124,13 +153,13 @@ fn deployment_default_params(
     deployment: &Deployment,
 ) -> impl Iterator<Item = (String, Value)> + '_ {
     DEPLOYMENT_DEFAULT_PARAMS.iter().filter_map(|name| {
-        let value = deployment.litellm_params.extra.get(*name)?;
+        let value = deployment.params.extra.get(*name)?;
         Some(((*name).to_owned(), value.clone()))
     })
 }
 
 fn merged_tools(deployment: &Deployment, client_tools: Option<&Value>) -> Option<Value> {
-    let deployment_tools = deployment.litellm_params.extra.get("tools")?.as_array()?;
+    let deployment_tools = deployment.params.extra.get("tools")?.as_array()?;
     let client_tools: &[Value] = match client_tools.unwrap_or(&Value::Null) {
         Value::Null => &[],
         Value::Array(tools) => tools,

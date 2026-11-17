@@ -1,19 +1,21 @@
 use std::sync::Arc;
 
 use axum::{Json, body::Bytes, extract::State, response::Response};
+use litellm_cache_response::CachePolicy;
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
-use litellm_inference_responses::{route::Responses, types::ResponsesCall};
+use litellm_inference_responses::{ResponsesRoute, route::Responses, types::ResponsesCall};
 
-use crate::{Error, Gateway, JsonObject, request};
+use crate::{
+    Error, Gateway, JsonObject,
+    routing::{self, Target},
+};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(&gateway, "/responses", &body)?;
-    request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
     let route = gateway.responses.clone();
     let route = match &gateway.cache {
@@ -23,21 +25,45 @@ pub(crate) async fn create(
         )),
         None => route,
     };
+    let policy = cache_options.policy;
+    routing::call(
+        gateway,
+        &identity,
+        "aresponses",
+        "/responses",
+        body,
+        move |target| attempt(route.clone(), policy, target),
+    )
+    .await
+}
 
+async fn attempt(
+    route: ResponsesRoute,
+    policy: CachePolicy,
+    target: Target,
+) -> Result<Response, Error> {
+    let api_key = target.api_key();
+    let Target {
+        deployment,
+        body,
+        timeout,
+        ..
+    } = target;
+    let params = &deployment.params;
     let call = ResponsesCall {
-        model: deployment.model.clone(),
+        model: params.model.clone(),
         input: body.get("input").cloned().unwrap_or_default(),
         optional_params: body
             .into_iter()
             .filter(|(name, _)| !matches!(name.as_str(), "model" | "input"))
             .collect(),
-        api_key: deployment.api_key.clone(),
-        api_base: deployment.api_base.clone(),
-        custom_llm_provider: deployment.custom_llm_provider.clone(),
+        api_key,
+        api_base: params.api_base.clone(),
+        custom_llm_provider: params.custom_llm_provider.clone(),
         extra_headers: None,
-        timeout: deployment.timeout,
+        timeout,
     };
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(call, policy);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         Bytes::from(Error::from(error).responses_sse_frame())
     });

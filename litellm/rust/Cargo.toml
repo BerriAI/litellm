@@ -12,7 +12,6 @@ repository = "https://github.com/BerriAI/litellm"
 litellm-config = { path = "crates/config" }
 litellm-config-load = { path = "crates/config-load" }
 litellm-error = { path = "crates/error" }
-litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
 litellm-router-core = { path = "crates/router-core" }
 litellm-tracing = { path = "crates/tracing" }

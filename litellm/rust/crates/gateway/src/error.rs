@@ -20,4 +20,6 @@ pub enum Error {
     Auth(#[from] litellm_gateway_auth::Error),
     #[error(transparent)]
     ModelCatalog(#[from] litellm_model_catalog::Error),
+    #[error(transparent)]
+    Router(#[from] litellm_router_core::ConfigError),
 }
