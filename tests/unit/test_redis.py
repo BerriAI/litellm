@@ -2069,7 +2069,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
 
 @pytest.mark.skipif(
     redis.VERSION != (5, 3, 1),
-    reason="the Rust interpreter in litellm-rust/crates/redis-resolve pins redis-py 5.3.1, per its AGENTS.md",
+    reason="the Rust interpreter in litellm/rust/crates/redis-resolve pins redis-py 5.3.1, per its AGENTS.md",
 )
 @pytest.mark.parametrize(
     ("kwargs", "environment", "merged", "expected"),
@@ -3347,7 +3347,7 @@ def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwar
     assert outcome == expected
 
 
-_REDIS_RESOLVE: Final = Path(__file__).parents[2] / "litellm-rust/crates/redis-resolve"
+_REDIS_RESOLVE: Final = Path(__file__).parents[2] / "litellm/rust/crates/redis-resolve"
 _REDIS_PY_KWARGS: Final = json.loads((_REDIS_RESOLVE / "redis-py-kwargs.json").read_text())
 
 

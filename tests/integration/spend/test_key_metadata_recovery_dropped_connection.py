@@ -57,7 +57,7 @@ NO_ENVIRONMENT: Final[Mapping[str, str]] = MappingProxyType({})
 ENTITY_TABLES: Final = tuple(
     dict.fromkeys((route.table, route.entity_column) for route in ROUTES if route.table != USER_SPEND)
 )
-FOCUS_ALIAS_FIELDS: Final = frozenset({"BillingAccountName", "Tags"})
+FOCUS_ALIAS_FIELDS: Final = frozenset({"BillingAccountName", "RequesterDetails", "Tags"})
 CBF_ALIAS_FIELDS: Final = frozenset({"resource/account", "resource/tag:api_key_alias"})
 
 
@@ -189,6 +189,13 @@ def _focus_tags(owned: Owned, *, alias: bool) -> dict[str, str]:
     }
 
 
+def _requester_details(owned: Owned, *, alias: str | None) -> list[JsonValue]:
+    return [
+        {"key": "Principal", "value": {"Type": "User", "Name": owned.email, "Email": owned.email}},
+        {"key": "Credential", "value": {"Type": "API Key", **({"Name": alias} if alias is not None else {})}},
+    ]
+
+
 def _assert_vantage_dry_run(body: Mapping[str, JsonValue], owned: Owned, *, alias: str | None) -> None:
     usage: Final = _first(body, "usage_data")
     assert {name: usage.get(name) for name in ("api_key", "api_key_alias", "user_id", "user_email", "spend")} == {
@@ -210,6 +217,7 @@ def _assert_vantage_dry_run(body: Mapping[str, JsonValue], owned: Owned, *, alia
         "ChargePeriodEnd": "2026-02-04T00:00:00Z",
     }, body
     assert _tags(focus) == _focus_tags(owned, alias=alias is not None), body
+    assert json.loads(string_value(focus["RequesterDetails"])) == _requester_details(owned, alias=alias), body
 
 
 def _assert_cloudzero_dry_run(body: Mapping[str, JsonValue], owned: Owned, *, alias: str | None) -> None:

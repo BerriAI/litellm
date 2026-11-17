@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils import batch_utils as core_batch_utils
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -49,6 +50,10 @@ def _uses_native_vertex_output(
     model_name: str | None,
     first_row: Mapping[str, object] | None,
 ) -> bool:
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_native_gemini_batch_output_row
+
+        return first_row is not None and is_native_gemini_batch_output_row(first_row)
     if custom_llm_provider != "vertex_ai":
         return False
     if model_name and litellm.disable_vertex_batch_output_transformation:
@@ -831,6 +836,12 @@ def _get_batch_job_usage_from_response_body(
     _usage_dict: Final = response_body.get("usage", None) or {}
     if ResponseAPILoggingUtils.is_response_api_usage(_usage_dict):
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage_dict)
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_gemini_batch_usage_shape, usage_from_batch_output
+
+        gemini_usage: Final = cast(Mapping[str, object], _usage_dict)  # cast-ok: usage block comes from provider JSON
+        if is_gemini_batch_usage_shape(gemini_usage):
+            return usage_from_batch_output(gemini_usage)
     usage: Final[Usage] = Usage(**_usage_dict)
     if custom_llm_provider == "xai":
         from litellm.llms.xai.chat.transformation import XAIChatConfig
@@ -839,14 +850,14 @@ def _get_batch_job_usage_from_response_body(
     return usage
 
 
-def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, Any]) -> Mapping[str, Any]:
+def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, object]) -> Mapping[str, object]:
     """
     Get the ``result`` object from a line of an Anthropic message batch results JSONL file.
 
     Anthropic batch results lines look like:
     ``{"custom_id": ..., "result": {"type": "succeeded", "message": {..., "usage": {...}}}}``
     """
-    return batch_results_line.get("result", None) or {}
+    return decoded_json_object(batch_results_line.get("result", None) or {})
 
 
 def _get_response_from_batch_job_output_file(
@@ -856,7 +867,9 @@ def _get_response_from_batch_job_output_file(
     Get the response from the batch job output file
     """
     if custom_llm_provider == "anthropic":
-        return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
+        return decoded_json_object(
+            _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
+        )
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput", None) or {}
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON

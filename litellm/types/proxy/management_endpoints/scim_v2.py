@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal, Optional, Union
+from typing import Any, Final, Literal, Optional, TypeAlias, Union
 
 from fastapi import HTTPException
 from pydantic import (
@@ -11,6 +11,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.user_requests import NewUserRequest
@@ -163,6 +164,23 @@ class SCIMMember(LiteLLMBaseModel):
 class SCIMGroup(SCIMResource):
     displayName: str
     members: list[SCIMMember] | None = None
+
+
+SCIM_ERROR_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
+ScimType: TypeAlias = Literal["uniqueness"]
+
+
+class ScimErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+class SCIMError(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schemas: tuple[Literal["urn:ietf:params:scim:api:messages:2.0:Error"]] = (SCIM_ERROR_SCHEMA,)
+    status: str
+    detail: str
+    scimType: ScimType | None = None
 
 
 class SCIMPlaceholderMergeResult(LiteLLMBaseModel):

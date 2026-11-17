@@ -48,6 +48,7 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 from litellm.proxy.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
+from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.responses.main import build_web_search_call
@@ -1315,9 +1316,9 @@ class TestStreamingTransform:
             [server_chunk, _stream_chunk("done", finish_reason="stop")],
         )
 
-        delivered: Final = (
-            [getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices]
-        )
+        delivered: Final = [
+            getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices
+        ]
         assert server_fields in delivered
         assert "".join(_delta_text(item) for item in out) == "DONE"
 
@@ -3252,6 +3253,39 @@ class TestTranslationMappingsAreReadLive:
         assert not [
             name for name, value in vars(unified_module).items() if isinstance(value, dict) and CallTypes.aocr in value
         ]
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.asyncio
+async def test_input_guardrails_preserve_routing_tags_and_existing_metadata(
+    monkeypatch: pytest.MonkeyPatch, hook: str, metadata_key: str
+) -> None:
+    _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
+    guardrail: Final = RecordingGuardrail()
+    metadata: Final = {"tags": ["region-b"], "inherited_tags": [], "user_api_key_user_id": "request-user"}
+    data: Final = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        metadata_key: metadata,
+    }
+    user_api_key_dict: Final = UserAPIKeyAuth(user_id="auth-user", user_email="auth@example.com")
+
+    if hook == "async_pre_call_hook":
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=CallTypes.acompletion.value
+        )
+    else:
+        await UnifiedLLMGuardrails().async_moderation_hook(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=CallTypes.acompletion.value
+        )
+
+    assert len(guardrail.apply_calls) == 1
+    assert guardrail.apply_calls[0]["inputs"]["texts"] == ["hello"]
+    assert get_tags_from_request_kwargs(data) == ["region-b"]
+    assert data[metadata_key] is metadata
+    assert metadata["user_api_key_user_id"] == "request-user"
 
 
 class AttachmentScanningGuardrail(RecordingGuardrail):

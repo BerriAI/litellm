@@ -15,6 +15,25 @@ else:
     LitellmLoggingObject = Any
 
 
+def mcp_tool_cost_per_query(cost_info: MCPServerCostInfo | None, tool_name: str) -> float:
+    resolved_cost_info: Final = cost_info or MCPServerCostInfo()
+    tool_name_to_cost_per_query: Final = resolved_cost_info.get("tool_name_to_cost_per_query") or {}
+    if tool_name in tool_name_to_cost_per_query:
+        return tool_name_to_cost_per_query[tool_name]
+    return resolved_cost_info.get("default_cost_per_query") or 0.0
+
+
+def mcp_server_charges_for_tool_calls(cost_info: MCPServerCostInfo | None) -> bool:
+    resolved_cost_info: Final = cost_info or MCPServerCostInfo()
+    return any(
+        (cost or 0.0) > 0
+        for cost in (
+            resolved_cost_info.get("default_cost_per_query"),
+            *(resolved_cost_info.get("tool_name_to_cost_per_query") or {}).values(),
+        )
+    )
+
+
 class MCPCostCalculator:
     @staticmethod
     def calculate_mcp_tool_call_cost(
@@ -46,24 +65,7 @@ class MCPCostCalculator:
             )
             or {}
         )
-        mcp_server_cost_info: Final[MCPServerCostInfo] = (
-            mcp_tool_call_metadata.get("mcp_server_cost_info") or MCPServerCostInfo()
+        return mcp_tool_cost_per_query(
+            cost_info=mcp_tool_call_metadata.get("mcp_server_cost_info"),
+            tool_name=mcp_tool_call_metadata.get("name", ""),
         )
-        #########################################################
-        # User defined cost per query
-        #########################################################
-        default_cost_per_query: Final = mcp_server_cost_info.get("default_cost_per_query", None)
-        tool_name_to_cost_per_query: Final[dict] = mcp_server_cost_info.get("tool_name_to_cost_per_query", {}) or {}
-        tool_name: Final = mcp_tool_call_metadata.get("name", "")
-
-        #########################################################
-        # 1. If tool_name is in tool_name_to_cost_per_query, use the cost per query
-        # 2. If tool_name is not in tool_name_to_cost_per_query, use the default cost per query
-        # 3. Default to 0.0 if no cost per query is found
-        #########################################################
-        cost_per_query: float = 0.0
-        if tool_name in tool_name_to_cost_per_query:
-            cost_per_query = tool_name_to_cost_per_query[tool_name]
-        elif default_cost_per_query is not None:
-            cost_per_query = default_cost_per_query
-        return cost_per_query

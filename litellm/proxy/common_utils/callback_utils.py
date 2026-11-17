@@ -19,6 +19,7 @@ from litellm.constants import (
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -93,6 +94,10 @@ class _CallbackNotDispatchable:
 _CallbackLoadError: TypeAlias = _CallbackResolvedToClass | _CallbackNotDispatchable
 
 
+class _PresidioOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 def _classify_loaded_callback(entry: str, loaded: object) -> CustomLogger | Callable[..., object] | _CallbackLoadError:
     """
     Decide whether what a ``litellm_settings.callbacks`` dotted path resolved to can be dispatched.
@@ -155,6 +160,18 @@ def initialize_callbacks_on_proxy(
     if isinstance(value, list):
         imported_list: Final[list[Any]] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            if callback == "customer_budget_webhook":
+                from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
+
+                imported_list.append(
+                    CustomerBudgetWebhook.from_config(
+                        string_keyed(_LOADED_CALLBACK.validate_python(callback_specific_params)).get(
+                            "customer_budget_webhook"
+                        )
+                    )
+                )
+                continue
+
             if isinstance(callback, str) and callback == "compression_interception":
                 from litellm.integrations.compression_interception.handler import (
                     CompressionInterceptionLogger,
@@ -193,15 +210,15 @@ def initialize_callbacks_on_proxy(
                 if presidio_logging_only is not None:
                     presidio_logging_only = bool(presidio_logging_only)  # validate boolean given
 
-                _presidio_params = {}
+                _presidio_params: Mapping[str, object] = {}
                 if "presidio" in callback_specific_params and isinstance(callback_specific_params["presidio"], dict):
                     _presidio_params = callback_specific_params["presidio"]
 
-                params: dict[str, Any] = {
+                params: Mapping[str, object] = {
                     "logging_only": presidio_logging_only,
                     **_presidio_params,
                 }
-                pii_masking_object = OPTIONAL_PresidioPIIMasking(**params)
+                pii_masking_object = OPTIONAL_PresidioPIIMasking(**_PresidioOptions(**params))
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 try:
@@ -235,7 +252,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(_secret_detection_object)
             elif isinstance(callback, str) and callback == "openai_moderations":
                 try:
-                    from enterprise.enterprise_hooks.openai_moderation import (
+                    from litellm.enterprise.enterprise_hooks.openai_moderation import (
                         ENTERPRISE_OpenAI_Moderation,
                     )
                 except ImportError:
@@ -270,7 +287,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(aporia_guardrail_object)
             elif isinstance(callback, str) and callback == "google_text_moderation":
                 try:
-                    from enterprise.enterprise_hooks.google_text_moderation import (
+                    from litellm.enterprise.enterprise_hooks.google_text_moderation import (
                         ENTERPRISE_GoogleTextModeration,
                     )
                 except ImportError:
@@ -299,7 +316,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(llm_guard_moderation_obj)
             elif isinstance(callback, str) and callback == "blocked_user_check":
                 try:
-                    from enterprise.enterprise_hooks.blocked_user_list import (
+                    from litellm.enterprise.enterprise_hooks.blocked_user_list import (
                         ENTERPRISE_BlockedUserList,
                     )
                 except ImportError:
@@ -314,7 +331,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(blocked_user_list)
             elif isinstance(callback, str) and callback == "banned_keywords":
                 try:
-                    from enterprise.enterprise_hooks.banned_keywords import (
+                    from litellm.enterprise.enterprise_hooks.banned_keywords import (
                         ENTERPRISE_BannedKeywords,
                     )
                 except ImportError:
@@ -548,6 +565,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
         BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,

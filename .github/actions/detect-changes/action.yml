@@ -1,7 +1,7 @@
 name: "Detect relevant changes"
 description: >-
-  Classify the pull request's changed files with .circleci/scripts/classify_changes.sh
-  and expose decision=run|skip for one category. backend means anything outside ui/,
+  Classify the pull request's changed files with .github/scripts/ci/classify_changes.sh
+  and expose decision=run|skip for one category. backend means anything outside litellm/ui/,
   docs/ and markdown; ui means the dashboard sources alone. decision=skip lets callers
   short-circuit expensive steps while the job still completes successfully and satisfies
   its required status check, which a paths: filter cannot do because a workflow that

@@ -2,7 +2,9 @@
 the detached pipeline's single attempt-row write, and the cache-first job lookup."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Coroutine, Mapping
+from contextlib import asynccontextmanager
+from contextvars import Context
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -88,6 +90,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         models=sorted(job.models),
         direction=job.direction,
         baseline_model=job.baseline_model,
+        skip_same_model=job.skip_same_model,
         shadow_percentage=job.shadow_percentage,
         judge_model=job.judge_model,
         max_turns=job.max_turns,
@@ -2562,3 +2565,227 @@ class TestSamplingFunnel:
 
         assert logger._test_funnel == []
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+
+_FAR_FUTURE: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
+_SETTLE_GUARD_SECONDS: Final = 5
+
+
+def _skipping_job(
+    baseline_model: str = "baseline-model", max_turns: int = 200, shadow_percentage: float = 100.0
+) -> ActiveShadowEvalJob:
+    return _reverse_job(
+        skip_same_model=True,
+        ends_at=_FAR_FUTURE,
+        baseline_model=baseline_model,
+        max_turns=max_turns,
+        shadow_percentage=shadow_percentage,
+    )
+
+
+def _served(
+    routed_model: str | None = "baseline-model",
+    attempted_fallbacks: int | None = None,
+    tier_litellm_params: Mapping[str, object] | None = None,
+) -> Mapping[str, object]:
+    """Request metadata as the router under evaluation leaves it on the request it served."""
+    decision: Final = {
+        "router_model_name": "my-router",
+        "tier_label": "COMPLEX",
+        **({"routed_model": routed_model} if routed_model else {}),
+        **({"tier_litellm_params": tier_litellm_params} if tier_litellm_params is not None else {}),
+    }
+    return {
+        "routing_decision": decision,
+        **({"attempted_fallbacks": attempted_fallbacks} if attempted_fallbacks is not None else {}),
+    }
+
+
+@asynccontextmanager
+async def _owned_tasks() -> AsyncIterator[None]:
+    """Record only the tasks created inside this scope and drain them on exit, cancelling
+    them if the guard expires, so the scope leaves nothing running whatever its body did."""
+    loop: Final = asyncio.get_running_loop()
+    previous: Final = loop.get_task_factory()
+    owned: Final[list[asyncio.Task[object]]] = []  # mutable-ok: the loop hands tasks over one at a time
+
+    def record(
+        task_loop: asyncio.AbstractEventLoop,
+        coro: Coroutine[object, object, object],
+        /,
+        *,
+        name: str | None = None,
+        context: Context | None = None,
+    ) -> asyncio.Task[object]:
+        task: Final = (
+            asyncio.Task(coro, loop=task_loop)
+            if context is None
+            else asyncio.Task(coro, loop=task_loop, context=context)
+        )
+        if name is not None:
+            task.set_name(name)
+        owned.append(task)
+        return task
+
+    loop.set_task_factory(record)
+    try:
+        yield
+    finally:
+        loop.set_task_factory(previous)
+        await asyncio.wait_for(asyncio.gather(*owned, return_exceptions=True), timeout=_SETTLE_GUARD_SECONDS)
+
+
+def _attempt_recording_prisma() -> tuple[MagicMock, asyncio.Future[asyncio.Task[object]]]:
+    """A prisma whose attempt write resolves a future with the pipeline task that made it."""
+    prisma: Final = _prisma()
+    writer: Final[asyncio.Future[asyncio.Task[object]]] = asyncio.get_running_loop().create_future()
+
+    async def create(*, data: Mapping[str, object]) -> None:
+        task: Final = asyncio.current_task()
+        if task is not None and not writer.done():
+            writer.set_result(task)
+
+    prisma.db.litellm_shadowevalattempt.create = AsyncMock(side_effect=create)
+    return prisma, writer
+
+
+async def _hook(logger: ShadowEvalLogger, kwargs: Mapping[str, object]) -> None:
+    async with _owned_tasks():
+        await logger.async_log_success_event(kwargs, RESPONSE, None, None)
+
+
+async def _hook_until_judged(
+    logger: ShadowEvalLogger,
+    kwargs: Mapping[str, object],
+    writer: asyncio.Future[asyncio.Task[object]],
+) -> None:
+    async with _owned_tasks():
+        await logger.async_log_success_event(kwargs, RESPONSE, None, None)
+        await asyncio.wait_for(asyncio.shield(writer), timeout=_SETTLE_GUARD_SECONDS)
+        await writer.result()
+
+
+@pytest.mark.asyncio
+class TestSameModelSkip:
+    """An opted-in reverse job skips samples its baseline's own group served and counts
+    them apart; whenever the served group is in doubt the sample is judged as before."""
+
+    @pytest.mark.parametrize(
+        ("baseline_model", "model_group", "metadata", "aliases"),
+        [
+            ("baseline-model", "my-router", _served("baseline-model"), {}),
+            ("baseline-model", "my-router", _served("fast"), {"fast": "baseline-model"}),
+            ("fast", "my-router", _served("baseline-model"), {"fast": "baseline-model"}),
+            ("baseline-model", "baseline-model", _served("other-model", attempted_fallbacks=1), {}),
+            (
+                "baseline-model",
+                "my-router",
+                _served("baseline-model", tier_litellm_params={"reasoning_effort": "high"}),
+                {},
+            ),
+        ],
+        ids=[
+            "router-picked-the-baseline",
+            "pick-is-an-alias",
+            "baseline-is-an-alias",
+            "fallback-landed-on-baseline",
+            "tier-overrides-do-not-change-the-group",
+        ],
+    )
+    async def test_baseline_served_sample_is_skipped_without_spend(
+        self, baseline_model, model_group, metadata, aliases
+    ):
+        prisma: Final = _prisma()
+        router: Final = _router()
+        _serve_aliases(router, aliases)
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(_skipping_job(baseline_model=baseline_model),))
+
+        await _hook(logger, _success_kwargs(request_metadata=metadata, model_group=model_group))
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+        assert logger._test_counter == {}
+        assert logger._test_funnel == [("job-1", "same_model")]
+
+    async def test_a_lost_sampling_roll_counts_not_sampled_even_when_the_baseline_served_it(self):
+        job: Final = _skipping_job(shadow_percentage=1.0)
+        missing_id: Final = next(
+            f"req-miss-{n}" for n in range(10_000) if not _sample_hits(f"req-miss-{n}", job.id, job.shadow_percentage)
+        )
+        prisma: Final = _prisma()
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(job,))
+
+        await _hook(logger, _success_kwargs(request_id=missing_id, request_metadata=_served(), model_group="my-router"))
+
+        router.acompletion.assert_not_called()
+        assert logger._test_funnel == [("job-1", "not_sampled")]
+
+    @pytest.mark.parametrize(
+        ("model_group", "metadata"),
+        [
+            ("my-router", _served("other-model")),
+            ("my-router", _served("baseline-twin")),
+            ("fallback-model", _served("baseline-model", attempted_fallbacks=1)),
+            ("my-router", _served("baseline-model", attempted_fallbacks=1)),
+            ("", _served("baseline-model")),
+            ("my-router", _served(None)),
+        ],
+        ids=[
+            "router-picked-another-group",
+            "differently-named-group-for-the-same-provider-model",
+            "fallback-left-the-baseline-pick",
+            "hop-back-onto-the-router-name",
+            "no-served-group",
+            "no-routed-model",
+        ],
+    )
+    async def test_sample_not_provably_served_by_the_baseline_is_judged(self, model_group, metadata):
+        prisma, writer = _attempt_recording_prisma()
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(_skipping_job(),))
+
+        await _hook_until_judged(logger, _success_kwargs(request_metadata=metadata, model_group=model_group), writer)
+
+        row: Final = prisma.db.litellm_shadowevalattempt.create.await_args.kwargs["data"]
+        assert row["shadow_model"] == "baseline-model"
+        assert row["outcome"] in ("real", "shadow", "tie")
+        assert router.acompletion.call_args_list[0].kwargs["model"] == "baseline-model"
+        assert logger._test_funnel == []
+
+    async def test_a_job_without_the_flag_still_judges_the_baseline_against_itself(self):
+        prisma, writer = _attempt_recording_prisma()
+        logger: Final = _logger(router=_router(), prisma=prisma, jobs=(_reverse_job(ends_at=_FAR_FUTURE),))
+
+        await _hook_until_judged(logger, _success_kwargs(request_metadata=_served(), model_group="my-router"), writer)
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
+        assert logger._test_funnel == []
+
+    async def test_skips_leave_the_turn_budget_for_judged_samples(self):
+        prisma, writer = _attempt_recording_prisma()
+        logger: Final = _logger(router=_router(), prisma=prisma, jobs=(_skipping_job(max_turns=1),))
+
+        for request_id in ("req-skip-1", "req-skip-2"):
+            await _hook(
+                logger, _success_kwargs(request_id=request_id, request_metadata=_served(), model_group="my-router")
+            )
+        await _hook_until_judged(
+            logger,
+            _success_kwargs(request_id="req-judged", request_metadata=_served("other-model"), model_group="my-router"),
+            writer,
+        )
+
+        judged: Final = prisma.db.litellm_shadowevalattempt.create.await_args_list
+        assert [call.kwargs["data"]["request_id"] for call in judged] == ["req-judged"]
+        assert logger._test_funnel == [("job-1", "same_model"), ("job-1", "same_model")]
+
+    async def test_the_flag_is_read_off_the_stored_job_row(self):
+        prisma: Final = _prisma(jobs=[_job_record(_skipping_job())])
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma)
+
+        await _hook(logger, _success_kwargs(request_metadata=_served(), model_group="my-router"))
+
+        router.acompletion.assert_not_called()
+        assert logger._test_funnel == [("job-1", "same_model")]
