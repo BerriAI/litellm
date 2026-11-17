@@ -96,6 +96,7 @@ from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import *
+from litellm.proxy.auth import jwt as proxy_jwt
 from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
     can_key_call_resolved_model,
@@ -103,7 +104,6 @@ from litellm.proxy.auth.auth_checks import (
     team_model_aliases_for_auth_check,
 )
 from litellm.proxy.auth.auth_utils import deployment_clientside_auth_params
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -3180,17 +3180,11 @@ _CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
 
 
 def _normalize_credential_value(value: str) -> str:
-    """Reduce a header value to the bare token, matching how ``user_api_key_auth``
-    reads a caller's key.
-
-    Reuses the auth module's ``_get_bearer_token`` so the caller-key comparison
-    strips exactly the schemes authentication accepts (``Bearer`` / ``bearer`` /
-    ``Basic`` / ``AWS4-HMAC-SHA256`` credential), rather than re-deriving a
-    narrower normalization here. ``_get_bearer_token`` returns ``""`` for a value
-    with no recognized scheme prefix, so a bare token (or a real Google
-    credential that carries no scheme) falls back to its own value.
-    """
-    return get_bearer_token(value) or value
+    normalized: Final = value.strip()
+    parts: Final = normalized.split(maxsplit=1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return (get_bearer_token(normalized) or normalized).strip()
 
 
 _VERTEX_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-goog-api-key"})
@@ -3238,18 +3232,6 @@ def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
     return override + pass_through
 
 
-def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -> bool:
-    """Whether a header value is the JWT whose claims ``user_api_key_auth`` stored as ``jwt_claims``."""
-    presented_claims: Final = JWTHandler.get_unverified_claims(value)
-    if presented_claims is None:
-        return False
-    return all(
-        presented_claims.get(name) == claim
-        for name, claim in jwt_claims.items()
-        if name not in JWTHandler.LITELLM_INTERNAL_CLAIMS
-    )
-
-
 def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
     """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``.
 
@@ -3261,7 +3243,7 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
         return True
     jwt_claims: Final = user_api_key_dict.jwt_claims
-    if jwt_claims and _is_authenticated_caller_jwt(normalized, jwt_claims):
+    if jwt_claims and proxy_jwt.presents_claims(normalized, jwt_claims):
         return True
     if is_no_auth_dev_mode(master_key, general_settings) and user_custom_auth is None:
         return False
@@ -3272,7 +3254,7 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
 
 
-def _caller_headers_without_litellm_secrets(
+def caller_headers_without_litellm_secrets(
     request: Request, user_api_key_dict: UserAPIKeyAuth, never_forwarded: frozenset[str]
 ) -> Mapping[str, str]:
     incoming: Final = safe_get_request_headers(request)
@@ -3292,7 +3274,7 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
     request: Request, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, str]:
     """Caller headers to forward on the bring-your-own-credentials Vertex branch, minus LiteLLM secrets."""
-    forwarded: Final = _caller_headers_without_litellm_secrets(
+    forwarded: Final = caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_VERTEX
     )
     if _VERTEX_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(forwarded):
@@ -3303,7 +3285,7 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
 def _upstream_headers_for_anthropic_route(
     request: Request, user_api_key_dict: UserAPIKeyAuth, proxy_auth_header: Mapping[str, str] | None
 ) -> Mapping[str, str]:
-    caller_headers: Final = _caller_headers_without_litellm_secrets(
+    caller_headers: Final = caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
     if proxy_auth_header is None:
@@ -3325,7 +3307,7 @@ def _upstream_headers_for_anthropic_route(
 def _upstream_headers_for_bedrock_agent_runtime_route(
     request: Request, user_api_key_dict: UserAPIKeyAuth, signed_headers: Mapping[str, object]
 ) -> Mapping[str, object]:
-    caller_headers: Final = _caller_headers_without_litellm_secrets(
+    caller_headers: Final = caller_headers_without_litellm_secrets(
         request,
         user_api_key_dict,
         _HEADERS_NEVER_FORWARDED_TO_BEDROCK | frozenset(name.lower() for name in signed_headers),

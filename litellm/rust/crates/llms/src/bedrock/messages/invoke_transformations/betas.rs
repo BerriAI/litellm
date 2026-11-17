@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 
-use litellm_llms_types::{
-    providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet},
-    recognized::python_truthy,
-};
+use litellm_llms_types::providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet};
+use litellm_python_compat::truthy::json_truthy;
 use serde_json::Value;
 
 use crate::{
@@ -289,7 +287,7 @@ fn get_anthropic_beta_list(
     {
         betas.insert(beta.into());
     }
-    if params.get("mcp_servers").is_some_and(python_truthy) {
+    if params.get("mcp_servers").is_some_and(json_truthy) {
         betas.insert("mcp-client-2025-04-04".into());
     }
     if messages.iter().any(|message| {

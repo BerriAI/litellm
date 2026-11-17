@@ -15,6 +15,9 @@ from litellm.litellm_core_utils.env_utils import (
 )
 
 MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
+PREFIX_BLOCK_HASHES_BLOCK_SIZE: Final = get_env_int_in_range(
+    "LITELLM_PREFIX_BLOCK_HASHES_BLOCK_SIZE", 512, minimum=1, maximum=sys.maxsize
+)
 OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
@@ -574,6 +577,12 @@ TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
     default=4,
     minimum=1,
     maximum=256,
+)
+PREFIX_BLOCK_HASHES_MAX_CHARS: Final = get_env_int_in_range(
+    "LITELLM_PREFIX_BLOCK_HASHES_MAX_CHARS",
+    default=min(65_536, TOKEN_COUNTER_MAX_EXACT_CHARS),
+    minimum=1,
+    maximum=TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 MAX_TILE_WIDTH: Final = get_env_int("MAX_TILE_WIDTH", 512)
 MAX_TILE_HEIGHT: Final = get_env_int("MAX_TILE_HEIGHT", 512)
@@ -1686,6 +1695,8 @@ LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
+SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY: Final = "_session_deployment_affinity_conversation"
+REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
@@ -1778,6 +1789,7 @@ AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: Final = "/speech/"
 AZURE_SPEECH_BATCH_PATH_PREFIX: Final = "/speechtotext/"
 AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:transcribe"
 OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX: Final = "/opensearch"
+CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX: Final = "/cursor-cli"
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
