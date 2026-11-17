@@ -29,9 +29,13 @@ from models import LiteLLMParamsBody
 
 _M = TypeVar("_M", bound=BaseModel)
 
+REALTIME_ROUTE: Final = "/v1/realtime"
+TRANSLATIONS_ROUTE: Final = "/v1/realtime/translations"
 
-def realtime_ws_url(model: str) -> str:
-    return f"{ws_base_url()}/v1/realtime?{urlencode({'model': model})}"
+
+def realtime_ws_url(model: str, *, route: str = REALTIME_ROUTE, intent: str | None = None) -> str:
+    query: Final = {"model": model} if intent is None else {"model": model, "intent": intent}
+    return f"{ws_base_url()}{route}?{urlencode(query)}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,7 @@ class RealtimeProvider:
     id: str
     alias: str
     litellm_params: LiteLLMParamsBody
+    modalities: tuple[str, ...] = ("text",)
 
 
 PROVIDERS = (
@@ -62,7 +67,7 @@ PROVIDERS = (
         "azure",
         "azure-realtime",
         LiteLLMParamsBody(
-            model="azure/gpt-realtime",
+            model="azure/gpt-realtime-1.5",
             api_key="os.environ/AZURE_API_KEY",
             api_version="2025-08-28",
             realtime_protocol="GA",
@@ -75,15 +80,17 @@ PROVIDERS = (
             model="gemini/gemini-3.1-flash-live-preview",
             api_key="os.environ/GEMINI_API_KEY",
         ),
+        modalities=("audio",),
     ),
     RealtimeProvider(
         "vertex_ai",
         "vertex-realtime",
         LiteLLMParamsBody(
-            model="vertex_ai/gemini-live-2.5-flash-native-audio",
+            model="vertex_ai/gemini-3.8-live",
             vertex_location="us-central1",
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),
+        modalities=("audio",),
     ),
     RealtimeProvider(
         "bedrock",
@@ -178,6 +185,75 @@ class ResponseCreate(BaseModel):
 class InputAudioBufferAppend(BaseModel):
     type: str = "input_audio_buffer.append"
     audio: str
+
+
+class InputAudioBufferCommit(BaseModel):
+    type: str = "input_audio_buffer.commit"
+
+
+class SessionInputAudioBufferAppend(BaseModel):
+    type: str = "session.input_audio_buffer.append"
+    audio: str
+
+
+AudioAppend = InputAudioBufferAppend | SessionInputAudioBufferAppend
+
+
+class TranslationOutput(BaseModel):
+    language: str
+
+
+class TranslationAudio(BaseModel):
+    output: TranslationOutput
+
+
+class TranslationSessionConfig(BaseModel):
+    audio: TranslationAudio
+
+
+class TranslationSessionUpdate(BaseModel):
+    type: str = "session.update"
+    session: TranslationSessionConfig
+
+
+class PcmFormat(BaseModel):
+    type: str = "audio/pcm"
+    rate: int = 24000
+
+
+class InputTranscription(BaseModel):
+    model: str
+
+
+class TranscriptionAudioInput(BaseModel):
+    format: PcmFormat = PcmFormat()
+    transcription: InputTranscription
+
+
+class TranscriptionAudio(BaseModel):
+    input: TranscriptionAudioInput
+
+
+class TranscriptionSessionConfig(BaseModel):
+    type: str = "transcription"
+    audio: TranscriptionAudio
+
+
+class TranscriptionSessionUpdate(BaseModel):
+    type: str = "session.update"
+    session: TranscriptionSessionConfig
+
+
+RealtimeClientEvent = (
+    SessionUpdate
+    | TranslationSessionUpdate
+    | TranscriptionSessionUpdate
+    | ConversationItemCreate
+    | ResponseCreate
+    | InputAudioBufferAppend
+    | InputAudioBufferCommit
+    | SessionInputAudioBufferAppend
+)
 
 
 def user_message(text: str) -> ConversationItemCreate:
@@ -317,7 +393,7 @@ class RealtimeSession:
     connection: Connection
 
     @step("Send the realtime event {event.type} over the websocket")
-    def send(self, event: SessionUpdate | ConversationItemCreate | ResponseCreate | InputAudioBufferAppend) -> None:
+    def send(self, event: RealtimeClientEvent) -> None:
         self.connection.send(event.model_dump_json(by_alias=True, exclude_none=True))
 
     @step("Wait for a {stop_type} event on the realtime websocket")
@@ -347,9 +423,9 @@ class RealtimeSession:
     @step("Stream the spoken question as mic chunks, then silence until the turn goes idle")
     def stream_and_collect(
         self,
-        chunks: Sequence[InputAudioBufferAppend],
+        chunks: Sequence[AudioAppend],
         *,
-        tail: InputAudioBufferAppend,
+        tail: AudioAppend,
         interval: float,
         idle: float,
         timeout: float,
@@ -360,9 +436,9 @@ class RealtimeSession:
 
     def _live_mic_events(
         self,
-        chunks: Sequence[InputAudioBufferAppend],
+        chunks: Sequence[AudioAppend],
         *,
-        tail: InputAudioBufferAppend,
+        tail: AudioAppend,
         interval: float,
         idle: float,
         timeout: float,
@@ -405,13 +481,19 @@ class RealtimeClient:
         )
         return model_name, model_id
 
-    @step("Open a /v1/realtime websocket session to {model}")
+    @step("Open a {route} websocket session to {model}")
     @contextmanager
     def connect(
-        self, *, key: str, model: str, timeout: float = 15.0
+        self,
+        *,
+        key: str,
+        model: str,
+        route: str = REALTIME_ROUTE,
+        intent: str | None = None,
+        timeout: float = 15.0,
     ) -> Generator[RealtimeSession, None, None]:
         with connect(
-            realtime_ws_url(model),
+            realtime_ws_url(model, route=route, intent=intent),
             additional_headers={"Authorization": f"Bearer {key}"},
             open_timeout=timeout,
         ) as connection:

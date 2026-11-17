@@ -23,7 +23,7 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from openai import APIError, AsyncOpenAI, OpenAI
@@ -1200,9 +1200,7 @@ def test_responses_pre_call_denial_streams_sse_with_typed_message_item(gateway: 
                 response.headers["content-type"],
                 response.text,
             )
-            lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
-            assert lines[-1] == "data: [DONE]", response.text
-            events: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+            events: Final = _blocked_stream_events(response.text)
             kinds: Final = tuple(event["type"] for event in events)
             assert tuple(kind for kind in kinds if kind != "response.output_text.delta") == (
                 "response.created",
@@ -1289,9 +1287,13 @@ def _responses_output_denial_config(tmp_path: Path, identity: str, model: str) -
 
 
 def _blocked_stream_events(text: str) -> tuple[dict[str, object], ...]:
-    lines: Final = tuple(line for line in text.split("\n") if line.startswith("data: "))
-    assert lines[-1] == "data: [DONE]", text
-    return tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+    assert "data: [DONE]" not in text, text
+    lines: Final = tuple(line for line in text.split("\n") if line.startswith(("event: ", "data: ")))
+    events: Final[tuple[dict[str, object], ...]] = tuple(
+        json.loads(line.removeprefix("data: ")) for line in lines[1::2]
+    )
+    assert lines[::2] == tuple(f"event: {event['type']}" for event in events), text
+    return events
 
 
 def _dead_api_base() -> str:
@@ -1635,7 +1637,7 @@ def test_chat_pre_call_denial_streams_content_filter(gateway: Gateway, tmp_path:
         assert lines[-1] == "data: [DONE]", response.text
         chunks: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
         assert chunks[0]["choices"][0]["delta"]["content"] == _RESPONSES_DENIAL, chunks
-        assert chunks[-1]["choices"][0]["finish_reason"] == "stop", chunks
+        assert chunks[-1]["choices"][0]["finish_reason"] == "content_filter", chunks
 
 
 @pytest.mark.covers("other.observability.guardrails.chat_pre_call_denial_returns_content_filter")
@@ -2798,7 +2800,7 @@ def test_client_disconnect_after_a_finished_responses_tool_call_scans_the_text_a
     with _disconnect_rig(gateway, tmp_path, shape="text_then_tool_call") as rig:
         try:
             received: Final = _stream_and_close(
-                rig, "/v1/responses", _tool_call_request(rig, "/v1/responses"), "response.output_item.done"
+                rig, "/v1/responses", _tool_call_request(rig, "/v1/responses"), '"type":"response.output_item.done"'
             )
             assert rig.token() in received, received
             scans: Final = eventually(
@@ -3263,7 +3265,10 @@ def test_client_disconnect_during_the_body_upload_runs_no_endpoint_and_writes_no
     with (
         wire_server(_openai_upstream) as upstream,
         owned_proxy_process(
-            gateway, tmp_path, {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"}
+            gateway,
+            tmp_path,
+            {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"},
+            state=OwnedState.PRIVATE,
         ) as owned,
         owned.gateway.scenario() as scenario,
     ):

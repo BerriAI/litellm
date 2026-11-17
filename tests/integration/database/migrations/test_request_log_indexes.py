@@ -39,8 +39,8 @@ requires_db: Final = pytest.mark.skipif(
 )
 
 REPO: Final = Path(__file__).resolve().parents[4]
-PACKAGE: Final = REPO / "litellm-proxy-extras" / "litellm_proxy_extras"
-PARTITION_SCRIPT: Final = REPO / "db_scripts" / "partition_spend_logs.sql"
+PACKAGE: Final = REPO / "litellm" / "proxy-extras" / "litellm_proxy_extras"
+PARTITION_SCRIPT: Final = REPO / "litellm/scripts" / "db" / "partition_spend_logs.sql"
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
@@ -922,7 +922,12 @@ def test_a_valid_partitioned_parent_index_under_another_name_is_renamed_with_its
     with caplog.at_level("INFO", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(partitioned_database, "public") is True
 
-    assert "Building index" not in caplog.text
+    assert caplog.messages == [
+        "Renaming the equivalent index call_id_parent_by_hand on LiteLLM_SpendLogs "
+        f"to {CALL_ID_INDEX} instead of building a second one",
+        "Building index LiteLLM_DailyUserSpend_api_key_date_idx on LiteLLM_DailyUserSpend concurrently",
+        "Request-log indexes are all in place",
+    ]
     oids: Final = _index_oids(partitioned_database)
     assert "call_id_parent_by_hand" not in oids and oids[CALL_ID_INDEX] == hand_built
     assert _attached_children(partitioned_database, CALL_ID_INDEX) == children_before
@@ -1033,13 +1038,14 @@ def test_the_entry_size_check_draws_the_line_exactly_where_postgres_does(
     create_index: Final = sql.SQL('CREATE INDEX "entry_probe_idx" ON "entry_probe" ({})').format(
         sql.SQL(", ").join(sql.Identifier(column) for column in index_columns)
     )
+    fitting_key: Final = secrets.token_hex(longest_fitting_key)[:longest_fitting_key]
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute('CREATE TABLE "entry_probe" ("s" TEXT, "k" TEXT, "t" TIMESTAMP(3))')
         conn.execute(
             'INSERT INTO "entry_probe" ("s", "k", "t") VALUES (%s, %s, %s), (%s, %s, %s)',
             (
                 s_value,
-                secrets.token_hex(longest_fitting_key)[:longest_fitting_key],
+                fitting_key,
                 t_value,
                 s_value,
                 secrets.token_hex(longest_fitting_key)[: longest_fitting_key + 1],
@@ -1051,7 +1057,8 @@ def test_the_entry_size_check_draws_the_line_exactly_where_postgres_does(
         )
         with pytest.raises(psycopg.errors.ProgramLimitExceeded, match="exceeds btree version 4 maximum 2704"):
             conn.execute(create_index)
-        conn.execute('DELETE FROM "entry_probe" WHERE octet_length("k") > %s', (longest_fitting_key,))
+        conn.execute('TRUNCATE "entry_probe"')
+        conn.execute('INSERT INTO "entry_probe" ("s", "k", "t") VALUES (%s, %s, %s)', (s_value, fitting_key, t_value))
         conn.execute(create_index)
 
     (finding,) = findings
@@ -1075,7 +1082,8 @@ def test_a_value_postgres_compresses_under_the_limit_is_not_counted_while_random
         )
         with pytest.raises(psycopg.errors.ProgramLimitExceeded, match="index row size 3016 exceeds"):
             conn.execute(create_index)
-        conn.execute('DELETE FROM "compress_probe" WHERE "k" <> %s', ("a" * 3000,))
+        conn.execute('TRUNCATE "compress_probe"')
+        conn.execute('INSERT INTO "compress_probe" ("k") VALUES (%s)', ("a" * 3000,))
         conn.execute(create_index)
         stored: Final = conn.execute('SELECT octet_length("k"), pg_column_size("k") FROM "compress_probe"').fetchone()
 

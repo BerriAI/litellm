@@ -2,6 +2,7 @@ import base64
 import itertools
 import json
 import os
+import re
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -679,9 +680,70 @@ def test_gemini_own_tool_call_signature_is_still_replayed_on_the_function_call_p
         assert _spend_row(rounds[1])["status"] == "success"
 
 
-def test_responses_previous_response_id_replays_gemini_session_history(
-    gateway: Gateway, tmp_path: Path
+_PLACEHOLDER_SIGNATURE: Final = base64.b64encode(b"skip_thought_signature_validator").decode()
+_ISSUED_ID: Final = re.compile(r'"id":\s*"([^"]+)"')
+_PLACEHOLDER_TOOL_TURN: Final = _model_turn(
+    _thought("I should count."),
+    {"function_call": {"name": "count_fruit", "args": {"kind": "apple"}}, "thoughtSignature": _PLACEHOLDER_SIGNATURE},
+)
+# Wording AI Studio answers with when a Vertex-minted signature is replayed to it, captured live on 2026-10-27
+_FOREIGN_SIGNATURE_REJECTED: Final = Reply(
+    status=400,
+    body=json.dumps(
+        {"error": {"code": 400, "message": "Corrupted thought signature.", "status": "INVALID_ARGUMENT"}}
+    ).encode(),
+)
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("endpoint", _ENDPOINTS)
+def test_gemini_tool_call_signature_the_backend_rejects_is_resent_once_with_the_placeholder(
+    gateway: Gateway, endpoint: Endpoint, stream: bool
 ) -> None:
+    rounds: Final = (f"gemini-reply-{uuid.uuid4().hex}", f"gemini-reply-{uuid.uuid4().hex}")
+    calls: Final = itertools.count()
+
+    def respond(request: Request) -> Reply:
+        match next(calls):
+            case 0:
+                return _reply(rounds[0], stream=False, parts=_GEMINI_TOOL_REPLY_PARTS)
+            case 1:
+                return _FOREIGN_SIGNATURE_REJECTED
+            case _:
+                return _reply(rounds[1], stream=stream, parts=({"text": "Twelve apples."},))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _register(gateway, scenario, "gemini", wire)
+        first: Final = _tool_round_one(endpoint, model)
+        headers: Final = {"anthropic-version": "2023-06-01"}
+        opened: Final = gateway.request("POST", _path(endpoint), first, headers=headers)
+        assert opened.status_code == 200, opened.text
+        second: Final = {
+            **_tool_round_two(endpoint, first, _JSON_OBJECT.validate_json(opened.content)),
+            "stream": stream,
+        }
+        closed: Final = gateway.request("POST", _path(endpoint), second, headers=headers)
+        assert closed.status_code == 200, closed.text
+        assert "Twelve apples." in closed.text, closed.text
+        received: Final = wire.drain()
+        assert [(request.method, request.target) for request in received] == [
+            ("POST", _target("gemini", False)),
+            ("POST", _target("gemini", stream)),
+            ("POST", _target("gemini", stream)),
+        ], received
+        rejected, resent = (_JSON_OBJECT.validate_json(request.body) for request in received[1:])
+        assert rejected == {
+            **_expected_body(endpoint, _user("Count the apples."), _GEMINI_TOOL_REPLAYED_TURN, _FUNCTION_RESPONSE_TURN),
+            **_DECLARATIONS,
+        }, rejected
+        assert resent == {
+            **_expected_body(endpoint, _user("Count the apples."), _PLACEHOLDER_TOOL_TURN, _FUNCTION_RESPONSE_TURN),
+            **_DECLARATIONS,
+        }, resent
+        assert _spend_row(rounds[1], *_ISSUED_ID.findall(closed.text))["status"] == "success"
+
+
+def test_responses_previous_response_id_replays_gemini_session_history(gateway: Gateway, tmp_path: Path) -> None:
     first_prompt: Final = f"gemini-session-first-{uuid.uuid4().hex}"
     second_prompt: Final = f"gemini-session-second-{uuid.uuid4().hex}"
     first_answer: Final = f"gemini-answer-first-{uuid.uuid4().hex}"

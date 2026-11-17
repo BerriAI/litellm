@@ -1,4 +1,3 @@
-import datetime
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Final, cast
@@ -9,6 +8,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date
 
 
 def _form_field_value(value: object) -> str:
@@ -168,7 +168,9 @@ class RankedChatModel:
 
 
 def rank_chat_models_from_llm_provider(custom_llm_provider: str) -> tuple[RankedChatModel, ...]:
-    known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
+    from litellm.utils import bundled_provider_models
+
+    known_models: Final = bundled_provider_models(custom_llm_provider)
     ranked_models: Final = (
         RankedChatModel(
             model=model, route_rank=route_rank, cost=cost, is_past_deprecation_date=is_past_deprecation_date
@@ -187,18 +189,11 @@ _COST_MAP_DEPRECATION: Final = TypeAdapter(_CostMapDeprecation)
 
 
 def _is_past_deprecation_date(cost_map_key: str) -> bool:
-    deprecation_date: Final = _COST_MAP_DEPRECATION.validate_python(
-        litellm.model_cost.get(cost_map_key) or {}  # pyright: ignore[reportUnknownMemberType]  # untyped cost map JSON
-    ).get("deprecation_date")
-    if not isinstance(deprecation_date, str):
-        return False
-    try:
-        return (
-            datetime.date.fromisoformat(deprecation_date)
-            <= datetime.datetime.now(datetime.timezone.utc).astimezone().date()
+    return is_past_deprecation_date(
+        _COST_MAP_DEPRECATION.validate_python(
+            litellm.model_cost.get(cost_map_key) or {}  # pyright: ignore[reportUnknownMemberType]  # untyped cost map JSON
         )
-    except ValueError:
-        return False
+    )
 
 
 def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float, bool]]:

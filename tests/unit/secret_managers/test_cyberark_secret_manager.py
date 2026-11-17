@@ -14,7 +14,7 @@ import litellm.proxy.proxy_server
 from litellm._uuid import uuid
 from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManager
 
-FIXTURE_PATH: Final = Path(__file__).resolve().parents[3] / "litellm-rust/crates/secrets-cyberark/tests/fixtures/parity.json"
+FIXTURE_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/rust/crates/secrets-cyberark/tests/fixtures/parity.json"
 
 
 class ParitySecret(TypedDict):
