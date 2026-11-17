@@ -3,10 +3,8 @@ use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION}
 
 use crate::Error;
 
-/// Python's `re.match(r"^[a-z][a-z0-9-]*$", location)`, whose `$` also matches before one
-/// trailing newline.
+/// A lowercase token of letters, digits and hyphens that starts with a letter.
 fn is_location_token(location: &str) -> bool {
-    let location = location.strip_suffix('\n').unwrap_or(location);
     location
         .as_bytes()
         .first()
@@ -175,6 +173,7 @@ mod tests {
     #[case::two_trailing_newlines("us-east5\n\n")]
     #[case::newline_inside("us\neast5")]
     #[case::only_a_newline("\n")]
+    #[case::one_trailing_newline("us-east5\n")]
     #[case::empty("")]
     fn a_location_that_is_not_a_token_is_rejected(#[case] location: &str) {
         let Err(Error::Auth(error)) = get_vertex_base_url(location) else {
@@ -192,7 +191,6 @@ mod tests {
     #[rstest]
     #[case::trailing_hyphen("us-")]
     #[case::digit_after_letter("u1")]
-    #[case::one_trailing_newline("us-east5\n")]
     fn a_location_python_accepts_is_accepted(#[case] location: &str) {
         assert!(get_vertex_base_url(location).is_ok());
     }
