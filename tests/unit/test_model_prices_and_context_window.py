@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import resolve_suppo
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.types.utils import SearchFreeRequests
+from litellm.utils import ProviderConfigManager
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -134,6 +135,23 @@ def test_claude_5_5_costs_the_same_on_both_bedrock_mantle_prefixes(
     tokens: Final = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
     assert litellm.cost_per_token(model=f"bedrock/mantle/{model}", **tokens) == litellm.cost_per_token(
         model=f"bedrock_mantle/{model}", **tokens
+    )
+
+
+@pytest.mark.parametrize("model", ("openai.gpt-6.2-sol", "openai.gpt-6.2-astra"))
+def test_bedrock_mantle_gpt_6_2_deployments_are_served_by_the_mantle_responses_config(
+    model: str, local_model_cost_map: None
+) -> None:
+    # A proxy deployment registers its model_info under its own bedrock_mantle/ name. Without a
+    # bedrock_mantle row, that registration merges into the bedrock_converse row for the same
+    # Bedrock id, Mantle loses its Responses capability, and requests leave unsigned.
+    litellm.register_model({f"bedrock_mantle/{model}": {"litellm_provider": "bedrock_mantle", "mode": "responses"}})
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders.BEDROCK_MANTLE, model=model
+    )
+    assert isinstance(config, litellm.BedrockMantleResponsesAPIConfig)
+    assert config.get_complete_url(api_base=None, litellm_params={"aws_region_name": "us-east-1"}) == (
+        "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
     )
 
 
