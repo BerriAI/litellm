@@ -4851,6 +4851,7 @@ class LlmProviders(str, Enum):
     ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
+    EZKIELYNA = "ezkielyna"
     SAIL = "sail"
     REKA = "reka"
     STREAMLAKE = "streamlake"
