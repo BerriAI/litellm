@@ -2737,8 +2737,8 @@
       "url": "https://docs.litellm.ai/docs/providers/bineric",
       "endpoints": {
         "chat_completions": true,
-        "responses": false,
-        "text_completion": false,
+        "responses": true,
+        "text_completion": true,
         "embeddings": false,
         "image_generations": false,
         "image_edits": false,
@@ -2751,11 +2751,11 @@
         "realtime": false,
         "video_generations": false,
         "batches": false,
-        "messages": false,
-        "interactions": false,
+        "messages": true,
+        "interactions": true,
         "systemone": true,
-        "a2a": false,
-        "generateContent": false
+        "a2a": true,
+        "generateContent": true
       }
     }
   },
