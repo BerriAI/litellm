@@ -3045,3 +3045,36 @@ def test_stream_chunk_builder_adds_no_choice_provider_specific_fields_when_no_ch
     assert response.choices[0].message.content == "Waves fold silver light."
     assert response.choices[0].finish_reason == "content_filter"
     assert getattr(response.choices[0], "provider_specific_fields", None) is None
+
+
+_TWO_CHOICE_REASON_FIELDS: Final[Mapping[int, Mapping[str, str]]] = {
+    0: {"native_finish_reason": "STOP"},
+    1: {"native_finish_reason": "SAFETY", "native_finish_message": "Flagged."},
+}
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+def test_stream_chunk_builder_keeps_each_choices_own_provider_specific_fields(over_http: bool) -> None:
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id="chatcmpl-two-reasons",
+            created=1,
+            model="gemini-3.8-flash",
+            choices=[
+                StreamingChoices(
+                    index=index,
+                    delta=Delta(content=f"choice {index}"),
+                    finish_reason="stop" if index == 0 else "content_filter",
+                    provider_specific_fields=dict(fields),
+                )
+            ],
+        )
+        for index, fields in _TWO_CHOICE_REASON_FIELDS.items()
+    )
+
+    response: Final = stream_chunk_builder(chunks=list(_as_received(chunks, over_http)))
+
+    assert response is not None
+    assert {
+        choice.index: getattr(choice, "provider_specific_fields", None) for choice in response.choices
+    } == _TWO_CHOICE_REASON_FIELDS

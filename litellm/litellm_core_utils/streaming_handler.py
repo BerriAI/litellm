@@ -175,6 +175,7 @@ def _prepend_upstream_choice_extras(
 
 
 _NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_CLOSING_CHOICE_INDEX: Final = 0
 _NO_CHOICE_FIELDS_BY_INDEX: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
 _NO_FINISH_REASONS_BY_INDEX: Final[Mapping[int, str]] = MappingProxyType({})
 
@@ -213,14 +214,6 @@ def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
             return first_choice
         case _:
             return None
-
-
-def _upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
-    first_choice: Final = _upstream_first_choice(upstream_chunk)
-    if first_choice is None:
-        return _NO_UPSTREAM_CHOICE_FIELDS
-    upstream_extras: Final[Mapping[str, object]] = first_choice.model_extra or {}
-    return MappingProxyType({field: upstream_extras[field] for field in fields if field in upstream_extras})
 
 
 def _upstream_choice_fields_at(upstream_chunk: object, index: int, fields: Sequence[str]) -> Mapping[str, object]:
@@ -269,6 +262,22 @@ def _non_null_upstream_choice_fields(upstream_chunk: object, fields: Sequence[st
 def _apply_choice_fields(choice: StreamingChoices, fields: Mapping[str, object]) -> None:
     for field, value in fields.items():
         setattr(choice, field, value)
+
+
+def _hold_back_closing_finish_fields(choices: Sequence[StreamingChoices], upstream_chunk: object) -> None:
+    held_back: Final = next(
+        (
+            choice
+            for choice in choices
+            if choice.index == _CLOSING_CHOICE_INDEX
+            and choice.finish_reason is None
+            and (choice.model_extra or {}).get("provider_specific_fields") is not None
+        ),
+        None,
+    )
+    if held_back is None or _CLOSING_CHOICE_INDEX not in _finish_reasons_by_index(upstream_chunk):
+        return
+    delattr(held_back, "provider_specific_fields")
 
 
 def _choice_fields_chunk(
@@ -1471,6 +1480,7 @@ class CustomStreamWrapper:
                     self._finish_sibling_choice(model_response.choices[0], sibling_finish_reason)
                 elif response_obj.get("is_finished"):
                     self._apply_finish_choice_fields(model_response.choices[0])
+                _hold_back_closing_finish_fields(model_response.choices, response_obj.get("original_chunk"))
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
                 return model_response
@@ -1777,9 +1787,7 @@ class CustomStreamWrapper:
             response_obj = self.handle_openai_text_completion_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
-            self._record_finish_reasons(chunk)
-            if response_obj["is_finished"]:
-                self._record_finish_choice_fields(chunk)
+            self._record_finishes(chunk)
             if response_obj["is_finished"] and response_obj["sibling_finish_reason"] is None:
                 self.received_finish_reason = response_obj["finish_reason"]
             if response_obj["usage"] is not None:
@@ -1854,10 +1862,9 @@ class CustomStreamWrapper:
                 self.response_id = cached_chunk.id
             if hasattr(cached_chunk, "system_fingerprint"):
                 self.system_fingerprint = cached_chunk.system_fingerprint
-            self._record_finish_reasons(cached_chunk)
+            self._record_finishes(cached_chunk)
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
-                self._record_finish_choice_fields(cached_chunk)
         else:  # openai / azure chat model
             self.uses_openai_chat_stream = True
             if isinstance(chunk, (ChatCompletionChunk, ModelResponseStream)):
@@ -2247,11 +2254,6 @@ class CustomStreamWrapper:
             unindexed=None if self.received_finish_reasons else self.received_finish_reason,
         )
 
-    def _record_finish_reasons(self, upstream_chunk: object) -> None:
-        received: Final = _finish_reasons_by_index(upstream_chunk)
-        if received:
-            self.received_finish_reasons = MappingProxyType({**self.received_finish_reasons, **received})
-
     def _record_finishes(self, upstream_chunk: object) -> None:
         received: Final = _finish_reasons_by_index(upstream_chunk)
         if not received:
@@ -2271,16 +2273,6 @@ class CustomStreamWrapper:
         if finish_reason == "stop" and self.tool_call:
             return "tool_calls"
         return finish_reason
-
-    def _record_finish_choice_fields(self, upstream_chunk: object) -> None:
-        self.received_finish_choice_fields = MappingProxyType(
-            {
-                **self.received_finish_choice_fields,
-                _upstream_choice_index(upstream_chunk): _upstream_choice_fields(
-                    upstream_chunk, STREAM_FINISH_CHOICE_FIELDS
-                ),
-            }
-        )
 
     def _apply_finish_choice_fields(self, choice: StreamingChoices) -> None:
         _apply_choice_fields(choice, self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS))
@@ -2356,7 +2348,9 @@ class CustomStreamWrapper:
         if served_tier is not None:
             setattr(model_response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
         _finish_reason: Final = (
-            self.received_finish_reason or self.received_finish_reasons.get(0) or self.intermittent_finish_reason
+            self.received_finish_reason
+            or self.received_finish_reasons.get(model_response.choices[0].index)
+            or self.intermittent_finish_reason
         )
         model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
             _finish_reason if _finish_reason is not None else "stop"
