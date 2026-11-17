@@ -19611,7 +19611,9 @@ def _kept_ids(model_list: list[dict[str, object]], messages: list[dict[str, obje
     ]
 
 
-@pytest.mark.parametrize("model", ["openai/my-fake-model", "claude-sonnet-5-5", "deepseek/deepseek-v4-pro"])
+@pytest.mark.parametrize(
+    "model", ["openai/my-fake-model", "anthropic/my-fake-claude-model", "deepseek/my-fake-deepseek-model"]
+)
 def test_pre_call_checks_leaves_a_stand_in_overcount_within_the_margin_to_the_provider(model: str):
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
     smallest_window_within_margin: Final = -(-tokens // STAND_IN_OVERCOUNT_MARGIN)
@@ -19646,6 +19648,38 @@ def test_pre_call_checks_steers_off_a_stand_in_overcount_when_another_deployment
     ]
 
     assert _kept_ids(model_list, _RUSSIAN_PROMPT) == ["large"]
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "deepseek/deepseek-v4-pro"])
+def test_pre_call_checks_enforce_an_operator_cap_below_the_cost_map_window_exactly(model: str):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    catalog_window: Final = litellm.get_model_info(model)["max_input_tokens"]
+    assert catalog_window is not None and catalog_window > tokens
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={tokens - 1}, Got={tokens}"):
+        _kept_ids(_single_deployment(model, tokens - 1), _RUSSIAN_PROMPT)
+
+
+def _text_of_stand_in_tokens(tokens: int) -> str:
+    sentence: Final = "Привет, как дела? Это тестовый текст. "
+    return sentence * (tokens // litellm.token_counter(custom_tokenizer=stand_in_tokenizer(), text=sentence))
+
+
+def test_pre_call_checks_refuse_a_stand_in_overcount_on_an_embedding_model():
+    backend: Final = "cohere/embed-english-v3.0"
+    window: Final = litellm.get_model_info(backend)["max_input_tokens"]
+    assert window is not None
+    router: Final = Router(
+        model_list=[{"model_name": "embedder", "litellm_params": {"model": backend, "api_key": "sk-test"}}],
+        enable_pre_call_checks=True,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={window}"):
+        router._pre_call_checks(
+            model="embedder",
+            healthy_deployments=router.registry().deployments("embedder"),
+            input=_text_of_stand_in_tokens(window * 3 // 2),
+        )
 
 
 def _blank_pdf_prompt() -> list[dict[str, object]]:

@@ -246,18 +246,35 @@ def _token_id_count(host: "PythonHost", count: int) -> int:
     return 0 if host.dynamic().disable_token_counter else count
 
 
-def _max_input_tokens(registry: PreCallRegistry, model: str, deployment: Mapping[str, object]) -> int | None:
-    """``_deployment_max_input_tokens``: the declared context window, or None when there is none or
+def _router_model_info(registry: PreCallRegistry, model: str, deployment: Mapping[str, object]) -> Mapping[str, object]:
+    """``_deployment_max_input_tokens``'s lookup: the deployment's router model info, or none when
     the deployment cannot be resolved."""
     try:
-        model_info: Final = registry._core_get_router_model_info(  # pyright: ignore[reportPrivateUsage]  # the host registry's lookup
+        return registry._core_get_router_model_info(  # pyright: ignore[reportPrivateUsage]  # the host registry's lookup
             deployment=deployment, received_model_name=model
         )
     except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
         verbose_router_logger.debug("litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e)
-        return None
+        return MappingProxyType({})
+
+
+def _max_input_tokens(model_info: Mapping[str, object]) -> int | None:
     max_input_tokens: Final = model_info.get("max_input_tokens")
     return max_input_tokens if isinstance(max_input_tokens, int) else None
+
+
+def _caps_below_catalog(
+    registry: PreCallRegistry, model: str, deployment: Mapping[str, object], window: int | None
+) -> bool:
+    model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
+    if window is None or "max_input_tokens" not in model_info:
+        return False
+    uncapped: Final = {
+        **deployment,
+        "model_info": {key: value for key, value in model_info.items() if key != "max_input_tokens"},
+    }
+    catalog_window: Final = _max_input_tokens(_router_model_info(registry, model, uncapped))
+    return catalog_window is not None and window < catalog_window
 
 
 def _items(value: object) -> tuple[object, ...]:
@@ -375,7 +392,11 @@ class PreCallFacts:
         self._messages: Final = messages
         self._input: Final = input
         self._has_input: Final = messages is not None or input is not None
-        self._windows: Final = {id: _max_input_tokens(registry, self._model, records(id)) for id in self._candidates}
+        self._registry: Final = registry
+        self._model_infos: Final = {
+            id: _router_model_info(registry, self._model, records(id)) for id in self._candidates
+        }
+        self._windows: Final = {id: _max_input_tokens(info) for id, info in self._model_infos.items()}
 
     def _record(self, id: str) -> Mapping[str, object]:  # a deployment id
         return self._records(id)
@@ -390,6 +411,15 @@ class PreCallFacts:
             for id, limit in self._windows.items()
             if limit is not None
         }
+
+    def _window_is_exact(self, id: str) -> bool:  # a deployment id
+        return self._model_infos[id].get("mode") == "embedding" or _caps_below_catalog(
+            self._registry, self._model, self._record(id), self._windows[id]
+        )
+
+    def _estimated(self, models: Mapping[str, str | None]) -> frozenset[str]:
+        stand_ins: Final = (id for id, model in models.items() if model is None)
+        return frozenset(id for id in stand_ins if not self._window_is_exact(id))
 
     def _candidate_records(self) -> Sequence[Mapping[str, object]]:
         return tuple(self._record(id) for id in self._candidates)
@@ -469,13 +499,13 @@ class PreCallFacts:
         models: Final = self._openai_models()
         keys: Final = {id: _token_count_key(model) for id, model in models.items()}
         counted: Final = {key: self._count(model) for key, model in _model_by_key(models, keys).items()}
-        return _deployment_counts(models, keys, counted)
+        return _deployment_counts(keys, counted, self._estimated(models))
 
     async def _counts_async(self) -> Mapping[str, _DeploymentCount]:
         models: Final = self._openai_models()
         keys: Final = {id: _token_count_key(model) for id, model in models.items()}
         counted: Final = {key: await self._count_async(model) for key, model in _model_by_key(models, keys).items()}
-        return _deployment_counts(models, keys, counted)
+        return _deployment_counts(keys, counted, self._estimated(models))
 
     def _answer(self, counts: Mapping[str, _DeploymentCount]) -> Mapping[str, object]:
         if not self._has_input:
@@ -527,12 +557,12 @@ def _model_by_key(
 
 
 def _deployment_counts(
-    models: Mapping[str, str | None], keys: Mapping[str, _TokenCountKey], counted: Mapping[_TokenCountKey, int | None]
+    keys: Mapping[str, _TokenCountKey], counted: Mapping[_TokenCountKey, int | None], estimated: frozenset[str]
 ) -> Mapping[str, _DeploymentCount]:
     return {
-        id: _DeploymentCount(tokens, estimated=model is None)
-        for id, model in models.items()
-        if (tokens := counted[keys[id]]) is not None
+        id: _DeploymentCount(tokens, estimated=id in estimated)
+        for id, key in keys.items()
+        if (tokens := counted[key]) is not None
     }
 
 

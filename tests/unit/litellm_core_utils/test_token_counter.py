@@ -9,11 +9,11 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Set
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from queue import SimpleQueue
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
@@ -3966,6 +3966,39 @@ def test_memoized_counts_match_uncached_counts_for_each_model_sharing_the_memo()
 
     assert len(set(uncached)) == len(models)
     assert tuple(token_counter_new(model=model, text=text) for model in models * 2) == uncached * 2
+
+
+class _CallCountingByteEncoding(tiktoken.Encoding):
+    def __init__(self) -> None:
+        super().__init__(
+            "call-counting-bytes",
+            pat_str=r"\S+|\s+",
+            mergeable_ranks={bytes([byte]): byte for byte in range(256)},
+            special_tokens={},
+        )
+        self.calls = 0
+
+    def encode(
+        self,
+        text: str,
+        *,
+        allowed_special: Literal["all"] | Set[str] = frozenset(),
+        disallowed_special: Literal["all"] | Collection[str] = "all",
+    ) -> list[int]:
+        self.calls += 1
+        return super().encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+
+
+def test_openai_encoding_custom_tokenizer_counts_are_memoized():
+    encoding: Final = _CallCountingByteEncoding()
+    custom_tokenizer: Final = {"type": "openai_tokenizer", "tokenizer": encoding}
+
+    first: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+    calls_for_one_count: Final = encoding.calls
+    second: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+
+    assert first == second == len(_MEMOIZED_TEXT)
+    assert encoding.calls == calls_for_one_count > 0
 
 
 def test_custom_tokenizer_counts_are_not_memoized():

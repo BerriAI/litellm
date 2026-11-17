@@ -1297,7 +1297,8 @@ def _get_count_function(
 ) -> TokenCounterFunction:
     exact: Final = _resolve_exact_count(model, custom_tokenizer)
     count: Final = _get_extrapolating_count_function(exact.count)
-    return count if custom_tokenizer is not None else _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count)
+    memoizable: Final = custom_tokenizer is None or isinstance(exact.tokenizer, tiktoken.Encoding | OpenAIEncoding)
+    return _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count) if memoizable else count
 
 
 @dataclass(frozen=True, slots=True)
