@@ -15,7 +15,7 @@ use litellm_llms_types::{
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -153,19 +153,16 @@ pub(crate) fn sigv4_environment(
     }
 }
 
-/// Python's `_move_betas_into_header`.
+/// Python's `_move_betas_into_header`: the betas the Invoke transform put in the body's
+/// `anthropic_beta` list become one header.
 fn move_betas_into_header(request: &MessagesRequest, headers: Headers) -> Result<Headers, Error> {
-    let body = serde_json::to_value(request).map_err(|error| {
-        Error::InvalidRequest(ErrorDetail::failed(
-            "Bedrock Mantle request serialization",
-            error,
-        ))
-    })?;
-    let betas: Option<Vec<String>> =
-        serde_json::from_value(body.get("anthropic_beta").cloned().unwrap_or(Value::Null))
-            .map_err(|error| {
-                Error::InvalidRequest(ErrorDetail::invalid("anthropic_beta", error))
-            })?;
+    let betas: Option<Vec<String>> = request
+        .params
+        .extra
+        .get("anthropic_beta")
+        .map(|betas| Vec::<String>::deserialize(betas))
+        .transpose()
+        .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("anthropic_beta", error)))?;
     let headers = without_exact(headers, "anthropic-beta");
     Ok(match betas {
         Some(betas) if !betas.is_empty() => headers
@@ -218,28 +215,47 @@ pub fn amazon_mantle_model_id(model: &str) -> String {
     model.replacen("mantle/", "", 1)
 }
 
-/// The body half of Python's Mantle transform: `model` and `stream` go last, `stream` only when it is `True`.
+/// The body Mantle receives: the Invoke body without the version and betas, which travel as
+/// headers, with `model` and `stream` last and `stream` only when it is `true`.
+#[derive(Deserialize, Serialize)]
+struct MantleWireBody {
+    #[serde(flatten)]
+    fields: Map<String, Value>,
+    #[serde(default, skip_serializing)]
+    anthropic_version: Option<IgnoredAny>,
+    #[serde(default, skip_serializing)]
+    anthropic_beta: Option<IgnoredAny>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stream: Option<StreamFlag>,
+}
+
+/// A `stream` value: only a boolean `true` streams.
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum StreamFlag {
+    Flag(bool),
+    #[serde(skip_serializing)]
+    Other(IgnoredAny),
+}
+
+/// The body half of Python's Mantle transform. A body that is not a Mantle request object is sent as it is.
 pub(crate) fn mantle_wire_body(body: Value, model_id: impl Fn(&str) -> String) -> Value {
-    let Value::Object(fields) = body else {
+    let Ok(wire) = MantleWireBody::deserialize(&body) else {
         return body;
     };
-    let model = fields
-        .get("model")
-        .and_then(Value::as_str)
-        .map(&model_id)
-        .filter(|model| !model.is_empty());
-    let streaming = fields.get("stream") == Some(&Value::Bool(true));
-    let kept = fields.into_iter().filter(|(name, _)| {
-        !matches!(
-            name.as_str(),
-            "anthropic_version" | "anthropic_beta" | "model" | "stream"
-        )
-    });
-    let mantle_fields = model
-        .map(|model| ("model".to_string(), Value::String(model)))
-        .into_iter()
-        .chain(streaming.then(|| ("stream".to_string(), Value::Bool(true))));
-    Value::Object(kept.chain(mantle_fields).collect::<Map<_, _>>())
+    let wire = MantleWireBody {
+        model: wire
+            .model
+            .map(|model| model_id(&model))
+            .filter(|model| !model.is_empty()),
+        stream: wire
+            .stream
+            .filter(|stream| matches!(stream, StreamFlag::Flag(true))),
+        ..wire
+    };
+    serde_json::to_value(wire).unwrap_or(body)
 }
 
 /// The usage a Mantle reply bills: the two token counts Python zero-fills, every other field as sent.

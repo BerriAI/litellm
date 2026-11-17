@@ -1045,6 +1045,13 @@ mod tests {
     }
 
     #[rstest]
+    #[case::string_stream_dropped(json!({"model": "mantle/m", "stream": "true", "max_tokens": 1}), json!({"max_tokens": 1, "model": "m"}))]
+    #[case::not_an_object(json!(["mantle/m"]), json!(["mantle/m"]))]
+    fn wire_body_keeps_only_a_boolean_true_stream(#[case] body: Value, #[case] expected: Value) {
+        assert_eq!(AMAZON_MANTLE_MESSAGES_CONFIG.wire_body(body), expected);
+    }
+
+    #[rstest]
     #[case::missing(None, json!({"input_tokens": 0, "output_tokens": 0}))]
     #[case::null(Some(json!(null)), json!({"input_tokens": 0, "output_tokens": 0}))]
     #[case::partial(Some(json!({"output_tokens": 7, "cache_read_input_tokens": 3})), json!({"input_tokens": 0, "output_tokens": 7, "cache_read_input_tokens": 3}))]
