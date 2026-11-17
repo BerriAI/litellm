@@ -1448,22 +1448,26 @@ def function_setup(
             get_set_callbacks: Final[Callable[[], Callable[..., None]]] = litellm_utils.get_set_callbacks
             get_set_callbacks()(callback_list=callbacks_to_set_up, function_id=function_id)
         ### DYNAMIC CALLBACKS ###
-        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
-        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
-        dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
-        dynamic_async_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
-        if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
-            sync_success_callbacks, async_success_callbacks = split_dynamic_success_callbacks(
-                kwargs.pop("success_callback")
-            )
-            dynamic_success_callbacks = list(sync_success_callbacks)
-            dynamic_async_success_callbacks = list(async_success_callbacks)
-        if kwargs.get("failure_callback", None) is not None and isinstance(kwargs["failure_callback"], list):
-            sync_failure_callbacks, async_failure_callbacks = split_dynamic_failure_callbacks(
-                kwargs.pop("failure_callback")
-            )
-            dynamic_failure_callbacks = list(sync_failure_callbacks)
-            dynamic_async_failure_callbacks = list(async_failure_callbacks)
+        per_request_success_callbacks: Final = (
+            kwargs.pop("success_callback") if isinstance(kwargs.get("success_callback"), list) else None
+        )
+        per_request_failure_callbacks: Final = (
+            kwargs.pop("failure_callback") if isinstance(kwargs.get("failure_callback"), list) else None
+        )
+        sync_success_callbacks, async_success_callbacks = split_dynamic_success_callbacks(
+            per_request_success_callbacks or ()
+        )
+        sync_failure_callbacks, async_failure_callbacks = split_dynamic_failure_callbacks(
+            per_request_failure_callbacks or ()
+        )
+        dynamic_success_callbacks: Final = (
+            list(sync_success_callbacks) if per_request_success_callbacks is not None else None
+        )
+        dynamic_async_success_callbacks: Final = list(async_success_callbacks) if async_success_callbacks else None
+        dynamic_failure_callbacks: Final = (
+            list(sync_failure_callbacks) if per_request_failure_callbacks is not None else None
+        )
+        dynamic_async_failure_callbacks: Final = list(async_failure_callbacks) if async_failure_callbacks else None
 
         if add_breadcrumb:
             try:
