@@ -360,7 +360,9 @@ def stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping
 
 
 def stream_ttft_timeout(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> float | None:
-    value: Final = kwargs.get("stream_ttft_timeout", deployment_params.get("stream_ttft_timeout"))
+    requested: Final = kwargs.get("stream_ttft_timeout")
+    # A request that leaves the field null has not chosen a value, so the deployment's setting applies.
+    value: Final = requested if requested is not None else deployment_params.get("stream_ttft_timeout")
     if not isinstance(value, (int, float, str)):
         return None
     try:

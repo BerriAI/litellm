@@ -796,10 +796,17 @@ def _ttft_chat_chunk(delta: Mapping[str, object], finish: str | None = None) -> 
     ).encode()
 
 
+_OMITTED: Final = object()
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_value, expected", ((None, 0.2), ("0.3", 0.3)))
+@pytest.mark.parametrize(
+    "request_value, expected",
+    ((_OMITTED, 0.2), (None, 0.2), ("0.3", 0.3)),
+    ids=("omitted", "explicit-null", "request-value"),
+)
 async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provider_body(
-    request_value: str | None,
+    request_value: object,
     expected: float,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
@@ -828,7 +835,7 @@ async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provi
     )
     request: Final = {
         "client_side_stream_ttft_timeout": True,
-        **({} if request_value is None else {"stream_ttft_timeout": request_value}),
+        **({} if request_value is _OMITTED else {"stream_ttft_timeout": request_value}),
     }
     response: Final = await router.acompletion(
         model="ttft",
