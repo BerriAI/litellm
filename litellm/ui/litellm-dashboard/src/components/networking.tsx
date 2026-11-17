@@ -4456,6 +4456,8 @@ export interface ConnectFlowStatus {
   connected: boolean | null;
   requested_scopes?: string[];
   servers: { server_id: string; server_name: string; connected: boolean }[] | null;
+  selectable?: false;
+  required_server_ids?: string[];
 }
 
 /**
@@ -6802,8 +6804,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
   return data.token;
 };
 
-export const getUiSettings = async () => {
-  const proxyBaseUrl = getProxyBaseUrl();
+export const getUiSettings = async (proxyBaseUrl = getProxyBaseUrl()) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
   const response = await fetch(url, {
     method: "GET",

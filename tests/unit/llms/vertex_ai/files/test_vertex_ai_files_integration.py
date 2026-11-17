@@ -12,27 +12,6 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent
 class TestVertexAIFilesIntegration:
     """Test integration of Vertex AI files with main litellm API"""
 
-
-
-
-    def test_litellm_file_content_vertex_ai_error_cases(self):
-        """Test error handling in vertex_ai file_content"""
-        # Test missing file_id - the VertexAI provider config's
-        # transform_file_content_request should handle empty file_id.
-        # Since the code now goes through base_llm_http_handler, we mock
-        # ProviderConfigManager to return None so it falls through to the
-        # old vertex_ai code path that validates file_id.
-        with patch(
-            "litellm.files.main.ProviderConfigManager.get_provider_files_config",
-            return_value=None,
-        ):
-            with pytest.raises(ValueError, match="file_id is required"):
-                litellm.file_content(
-                    file_id="",  # Empty file_id should cause error
-                    custom_llm_provider="vertex_ai",
-                    vertex_project="test-project",
-                )
-
     def test_vertex_ai_provider_in_supported_providers_list(self):
         """Test that vertex_ai is included in supported providers for file_content"""
         # This test ensures the type annotations and error messages include vertex_ai

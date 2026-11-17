@@ -208,6 +208,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     reconcile_team_access_group_membership,
     sync_team_access_group_membership,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
@@ -238,7 +239,7 @@ from litellm.proxy.utils import (
 )
 from litellm.redis.stores.spend_counters import team_counter
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.chunked_in import delete_many_in, find_many_in
+from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -621,7 +622,7 @@ async def refresh_cached_team(
     )
     batches: Final = active_request_redis_batches()
     if batches is not None:
-        await batches.flush_all()
+        await batches.flush_pre_call()
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
@@ -918,6 +919,50 @@ class TeamMemberBudgetHandler:
 
         TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
         return updated_kv
+
+    @staticmethod
+    async def member_budgets_on_team_reset_window(
+        team_id: str, team_member_budget_id: str | None, prisma_client: PrismaClient
+    ) -> tuple[str | None, tuple[str, ...]]:
+        """The team default's reset window, and the budgets of members who take their cap from it and reset on a copy."""
+        team_default: Final = (
+            await _budget_db(prisma_client).find_unique(where={"budget_id": team_member_budget_id})
+            if team_member_budget_id is not None
+            else None
+        )
+        team_window: Final = team_default.budget_duration if team_default is not None else None
+        memberships: Final = await _team_membership_db(prisma_client).find_many(
+            where={"team_id": team_id, "budget_id": {"not": team_member_budget_id}},
+            include={"litellm_budget_table": True},
+        )
+        return team_window, tuple(
+            m.litellm_budget_table.budget_id
+            for m in memberships
+            if m.litellm_budget_table is not None
+            and m.litellm_budget_table.max_budget is None
+            and m.litellm_budget_table.budget_duration == team_window
+        )
+
+    @staticmethod
+    async def move_members_to_team_reset_window(
+        team_id: str, team_member_budget_id: str | None, budget_duration: str | None, prisma_client: PrismaClient
+    ) -> None:
+        """Runs before the team default is written, so a retry after a failure still finds the members left behind."""
+        team_window, budget_ids = await TeamMemberBudgetHandler.member_budgets_on_team_reset_window(
+            team_id=team_id, team_member_budget_id=team_member_budget_id, prisma_client=prisma_client
+        )
+        if team_window == budget_duration or not budget_ids:
+            return
+        _ = await update_many_in(
+            _budget_db(prisma_client),
+            "budget_id",
+            budget_ids,
+            data={
+                "budget_duration": budget_duration,
+                "budget_reset_at": get_budget_reset_time(budget_duration) if budget_duration else None,
+            },
+            atomicity="per_chunk_ok",
+        )
 
     @staticmethod
     async def backfill_team_member_budget_entries(
@@ -2087,20 +2132,23 @@ async def new_team(
 
             asyncio.create_task(
                 create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    request_data=with_audit_actor(
+                        LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.api_key,
+                            table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                            object_id=data.team_id,
+                            action="created",
+                            updated_values=_updated_values,
+                            before_value=None,
                         ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                        object_id=data.team_id,
-                        action="created",
-                        updated_values=_updated_values,
-                        before_value=None,
+                        user_api_key_dict,
                     )
                 )
             )
@@ -2143,20 +2191,23 @@ async def _create_team_update_audit_log(
 
     asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=get_audit_log_changed_by(
-                    litellm_changed_by=litellm_changed_by,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=team_id,
+                    action="updated",
+                    updated_values=_after_value,
+                    before_value=_before_value,
                 ),
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                object_id=team_id,
-                action="updated",
-                updated_values=_after_value,
-                before_value=_before_value,
+                user_api_key_dict,
             )
         )
     )
@@ -2824,6 +2875,15 @@ async def update_team(
                         if key in existing_team_row.metadata
                     },
                 }
+
+        _current_member_budget_id: Final = (existing_team_row.metadata or {}).get("team_member_budget_id")
+        if "team_member_budget_duration" in _team_member_fields_in_request:
+            await TeamMemberBudgetHandler.move_members_to_team_reset_window(
+                team_id=data.team_id,
+                team_member_budget_id=_current_member_budget_id if isinstance(_current_member_budget_id, str) else None,
+                budget_duration=data.team_member_budget_duration,
+                prisma_client=prisma_client,
+            )
 
         if _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
@@ -5056,20 +5116,23 @@ def _schedule_deleted_team_audit_rows(
     for team in teams:
         asyncio.create_task(
             create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                request_data=with_audit_actor(
+                    LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                        object_id=team.team_id,
+                        action="deleted",
+                        updated_values="{}",
+                        before_value=team.model_dump_json(exclude_none=True),
                     ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                    object_id=team.team_id,
-                    action="deleted",
-                    updated_values="{}",
-                    before_value=team.model_dump_json(exclude_none=True),
+                    user_api_key_dict,
                 )
             )
         )
@@ -5403,6 +5466,9 @@ async def _resolve_team_access_group_resources(
             ),
             "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
             "access_group_skill_names": _effective_access_group_skill_names(resolved_groups, unresolved_ids),
+            "access_group_vector_store_ids": tuple(
+                dict.fromkeys(chain.from_iterable(group.access_vector_store_ids or () for group in resolved_groups))
+            ),
             "unresolved_access_group_ids": unresolved_ids,
             "access_group_details": tuple(
                 TeamAccessGroupModelGrant(
@@ -5412,6 +5478,7 @@ async def _resolve_team_access_group_resources(
                     mcp_server_ids=tuple(group.access_mcp_server_ids or ()),
                     agent_ids=tuple(group.access_agent_ids or ()),
                     skill_names=tuple(group.access_skill_names or ()),
+                    vector_store_ids=tuple(group.access_vector_store_ids or ()),
                 )
                 for group in resolved_groups
             ),

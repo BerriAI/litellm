@@ -17,6 +17,30 @@ where
     <Recognized<T> as serde::Deserialize<'de>>::deserialize(deserializer).map(Some)
 }
 
+/// `deserialize_with` for an optional typed field whose explicit `null` Python forwards: `null`
+/// becomes `Some(Unrecognized(Null))`, and any other value must decode as `T`.
+pub fn null_or_known<'de, D, T>(deserializer: D) -> Result<Option<Recognized<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(Some(Recognized::Unrecognized(Value::Null)));
+    }
+    serde_json::from_value(value)
+        .map(|known| Some(Recognized::Known(known)))
+        .map_err(serde::de::Error::custom)
+}
+
+/// `deserialize_with` for an optional raw field whose explicit `null` Python forwards.
+pub fn present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Value as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
 /// `deserialize_with` for an optional float Python forwards as the caller sent it: an integer
 /// stays `Unrecognized` with its exact digits, as Python sends, logs and prints it, and `null`
 /// stays absent as before.

@@ -1,6 +1,9 @@
 mod support;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use litellm_redis_client::commands;
 use litellm_redis_client::{Amount, CallTag, Expiry, Operation, tagged};
@@ -192,16 +195,19 @@ async fn a_post_declaration_after_a_flush_arms_a_new_deadline(
 
 #[rstest]
 #[tokio::test]
-async fn the_deadline_flush_runs_under_the_deadline_tag(
+async fn the_deadline_flush_runs_under_the_tag_given_when_its_first_op_is_declared(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
     let deployment = RedisDeployment::start(topology).await.unwrap();
     let (client, tags) = connect_tagged(&deployment);
+    let caller = Arc::new(Mutex::new("the request before it has a span"));
+    let asked = caller.clone();
     let request = RequestRedis::with_deadline_tag(
         Handle::current(),
         Duration::from_millis(100),
-        Some(Arc::new("post_call_redis_batch") as CallTag),
+        Arc::new(move || Some(Arc::new(*asked.lock().unwrap()) as CallTag)),
     );
+    *caller.lock().unwrap() = "post_call_redis_batch";
 
     let declared = tagged(Arc::new("declaring op"), async {
         request
