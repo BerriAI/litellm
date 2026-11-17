@@ -13,7 +13,7 @@
 - A setting that can come from the environment, the secret manager or OIDC is read through `resources.secrets`. `resources.environment` is only for what Python reads straight from `os.environ`
 
 ## State
-- `AppState::build` (`src/state.rs`) builds `Resources` and then the stores once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
+- `AppState::build` (`src/state.rs`) builds `Resources` and then what both modes share once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
 - In front of Python the config is the local YAML file Python loads, which the supervisor names in `LITELLM_FORWARD_CONFIG`. When Python loads no local file, or `load_config` cannot load the one it names, the config is `Config::default()`, so only the environment's `REDIS_*` and `DATABASE_*` are seen. Never fail boot on that file, because the gateway exiting stops Python too. Config stored in the database is not read yet
 
 ## Redis
@@ -30,6 +30,6 @@
 - `/health/readiness` pings the writer for up to 2s and reports `connected`, `disconnected`, or `Not connected` when no database is configured, and always answers 200. The proxy's 503 on `disconnected` without `allow_requests_on_db_unavailable` and its 15s cache of a good answer are not ported
 
 ## License
-- `build_license` verifies the license once at boot (`src/license.rs`) and the result never changes while serving. For now both modes only log whether it is enterprise
+- `build_license` verifies the license once at boot (`src/license.rs`) and the result never changes while serving. `middleware::global` hands it to every middleware and route as `Extension<Arc<Entitlements>>`
 - The key comes from `LITELLM_LICENSE`, where config `environment_variables` replaces the process environment, and from `general_settings.litellm_license`, which wins unless only the environment's key is enterprise, as in `_use_config_license`
 - Verification itself belongs to `litellm-license`. A key the bundled public key did not sign is asked of the license server, so boot can wait on that request for `NON_LLM_CONNECTION_TIMEOUT` seconds per attempt
