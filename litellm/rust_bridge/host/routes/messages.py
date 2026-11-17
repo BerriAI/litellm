@@ -721,7 +721,8 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
     model: Final = _provider_model(error, request, request_provider)
     if isinstance(provider_rejection, str):
-        _log_resolved_call(request, request_provider, model)
+        # Python's handler logs the route model before its provider config's transform refuses the call.
+        _log_resolved_call(request, request_provider)
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         rejection: Final = _provider_rejection(
             provider_rejection,
