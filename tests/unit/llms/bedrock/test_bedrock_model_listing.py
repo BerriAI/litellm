@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import re
+import uuid
 from collections.abc import Callable, Mapping
 from functools import reduce
 from typing import Final
@@ -15,6 +16,7 @@ from litellm.llms.bedrock.common_utils import BedrockError, BedrockModelInfo
 from litellm.llms.bedrock.model_listing import CONTROL_PLANE_ENDPOINT_RETRY_SECONDS
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.router import LiteLLM_Params
+from litellm.utils import _get_valid_models_from_provider_api
 
 ACCESS_KEY: Final = "AKIAIOSFODNN7EXAMPLE"
 SECRET_KEY: Final = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
@@ -128,6 +130,10 @@ def _refuse_connection(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("Connection refused", request=request)
 
 
+def _time_out(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("timed out", request=request)
+
+
 def _hosts(handler: Mock) -> tuple[str, ...]:
     return tuple(call.args[0].url.host for call in handler.call_args_list)
 
@@ -136,7 +142,7 @@ def _bedrock(
     handler: Callable[[httpx.Request], httpx.Response], endpoint_failures: InMemoryCache | None = None
 ) -> BedrockModelInfo:
     return BedrockModelInfo(
-        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)),
         endpoint_failures=endpoint_failures if endpoint_failures is not None else InMemoryCache(),
     )
 
@@ -236,8 +242,9 @@ def test_configured_endpoint_without_the_list_routes_falls_back_to_the_regional_
         lambda request: httpx.Response(200, json={"message": "ok"}),
         lambda request: httpx.Response(200, json={"modelSummaries": [], "inferenceProfileSummaries": []}),
         _refuse_connection,
+        _time_out,
     ],
-    ids=["401", "403", "429", "503", "not-json", "json-without-models", "empty-lists", "connection-refused"],
+    ids=["401", "403", "429", "503", "not-json", "json-without-models", "empty-lists", "connection-refused", "timeout"],
 )
 def test_any_failure_through_the_configured_endpoint_lists_through_the_regional_host(
     endpoint_answer: Callable[[httpx.Request], httpx.Response], caplog: pytest.LogCaptureFixture
@@ -254,6 +261,36 @@ def test_any_failure_through_the_configured_endpoint_lists_through_the_regional_
     assert any(
         VPC_ENDPOINT_HOST in record.getMessage() and REGIONAL_HOST in record.getMessage() for record in caplog.records
     )
+
+
+def test_signed_listing_request_never_follows_a_redirect_to_another_host() -> None:
+    redirect_host: Final = "collector.example.com"
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(307, headers={"Location": f"https://{redirect_host}{request.url.raw_path.decode()}"})
+
+    handler: Final = Mock(wraps=_endpoint_answering(redirect))
+
+    assert (
+        _bedrock(handler).discover_models(_deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}"))
+        == EXPECTED_MODELS
+    )
+    assert redirect_host not in _hosts(handler)
+
+
+@pytest.mark.parametrize("control_plane_endpoint", [None, f"https://{VPC_ENDPOINT_HOST}"], ids=["regional", "configured"])
+def test_timed_out_listing_is_not_sent_again_by_the_next_models_request(control_plane_endpoint: str | None) -> None:
+    timing_out: Final = Mock(wraps=_time_out)
+    bedrock: Final = _bedrock(timing_out)
+    deployment: Final = LiteLLM_Params(
+        **{**_deployment(control_plane_endpoint=control_plane_endpoint), "model": f"bedrock/{uuid.uuid4().hex}/*"}
+    )
+
+    assert _get_valid_models_from_provider_api(bedrock, "bedrock", deployment) == []
+    requests_sent: Final = timing_out.call_count
+    assert requests_sent > 0
+    assert _get_valid_models_from_provider_api(bedrock, "bedrock", deployment) == []
+    assert timing_out.call_count == requests_sent
 
 
 def test_failed_configured_endpoint_is_skipped_until_the_retry_window_ends() -> None:

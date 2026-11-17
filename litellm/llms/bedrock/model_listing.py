@@ -114,7 +114,7 @@ class BedrockModelLister(BaseAWSLLM):
     def _list_through(self, first_base_url: str, fallback_base_url: str) -> frozenset[str]:
         try:
             listed: Final = self._invocable_model_ids(first_base_url)
-        except (BedrockError, ValueError) as error:
+        except (BedrockError, ValueError, httpx.TimeoutException) as error:
             return self._list_through_fallback(first_base_url, fallback_base_url, error)
         if listed:
             return listed
@@ -176,7 +176,11 @@ class BedrockModelLister(BaseAWSLLM):
         url: Final = f"{base_url}{path}?{urlencode(query, quote_via=quote)}"
         host: Final = httpx.URL(url).host
         try:
-            response: Final = self._client.get(url=url, headers=self._auth_headers(url), timeout=LIST_MODELS_TIMEOUT)
+            response: Final = self._client.get(
+                url=url, headers=self._auth_headers(url), follow_redirects=False, timeout=LIST_MODELS_TIMEOUT
+            )
+        except httpx.TimeoutException:
+            raise
         except httpx.TransportError as error:
             raise BedrockError(
                 status_code=500,
