@@ -1689,7 +1689,7 @@ def _responses_stream_fallback_error(
     )
 
 
-def wrap_responses_stream(
+def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it ports
     attempt: StreamAttempt, response: BaseResponsesAPIStreamingIterator
 ) -> BaseResponsesAPIStreamingIterator:
     """``_aresponses_streaming_iterator``: pre-output lifecycle events are held while a fallback can take
