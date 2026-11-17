@@ -370,6 +370,27 @@ def test_transform_audio_transcription_response_keeps_the_body_out_of_malformed_
     assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
 
 
+@pytest.mark.parametrize(
+    ("payload", "hidden"),
+    [
+        ({"text": "t", "words": ["sensitive"]}, "sensitive"),
+        ({"text": "t", "words": [{"type": "word", "text": "ok"}, ["sensitive"]]}, "sensitive"),
+        ({"text": "t", "words": {"sensitive": {"sensitive": 1}}}, "sensitive"),
+        ({"text": "t", "words": [{"type": "word", "text": "ok"}, 123456]}, "123456"),
+    ],
+)
+def test_transform_audio_transcription_response_keeps_a_malformed_words_entry_out_of_the_error(
+    payload: dict[str, object], hidden: str
+):
+    raw_response = httpx.Response(200, json=payload)
+
+    with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
+        ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
+
+    formatted: Final = "".join(traceback.format_exception(exc_info.value))
+    assert hidden not in formatted, formatted
+
+
 def test_transform_audio_transcription_response_names_the_failing_lookup_of_a_malformed_payload():
     raw_response = httpx.Response(200, json={"text": "sensitive", "words": [None]})
 
