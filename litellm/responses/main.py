@@ -106,7 +106,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatib
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import (
     PROMPT_TEMPLATE_APPLIED,
-    PromptManagement,
     params_the_prompt_hook_changed,
     prompt_management_applied,
 )
@@ -775,23 +774,29 @@ def _deployment_model_info_after_prompt_swap(
 class _AsyncPromptManagementOutcome:
     merged_optional_params: Mapping[str, object]
     deployment_model_info: object
-    prompt_management_marker: Mapping[str, PromptManagement] = field(default_factory=lambda: MappingProxyType({}))
+    chat_bridge_prompt_kwargs: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
-def _prompt_template_marker(
+def _chat_bridge_prompt_kwargs(
     original_model: str,
     model: str,
     client_messages_before_the_hook: Sequence[AllMessageValues],
     merged_input: Sequence[AllMessageValues],
     params_the_hook_saw: Mapping[str, object],
     merged_optional_params: Mapping[str, object],
-) -> Mapping[str, PromptManagement]:
-    return (
-        PROMPT_TEMPLATE_APPLIED
-        if model != original_model
-        or tuple(merged_input) != tuple(client_messages_before_the_hook)
-        or len(params_the_prompt_hook_changed(params_the_hook_saw, merged_optional_params)) > 0
-        else MappingProxyType({})
+) -> Mapping[str, object]:
+    changed_params: Final = params_the_prompt_hook_changed(params_the_hook_saw, merged_optional_params)
+    if (
+        model == original_model
+        and tuple(merged_input) == tuple(client_messages_before_the_hook)
+        and len(changed_params) == 0
+    ):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            **{key: value for key, value in changed_params.items() if key not in _RESPONSES_REQUEST_FIELDS},
+            **PROMPT_TEMPLATE_APPLIED,
+        }
     )
 
 
@@ -1093,7 +1098,7 @@ async def aresponses(
                 deployment_model_info=_deployment_model_info_after_prompt_swap(
                     requested_provider, custom_llm_provider, kwargs.get("model_info")
                 ),
-                prompt_management_marker=_prompt_template_marker(
+                chat_bridge_prompt_kwargs=_chat_bridge_prompt_kwargs(
                     original_model,
                     model,
                     client_messages_before_the_hook,
@@ -1218,10 +1223,11 @@ def _apply_prompt_management_to_responses_call(
     kwargs: dict[str, Any],
     local_vars: dict[str, object],
     use_chat_completions_api: bool,
-) -> tuple[str | ResponseInputParam, str, str | None, object, Mapping[str, PromptManagement]]:
+) -> tuple[str | ResponseInputParam, str, str | None, object, Mapping[str, object]]:
     """Returns the prompt-managed input, model and provider, the deployment metadata that still
     describes the upstream (``None`` once the prompt manager moved the request to another provider), and
-    the marker that tells a chat call bridged from here whether the prompt template already applied."""
+    what a chat call bridged from here inherits: the marker that the prompt template already applied and the
+    template's settings the Responses request cannot carry."""
     carried_outcome: Final[object] = kwargs.get("_async_prompt_merged_params")
     kwargs.pop("_async_prompt_merged_params", None)
     if carried_outcome is not None:
@@ -1235,7 +1241,7 @@ def _apply_prompt_management_to_responses_call(
             model,
             custom_llm_provider,
             async_outcome.deployment_model_info,
-            async_outcome.prompt_management_marker,
+            async_outcome.chat_bridge_prompt_kwargs,
         )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
@@ -1305,7 +1311,7 @@ def _apply_prompt_management_to_responses_call(
             model,
             resolved_provider,
             _deployment_model_info_after_prompt_swap(custom_llm_provider, resolved_provider, kwargs.get("model_info")),
-            _prompt_template_marker(
+            _chat_bridge_prompt_kwargs(
                 original_model,
                 model,
                 client_messages_before_the_hook,
@@ -1663,7 +1669,7 @@ def responses(
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
-        input, model, custom_llm_provider, deployment_model_info, prompt_management_marker = (
+        input, model, custom_llm_provider, deployment_model_info, chat_bridge_prompt_kwargs = (
             _apply_prompt_management_to_responses_call(
                 input=input,
                 tools=tools,
@@ -1873,7 +1879,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **{**bridge_kwargs, **prompt_management_marker},
+                **{**bridge_kwargs, **chat_bridge_prompt_kwargs},
             )
 
         # Get optional parameters for the responses API

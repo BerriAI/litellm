@@ -7009,7 +7009,10 @@ PROMPT_TEMPLATES: Final[Mapping[str, tuple[AllMessageValues, Mapping[str, object
     }
 )
 SETTINGS_ONLY_TEMPLATES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
-    {"low-temperature": MappingProxyType({"temperature": 0.25})}
+    {
+        "short-chat-answers": MappingProxyType({"temperature": 0.25, "max_tokens": 64}),
+        "short-responses-answers": MappingProxyType({"temperature": 0.25, "max_output_tokens": 64}),
+    }
 )
 
 
@@ -7484,9 +7487,10 @@ async def test_a_responses_call_handed_to_chat_still_places_the_cache_points_on_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_id", ["short-chat-answers", "short-responses-answers"])
 @pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
-async def test_a_responses_call_whose_template_only_sets_parameters_still_places_the_cache_points(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, asynchronous: bool
+async def test_a_responses_call_whose_template_only_sets_parameters_sends_them_once_with_the_cache_points(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, asynchronous: bool, prompt_id: str
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = _anthropic_answering_blue(respx_mock)
@@ -7495,7 +7499,7 @@ async def test_a_responses_call_whose_template_only_sets_parameters_still_places
             "model": "anthropic/backup",
             "input": "What color is the sky?",
             "instructions": ONE_WORD,
-            "prompt_id": "low-temperature",
+            "prompt_id": prompt_id,
             "callbacks": [_PromptManager()],
             "api_key": "sk-test",
             "cache_control_injection_points": [{"location": "message", "role": "system"}],
@@ -7506,6 +7510,8 @@ async def test_a_responses_call_whose_template_only_sets_parameters_still_places
 
     sent: Final = json.loads(route.calls.last.request.content)
     assert sent["temperature"] == 0.25
+    assert sent["max_tokens"] == 64
+    assert "max_output_tokens" not in sent
     assert sent["system"] == [{"type": "text", "text": ONE_WORD, "cache_control": {"type": "ephemeral"}}]
 
 
