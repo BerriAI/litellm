@@ -34,10 +34,11 @@ const RETRYABLE_ERRORS: [&str; 3] = [
 ];
 
 /// A service account key, as `from_service_account_info` reads it.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 pub(crate) struct ServiceAccountInfo {
     pub(crate) client_email: Option<String>,
     pub(crate) token_uri: Option<String>,
+    #[redact(with = "[REDACTED]")]
     pub(crate) private_key: Option<String>,
     pub(crate) private_key_id: Option<String>,
     pub(crate) project_id: Option<String>,

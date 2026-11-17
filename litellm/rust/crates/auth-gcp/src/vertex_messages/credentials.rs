@@ -62,12 +62,14 @@ pub(crate) enum Lifetime {
 }
 
 /// A token endpoint's JSON reply to a grant.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 pub(crate) struct TokenReply {
     /// `None` when the reply has no `access_token`, `Some(None)` when it is null.
+    #[redact(with = "[REDACTED]")]
     #[serde(default, deserialize_with = "present")]
     pub(crate) access_token: Option<Option<String>>,
     pub(crate) expires_in: Option<Lifetime>,
+    #[redact(with = "[REDACTED]")]
     pub(crate) refresh_token: Option<String>,
 }
 
@@ -184,6 +186,18 @@ mod tests {
     use super::*;
 
     const NOW: OffsetDateTime = datetime!(2026-11-16 12:00 UTC);
+
+    #[rstest]
+    fn token_reply_debug_never_shows_a_token() {
+        let reply: TokenReply = serde_json::from_value(serde_json::json!({
+            "access_token": "credential-value",
+            "refresh_token": "credential-value",
+        }))
+        .unwrap();
+        let debug = format!("{reply:?}");
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
 
     fn minted(expiry: Expiry) -> Minted {
         Minted::new(SecretValue::new("t"), expiry)

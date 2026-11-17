@@ -24,13 +24,16 @@ use super::{
 const CANNOT_REFRESH: &str = "The external account authorized user credentials need refresh_token, token_url, client_id and client_secret to refresh.";
 
 /// A workforce identity user's file, as `Credentials.from_info` reads it.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 pub(crate) struct ExternalAuthorizedUserInfo {
+    #[redact(with = "[REDACTED]")]
     pub(crate) token: Option<String>,
     pub(crate) expiry: Option<String>,
+    #[redact(with = "[REDACTED]")]
     pub(crate) refresh_token: Option<String>,
     pub(crate) token_url: Option<String>,
     pub(crate) client_id: Option<String>,
+    #[redact(with = "[REDACTED]")]
     pub(crate) client_secret: Option<String>,
 }
 
@@ -206,6 +209,19 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[rstest]
+    fn info_debug_never_shows_a_secret() {
+        let info: ExternalAuthorizedUserInfo = serde_json::from_value(json!({
+            "token": "credential-value",
+            "refresh_token": "credential-value",
+            "client_secret": "credential-value",
+        }))
+        .unwrap();
+        let debug = format!("{info:?}");
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
 
     type Seen = Arc<Mutex<Vec<(Option<String>, String)>>>;
 

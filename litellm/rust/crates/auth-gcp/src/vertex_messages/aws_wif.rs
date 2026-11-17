@@ -24,12 +24,14 @@ use super::{
 
 /// LiteLLM's own `aws_*` keys in an external account file. Each is `Some(None)` when null, which
 /// still chooses the explicit AWS login.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 pub(crate) struct ExplicitAwsKeys {
     #[serde(default, deserialize_with = "present")]
     aws_access_key_id: Option<Option<String>>,
+    #[redact(with = "[REDACTED]")]
     #[serde(default, deserialize_with = "present")]
     aws_secret_access_key: Option<Option<String>>,
+    #[redact(with = "[REDACTED]")]
     #[serde(default, deserialize_with = "present")]
     aws_session_token: Option<Option<String>>,
     #[serde(default, deserialize_with = "present")]
