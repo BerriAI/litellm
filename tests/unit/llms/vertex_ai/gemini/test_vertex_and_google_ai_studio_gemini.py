@@ -3,9 +3,10 @@ import json
 import logging
 import re
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
-from itertools import pairwise
+from dataclasses import dataclass
+from itertools import chain, pairwise
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -35,7 +36,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, StreamingChoices, Usage
 from litellm.utils import CustomStreamWrapper
 from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -8246,6 +8247,171 @@ def test_non_streamed_content_filter_choice_keeps_google_reason(
     assert resp.choices[0].message.content is None
     assert resp.choices[0].provider_specific_fields == expected_provider_specific_fields
     assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
+
+
+@dataclass(frozen=True, slots=True)
+class _GoogleReasonOutcome:
+    document: Mapping[str, object]
+    frames: tuple[Mapping[str, object], ...]
+    text: str
+    finish_reason: str
+    reason_fields: Mapping[str, str]
+
+
+_GOOGLE_REASON_USAGE: Final = {"promptTokenCount": 11, "candidatesTokenCount": 5, "totalTokenCount": 16}
+
+
+def _google_text_frame(text: str) -> Mapping[str, object]:
+    return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "index": 0}]}
+
+
+def _google_finished(candidate: Mapping[str, object]) -> Mapping[str, object]:
+    return {"candidates": [{**candidate, "index": 0}], "usageMetadata": _GOOGLE_REASON_USAGE}
+
+
+def _flagged_outcome(candidate: Mapping[str, str], reason_fields: Mapping[str, str]) -> _GoogleReasonOutcome:
+    return _GoogleReasonOutcome(
+        document=_google_finished(candidate),
+        frames=(_google_text_frame("Waves fold "), _google_finished(candidate)),
+        text="Waves fold ",
+        finish_reason="content_filter",
+        reason_fields=reason_fields,
+    )
+
+
+def _blocked_outcome(prompt_feedback: Mapping[str, str], reason_fields: Mapping[str, str]) -> _GoogleReasonOutcome:
+    blocked: Final = {
+        "promptFeedback": prompt_feedback,
+        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+    }
+    return _GoogleReasonOutcome(
+        document=blocked, frames=(blocked,), text="", finish_reason="content_filter", reason_fields=reason_fields
+    )
+
+
+def _finished_after_text_outcome(native: str, finish_reason: str) -> _GoogleReasonOutcome:
+    return _GoogleReasonOutcome(
+        document=_google_finished(
+            {"content": {"role": "model", "parts": [{"text": "Waves fold silver light."}]}, "finishReason": native}
+        ),
+        frames=(
+            _google_text_frame("Waves fold "),
+            _google_text_frame("silver light."),
+            _google_finished({"finishReason": native}),
+        ),
+        text="Waves fold silver light.",
+        finish_reason=finish_reason,
+        reason_fields={"native_finish_reason": native},
+    )
+
+
+_GOOGLE_REASON_OUTCOMES: Final = (
+    pytest.param(
+        _flagged_outcome(
+            {"finishReason": "SAFETY", "finishMessage": "Candidate was blocked for safety."},
+            {"native_finish_reason": "SAFETY", "native_finish_message": "Candidate was blocked for safety."},
+        ),
+        id="flagged_with_message",
+    ),
+    pytest.param(
+        _flagged_outcome({"finishReason": "RECITATION"}, {"native_finish_reason": "RECITATION"}),
+        id="flagged_without_message",
+    ),
+    pytest.param(
+        _blocked_outcome(
+            {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "Prompt was blocked."},
+            {"block_reason": "PROHIBITED_CONTENT", "block_reason_message": "Prompt was blocked."},
+        ),
+        id="blocked_with_message",
+    ),
+    pytest.param(_blocked_outcome({"blockReason": "SAFETY"}, {"block_reason": "SAFETY"}), id="blocked_without_message"),
+    pytest.param(_finished_after_text_outcome("STOP", "stop"), id="stop"),
+    pytest.param(_finished_after_text_outcome("MALFORMED_FUNCTION_CALL", "stop"), id="malformed_function_call"),
+)
+
+
+def _google_reason_handler(outcome: _GoogleReasonOutcome) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if ":streamGenerateContent" not in request.url.path:
+            return httpx.Response(200, json=dict(outcome.document))
+        return httpx.Response(
+            200,
+            content="".join(f"data: {json.dumps(frame)}\r\n\r\n" for frame in outcome.frames).encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    return handler
+
+
+async def _google_reason_stream(outcome: _GoogleReasonOutcome, is_async: bool) -> tuple[ModelResponseStream, ...]:
+    transport: Final = httpx.MockTransport(_google_reason_handler(outcome))
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "Describe the sea."}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "api_key": "fake-gemini-key",
+    }
+    if is_async:
+        stream: Final = await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+        return tuple([chunk async for chunk in stream])
+    return tuple(litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))))
+
+
+def _stream_choices(chunks: Sequence[ModelResponseStream]) -> tuple[StreamingChoices, ...]:
+    return tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+
+
+def _finish_choices(chunks: Sequence[ModelResponseStream]) -> tuple[StreamingChoices, ...]:
+    return tuple(choice for choice in _stream_choices(chunks) if choice.finish_reason)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
+async def test_streamed_finish_chunk_and_rebuilt_choice_carry_google_reason(
+    outcome: _GoogleReasonOutcome, is_async: bool
+) -> None:
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    finish_choices: Final = _finish_choices(chunks)
+    assert len(finish_choices) == 1, chunks
+    assert getattr(finish_choices[0], "provider_specific_fields", None) == outcome.reason_fields
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
+async def test_streamed_google_outcome_keeps_text_finish_reason_and_usage(
+    outcome: _GoogleReasonOutcome, is_async: bool
+) -> None:
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    assert "".join(choice.delta.content or "" for choice in _stream_choices(chunks)) == outcome.text
+    assert [choice.finish_reason for choice in _finish_choices(chunks)] == [outcome.finish_reason]
+    usage: Final = next(chunk.usage for chunk in reversed(chunks) if getattr(chunk, "usage", None))
+    usage_metadata: Final = outcome.frames[-1]["usageMetadata"]
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        usage_metadata["promptTokenCount"],
+        usage_metadata.get("candidatesTokenCount", 0),
+        usage_metadata["totalTokenCount"],
+    )
+
+
+@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
+def test_non_streamed_choice_carries_google_reason_and_its_message_only_when_sent(
+    outcome: _GoogleReasonOutcome,
+) -> None:
+    response: Final = litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Describe the sea."}],
+        api_key="fake-gemini-key",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_google_reason_handler(outcome)))),
+    )
+
+    assert response.choices[0].finish_reason == outcome.finish_reason
+    assert response.choices[0].provider_specific_fields == outcome.reason_fields
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():

@@ -2985,3 +2985,63 @@ def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_wi
         model="my-gpt-6", messages=messages
     )
     assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)
+
+
+def _google_reason_stream(final_choice_fields: Mapping[str, object]) -> tuple[ModelResponseStream, ...]:
+    return (
+        ModelResponseStream(
+            id="chatcmpl-google-reason",
+            created=1,
+            model="gemini-3.8-flash",
+            choices=[StreamingChoices(index=0, delta=Delta(content="Waves fold ", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-google-reason",
+            created=2,
+            model="gemini-3.8-flash",
+            choices=[StreamingChoices(index=0, delta=Delta(content="silver light."))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-google-reason",
+            created=3,
+            model="gemini-3.8-flash",
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="content_filter", **final_choice_fields)],
+        ),
+    )
+
+
+def _as_received(chunks: Sequence[ModelResponseStream], over_http: bool) -> tuple[object, ...]:
+    return tuple(chunk.model_dump(exclude_none=True) if over_http else chunk for chunk in chunks)
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+@pytest.mark.parametrize(
+    "reason_fields",
+    [
+        pytest.param({"native_finish_reason": "SAFETY", "native_finish_message": "Flagged."}, id="finish_reason"),
+        pytest.param({"block_reason": "PROHIBITED_CONTENT"}, id="block_reason"),
+    ],
+)
+def test_stream_chunk_builder_keeps_the_final_choices_provider_specific_fields(
+    over_http: bool, reason_fields: Mapping[str, str]
+) -> None:
+    chunks: Final = _as_received(_google_reason_stream({"provider_specific_fields": dict(reason_fields)}), over_http)
+
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.content == "Waves fold silver light."
+    assert response.choices[0].finish_reason == "content_filter"
+    assert getattr(response.choices[0], "provider_specific_fields", None) == reason_fields
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+def test_stream_chunk_builder_adds_no_choice_provider_specific_fields_when_no_chunk_carries_them(
+    over_http: bool,
+) -> None:
+    response: Final = stream_chunk_builder(chunks=list(_as_received(_google_reason_stream({}), over_http)))
+
+    assert response is not None
+    assert response.choices[0].message.content == "Waves fold silver light."
+    assert response.choices[0].finish_reason == "content_filter"
+    assert getattr(response.choices[0], "provider_specific_fields", None) is None
