@@ -71,7 +71,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.auth_utils import get_request_route, is_valid_anthropic_user_profile_id
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -572,11 +572,66 @@ def _key_or_team_metadata_flag_is_true(
 
 def pinned_anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
-    return next((value for value in admin_mapped if isinstance(value, str) and value), None)
+    return next((value for value in admin_mapped if isinstance(value, str) and _usable_profile_pin(value)), None)
 
 
-def anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
-    return pinned_anthropic_user_profile_id(user_api_key_dict) or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)
+def _usable_profile_pin(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and is_valid_anthropic_user_profile_id(value)
+
+
+def _warn_on_unusable_profile_pins(user_api_key_dict: UserAPIKeyAuth) -> None:
+    unusable: Final = sum(
+        1
+        for value in _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+        if value not in (None, "") and not _usable_profile_pin(value)
+    )
+    if unusable:
+        verbose_proxy_logger.warning(
+            "Skipping %d stored %s value(s) on key alias %s / team %s that are not valid Anthropic user profile ids",
+            unusable,
+            ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+            user_api_key_dict.key_alias,
+            user_api_key_dict.team_id,
+        )
+
+
+def anthropic_user_profile_id(
+    user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str], caller_credential: bool = False
+) -> str | None:
+    client_profile_id: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)
+    if caller_credential:
+        return client_profile_id
+    return pinned_anthropic_user_profile_id(user_api_key_dict) or client_profile_id
+
+
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except PydanticValidationError:
+        return MappingProxyType({})
+
+
+def _without_caller_profile_body_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            **{
+                name: value
+                for name, value in fields.items()
+                if name not in ("user_profile_id", "additionalModelRequestFields")
+            },
+            **(
+                {
+                    "additionalModelRequestFields": {
+                        name: value
+                        for name, value in _request_fields(fields["additionalModelRequestFields"]).items()
+                        if name != "user_profile_id"
+                    }
+                }
+                if "additionalModelRequestFields" in fields
+                else {}
+            ),
+        }
+    )
 
 
 def _key_or_team_allows_client_mock_response(
@@ -2373,9 +2428,33 @@ async def add_litellm_data_to_request(
     if dynamic_api_version is not None:  # only pass, if set
         data["api_version"] = dynamic_api_version
 
+    _warn_on_unusable_profile_pins(user_api_key_dict)
+    caller_body_profile: Final = anthropic_user_profile_id_in_headers(_REQUEST_FIELDS.validate_python(data))
+    if anthropic_user_profile_id(user_api_key_dict, {}) is not None:
+        for field in ("extra_headers", "headers"):
+            if field in data:
+                data[field] = {  # rebind-ok: data is an out-param
+                    name: value
+                    for name, value in _request_fields(data[field]).items()  # pyright: ignore[reportUnknownArgumentType]  # legacy request data is a bare dict
+                    if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+                }
+        caller_body: Final = _without_caller_profile_body_fields(_REQUEST_FIELDS.validate_python(data))
+        data.pop("user_profile_id", None)
+        if "additionalModelRequestFields" in data:
+            data["additionalModelRequestFields"] = (  # rebind-ok: data is an out-param
+                caller_body["additionalModelRequestFields"]
+            )
+        if "extra_body" in data:
+            data["extra_body"] = dict(  # rebind-ok: data is an out-param
+                _without_caller_profile_body_fields(_request_fields(caller_body.get("extra_body")))
+            )
+
     ## Forward any LLM API Provider specific headers in extra_headers
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers, user_profile_id=anthropic_user_profile_id(user_api_key_dict, _headers)
+        data=data,
+        headers=_headers,
+        user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
+        caller_user_profile_id=caller_body_profile,
     )
 
     ## Cache Controls
@@ -4082,10 +4161,22 @@ def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
     return isinstance(api_key, str) and bool(api_key.strip())
 
 
-def _user_profile_id_header(providers: frozenset[str], user_profile_id: str | None) -> ProviderSpecificHeader:
+def anthropic_user_profile_id_in_headers(params: Mapping[str, object]) -> str | None:
+    for field in ("extra_headers", "headers"):
+        for name, value in reversed(tuple(_request_fields(params.get(field)).items())):
+            if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER and isinstance(value, str):
+                return value
+    return None
+
+
+def _user_profile_id_header(
+    providers: frozenset[str], user_profile_id: str | None, yields_to_configured: bool = False
+) -> ProviderSpecificHeader:
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
         extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+        claude_models_only=True,
+        yields_to_configured=yields_to_configured,
     )
 
 
@@ -4093,6 +4184,7 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
     user_profile_id: str | None = None,
+    caller_user_profile_id: str | None = None,
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
@@ -4102,13 +4194,18 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    sends_anthropic_bearer_oauth: Final = any(
+        value.startswith("Bearer ") for value in anthropic_oauth_credential_headers.values()
+    )
     caller_credential_providers: Final = (
-        ANTHROPIC_OAUTH_FORWARD_PROVIDERS if anthropic_oauth_credential_headers else frozenset[str]()
+        ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_bearer_oauth else frozenset[str]()
     ) | (
         _CALLER_API_KEY_PROVIDERS
         if _carries_a_caller_api_key(_REQUEST_FIELDS.validate_python(data))
         else frozenset[str]()
     )
+    caller_profile: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER, caller_user_profile_id)
+
     typesafe_danger_zone_headers: Final = {
         header: value
         for header, value in headers.items()
@@ -4122,9 +4219,11 @@ def add_provider_specific_headers_to_request(
                 custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
             ),
             _user_profile_id_header(
-                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers, user_profile_id
+                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers,
+                user_profile_id or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
+                yields_to_configured=user_profile_id is None,
             ),
-            _user_profile_id_header(caller_credential_providers, headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)),
+            _user_profile_id_header(caller_credential_providers, caller_profile),
             ProviderSpecificHeader(
                 custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
                 extra_headers=anthropic_oauth_credential_headers,
@@ -4138,7 +4237,7 @@ def add_provider_specific_headers_to_request(
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers)
+    return sends_anthropic_bearer_oauth
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

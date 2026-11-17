@@ -287,6 +287,7 @@ def test_mantle_claude_completion_sends_a_proxy_user_profile_id_in_the_body(
 
     body: Final = json.loads(respond.call_args.args[0].content)
     assert {key: body[key] for key in ("user_profile_id",) if key in body} == expected_fields
+    assert "anthropic-user-profile-id" not in respond.call_args.args[0].headers
 
 
 @pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)

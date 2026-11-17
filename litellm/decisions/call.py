@@ -407,13 +407,18 @@ def _provider_ir_request(
 
 
 def _outbound_headers(
-    extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
+    extra_headers: Mapping[str, str] | None,
+    custom_llm_provider: str,
+    kwargs: Mapping[str, object],
+    model: str | None = None,
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
             kwargs.get("provider_specific_header")
         ),
         custom_llm_provider=custom_llm_provider,
+        model=model,
+        configured_headers=extra_headers,
     )
     return MappingProxyType(override_headers(extra_headers or {}, forwarded))
 
@@ -472,7 +477,7 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
-        headers: Final = _outbound_headers(extra_headers, provider, kwargs)
+        headers: Final = _outbound_headers(extra_headers, provider, kwargs, upstream_model)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_media(
             fields, provider_config, canonical_model, provider, kwargs

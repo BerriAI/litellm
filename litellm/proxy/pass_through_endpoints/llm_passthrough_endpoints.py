@@ -112,6 +112,7 @@ from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
+from litellm.proxy.litellm_pre_call_utils import anthropic_user_profile_id
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
@@ -2859,10 +2860,14 @@ def _upstream_headers_for_anthropic_route(
     caller_headers: Final = _caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
+    profile_id: Final = anthropic_user_profile_id(
+        user_api_key_dict, caller_headers, caller_credential=proxy_auth_header is None
+    )
+    profile_header: Final = {ANTHROPIC_USER_PROFILE_ID_HEADER: profile_id} if profile_id else {}
     if proxy_auth_header is None:
         if _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
             raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
-        return caller_headers
+        return MappingProxyType({**caller_headers, **profile_header})
     forwarded: Final = MappingProxyType(
         {name: value for name, value in caller_headers.items() if name not in _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS}
     )
@@ -2872,7 +2877,7 @@ def _upstream_headers_for_anthropic_route(
         if caller_beta and credential_beta
         else {}
     )
-    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta})
+    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta, **profile_header})
 
 
 def _pinned_profile_header(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
@@ -2894,22 +2899,35 @@ def _with_pinned_profile(
 def _vertex_upstream_request(
     placement: VertexLabelPlacement | None,
     pinned_profile: Mapping[str, str],
+    keeps_profile_header: bool,
     headers: Mapping[str, str],
     body: Mapping[str, object] | None,
     litellm_params: Mapping[str, object],
 ) -> UpstreamRequest:
     labelled_headers, labelled_body = _with_vertex_request_labels(placement, headers, body, litellm_params)
-    return override_headers(labelled_headers, pinned_profile), labelled_body
+    if keeps_profile_header:
+        return override_headers(labelled_headers, pinned_profile), labelled_body
+    return {
+        name: value for name, value in labelled_headers.items() if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+    }, labelled_body
+
+
+def _targets_vertex_claude(path: str) -> bool:
+    return _vertex_publisher(tuple(path.strip("/").split("/"))) == "anthropic"
 
 
 def _relay_request_headers(request: Request, user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
     from litellm.proxy.litellm_pre_call_utils import pinned_anthropic_user_profile_id
 
-    if pinned_anthropic_user_profile_id(user_api_key_dict) is None:
+    pinned: Final = pinned_anthropic_user_profile_id(user_api_key_dict)
+    if pinned is None:
         return request.headers
     pass_through_profile_header: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USER_PROFILE_ID_HEADER
     return MappingProxyType(
-        {name: value for name, value in dict(request.headers).items() if name != pass_through_profile_header}
+        {
+            **{name: value for name, value in dict(request.headers).items() if name != pass_through_profile_header},
+            pass_through_profile_header: pinned,
+        }
     )
 
 
@@ -3149,6 +3167,7 @@ async def _base_vertex_proxy_route(
             _vertex_upstream_request,
             _vertex_label_placement(request.method, updated_url.path),
             {} if headers_passed_through else _pinned_profile_header(user_api_key_dict),
+            headers_passed_through or _targets_vertex_claude(updated_url.path),
         ),
     )  # dynamically construct pass-through endpoint based on incoming path
 

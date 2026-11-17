@@ -4,6 +4,8 @@ use serde_json::{Map, Value};
 pub fn get_provider_specific_headers(
     provider_specific_header: Option<&ProviderSpecificHeaders>,
     custom_llm_provider: &str,
+    model: &str,
+    configured_headers: &Map<String, Value>,
 ) -> Map<String, Value> {
     let entries: &[ProviderSpecificHeader] = match provider_specific_header {
         None => &[],
@@ -12,13 +14,33 @@ pub fn get_provider_specific_headers(
     };
     entries
         .iter()
-        .filter(|entry| {
-            entry
-                .custom_llm_provider
-                .split(',')
-                .any(|scoped| scoped.trim() == custom_llm_provider)
+        .filter(|entry| applies_to_call(entry, custom_llm_provider, model))
+        .flat_map(|entry| contributed_headers(entry, configured_headers))
+        .collect()
+}
+
+fn applies_to_call(entry: &ProviderSpecificHeader, custom_llm_provider: &str, model: &str) -> bool {
+    (!entry.claude_models_only || model.to_lowercase().contains("claude"))
+        && entry
+            .custom_llm_provider
+            .split(',')
+            .any(|scoped| scoped.trim() == custom_llm_provider)
+}
+
+fn contributed_headers(
+    entry: &ProviderSpecificHeader,
+    configured_headers: &Map<String, Value>,
+) -> Map<String, Value> {
+    entry
+        .extra_headers
+        .iter()
+        .filter(|(name, _)| {
+            !entry.yields_to_configured
+                || !configured_headers
+                    .keys()
+                    .any(|configured| configured.eq_ignore_ascii_case(name))
         })
-        .flat_map(|entry| entry.extra_headers.clone())
+        .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
 
@@ -80,7 +102,9 @@ mod tests {
         assert_eq!(
             Value::Object(get_provider_specific_headers(
                 Some(&configured),
-                "anthropic"
+                "anthropic",
+                "claude-haiku-5-5",
+                &Map::new()
             )),
             expected
         );
@@ -88,6 +112,59 @@ mod tests {
 
     #[test]
     fn no_configured_headers_match_nothing() {
-        assert_eq!(get_provider_specific_headers(None, "anthropic"), Map::new());
+        assert_eq!(
+            get_provider_specific_headers(None, "anthropic", "claude-haiku-5-5", &Map::new()),
+            Map::new()
+        );
+    }
+
+    #[rstest]
+    #[case::claude_model("claude-sonnet-5-5", json!({"anthropic-user-profile-id": "uprof_pin"}))]
+    #[case::claude_model_in_any_case("Claude-Sonnet-5-5", json!({"anthropic-user-profile-id": "uprof_pin"}))]
+    #[case::non_claude_model("mistral-large-2411", json!({}))]
+    fn claude_only_entries_skip_other_models(#[case] model: &str, #[case] expected: Value) {
+        let configured: ProviderSpecificHeaders = serde_json::from_value(json!({
+            "custom_llm_provider": "azure_ai",
+            "extra_headers": {"anthropic-user-profile-id": "uprof_pin"},
+            "claude_models_only": true
+        }))
+        .unwrap();
+        assert_eq!(
+            Value::Object(get_provider_specific_headers(
+                Some(&configured),
+                "azure_ai",
+                model,
+                &Map::new()
+            )),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::yielding_entry_keeps_the_configured_value(true, json!({"x-other": "client"}))]
+    #[case::overriding_entry_replaces_it(
+        false,
+        json!({"Anthropic-User-Profile-Id": "uprof_client", "x-other": "client"})
+    )]
+    fn yielding_entries_never_replace_a_configured_header(
+        #[case] yields_to_configured: bool,
+        #[case] expected: Value,
+    ) {
+        let configured: ProviderSpecificHeaders = serde_json::from_value(json!({
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"Anthropic-User-Profile-Id": "uprof_client", "x-other": "client"},
+            "yields_to_configured": yields_to_configured
+        }))
+        .unwrap();
+        let deployment = json!({"anthropic-user-profile-id": "uprof_deployment"});
+        assert_eq!(
+            Value::Object(get_provider_specific_headers(
+                Some(&configured),
+                "anthropic",
+                "claude-haiku-5-5",
+                deployment.as_object().unwrap()
+            )),
+            expected
+        );
     }
 }

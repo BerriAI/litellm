@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
@@ -11,6 +11,7 @@ use litellm_llms::base_llm::{
 };
 use litellm_llms_types::formats::messages::MessagesRequest;
 use litellm_secrets::source::SecretSource;
+use serde_json::{Map, Value};
 
 use super::{
     Error, MessagesCall,
@@ -83,6 +84,15 @@ fn prepare_provider_request(
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
+    let configured_headers = extra_headers.unwrap_or_default();
+    let scoped = get_provider_specific_headers(
+        provider_specific_header.as_ref(),
+        provider.as_str(),
+        &model,
+        &configured_headers,
+    );
+    let forwarded = string_headers(Some(replaced_by(configured_headers, scoped)))?;
+
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
         shaping.settings.reasoning_auto_summary,
@@ -94,11 +104,6 @@ fn prepare_provider_request(
         &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
     )?;
 
-    let scoped =
-        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
-    let forwarded = string_headers(Some(
-        extra_headers.into_iter().flatten().chain(scoped).collect(),
-    ))?;
     let forwarded = config.request_headers(
         with_default_headers(forwarded, config.default_headers()),
         &transformed,
@@ -144,6 +149,22 @@ fn without_additional_drop_params(
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
     })
+}
+
+fn replaced_by(configured: Map<String, Value>, scoped: Map<String, Value>) -> Map<String, Value> {
+    let scoped_names: HashMap<String, String> = scoped
+        .keys()
+        .map(|name| (name.to_ascii_lowercase(), name.clone()))
+        .collect();
+    configured
+        .into_iter()
+        .filter(|(name, _)| {
+            scoped_names
+                .get(&name.to_ascii_lowercase())
+                .is_none_or(|scoped_name| scoped_name == name)
+        })
+        .chain(scoped)
+        .collect()
 }
 
 #[cfg(test)]
@@ -417,6 +438,65 @@ mod tests {
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         assert_eq!(caller_headers, expected);
+    }
+
+    #[rstest]
+    #[case::pin_replaces_the_caller_header_in_another_case(
+        "claude-test",
+        json!({"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-user-profile-id": "uprof_pin"}}),
+        &[("anthropic-user-profile-id", "uprof_pin")]
+    )]
+    #[case::yielding_header_keeps_the_configured_one(
+        "claude-test",
+        json!({
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"anthropic-user-profile-id": "uprof_client"},
+            "yields_to_configured": true
+        }),
+        &[("Anthropic-User-Profile-Id", "uprof_caller")]
+    )]
+    #[case::claude_only_header_skips_other_models(
+        "deepseek-chat",
+        json!({
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"x-claude-only": "1"},
+            "claude_models_only": true
+        }),
+        &[("Anthropic-User-Profile-Id", "uprof_caller")]
+    )]
+    fn scoped_headers_apply_by_model_and_replace_any_casing(
+        shaping: MessagesShaping,
+        #[case] model: &str,
+        #[case] configured: Value,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let prepared = prepare(MessagesCall {
+            body: body(
+                json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: Some("sk-test".into()),
+            api_base: None,
+            custom_llm_provider: Some("anthropic".into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([(
+                "Anthropic-User-Profile-Id".into(),
+                json!("uprof_caller"),
+            )])),
+            provider_specific_header: Some(serde_json::from_value(configured).unwrap()),
+            timeout: None,
+            shaping,
+        })
+        .unwrap();
+        let profile_headers: Vec<(&str, &str)> = prepared
+            .environment
+            .headers
+            .iter()
+            .filter(|(name, _)| {
+                name.eq_ignore_ascii_case("anthropic-user-profile-id") || name == "x-claude-only"
+            })
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(profile_headers, expected);
     }
 
     #[rstest]

@@ -2628,7 +2628,7 @@ async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
 
 
 @pytest.mark.asyncio
-async def test_azure_ai_decision_sends_the_proxy_user_profile_id_over_a_caller_header_in_another_case(
+async def test_azure_ai_decision_model_gets_no_proxy_user_profile_id_since_it_is_not_claude(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -2652,7 +2652,7 @@ async def test_azure_ai_decision_sends_the_proxy_user_profile_id_over_a_caller_h
         **proxy_request_data,
     )
 
-    assert respx_mock.calls[0].request.headers.get_list("anthropic-user-profile-id") == ["uprof_pinned"]
+    assert respx_mock.calls[0].request.headers.get_list("anthropic-user-profile-id") == ["uprof_other"]
 
 
 @pytest.mark.asyncio

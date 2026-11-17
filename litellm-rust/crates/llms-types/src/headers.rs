@@ -7,6 +7,10 @@ pub struct ProviderSpecificHeader {
     pub custom_llm_provider: String,
     #[serde(default)]
     pub extra_headers: Map<String, Value>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub claude_models_only: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub yields_to_configured: bool,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]

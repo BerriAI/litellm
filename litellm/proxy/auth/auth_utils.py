@@ -2,6 +2,7 @@ import importlib.util
 import os
 import re
 import sys
+import unicodedata
 from collections.abc import Callable, Collection, Iterator, Mapping
 from functools import lru_cache
 from itertools import accumulate, chain, repeat
@@ -1589,6 +1590,22 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
+def is_valid_anthropic_user_profile_id(value: str) -> bool:
+    return value.isascii() and not any(char.isspace() or unicodedata.category(char) in ("Cc", "Cs") for char in value)
+
+
+def validate_anthropic_user_profile_id_metadata(data: BatchLimitRequest, entity: Literal["key", "team"]) -> None:
+    value: Final = data.metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if data.metadata else None
+    if isinstance(value, str) and not is_valid_anthropic_user_profile_id(value):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"{ANTHROPIC_USER_PROFILE_ID_METADATA_KEY} on a {entity} must contain only printable ASCII "
+                "characters without whitespace"
+            },
+        )
+
+
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
@@ -1604,6 +1621,7 @@ def enforce_batch_limits_are_admin_only(
     than on presence, so a form resending the stored value stays a no-op. A
     non-string Anthropic user profile id answers 400 for every role.
     """
+    validate_anthropic_user_profile_id_metadata(data, entity)
     sent_profile_id: Final = data.metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if data.metadata else None
     stored_profile_id: Final = (
         existing_metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if existing_metadata else None

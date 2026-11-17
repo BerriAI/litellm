@@ -8,6 +8,7 @@ from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from itertools import chain, count, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, cast
@@ -59,6 +60,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.litellm_core_utils.get_provider_specific_headers import override_headers
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -119,6 +121,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    pinned_anthropic_user_profile_id,
     strip_client_guardrail_information,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
@@ -132,6 +135,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
 from litellm.types.litellm_params import ProxyRequestState, wire_names
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -1099,10 +1103,23 @@ UpstreamRequestFilter: TypeAlias = Callable[
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
-def _unfiltered_request(
-    headers: Mapping[str, str], body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
+def _with_pinned_profile_id_where_sent(
+    pinned_profile_id: str | None,
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
 ) -> UpstreamRequest:
-    return headers, body
+    if pinned_profile_id is None or all(name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers):
+        return headers, body
+    return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}), body
+
+
+def _upstream_request_filter_or_pin(
+    upstream_request_filter: UpstreamRequestFilter | None, user_api_key_dict: UserAPIKeyAuth
+) -> UpstreamRequestFilter:
+    if upstream_request_filter is not None:
+        return upstream_request_filter
+    return partial(_with_pinned_profile_id_where_sent, pinned_anthropic_user_profile_id(user_api_key_dict))
 
 
 def _filtered_upstream_request(
@@ -1130,7 +1147,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
-    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
+    upstream_request_filter: UpstreamRequestFilter | None = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1152,7 +1169,8 @@ async def pass_through_request(
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
         upstream_request_filter: Optional last rewrite of the headers and JSON body sent upstream, given the
-            litellm_params the request is logged with
+            litellm_params the request is logged with. Without one, a key or team profile pin replaces a sent
+            anthropic-user-profile-id header
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1493,7 +1511,7 @@ async def pass_through_request(
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         outbound_headers, upstream_body = _filtered_upstream_request(
-            upstream_request_filter,
+            _upstream_request_filter_or_pin(upstream_request_filter, user_api_key_dict),
             upstream_headers,
             outgoing_body,
             _LITELLM_PARAMS.validate_python(kwargs["litellm_params"]),
@@ -2144,7 +2162,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
-    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
+    upstream_request_filter: UpstreamRequestFilter | None = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid

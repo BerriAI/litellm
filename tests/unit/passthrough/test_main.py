@@ -51,3 +51,29 @@ async def test_allm_passthrough_route_hosted_vllm_sends_normalized_model(respx_m
     outbound: Final = json.loads(route.calls[0].request.content)
     assert outbound["model"] == "my-deployment"
     assert outbound["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.parametrize(
+    ("model", "forwarded_profile_id"),
+    [("azure_ai/claude-sonnet-5-5", "uprof_key"), ("azure_ai/gpt-5", None)],
+    ids=["claude_model", "other_model"],
+)
+@pytest.mark.asyncio
+async def test_allm_passthrough_route_sends_an_x_pass_user_profile_id_to_claude_models_only(
+    respx_mock: respx.MockRouter, model: str, forwarded_profile_id: str | None
+) -> None:
+    upstream: Final = respx_mock.route(host="example.services.ai.azure.com").respond(json={"ok": True})
+
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="chat/completions",
+        model=model,
+        api_base="https://example.services.ai.azure.com/models",
+        api_key="sk-foundry",
+        request_headers={"content-type": "application/json", "X-Pass-Anthropic-User-Profile-Id": "uprof_key"},
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+        client=AsyncHTTPHandler(),
+    )
+
+    assert response.status_code == 200
+    assert upstream.calls.last.request.headers.get("anthropic-user-profile-id") == forwarded_profile_id

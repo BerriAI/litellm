@@ -4145,6 +4145,7 @@ _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CONFIGURED_HEADERS: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
@@ -5635,6 +5636,8 @@ def completion(
             ProviderSpecificHeaderUtils.get_provider_specific_headers(
                 provider_specific_header=provider_specific_header,
                 custom_llm_provider=custom_llm_provider,
+                model=model,
+                configured_headers=_CONFIGURED_HEADERS.validate_python(headers),
             ),
         )
 

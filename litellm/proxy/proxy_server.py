@@ -424,7 +424,8 @@ from litellm.proxy.auth.password_policy import validate_password_not_breached, v
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
     _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
-    request_anthropic_user_profile_id,
+    request_client_anthropic_user_profile_id,
+    request_pinned_anthropic_user_profile_id,
     user_api_key_auth,
     user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_live_websocket,
@@ -642,7 +643,11 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    add_litellm_data_to_request,
+    anthropic_user_profile_id_in_headers,
+)
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -1320,6 +1325,7 @@ _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
+_LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 
 
 class _AiohttpConnectorKwargs(TypedDict, total=False):
@@ -14212,11 +14218,21 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 
 
-def _with_user_profile_id(counter: BaseTokenCounter | None, user_profile_id: str | None) -> BaseTokenCounter | None:
+def _with_user_profile_id(
+    counter: BaseTokenCounter | None,
+    pinned_user_profile_id: str | None,
+    client_user_profile_id: str | None,
+    deployment_litellm_params: Mapping[str, object],
+) -> BaseTokenCounter | None:
     from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
     from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
+    user_profile_id: Final = (
+        pinned_user_profile_id
+        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+        or client_user_profile_id
+    )
     match counter:
         case AnthropicTokenCounter() if user_profile_id:
             return AnthropicTokenCounter(user_profile_id=user_profile_id)
@@ -14716,7 +14732,8 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
 async def token_counter(
     request: TokenCountRequest,
     call_endpoint: bool = False,
-    user_profile_id: Annotated[str | None, Depends(request_anthropic_user_profile_id)] = None,
+    pinned_user_profile_id: Annotated[str | None, Depends(request_pinned_anthropic_user_profile_id)] = None,
+    client_user_profile_id: Annotated[str | None, Depends(request_client_anthropic_user_profile_id)] = None,
 ):
     """
     Args:
@@ -14726,7 +14743,12 @@ async def token_counter(
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, user_profile_id=user_profile_id)
+    return await count_request_tokens(
+        request=request,
+        call_endpoint=call_endpoint,
+        pinned_user_profile_id=pinned_user_profile_id,
+        client_user_profile_id=client_user_profile_id,
+    )
 
 
 async def count_request_tokens(
@@ -14736,7 +14758,8 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
-    user_profile_id: str | None = None,
+    pinned_user_profile_id: str | None = None,
+    client_user_profile_id: str | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14790,7 +14813,12 @@ async def count_request_tokens(
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
-        provider_counter = _with_user_profile_id(routed_counter, user_profile_id)
+        provider_counter = _with_user_profile_id(
+            routed_counter,
+            pinned_user_profile_id,
+            client_user_profile_id,
+            _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})),
+        )
         if _model is not None:
             model_to_use = _model
 

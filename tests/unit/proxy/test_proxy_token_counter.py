@@ -242,7 +242,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -323,7 +324,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1142,7 +1144,8 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1200,7 +1203,8 @@ async def test_anthropic_endpoint_403_permission_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1258,7 +1262,8 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
-        user_profile_id=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -3286,9 +3291,23 @@ _HELLO_COUNT_ROUTES: Final = (
 @pytest.mark.parametrize("litellm_params", _CLAUDE_COUNT_DEPLOYMENTS)
 @pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
 @pytest.mark.parametrize(
-    ("key_metadata", "sent_profile_id"),
-    (({"anthropic_user_profile_id": "uprof_pinned"}, "uprof_pinned"), ({}, "uprof_client")),
-    ids=("key_pin_over_client_header", "client_header"),
+    ("key_metadata", "deployment_headers", "sent_profile_id"),
+    (
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
+        ({}, {}, "uprof_client"),
+        ({}, {"Anthropic-User-Profile-Id": "uprof_deployment"}, "uprof_deployment"),
+        (
+            {"anthropic_user_profile_id": "uprof_pinned"},
+            {"Anthropic-User-Profile-Id": "uprof_deployment"},
+            "uprof_pinned",
+        ),
+    ),
+    ids=(
+        "key_pin_over_client_header",
+        "client_header",
+        "deployment_header_over_client_header",
+        "key_pin_over_deployment_header",
+    ),
 )
 def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_would_send(
     litellm_params: dict[str, JsonValue],
@@ -3296,6 +3315,7 @@ def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_wo
     body: Mapping[str, JsonValue],
     count_field: str,
     key_metadata: Mapping[str, str],
+    deployment_headers: dict[str, JsonValue],
     sent_profile_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3319,7 +3339,11 @@ def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_wo
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
-        Router(model_list=[{"model_name": "provider-counted", "litellm_params": litellm_params}]),
+        Router(
+            model_list=[
+                {"model_name": "provider-counted", "litellm_params": {**litellm_params, "extra_headers": deployment_headers}}
+            ]
+        ),
     )
     monkeypatch.setitem(
         app.dependency_overrides,

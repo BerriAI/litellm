@@ -163,7 +163,11 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, anthropic_user_profile_id
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    anthropic_user_profile_id,
+    pinned_anthropic_user_profile_id,
+)
 from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
@@ -4296,10 +4300,16 @@ async def user_api_key_auth(
     return user_api_key_auth_obj
 
 
-async def request_anthropic_user_profile_id(
+async def request_pinned_anthropic_user_profile_id(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> str | None:
+    return pinned_anthropic_user_profile_id(user_api_key_dict)
+
+
+async def request_client_anthropic_user_profile_id(
     request: Request, user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 ) -> str | None:
-    return anthropic_user_profile_id(user_api_key_dict, request.headers)
+    return anthropic_user_profile_id(user_api_key_dict, request.headers, caller_credential=True)
 
 
 async def _return_user_api_key_auth_obj(

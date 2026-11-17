@@ -2602,6 +2602,86 @@ async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "inbound_headers", "forward_headers", "sent_profile_id"),
+    [
+        pytest.param(
+            {"anthropic_user_profile_id": "uprof_key"},
+            {"x-pass-anthropic-user-profile-id": "uprof_caller"},
+            False,
+            "uprof_key",
+            id="pin-replaces-x-pass-id",
+        ),
+        pytest.param(
+            {"anthropic_user_profile_id": "uprof_key"},
+            {"Anthropic-User-Profile-Id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="pin-replaces-forwarded-id",
+        ),
+        pytest.param({"anthropic_user_profile_id": "uprof_key"}, {}, False, None, id="pin-adds-nothing"),
+        pytest.param({}, {"x-pass-anthropic-user-profile-id": "uprof_caller"}, False, "uprof_caller", id="no-pin"),
+    ],
+)
+async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
+    key_metadata: dict[str, str],
+    inbound_headers: dict[str, str],
+    forward_headers: bool,
+    sent_profile_id: str | None,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    captured: Final[dict[str, httpx.Headers]] = {}  # mutable-ok: the mock transport records the upstream headers
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    real_handler: Final = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict: Final = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key: Final = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    fake_client: Final = httpx.AsyncClient(transport=httpx.MockTransport(transport_handler))
+    cache_dict[cache_key] = SimpleNamespace(client=fake_client)
+
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    proxy_logging.get_proxy_hook = MagicMock(return_value=MagicMock())
+
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    request.scope = {"path": "/internal/v1/messages"}
+    request.url = MagicMock()
+    request.url.path = "/internal/v1/messages"
+    request.body = AsyncMock(return_value=b'{"model": "claude-sonnet-5-5"}')
+    request.headers = Headers({"content-type": "application/json", **inbound_headers})
+    request.query_params = QueryParams({})
+
+    try:
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):  # test-quality-ok: read at call time
+            response: Final = await pass_through_request(
+                request=request,
+                target="http://internal-api.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=forward_headers,
+            )
+    finally:
+        cache_dict[cache_key] = real_handler
+        await fake_client.aclose()
+
+    assert (response.status_code, captured["headers"].get_list("anthropic-user-profile-id")) == (
+        200,
+        [] if sent_profile_id is None else [sent_profile_id],
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_pass_through_endpoint():
     """
     Test creating a new pass-through endpoint
