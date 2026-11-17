@@ -1237,6 +1237,7 @@ pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
 mod tests {
     use super::*;
     use crate::constants::{AWS_REGION, BEDROCK_SERVICE};
+    use crate::error::StsFailure;
     use reqwest::header::CONTENT_TYPE;
 
     #[cfg(unix)]
@@ -2031,6 +2032,8 @@ mod tests {
     struct Sts {
         requests: Arc<std::sync::Mutex<Vec<StsRequest>>>,
         deny_assume_role: bool,
+        reject_web_identity: Option<&'static str>,
+        unreachable: bool,
         caller_arns: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>,
     }
 
@@ -2063,6 +2066,9 @@ mod tests {
             };
             match request.action() {
                 "AssumeRole" if self.deny_assume_role => (403, error("AccessDenied")),
+                "AssumeRoleWithWebIdentity" if self.reject_web_identity.is_some() => {
+                    (400, error(self.reject_web_identity.unwrap_or_default()))
+                }
                 "AssumeRole" => (
                     200,
                     format!(
@@ -2113,7 +2119,13 @@ mod tests {
             };
             let (status, body) = self.response(&recorded);
             self.requests.lock().unwrap().push(recorded);
+            let unreachable = self.unreachable;
             aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async move {
+                if unreachable {
+                    return Err(aws_smithy_runtime_api::client::result::ConnectorError::io(
+                        std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into(),
+                    ));
+                }
                 Ok(
                     aws_smithy_runtime_api::client::orchestrator::HttpResponse::new(
                         status.try_into().unwrap(),
@@ -2425,6 +2437,73 @@ mod tests {
         assert_eq!(request.form["RoleSessionName"], "oidc-session");
         assert_eq!(request.form["DurationSeconds"], "3600");
         assert_eq!(request.form.get("Policy").map(String::as_str), policy);
+    }
+
+    #[rstest::rstest]
+    #[case::invalid_web_identity_token(
+        Sts { reject_web_identity: Some("InvalidIdentityToken"), ..Sts::default() },
+        StsFailure::InvalidWebIdentityToken { message: "denied".into() }
+    )]
+    #[case::expired_web_identity_token(
+        Sts { reject_web_identity: Some("ExpiredTokenException"), ..Sts::default() },
+        StsFailure::Rejected {
+            operation: "AssumeRoleWithWebIdentity",
+            code: "ExpiredTokenException".into(),
+            message: "denied".into(),
+        }
+    )]
+    #[case::unreachable(Sts { unreachable: true, ..Sts::default() }, StsFailure::Unreachable)]
+    #[tokio::test]
+    async fn a_failed_web_identity_exchange_names_why_sts_failed(
+        #[case] sts: Sts,
+        #[case] expected: StsFailure,
+    ) {
+        let error = web_identity_source("oidc/file/var/run/secrets/token")
+            .resolve(
+                &sts_service(&sts, Some(Arc::new(Tokens(Some("resolved.jwt.value"))))),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            litellm_error::find::<Error>(&error).and_then(Error::sts_failure),
+            Some(expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denied_assume_role_names_the_sts_code() {
+        let sts = Sts {
+            deny_assume_role: true,
+            caller_arns: Arc::new(std::sync::Mutex::new(vec![None, None])),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            ..AwsAuthConfig::default()
+        }));
+
+        let error = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            litellm_error::find::<Error>(&error).and_then(Error::sts_failure),
+            Some(StsFailure::Rejected {
+                operation: "AssumeRole",
+                code: "AccessDenied".into(),
+                message: "denied".into(),
+            })
+        );
     }
 
     #[rstest::rstest]

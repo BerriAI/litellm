@@ -1097,6 +1097,42 @@ async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
     assert server.requests == []
 
 
+_STS_ACCESS_DENIED: Final = ResponseSpec(
+    body=(
+        b'<ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><Error><Type>Sender</Type>'
+        b"<Code>AccessDenied</Code><Message>denied</Message></Error><RequestId>r</RequestId></ErrorResponse>"
+    ),
+    status=403,
+    headers={"content-type": "text/xml"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_aws_credentials")
+async def test_bedrock_mantle_denied_assume_role_raises_the_botocore_client_error(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from botocore.exceptions import ClientError
+
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    server.default_response = _STS_ACCESS_DENIED
+    route: Final = {
+        "api_key": None,
+        "aws_region_name": "us-east-1",
+        **_SIGV4_ONLY,
+        "aws_role_name": "arn:aws:iam::123456789012:role/bedrock",
+        "aws_session_name": "litellm-session",
+        "aws_sts_endpoint": server.base_url,
+    }
+
+    with pytest.raises(ClientError) as raised:
+        await _mantle(_RUST_ENTRY, server, **route)
+
+    assert raised.value.response.get("Error", {}).get("Code") == "AccessDenied"
+    assert raised.value.operation_name == "AssumeRole"
+    assert all(request.method == "POST" and "/v1/messages" not in request.path for request in server.requests)
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_aws_credentials")
 async def test_bedrock_mantle_refusal_without_credentials_raises_the_transforms_bad_request(
