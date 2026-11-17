@@ -235,11 +235,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         base_model: str | None = None,
         allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        if azureAIGPT5Config.is_model_gpt_5_model(model):
+        detection_model: Final = base_model or model
+        if azureAIGPT5Config.is_model_gpt_5_model(detection_model):
             return azureAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=detection_model,
                 drop_params=drop_params,
             )
         foundry_effort: Final = _reasoning_effort_params(
