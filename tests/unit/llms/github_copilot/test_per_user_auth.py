@@ -1026,6 +1026,97 @@ async def test_e2e_anthropic_messages_per_user_credential(per_user_credential):
     assert response["usage"]["input_tokens"] == 4
 
 
+_MODEL_NOT_SUPPORTED: Final = {
+    "error": {
+        "message": "The requested model is not supported.",
+        "code": "model_not_supported",
+        "param": "model",
+        "type": "invalid_request_error",
+    }
+}
+_ALICE_ACCOUNT: Final = (
+    "not available for GitHub account 'alice-gh', which LiteLLM user 'user-a' connected for LiteLLM credential "
+    "'copilot-cred'. That can be a different account from the one signed in to your editor."
+)
+
+
+def _alice_secret_fields():
+    connection: Final = _secret_fields("user-a", "gho_a")["user_provider_credentials"]["copilot-cred"]
+    return {
+        "user_provider_credentials_user_id": "user-a",
+        "user_provider_credentials": {"copilot-cred": {**connection, "github_login": "alice-gh"}},
+    }
+
+
+def _copilot_rejects_the_model(request: httpx.Request) -> httpx.Response:
+    if str(request.url) == COPILOT_USER_URL:
+        return httpx.Response(200, json=_user_payload(), request=request)
+    if request.url.host.endswith("githubcopilot.com"):
+        return httpx.Response(400, json=_MODEL_NOT_SUPPORTED, request=request)
+    pytest.fail(f"unexpected request to {request.url}")
+
+
+def test_e2e_completion_model_not_supported_names_the_connected_github_account(per_user_credential):
+    from litellm.llms.openai.common_utils import OpenAIError
+
+    copilot_request: Final = httpx.Request("POST", "https://api.githubcopilot.com/chat/completions")
+    with (
+        github_http(_user_responder()),
+        _no_authenticator(),
+        patch(
+            "litellm.main.openai_chat_completions.completion",
+            side_effect=OpenAIError(
+                status_code=400,
+                message=str(_MODEL_NOT_SUPPORTED),
+                request=copilot_request,
+                response=httpx.Response(400, request=copilot_request),
+                body=_MODEL_NOT_SUPPORTED["error"],
+            ),
+        ),
+        pytest.raises(BadRequestError) as caught,
+    ):
+        litellm.completion(
+            model="github_copilot/claude-opus-4.6",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_alice_secret_fields(),
+        )
+    assert _ALICE_ACCOUNT in caught.value.message, caught.value.message
+
+
+def test_e2e_responses_model_not_supported_names_the_connected_github_account(per_user_credential):
+    with (
+        github_http(_copilot_rejects_the_model),
+        _no_authenticator(),
+        pytest.raises(BadRequestError) as caught,
+    ):
+        litellm.responses(
+            model="github_copilot/gpt-5.3-codex",
+            input=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_alice_secret_fields(),
+        )
+    assert _ALICE_ACCOUNT in caught.value.message, caught.value.message
+
+
+@pytest.mark.asyncio
+async def test_e2e_anthropic_messages_model_not_supported_names_the_connected_github_account(per_user_credential):
+    with (
+        github_http(_copilot_rejects_the_model),
+        _no_authenticator(),
+        pytest.raises(BadRequestError) as caught,
+    ):
+        await litellm.anthropic.messages.acreate(
+            model="github_copilot/claude-haiku-4.5",
+            custom_llm_provider="github_copilot",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_alice_secret_fields(),
+        )
+    assert _ALICE_ACCOUNT in caught.value.message, caught.value.message
+
+
 _CONNECT_MESSAGE = "has not connected GitHub Copilot for 'copilot-cred'"
 
 

@@ -38,8 +38,12 @@ from litellm.exceptions import (
 )
 
 from .authenticator import github_api_headers
-from .common_utils import get_copilot_default_headers
-from .github_host import GithubHostEndpoints, github_host_endpoints, normalized_github_host
+from .common_utils import custom_github_app_hint, get_copilot_default_headers
+from .github_host import (
+    GithubHostEndpoints,
+    github_host_endpoints,
+    normalized_github_host,
+)
 
 GITHUB_COPILOT_USER_SESSION_KWARG_KEY: Final = "github_copilot_user_session"
 _LLM_PROVIDER: Final = "github_copilot"
@@ -641,34 +645,63 @@ def _connect_error(credential_name: str, problem: str | None = None) -> CallerCr
     )
 
 
+def _object_mapping(value: object) -> Mapping[object, object] | None:
+    return (
+        cast(Mapping[object, object], value)  # cast-ok: value is Mapping-checked at runtime
+        if isinstance(value, Mapping)
+        else None
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredUserConnection:
+    user_id: object
+    credentials: Mapping[object, object] | None
+    connection: Mapping[object, object] | None
+
+
+def _stored_user_connection(kwargs: Mapping[str, object], credential_name: object) -> _StoredUserConnection:
+    secret_fields: Final = _object_mapping(kwargs.get("secret_fields"))
+    credentials: Final = (
+        _object_mapping(secret_fields.get("user_provider_credentials")) if secret_fields is not None else None
+    )
+    return _StoredUserConnection(
+        user_id=secret_fields.get("user_provider_credentials_user_id") if secret_fields is not None else None,
+        credentials=credentials,
+        connection=_object_mapping(credentials.get(credential_name)) if credentials is not None else None,
+    )
+
+
+def github_copilot_account_in_use(kwargs: Mapping[str, object]) -> str:
+    session: Final = github_copilot_user_session_from(kwargs)
+    credential_name: Final[object] = kwargs.get("litellm_credential_name")
+    if session is None:
+        return "the GitHub account this LiteLLM proxy signed in to GitHub Copilot with"
+    if session.is_app:
+        return f"the GitHub App installation on LiteLLM credential '{credential_name}'"
+    stored: Final = _stored_user_connection(kwargs, credential_name)
+    github_login: Final[object] = stored.connection.get("github_login") if stored.connection is not None else None
+    owner: Final = f"LiteLLM user '{stored.user_id}'" if isinstance(stored.user_id, str) and stored.user_id else "you"
+    if isinstance(github_login, str) and github_login:
+        return f"GitHub account '{github_login}', which {owner} connected for LiteLLM credential '{credential_name}'"
+    return f"the GitHub account {owner} connected for LiteLLM credential '{credential_name}'"
+
+
+def github_copilot_sign_in_app_hint(kwargs: Mapping[str, object]) -> str:
+    session: Final = github_copilot_user_session_from(kwargs)
+    hint: Final = None if session is not None and session.is_app else custom_github_app_hint()
+    return "" if hint is None else f" {hint}"
+
+
 def _caller_connection(
     kwargs: Mapping[str, object],
     credential_name: str,
     endpoints: GithubHostEndpoints,
 ) -> tuple[str, str]:
-    secret_fields_raw: Final[object] = kwargs.get("secret_fields")
-    secret_fields: Final = (
-        cast(Mapping[object, object], secret_fields_raw)  # cast-ok: value is Mapping-checked or dict-shaped at runtime
-        if isinstance(secret_fields_raw, Mapping)
-        else None
-    )
-    user_id: Final[object] = (
-        secret_fields.get("user_provider_credentials_user_id") if secret_fields is not None else None
-    )
-    credentials_raw: Final[object] = (
-        secret_fields.get("user_provider_credentials") if secret_fields is not None else None
-    )
-    credentials: Final = (
-        cast(Mapping[object, object], credentials_raw)  # cast-ok: value is Mapping-checked or dict-shaped at runtime
-        if isinstance(credentials_raw, Mapping)
-        else None
-    )
-    connection_raw: Final[object] = credentials.get(credential_name) if credentials is not None else None
-    connection: Final = (
-        cast(Mapping[object, object], connection_raw)  # cast-ok: runtime Mapping check validates the stored connection
-        if isinstance(connection_raw, Mapping)
-        else None
-    )
+    stored: Final = _stored_user_connection(kwargs, credential_name)
+    user_id: Final = stored.user_id
+    credentials: Final = stored.credentials
+    connection: Final = stored.connection
     token: Final[object] = connection.get("access_token") if connection is not None else None
     github_host: Final = normalized_github_host(connection.get("github_host") if connection is not None else None)
     if not isinstance(user_id, str) or not user_id:

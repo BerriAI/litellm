@@ -24,6 +24,8 @@ from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_CLIENT_ID
+from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.proxy.common_utils.openai_error_payload import openai_error_type
@@ -3527,7 +3529,11 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.request.content == b""
 
 
-def test_github_copilot_model_not_supported_explains_the_copilot_model_policy():
+_PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", api_base="https://api.githubcopilot.com")
+_APP_SESSION: Final = GithubCopilotUserSession(token="ghs-app", api_base="https://api.githubcopilot.com", is_app=True)
+
+
+def _copilot_model_not_supported_message(request_kwargs: dict[str, object]) -> str:
     copilot_body: Final = {
         "error": {
             "message": "The requested model is not supported.",
@@ -3550,15 +3556,115 @@ def test_github_copilot_model_not_supported_explains_the_copilot_model_policy():
             original_exception=original,
             custom_llm_provider="github_copilot",
             completion_kwargs={},
-            extra_kwargs={},
+            extra_kwargs=request_kwargs,
         )
     assert caught.value.status_code == 400
-    assert (
-        "GitHub Copilot rejected model 'claude-opus-4.6' because it is not available for this GitHub Copilot "
-        "account. Ask your GitHub admin to enable it in the Copilot model policy, or use a model your Copilot "
-        "plan includes. This is not a LiteLLM error."
-    ) in caught.value.message, caught.value.message
     assert "The requested model is not supported." in caught.value.message
+    assert "gho-" not in caught.value.message
+    assert "ghu-" not in caught.value.message
+    assert "ghs-" not in caught.value.message
+    return caught.value.message
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "account"),
+    [
+        pytest.param(
+            {"litellm_credential_name": "shared-copilot"},
+            "the GitHub account this LiteLLM proxy signed in to GitHub Copilot with",
+            id="shared-device-login",
+        ),
+        pytest.param(
+            {
+                "litellm_credential_name": "team-copilot",
+                "github_copilot_user_session": _PER_USER_SESSION,
+                "secret_fields": {
+                    "user_provider_credentials_user_id": "dev-alice",
+                    "user_provider_credentials": {
+                        "team-copilot": {"access_token": "gho-alice", "github_login": "alice-gh"},
+                        "other-copilot": {"access_token": "gho-other", "github_login": "someone-else"},
+                    },
+                },
+            },
+            "GitHub account 'alice-gh', which LiteLLM user 'dev-alice' connected for LiteLLM credential "
+            "'team-copilot'",
+            id="per-user-connected-login",
+        ),
+        pytest.param(
+            {
+                "litellm_credential_name": "team-copilot",
+                "github_copilot_user_session": _PER_USER_SESSION,
+                "secret_fields": {
+                    "user_provider_credentials_user_id": "dev-alice",
+                    "user_provider_credentials": {"team-copilot": {"access_token": "gho-alice"}},
+                },
+            },
+            "the GitHub account LiteLLM user 'dev-alice' connected for LiteLLM credential 'team-copilot'",
+            id="per-user-without-saved-login",
+        ),
+        pytest.param(
+            {"litellm_credential_name": "team-copilot", "github_copilot_user_session": _PER_USER_SESSION},
+            "the GitHub account you connected for LiteLLM credential 'team-copilot'",
+            id="per-user-outside-the-proxy",
+        ),
+        pytest.param(
+            {"litellm_credential_name": "org-app", "github_copilot_user_session": _APP_SESSION},
+            "the GitHub App installation on LiteLLM credential 'org-app'",
+            id="github-app",
+        ),
+    ],
+)
+def test_github_copilot_model_not_supported_names_the_github_account_used(
+    request_kwargs: dict[str, object], account: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("GITHUB_COPILOT_CLIENT_ID", raising=False)
+    assert (
+        f"GitHub Copilot rejected model 'claude-opus-4.6' because it is not available for {account}. That can be "
+        "a different account from the one signed in to your editor. Ask your GitHub admin to enable the model in "
+        "that account's Copilot model policy, or use a model its Copilot plan includes. This is not a LiteLLM error."
+    ) in _copilot_model_not_supported_message(request_kwargs)
+
+
+_CUSTOM_APP_HINT: Final = (
+    "That can be a different account from the one signed in to your editor. LiteLLM signs in to GitHub Copilot "
+    "with a custom GitHub App (GITHUB_COPILOT_CLIENT_ID). Check that the app's 'Copilot Requests' permission is set "
+    "to 'Read-only'"
+)
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        pytest.param({"litellm_credential_name": "shared-copilot"}, id="shared-device-login"),
+        pytest.param(
+            {"litellm_credential_name": "team-copilot", "github_copilot_user_session": _PER_USER_SESSION},
+            id="per-user-device-login",
+        ),
+    ],
+)
+def test_github_copilot_model_not_supported_names_a_custom_sign_in_app(
+    request_kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23custom")
+    assert _CUSTOM_APP_HINT in _copilot_model_not_supported_message(request_kwargs)
+
+
+@pytest.mark.parametrize(
+    ("client_id", "request_kwargs"),
+    [
+        pytest.param(DEFAULT_GITHUB_CLIENT_ID, {"litellm_credential_name": "shared-copilot"}, id="default-app"),
+        pytest.param(
+            "Iv23custom",
+            {"litellm_credential_name": "org-app", "github_copilot_user_session": _APP_SESSION},
+            id="github-app-installation",
+        ),
+    ],
+)
+def test_github_copilot_model_not_supported_skips_the_app_hint_without_a_custom_sign_in_app(
+    client_id: str, request_kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", client_id)
+    assert "GITHUB_COPILOT_CLIENT_ID" not in _copilot_model_not_supported_message(request_kwargs)
 
 
 def test_openai_model_not_supported_keeps_the_upstream_message():
