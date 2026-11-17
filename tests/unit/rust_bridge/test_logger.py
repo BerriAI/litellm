@@ -70,6 +70,19 @@ def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture)
     assert [record.getMessage() for record in caplog.records] == ["visible"]
 
 
+def test_native_limiter_records_reach_the_proxy_logger(caplog: pytest.LogCaptureFixture) -> None:
+    target: Final = "litellm_callbacks_parallel_request_limiter::hosted"
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        assert logger.enabled(logging.DEBUG, target)
+        assert not logger.enabled(logging.DEBUG, "litellm_http")
+        logger.emit(logging.DEBUG, "limiter", "hosted.rs", 1, target, {}, ("", ""))
+        logger.emit(logging.DEBUG, "http", "http.rs", 1, "litellm_http", {}, ("", ""))
+
+    assert [(record.name, record.levelno, record.getMessage()) for record in caplog.records] == [
+        ("LiteLLM Proxy", logging.DEBUG, "limiter")
+    ]
+
+
 def test_native_redis_timeouts_share_the_redis_py_timeout_throttle(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:

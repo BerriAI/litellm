@@ -3324,7 +3324,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if request_params.get("no-log", False) is True:
             # proxy cost tracking cal backs should run
 
-            if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
+            if not (
+                isinstance(callback, CustomLogger)
+                and (callback.runs_on_no_log_requests or "_PROXY_" in callback.__class__.__name__)
+            ):
                 verbose_logger.debug("no-log request, skipping logging for %s event", event_hook)
                 return False
 
@@ -7001,6 +7004,15 @@ def build_custom_logger_compatible_class(
         anthropic_cache_control_hook: Final = AnthropicCacheControlHook()
         _in_memory_loggers.append(anthropic_cache_control_hook)
         return anthropic_cache_control_hook
+    elif logging_integration == "prefix_block_hashes":
+        from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrefixBlockHashes):
+                return callback
+        prefix_block_hashes: Final = PrefixBlockHashes()
+        _in_memory_loggers.append(prefix_block_hashes)
+        return prefix_block_hashes
     elif logging_integration == "vector_store_pre_call_hook":
         from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
             VectorStorePreCallHook,
@@ -7501,6 +7513,12 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "prefix_block_hashes":
+            from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrefixBlockHashes):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (

@@ -7362,7 +7362,7 @@ def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on
             {
                 "model_name": "opted-in",
                 "litellm_params": {"model": "bedrock/moonshotai.kimi-k3", "aws_region_name": "us-east-1"},
-                "model_info": {"id": "opted-in-id", "supports_prompt_cache_breakpoint": True},
+                "model_info": {"id": "opted-in-id", "supports_bedrock_converse_cache_point": True},
             }
         ]
     )
@@ -7373,8 +7373,9 @@ def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on
 
     assert (
         bridged_system({"id": "flagless-id"}),
-        bridged_system({"id": "opted-in-id", "supports_prompt_cache_breakpoint": True}),
-    ) == ({"role": "system", "content": "House rules"}, marked_system)
+        bridged_system({"id": "opted-in-id", "supports_bedrock_converse_cache_point": True}),
+        bridged_system({"id": "openai-flagged-id", "supports_prompt_cache_breakpoint": True}),
+    ) == ({"role": "system", "content": "House rules"}, marked_system, {"role": "system", "content": "House rules"})
 
 
 def test_the_shared_input_transform_keeps_every_item_mark_for_a_request_it_sends():

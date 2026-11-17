@@ -25,6 +25,9 @@ pub struct KeyIdentity {
     pub invoked_agent_id: Option<Scalar>,
     pub team_priority: Option<Scalar>,
     pub key_priority: Option<Scalar>,
+    pub customer_org_id: Option<String>,
+    pub customer_team_id: Option<String>,
+    pub customer_member_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -87,6 +90,22 @@ pub struct AgentPolicy {
     pub session_tpm_limit: Option<Scalar>,
 }
 
+/// One level of the customer hierarchy a request is charged to, with the limits its budget row
+/// grants. `borrows` marks a customer organization whose per-model limits are shares of idle
+/// capacity the dynamic limiter enforces.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CustomerScope {
+    pub rejected: Option<Vec<String>>,
+    pub key: Option<String>,
+    pub entity_id: Option<String>,
+    pub rpm_limit: Option<i64>,
+    pub tpm_limit: Option<i64>,
+    pub model_rpm_limit: Option<BTreeMap<String, i64>>,
+    pub model_tpm_limit: Option<BTreeMap<String, i64>>,
+    pub borrows: Option<bool>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyLimits {
@@ -110,6 +129,7 @@ pub struct KeyLimits {
     pub estimated_output_tokens: Option<EstimatedOutputTokens>,
     pub managed_agent_policy: Option<AgentPolicy>,
     pub invoked_agent_policy: Option<AgentPolicy>,
+    pub customer_scopes: Option<Vec<CustomerScope>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

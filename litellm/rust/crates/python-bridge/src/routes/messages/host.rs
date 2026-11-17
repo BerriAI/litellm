@@ -234,19 +234,17 @@ fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
         .map(Vec::as_slice)
 }
 
-/// Installs the beta map Python loaded for a call whose betas are filtered, converting it again
-/// only when a reload replaced it.
-fn install_beta_headers_config(
-    py: Python<'_>,
-    model: &str,
-    custom_llm_provider: Option<&str>,
-    api_base: Option<&str>,
-) -> PyResult<()> {
+/// Installs the beta map once Python has loaded it. Loading starts only when a filter has a beta
+/// to filter, off the calling thread, so a call that sends no beta never fetches the remote map.
+fn install_loaded_beta_headers_config(py: Python<'_>) -> PyResult<()> {
     static INSTALLED: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
+    litellm_llms::anthropic::beta_headers::on_beta_headers_config_needed(
+        request_beta_headers_config,
+    );
     let loaded = py
         .import(ROUTE_HOST_MODULE)?
-        .getattr("beta_headers_config")?
-        .call1((model, custom_llm_provider, api_base))?;
+        .getattr("loaded_beta_headers_config")?
+        .call0()?;
     if loaded.is_none() {
         return Ok(());
     }
@@ -260,6 +258,17 @@ fn install_beta_headers_config(
     litellm_llms::anthropic::beta_headers::install_beta_headers_config(from_py(&loaded)?);
     *INSTALLED.lock() = Some(loaded.unbind());
     Ok(())
+}
+
+fn request_beta_headers_config() {
+    Python::attach(|py| {
+        if let Err(error) = py
+            .import(ROUTE_HOST_MODULE)
+            .and_then(|module| module.call_method0("load_beta_headers_config_in_background"))
+        {
+            error.write_unraisable(py, None);
+        }
+    });
 }
 
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -656,12 +665,7 @@ impl MessagesPythonHost {
             .getattr("filters_beta_headers")?
             .call1((&model, custom_llm_provider.as_deref(), api_base.as_deref()))?
             .extract()?;
-        install_beta_headers_config(
-            py,
-            &model,
-            custom_llm_provider.as_deref(),
-            api_base.as_deref(),
-        )?;
+        install_loaded_beta_headers_config(py)?;
         let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),
             None => self.merged_headers(py, arguments, filters_beta)?,
@@ -692,6 +696,7 @@ impl MessagesPythonHost {
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 global_drop_params: global_drop_params(py)?,
+                base_model: argument("base_model")?.and_then(|value| value.extract().ok()),
                 ..settings.settings
             },
         };
