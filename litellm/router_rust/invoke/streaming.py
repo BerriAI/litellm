@@ -63,9 +63,10 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, as_str_mapping, finish_evidence_of, without
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.router_rust.surface.health import failure_already_logged, logged_call
 from litellm.types.utils import ModelResponseStream, Usage
 
@@ -861,6 +862,11 @@ class FallbackAwareStreamWrapper(CustomStreamWrapper):
     fallback takes over."""
 
     fallback_headers_adopted: bool = False
+    _source_stream: CustomStreamWrapper
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return self._source_stream.finish_evidence
 
     def adopt_fallback_response_headers(
         self,
@@ -910,6 +916,7 @@ def _chat_wrapper_init(
 class _AsyncChatStream(FallbackAwareStreamWrapper):
     def __init__(self, generator: AsyncGenerator[object, None], model_response: CustomStreamWrapper) -> None:  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
         _chat_wrapper_init(self, generator, model_response)
+        self._source_stream = model_response
         self._async_generator: Final = generator
 
     def __aiter__(self) -> "_AsyncChatStream":  # pyright: ignore[reportIncompatibleMethodOverride]  # iterates the generator
@@ -922,6 +929,7 @@ class _AsyncChatStream(FallbackAwareStreamWrapper):
 class _SyncChatStream(FallbackAwareStreamWrapper):
     def __init__(self, generator: Generator[object, None, None], model_response: CustomStreamWrapper) -> None:  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
         _chat_wrapper_init(self, generator, model_response)
+        self._source_stream = model_response
         self.chunks = []  # the sync twin keeps no inner chunk list
         hidden_params: Final = get_hidden_params(model_response)
         if hidden_params is not None:
@@ -1131,6 +1139,10 @@ class FallbackAwareAnthropicMessagesStream:
     @property
     def chunks(self) -> object:
         return getattr(self._source_iterator, "chunks", None)
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self._source_iterator)
 
     @property
     def messages(self) -> object:
@@ -1821,7 +1833,7 @@ async def _responses_recover_stream_error(
     if _responses_stream_retries(attempt, e, source_iterator):
         if hasattr(source_iterator, "aclose"):
             with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
-                await source_iterator.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+                await aclose_if_supported(source_iterator)
         await attempt.failure_recorded()
         trigger: Final = _mid_stream_retry_trigger(e)
         retried: Final = await attempt.retry(trigger)
@@ -1882,7 +1894,7 @@ async def _responses_yield_retried(
         if hasattr(response, "aclose"):
             with anyio.CancelScope(shield=True):
                 try:
-                    await response.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+                    await aclose_if_supported(response)
                 except Exception as exc:  # noqa: BLE001  # closing is best-effort
                     verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing retry: %s", exc)
 

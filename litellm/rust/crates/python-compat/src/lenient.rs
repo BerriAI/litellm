@@ -6,6 +6,7 @@
 //! | [`IsTrue`] | `value is True` |
 //! | [`Truthy`] | `bool(value)` |
 //! | [`Lenient`] | the value when it has the expected shape, otherwise ignored |
+//! | [`LaxBoolOr`] | `TypeAdapter(bool).validate_python(value)`, or the fallback where pydantic raises |
 //!
 //! The bool rules are `serde_with` adapters, used as `#[serde_as(as = "IsTrue")]` on a `bool`.
 
@@ -16,6 +17,8 @@ use serde::{
     de::{Error, IgnoredAny, MapAccess, SeqAccess, Visitor},
 };
 use serde_with::DeserializeAs;
+
+use crate::{Value, pydantic::lax_bool};
 
 /// `value is True`: only a boolean `true` is true. `"true"`, `1` and anything else are false.
 pub struct IsTrue;
@@ -30,6 +33,18 @@ impl<'de> DeserializeAs<'de, bool> for IsTrue {
         }
 
         Ok(matches!(Raw::deserialize(deserializer)?, Raw::Bool(true)))
+    }
+}
+
+/// Pydantic's lax `bool`, with `FALLBACK` for a value pydantic refuses, `null` included.
+pub struct LaxBoolOr<const FALLBACK: bool>;
+
+impl<'de, const FALLBACK: bool> DeserializeAs<'de, bool> for LaxBoolOr<FALLBACK> {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+        Ok(Value::deserialize(deserializer)
+            .ok()
+            .and_then(|value| lax_bool(&value))
+            .unwrap_or(FALLBACK))
     }
 }
 
