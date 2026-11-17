@@ -30,6 +30,7 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -61,14 +62,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             message=str(e.detail),
             internal_message=e.internal_message,
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=e.status_code,
         )
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
         )
     if isinstance(e, ProxyException):
@@ -78,7 +79,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     return ProxyException(
         message="Authentication Error, " + str(e),
         type=ProxyErrorTypes.auth_error,
-        param=getattr(e, "param", "None"),
+        param=openai_error_param(e),
         code=status.HTTP_401_UNAUTHORIZED,
     )
 
@@ -87,6 +88,14 @@ def _get_user_agent(request: Request) -> str | None:
     if "headers" not in request.scope:
         return None
     return request.headers.get("user-agent")
+
+
+def _get_spend_logs_metadata(request: Request) -> Mapping[str, object] | None:
+    if "headers" not in request.scope:
+        return None
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    return as_str_mapping(LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(request.headers))
 
 
 def _with_client_context(
@@ -105,6 +114,27 @@ def _with_client_context(
     if not stamped:
         return request_data
     return {**request_data, key: {**base, **stamped}}
+
+
+def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
+    metadata: Final = request_data.get(key)
+    return metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
+
+
+def _with_spend_logs_metadata(
+    request_data: dict[str, object], route: str, spend_logs_metadata: Mapping[str, object] | None
+) -> dict[str, object]:
+    """The failure spend row reads `metadata` on every route, while callbacks on
+    `litellm_metadata` routes read that bucket, so the header goes into both."""
+    if spend_logs_metadata is None:
+        return request_data
+    from litellm.proxy.litellm_pre_call_utils import metadata_variable_name_for_request
+
+    keys: Final = frozenset(("metadata", metadata_variable_name_for_request(route, request_data)))
+    return {
+        **request_data,
+        **{key: {**_metadata_bucket(request_data, key), "spend_logs_metadata": spend_logs_metadata} for key in keys},
+    }
 
 
 def _escape_control_chars(value: str) -> str:
@@ -145,6 +175,7 @@ class UserAPIKeyAuthExceptionHandler:
         parent_otel_span: Span | None,
         api_key: str,
         resolved_identity: UserAPIKeyAuth | None = None,
+        dispatched_call_type: str | None = None,
     ) -> UserAPIKeyAuth:
         """
         Handles Connection Errors when reading a Virtual Key from LiteLLM DB
@@ -252,11 +283,16 @@ class UserAPIKeyAuthExceptionHandler:
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_client_context(request_context, requester_ip, user_agent),
+                request_data=_with_spend_logs_metadata(
+                    _with_client_context(request_context, requester_ip, user_agent),
+                    normalize_request_route(route),
+                    _get_spend_logs_metadata(request),
+                ),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
                 route=route,
+                dispatched_call_type=dispatched_call_type,
             )
             # Use transformed exception if callback returned one, otherwise use original
             if transformed_exception is not None:

@@ -3,6 +3,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -345,8 +346,14 @@ class _Router:
     ) -> dict[str, list[str]]:
         return {}
 
-    def deployments_named(self, model_name: str) -> None:
-        return None
+    def registry(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            names=lambda **kwargs: self.get_model_names(),
+            aliases=lambda: self.model_group_alias,
+            index=lambda name: self.model_name_to_deployment_indices,
+            access_groups=lambda **kwargs: self.get_model_access_groups(**kwargs),
+            deployments=lambda model_name=None, **kwargs: None,
+        )
 
     async def acompletion(self, **kwargs: object) -> ModelResponse:
         self.calls.append(kwargs)

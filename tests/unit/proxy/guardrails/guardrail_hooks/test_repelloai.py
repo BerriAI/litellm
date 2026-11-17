@@ -1,4 +1,6 @@
 import os
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -851,6 +853,61 @@ class TestRepelloAIPostCall:
             '{"body": "blocked output in function_call"}'
             in captured["json"]["scan_data"]["response"]
         )
+
+    @pytest.mark.asyncio
+    async def test_server_tool_call_arguments_scanned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        guardrail: Final = _guardrail(event_hook="post_call")
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_01",
+                                "type": "function",
+                                "function": {
+                                    "name": "lookup_order",
+                                    "arguments": '{"order_id": "A-17"}',
+                                },
+                            }
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "web_search",
+                                        "arguments": '{"query": "persimmon"}',
+                                    },
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ]
+        )
+        captured: Final = {}
+
+        async def capture(
+            url: str, headers: Mapping[str, str], json: Mapping[str, object], **_kwargs: object
+        ) -> Response:
+            captured["json"] = json
+            return _verdict_response("passed", url)
+
+        monkeypatch.setattr(guardrail.async_handler, "post", capture)
+        await guardrail.async_post_call_success_hook(
+            data={"messages": [{"role": "user", "content": "q"}]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+        assert captured["json"]["scan_data"] == {
+            "response": '{"query": "persimmon"}\n{"order_id": "A-17"}'
+        }
 
 
 # ----------------------------------------------------------------------
