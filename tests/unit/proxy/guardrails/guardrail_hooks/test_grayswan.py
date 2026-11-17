@@ -1,4 +1,5 @@
 import contextlib
+import json
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
@@ -954,52 +955,77 @@ async def test_application_errors_respect_failure_policy(
     assert failure_record["guardrail_status"] == "guardrail_failed_to_respond"
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        None,
-        [],
-        {"violation": "0"},
-        {"violation": True},
-        {"violation": -0.1},
-        {"violation": 1.1},
-        {"violation": float("nan")},
-        {"violation": float("inf")},
-        {"error": True, "violation": 1.0},
-    ],
-)
-@pytest.mark.parametrize("legacy", [False, True])
-def test_invalid_decisions_are_errors(payload, legacy):
-    guardrail = GraySwanGuardrail(guardrail_name="invalid-decision", api_key="test-key")
-    if legacy:
-        with pytest.raises(GraySwanGuardrailAPIError):
-            guardrail._process_grayswan_response(payload)
-    else:
-        with pytest.raises(GraySwanGuardrailAPIError):
-            guardrail._process_response_internal(payload, {}, {"texts": ["hello"]}, False)
+def _guardrail_answering(reply: bytes) -> GraySwanGuardrail:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=reply, headers={"content-type": "application/json"})
 
-
-@pytest.mark.parametrize("score", [0, 0.49, 0.5, 1])
-def test_valid_decisions_keep_threshold_semantics(score):
-    guardrail = GraySwanGuardrail(
-        guardrail_name="valid-decision",
+    guardrail: Final = GraySwanGuardrail(
+        guardrail_name="monitor-decision",
         api_key="test-key",
         violation_threshold=0.5,
         on_flagged_action="block",
+        fail_open=False,
+        event_hook=GuardrailEventHooks.pre_call,
     )
-    inputs = {"texts": ["hello"]}
-    payload = {
-        "violation": score,
-        "error": False,
-        "observe_violation": 1.0,
-        "block_message": "Informational only below threshold",
-    }
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(answer))
+    return guardrail
+
+
+_INVALID_REPLIES: Final = (
+    b"null",
+    b"[]",
+    b"{}",
+    b'{"violation": null}',
+    b'{"violation": "0"}',
+    b'{"violation": true}',
+    b'{"violation": -0.1}',
+    b'{"violation": 1.1}',
+    b'{"violation": NaN}',
+    b'{"violation": Infinity}',
+    b'{"error": true}',
+    b'{"error": true, "violation": 1.0}',
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", _INVALID_REPLIES)
+async def test_invalid_decisions_are_errors(payload: bytes) -> None:
+    guardrail: Final = _guardrail_answering(payload)
+
+    with pytest.raises(GraySwanGuardrailAPIError):
+        await guardrail.apply_guardrail({"texts": ["hello"]}, {}, "request")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", _INVALID_REPLIES)
+async def test_invalid_decisions_are_errors_on_the_legacy_entrypoint(payload: bytes) -> None:
+    guardrail: Final = _guardrail_answering(payload)
+
+    with pytest.raises(GraySwanGuardrailAPIError):
+        await guardrail.run_grayswan_guardrail({"messages": [{"role": "user", "content": "hello"}]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("score", [0, 0.49, 0.5, 1])
+async def test_valid_decisions_keep_threshold_semantics(score: float) -> None:
+    guardrail: Final = _guardrail_answering(
+        json.dumps(
+            {
+                "violation": score,
+                "error": False,
+                "observe_violation": 1.0,
+                "block_message": "Informational only below threshold",
+            }
+        ).encode()
+    )
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["hello"]}
+
     if score >= 0.5:
         with pytest.raises(HTTPException) as error:
-            guardrail._process_response_internal(payload, {}, inputs, False)
+            await guardrail.apply_guardrail(inputs, {}, "request")
         assert error.value.status_code == 400
     else:
-        assert guardrail._process_response_internal(payload, {}, inputs, False) is inputs
+        assert await guardrail.apply_guardrail(inputs, {}, "request") is inputs
 
 
 @pytest.mark.asyncio
