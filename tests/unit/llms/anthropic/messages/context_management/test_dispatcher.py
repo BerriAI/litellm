@@ -131,15 +131,15 @@ async def test_malformed_edit_entries_are_skipped():
 
 
 async def test_sync_editor_counts_tokens_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     warm_tokenizer(MODEL)
-    messages = [{"role": "user", "content": text * 100}, *_history_with_two_tool_pairs()]
+    messages = [{"role": "user", "content": uncounted_text()}, *_history_with_two_tool_pairs()]
 
     result, took, lags = await timed_with_loop_lags(
         lambda: apply_context_management(

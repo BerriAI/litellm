@@ -1831,7 +1831,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     text=text,
                     output_parse_pii=self.output_parse_pii,
                     presidio_config=None,
-                    request_data=request_data or {},
+                    request_data=request_data,
                 )
                 new_texts.append(modified_text)
         inputs["texts"] = new_texts
