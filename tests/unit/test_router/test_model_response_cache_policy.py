@@ -382,3 +382,87 @@ async def test_streaming_respects_response_cache_disabled():
             assert call_kw["cache"]["no-store"] is True
     finally:
         router.retire()
+
+
+def test_default_litellm_params_no_store_preserved_with_model_ttl():
+    """Default no-store controls in default_litellm_params are preserved when model defines cache_ttl."""
+    deployment = {
+        "model_name": "ttl-model",
+        "litellm_params": {"model": "openai/gpt-4o"},
+        "model_info": {"cache_ttl": 60},
+    }
+    kwargs = {}
+    default_litellm_params = {"cache": {"no-store": True}}
+    caching = _resolve_deployment_cache_policy(
+        deployment,
+        global_caching=True,
+        kwargs=kwargs,
+        default_litellm_params=default_litellm_params,
+    )
+    assert caching is True
+    assert kwargs["cache"]["no-store"] is True
+    assert kwargs["cache"]["ttl"] == 60
+
+
+@pytest.mark.asyncio
+async def test_router_preserves_default_litellm_params_cache_controls():
+    """Router with default_litellm_params cache controls preserves no-store when model defines cache_ttl."""
+    model_list = [
+        {
+            "model_name": "ttl-model",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"cache_ttl": 60},
+        },
+    ]
+
+    router = Router(
+        model_list=model_list,
+        cache_responses=True,
+        default_litellm_params={"cache": {"no-store": True}},
+    )
+    try:
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+            mock_acompletion.return_value = {"id": "1", "choices": [{"message": {"content": "ok"}}]}
+
+            await router.acompletion(model="ttl-model", messages=[{"role": "user", "content": "hi"}])
+            assert mock_acompletion.call_count == 1
+            call_kw = mock_acompletion.call_args.kwargs
+            assert call_kw["cache"]["no-store"] is True
+            assert call_kw["cache"]["ttl"] == 60
+    finally:
+        router.retire()
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_direct_call_enforces_cache_opt_out():
+    """Prompt management deployments with response_cache=False enforce caching=False on direct calls."""
+    from unittest.mock import MagicMock
+
+    from litellm.router_rust.invoke.prompt_management import prompt_management_acompletion
+
+    core = MagicMock()
+    core.group_deployments.return_value = None
+    core.shaping.cache_responses = True
+    core.shaping.default_litellm_params = {}
+
+    deployment = {
+        "model_name": "langfuse/prompt",
+        "litellm_params": {"model": "langfuse/prompt-id"},
+        "model_info": {"response_cache": False},
+    }
+    core.select = AsyncMock(return_value=deployment)
+    core.host.invoke.return_value = AsyncMock(return_value={"id": "1", "choices": []})
+
+    mock_logging = MagicMock()
+    mock_logging.get_chat_completion_prompt.return_value = ("gpt-4o", [{"role": "user", "content": "rendered"}], {})
+
+    with patch(
+        "litellm.router_rust.invoke.prompt_management._logging_and_kwargs",
+        return_value=(mock_logging, {"prompt_id": "pid", "original_function": core.router.acompletion}),
+    ):
+        await prompt_management_acompletion(core, "langfuse/prompt", [{"role": "user", "content": "hi"}], {})
+
+        direct_call_kwargs = core.host.invoke.return_value.call_args.kwargs
+        assert direct_call_kwargs["caching"] is False
+        assert direct_call_kwargs["cache"]["no-cache"] is True
+        assert direct_call_kwargs["cache"]["no-store"] is True

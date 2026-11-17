@@ -906,6 +906,7 @@ def _resolve_deployment_cache_policy(
     deployment: Mapping[str, object],
     global_caching: bool,
     kwargs: dict[str, object],
+    default_litellm_params: Mapping[str, object] | None = None,
 ) -> bool:
     """Apply model-level response-cache policy (response_cache, cache_ttl) to kwargs.
 
@@ -913,6 +914,12 @@ def _resolve_deployment_cache_policy(
     If response_cache is explicitly False, forces caching=False, kwargs["caching"]=False,
     and sets cache={"no-cache": True, "no-store": True} so client requests cannot bypass it.
     """
+    if default_litellm_params:
+        default_cache: Final = as_dict(default_litellm_params.get("cache"))
+        if default_cache:
+            existing_cache: Final = as_dict(kwargs.get("cache"))
+            kwargs["cache"] = {**default_cache, **existing_cache}
+
     model_info: Final = as_dict(deployment.get("model_info"))
     litellm_params: Final = as_dict(deployment.get("litellm_params"))
 
@@ -1001,7 +1008,12 @@ def attempt_call(
     data: Final = _deployment_params(plan, deployment)
     model_name: Final = str(data.get("model"))
     _validate_decisions_connection(plan, data, request)
-    caching: Final = _resolve_deployment_cache_policy(deployment, shaping.cache_responses, kwargs)
+    caching: Final = _resolve_deployment_cache_policy(
+        deployment,
+        shaping.cache_responses,
+        kwargs,
+        default_litellm_params=shaping.default_litellm_params,
+    )
     if fallback_model_group is not None:
         field: Final = plan.prepare_field or "metadata"
         kwargs[field] = {**as_dict(kwargs.get(field)), "model_group": fallback_model_group}
@@ -2307,7 +2319,12 @@ class RustEndpoints:
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
             kwargs["model_id"] = pinned
-        caching: Final = _resolve_deployment_cache_policy(deployment, self._cache_responses, kwargs)
+        caching: Final = _resolve_deployment_cache_policy(
+            deployment,
+            self._cache_responses,
+            kwargs,
+            default_litellm_params=self._core.resolved.default_litellm_params,
+        )
         return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": caching, **kwargs})
 
     async def aadapter_completion(
@@ -2655,6 +2672,7 @@ __all__ = [
     "Plan",
     "RustEndpoints",
     "Shaping",
+    "_resolve_deployment_cache_policy",
     "arm_compaction_state",
     "attempt_call",
     "clean_realtime_session_deployment",

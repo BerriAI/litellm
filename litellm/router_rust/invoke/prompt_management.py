@@ -10,7 +10,11 @@ from collections.abc import Mapping
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import without
-from litellm.router_rust.invoke.endpoints import PLANS, EndpointCore
+from litellm.router_rust.invoke.endpoints import (
+    PLANS,
+    EndpointCore,
+    _resolve_deployment_cache_policy,
+)
 from litellm.router_rust.invoke.shaping import as_dict, update_kwargs_with_deployment
 
 _PROMPT_MANAGEMENT_PARAMS: Final = frozenset(
@@ -112,7 +116,14 @@ async def prompt_management_acompletion(
     final["prompt_label"] = prompt_label
     target_list: Final = core.group_deployments(model_name=str(rendered_model))  # pyright: ignore[reportUnknownArgumentType]  # the core's host registry
     if target_list is None or len(target_list) == 0:  # a direct call to the rendered model
-        _ = final.pop("original_function")
+        _ = final.pop("original_function", None)
+        caching: Final = _resolve_deployment_cache_policy(
+            deployment,
+            core.shaping.cache_responses,
+            final,
+            default_litellm_params=core.shaping.default_litellm_params,
+        )
+        final["caching"] = caching
         return await core.host.invoke("acompletion")(**final)  # pyright: ignore[reportUnknownMemberType]  # the core's host
     timeouts: Final = {
         key: value
