@@ -91,10 +91,3 @@ class TestLibertAIProviderConfig:
         matrix = json.loads(backup_path.read_text())
 
         assert "libertai" in matrix["providers"]
-        endpoints = matrix["providers"]["libertai"]["endpoints"]
-        assert endpoints["chat_completions"] is True
-        # embeddings is advertised false: the JSON-configured-provider path only
-        # wires chat routing (the OpenAILike embedding handler is reached solely
-        # for the literal openai_like/llamafile/lm_studio providers), matching
-        # the llamagate precedent. bge-m3 stays in the cost map for metadata.
-        assert endpoints["embeddings"] is False

@@ -168,22 +168,22 @@ def test_a_row_under_another_key_does_not_price_the_elevenlabs_model(monkeypatch
     ("text", "forwarded", "recorded"),
     [
         pytest.param(
-            '{"text":"Hello ",   "flush":true}', {"text": "Hello ", "flush": True}, {"text": "Hello "}, id="text frame"
+            '{"text":"Hello ",   "flush":true}', {"text": "Hello ", "flush": True}, ({"text": "Hello "},), id="text frame"
         ),
         pytest.param(
             '{"text": "The authorization form is ready "}',
             {"text": "The authorization form is ready "},
-            {"text": "The authorization form is ready "},
+            ({"text": "The authorization form is ready "},),
             id="credential word inside the text",
         ),
-        pytest.param('{"text": ""}', {"text": ""}, {"text": ""}, id="end of stream"),
+        pytest.param('{"text": ""}', {"text": ""}, ({"text": ""},), id="end of stream"),
         pytest.param(
             '{"context_id": "ctx", "close_context": true}',
             {"context_id": "ctx", "close_context": True},
-            None,
+            (),
             id="close context has no text",
         ),
-        pytest.param('{"text": "a", "text": "bbbb"}', {"text": "bbbb"}, {"text": "bbbb"}, id="last duplicate wins"),
+        pytest.param('{"text": "a", "text": "bbbb"}', {"text": "bbbb"}, ({"text": "bbbb"},), id="last duplicate wins"),
     ],
 )
 def test_client_text_forwards_the_parsed_frame_and_records_the_text_it_carries(text, forwarded, recorded):
@@ -209,7 +209,7 @@ def test_caller_credential_fields_never_reach_elevenlabs(text):
     assert isinstance(decision, ForwardedClientText)
     assert "sk-litellm-virtual" not in decision.text
     assert json.loads(decision.text) == {"text": " ", "voice_settings": {"a": 1}}
-    assert decision.recorded == {"text": " "}
+    assert decision.recorded == ({"text": " "},)
 
 
 @pytest.mark.parametrize(

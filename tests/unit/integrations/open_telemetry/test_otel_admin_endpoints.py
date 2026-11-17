@@ -3,10 +3,14 @@ async_management_endpoint_{success,failure}_hook integration points."""
 
 import asyncio
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from fastapi import Request
 
+from litellm import Router
 from litellm.proxy._types import (
     ManagementEndpointLoggingPayload,
     UserAPIKeyAuth,
@@ -340,3 +344,203 @@ def test_management_wrapper_swallows_post_success_errors(server_span_factory, ot
     result = asyncio.run(fake_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span)))
 
     assert result == {"ok": True}
+
+
+TEAM_NEW_PATH: Final = "/team/new"
+MODEL_LIST_PATH: Final = "/v1/models"
+MODEL_RETRIEVE_PATH: Final = "/v1/models/gpt-4o"
+INBOUND_TRACEPARENT: Final = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+
+def _request(method: str, path: str, body: bytes = b"") -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+
+async def _answer_like_the_proxy(request: Request, exception: Exception) -> None:
+    from litellm.proxy.proxy_server import app
+
+    handler: Final = next(
+        app.exception_handlers[cls] for cls in type(exception).__mro__ if cls in app.exception_handlers
+    )
+    await handler(request, exception)
+
+
+@pytest.mark.parametrize(
+    ("wrapper_name", "exports_payload"),
+    [("management_endpoint_wrapper", True), ("management_endpoint_span_wrapper", False)],
+)
+def test_span_wrapper_omits_payload(server_span_factory, otel_with_exporter, monkeypatch, wrapper_name, exports_payload):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    otel, exporter = otel_with_exporter
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
+
+    server_span: Final = server_span_factory(TEAM_NEW_PATH)
+    wrap: Final = getattr(mgmt_utils, wrapper_name)
+
+    @wrap
+    async def fake_fn(http_request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+        return {"data": [{"id": "gpt-4o"}]}
+
+    asyncio.run(
+        fake_fn(
+            http_request=_request("POST", TEAM_NEW_PATH, b'{"team_alias": "t"}'),
+            user_api_key_dict=_real_user_api_key_dict(server_span),
+        )
+    )
+
+    spans: Final = [s for s in exporter.get_finished_spans() if s.name == TEAM_NEW_PATH]
+    assert len(spans) == 1
+    attribute_keys: Final = tuple(spans[0].attributes)
+    assert any(key.startswith("request.") for key in attribute_keys) is exports_payload
+    assert any(key.startswith("response.") for key in attribute_keys) is exports_payload
+
+
+@pytest.mark.parametrize(
+    ("wrapper_name", "exports_request_body"),
+    [("management_endpoint_wrapper", True), ("management_endpoint_span_wrapper", False)],
+)
+def test_span_wrapper_omits_request_body_on_failure(
+    server_span_factory, otel_with_exporter, monkeypatch, wrapper_name, exports_request_body
+):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    otel, exporter = otel_with_exporter
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
+
+    server_span: Final = server_span_factory(TEAM_NEW_PATH)
+    wrap: Final = getattr(mgmt_utils, wrapper_name)
+
+    @wrap
+    async def fake_fn(http_request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+        raise make_fastapi_http_exception(400, "team_alias taken")
+
+    with pytest.raises(Exception, match="team_alias taken"):
+        asyncio.run(
+            fake_fn(
+                http_request=_request("POST", TEAM_NEW_PATH, b'{"team_alias": "t"}'),
+                user_api_key_dict=_real_user_api_key_dict(server_span),
+            )
+        )
+
+    spans: Final = [s for s in exporter.get_finished_spans() if s.name == TEAM_NEW_PATH]
+    assert len(spans) == 1
+    assert any(key.startswith("request.") for key in spans[0].attributes) is exports_request_body
+
+
+@pytest.mark.parametrize(
+    ("raised", "status_code"),
+    [
+        (RuntimeError("router settings lookup failed"), 500),
+        (httpx.ConnectError("All connection attempts failed"), 503),
+        (make_fastapi_http_exception(400, "Invalid scope parameter"), 400),
+    ],
+)
+def test_span_wrapper_failure_keeps_the_answered_status(otel_with_exporter, monkeypatch, raised, status_code):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    otel, exporter = otel_with_exporter
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
+
+    server_span: Final = _server_span(otel, MODEL_LIST_PATH, headers={})
+    request: Final = _request("GET", MODEL_LIST_PATH)
+    request.state.parent_otel_span = server_span
+
+    @mgmt_utils.management_endpoint_span_wrapper
+    async def failing_model_list(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+        raise raised
+
+    async def call_and_answer() -> None:
+        try:
+            await failing_model_list(request=request, user_api_key_dict=_real_user_api_key_dict(server_span))
+        except Exception as exc:
+            await _answer_like_the_proxy(request, exc)
+
+    asyncio.run(call_and_answer())
+
+    assert_server_span_attrs(
+        exporter,
+        expected_status=status_code,
+        expected_url_path=MODEL_LIST_PATH,
+        where=f"model list {type(raised).__name__}",
+    )
+    exported: Final = get_server_span(exporter)
+    assert exported is not None
+    assert exported.attributes.get("error.code") == str(status_code)
+
+
+def _server_span(otel, path: str, headers: dict[str, str]):
+    server_span: Final = otel.create_litellm_proxy_request_started_span(start_time=datetime.now(), headers=headers)
+    otel.set_proxy_request_route_attributes(server_span, url_path=path, http_route=path)
+    return server_span
+
+
+def _assert_ended_in_inbound_trace(exporter, path: str, handler_name: str) -> None:
+    assert_server_span_attrs(exporter, expected_status=200, expected_url_path=path, where=f"{path} success")
+    exported: Final = get_server_span(exporter)
+    assert exported is not None
+    assert exported.context.trace_id == int(INBOUND_TRACEPARENT.split("-")[1], 16)
+
+    endpoint_spans: Final = [s for s in exporter.get_finished_spans() if s.name == handler_name]
+    assert len(endpoint_spans) == 1
+    assert endpoint_spans[0].parent is not None
+    assert endpoint_spans[0].parent.span_id == exported.context.span_id
+    assert not any(key.startswith("response.") for key in endpoint_spans[0].attributes)
+
+
+def _install_proxy_state(monkeypatch, router: Router | None) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+
+def test_model_list_ends_server_span_in_inbound_trace(otel_with_exporter, monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    otel, exporter = otel_with_exporter
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
+    _install_proxy_state(monkeypatch, None)
+    server_span: Final = _server_span(otel, MODEL_LIST_PATH, headers={"traceparent": INBOUND_TRACEPARENT})
+
+    result: Final = asyncio.run(proxy_server.model_list(user_api_key_dict=_real_user_api_key_dict(server_span)))
+
+    assert result == {"data": [], "object": "list"}
+    _assert_ended_in_inbound_trace(exporter, MODEL_LIST_PATH, "model_list")
+
+
+def test_model_retrieve_ends_server_span_in_inbound_trace(otel_with_exporter, monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    otel, exporter = otel_with_exporter
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
+    _install_proxy_state(
+        monkeypatch,
+        Router(model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"}}]),
+    )
+    server_span: Final = _server_span(otel, MODEL_RETRIEVE_PATH, headers={"traceparent": INBOUND_TRACEPARENT})
+
+    result: Final = asyncio.run(
+        proxy_server.model_info(model_id="gpt-4o", user_api_key_dict=_real_user_api_key_dict(server_span))
+    )
+
+    assert result["id"] == "gpt-4o"
+    _assert_ended_in_inbound_trace(exporter, MODEL_RETRIEVE_PATH, "model_info")

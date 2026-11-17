@@ -142,7 +142,7 @@ async def test_stream_input_relays_to_elevenlabs_with_only_the_proxy_key(monkeyp
     decision = call.frame_policy.client_text('{"text": "Hi ", "xi_api_key": "sk-litellm-virtual", "flush": true}')
     assert isinstance(decision, ForwardedClientText)
     assert json.loads(decision.text) == {"text": "Hi ", "flush": True}
-    assert decision.recorded == {"text": "Hi "}
+    assert decision.recorded == ({"text": "Hi "},)
     assert isinstance(call.frame_policy.client_text('{"text": "Hi ", "x": "\\ud800"}'), RefusedClientText)
     assert call.frame_policy.recorded_upstream_frame(
         {"audio": "AAAA", "alignment": {"chars": ["H", "i"]}, "isFinal": None}

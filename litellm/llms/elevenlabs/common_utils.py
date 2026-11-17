@@ -120,7 +120,7 @@ def elevenlabs_tts_client_text(text: str) -> ClientTextDecision:
         {key: value for key, value in frame.items() if key not in ELEVENLABS_TTS_CALLER_CREDENTIAL_FIELDS},
         ensure_ascii=False,
     )
-    return ForwardedClientText(text=forwarded, recorded={"text": frame_text} if frame_text is not None else None)
+    return ForwardedClientText(text=forwarded, recorded=() if frame_text is None else ({"text": frame_text},))
 
 
 class _Alignment(BaseModel):

@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
-from litellm.router_utils.ptu_shares import (
+from litellm.litellm_core_utils.ptu_shares import (
     filter_ptu_shared_deployments,
     model_group_deployments,
     model_group_ptu_capacity,

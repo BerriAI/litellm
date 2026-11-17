@@ -1,9 +1,16 @@
 # tests/unit
 
-In-process. No network or subprocess
+In-process. No network or subprocess. `interactions/test_openapi_compliance.py` reads the spec snapshot beside it,
+and only the `interactions-spec-canary` workflow passes `--interactions-spec-url` (registered in
+`interactions/conftest.py`, so name that file or directory on the command line) with `ai.google.dev` allowed, to run
+the same tests against Google's live spec
 
 Unit tests must not depend on the current time or execution speed. Use fixed timestamps for fixtures
 and controlled clocks for time-dependent behavior. Incidental clock reads inside production code are allowed
+
+A unix socket goes under the `socket_dir` or `socket_path` fixture, never `tmp_path`, whose paths run past macOS's
+104-byte AF_UNIX limit and fail only on a Mac. Code that opens a socket in its own `tempfile` directory runs under
+`socket_tempdir`
 
 ## What good looks like
 
@@ -34,6 +41,9 @@ Green if `send_batched` drops every row. pydantic doubles in 12 of 203 files, fa
 
 `tests/unit/<path>` mirrors `litellm/<path>`, so a changed file selects its tests by path, not a mapping
 file. New unit tests go here
+
+A new directory under `tests/unit` runs in CI only once a shard in `.github/workflows/test-unit.yml` names it.
+`pytest tests/unit/test_assert_ci_coverage.py` checks that, so run it before you push
 
 ## Writing it so a human can read it
 

@@ -141,7 +141,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         llm_router: Router,
         model: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         litellm_parent_otel_span: Span,
     ) -> ResourceObjectType:
         """
@@ -399,7 +399,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def create_resource_for_each_model(
         self,
         llm_router: Router,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         target_model_names_list: list[str],
         litellm_parent_otel_span: Span,
     ) -> list[ResourceObjectType]:

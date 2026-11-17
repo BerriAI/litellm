@@ -272,6 +272,7 @@ async def test_sdk_chat_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     assert lines[-1] == "data: [DONE]"
     assert json.loads(lines[0][6:])["choices"][0]["delta"]["content"] == "he"
     assert calls[0]["stream_options"] == {"include_usage": True}
+    assert calls[0]["_litellm_stream_usage_injected"] is True
     assert (ep.usage.input_tokens, ep.usage.output_tokens) == (6, 2)
     assert ep.usage.cost == pytest.approx(6 * 0.001 + 2 * 0.002)
 

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -121,7 +122,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         complete_url = complete_url.rstrip("/")
         # Strip /v1 suffix if present since IMAGE_GENERATION_ENDPOINT already includes v1
         complete_url = complete_url.removesuffix("/v1")
-        complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
+        complete_url = join_api_base(complete_url, self.IMAGE_GENERATION_ENDPOINT)
         return complete_url
 
     def validate_environment(
