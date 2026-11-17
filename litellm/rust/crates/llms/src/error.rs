@@ -207,7 +207,8 @@ pub enum ErrorDetail {
     MissingAzureApiBase,
     /// Python's `BaseAWSLLM.validate_aws_region_name` refusal of a Mantle region.
     #[error(
-        "Invalid AWS region format: '{region}'. Region names must contain only lowercase letters, digits, and hyphens."
+        "Invalid AWS region format: '{}'. Region names must contain only lowercase letters, digits, and hyphens.",
+        region.escape_debug()
     )]
     InvalidMantleRegion {
         region: String,
