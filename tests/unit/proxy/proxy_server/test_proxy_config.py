@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import json
 import logging
 import os
@@ -1607,6 +1608,78 @@ def test_ProxyConfig__check_for_os_environ_vars_missing_env_returns_none(monkeyp
     out = pc._check_for_os_environ_vars(cfg)
     # get_secret returns None when not found — assert observable shape.
     assert out["a"] is None
+
+
+_POINTERS: Final = {
+    "anthropic_issuer_signing_key_ref": "os.environ/PROBE_SET",
+    "anthropic_keycloak_client_secret_ref": "os.environ/PROBE_SET",
+    "x": {"anthropic_issuer_signing_key_ref": "os.environ/PROBE_SET"},
+}
+
+
+# Twin of the `resolves_like_python` cases in litellm/rust/crates/config-load/src/environ.rs
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        pytest.param({"a": "os.environ/PROBE_SET"}, {"a": "set-value"}, id="set"),
+        pytest.param({"a": "os.environ/PROBE_UNSET"}, {"a": None}, id="unset"),
+        pytest.param({"a": "os.environ/PROBE_TRUE"}, {"a": True}, id="capitalized_true"),
+        pytest.param({"a": "os.environ/PROBE_FALSE"}, {"a": False}, id="false_text"),
+        pytest.param({"a": "os.environ/PROBE_SPACE"}, {"a": True}, id="padded_true"),
+        pytest.param({"a": "os.environ/PROBE_EMPTY"}, {"a": ""}, id="empty"),
+        pytest.param({"a": "os.environ/PROBE_NUM"}, {"a": "42"}, id="number_stays_text"),
+        pytest.param({"a": "os.environ/PROBE_YES"}, {"a": "yes"}, id="yes_stays_text"),
+        pytest.param({"a": "os.environ/"}, {"a": None}, id="bare_prefix"),
+        pytest.param(
+            {"a": " os.environ/PROBE_SET", "b": "OS.ENVIRON/PROBE_SET"},
+            {"a": " os.environ/PROBE_SET", "b": "OS.ENVIRON/PROBE_SET"},
+            id="not_a_prefix",
+        ),
+        pytest.param(
+            {"a": ["os.environ/PROBE_SET", {"b": "os.environ/PROBE_SET"}, ["os.environ/PROBE_SET"]]},
+            {"a": ["os.environ/PROBE_SET", {"b": "set-value"}, ["os.environ/PROBE_SET"]]},
+            id="only_mappings_inside_lists",
+        ),
+        pytest.param({"a": {"b": {"c": "os.environ/PROBE_SET"}}}, {"a": {"b": {"c": "set-value"}}}, id="nested"),
+        pytest.param(_POINTERS, _POINTERS, id="secret_pointers"),
+        pytest.param(
+            {"a": 1, "b": True, "c": None, "d": 1.5}, {"a": 1, "b": True, "c": None, "d": 1.5}, id="non_strings"
+        ),
+        pytest.param(
+            {"environment_variables": {"CFG_ONLY": "from-config", "CFG_REF": "os.environ/PROBE_SET"}},
+            {"environment_variables": {"CFG_ONLY": "from-config", "CFG_REF": "set-value"}},
+            id="environment_variables_read_the_process_environment",
+        ),
+    ],
+)
+def test_ProxyConfig__check_for_os_environ_vars_matches_rust_config_load(
+    monkeypatch: pytest.MonkeyPatch, config: dict[str, object], expected: dict[str, object]
+) -> None:
+    for name, value in {
+        "PROBE_SET": "set-value",
+        "PROBE_TRUE": "True",
+        "PROBE_FALSE": "false",
+        "PROBE_EMPTY": "",
+        "PROBE_NUM": "42",
+        "PROBE_SPACE": " true ",
+        "PROBE_YES": "yes",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("PROBE_UNSET", raising=False)
+
+    assert ProxyConfig()._check_for_os_environ_vars(config=config) == expected
+
+
+@pytest.mark.parametrize(("depth", "expected"), [(100, "set-value"), (101, "os.environ/PROBE_SET")])
+def test_ProxyConfig__check_for_os_environ_vars_depth_limit_matches_rust_config_load(
+    monkeypatch: pytest.MonkeyPatch, depth: int, expected: str
+) -> None:
+    monkeypatch.setenv("PROBE_SET", "set-value")
+    config: Final = {"leaf": "os.environ/PROBE_SET"}
+    nested: Final = functools.reduce(lambda inner, _: {"k": inner}, range(depth), config)
+
+    resolved: Final = ProxyConfig()._check_for_os_environ_vars(config=nested)
+    assert functools.reduce(lambda inner, _: inner["k"], range(depth), resolved)["leaf"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -5246,6 +5319,30 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
     assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 1}
     assert pc.settings.source("max_file_size_mb") == "config"
     assert pc.settings.source("max_parallel_requests") == "config"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_reload_keeps_db_pass_through_endpoints_without_store_model_in_db(
+    tmp_path, monkeypatch
+):
+    from litellm.proxy import proxy_server
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        "general_settings:\n  pass_through_endpoints:\n    - path: /config\n      target: http://config.test\n"
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "initialize_pass_through_endpoints", AsyncMock())
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    pc: Final = ProxyConfig()
+    await pc.get_config(config_file_path=str(config_file))
+    await pc._update_general_settings({"pass_through_endpoints": [{"path": "/db", "target": "http://db.test"}]})
+
+    await pc.get_config(config_file_path=str(config_file))
+
+    assert [endpoint["path"] for endpoint in pc.settings["pass_through_endpoints"]] == ["/db", "/config"]
 
 
 @pytest.mark.asyncio

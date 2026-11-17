@@ -42,8 +42,11 @@ jobs:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          guard=scripts/ci_cd/spend_logs_guard.py
+          guard=litellm/scripts/ci_cd/spend_logs_guard.py
           # TODO: Drop the legacy path after this lands on main.
+          if [ ! -f "$guard" ]; then
+            guard=scripts/ci_cd/spend_logs_guard.py
+          fi
           if [ ! -f "$guard" ]; then
             guard=ci_cd/spend_logs_guard.py
           fi

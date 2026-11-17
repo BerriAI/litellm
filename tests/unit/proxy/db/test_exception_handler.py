@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from prisma import errors as prisma_errors
-from prisma.engine.errors import BinaryNotFoundError, EngineConnectionError, EngineRequestError
+from prisma.engine.errors import BinaryNotFoundError, EngineConnectionError, EngineRequestError, NotConnectedError
 from prisma.errors import (
     ClientNotConnectedError,
     DataError,
@@ -1100,7 +1100,11 @@ def test_postgres_lifecycle_errors_mean_the_database_is_unavailable(error: Excep
             ),
             True,
         ),
+        (ClientNotConnectedError(), True),
+        (NotConnectedError("Not connected to the query engine"), True),
+        (httpx.ConnectError("connection refused"), True),
         (httpx.ReadTimeout("read timed out"), False),
+        (httpx.ReadError("connection reset"), False),
         (_localized_error("57014"), False),
     ],
 )

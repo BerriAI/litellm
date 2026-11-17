@@ -1175,6 +1175,56 @@ def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
     assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
 
 
+def _rag_query_with_s3_image(
+    client: TestClient, respx_mock: respx.MockRouter, general_settings: Mapping[str, object]
+) -> tuple[httpx.Response, respx.Route]:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", dict(general_settings)):
+        response: Final = _post_rag_query(
+            client,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+            body={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}},
+                        ],
+                    }
+                ]
+            },
+        )
+    return response, search
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_refuses_an_s3_image_in_a_bucket_the_proxy_does_not_list(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    response, search = _rag_query_with_s3_image(client_team_a, respx_mock, {})
+
+    assert response.status_code == 403, response.json()
+    assert "allowed_client_side_s3_buckets" in response.json()["detail"]
+    assert search.call_count == 0
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_answers_an_s3_image_in_a_listed_bucket(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    response, search = _rag_query_with_s3_image(
+        client_team_a, respx_mock, {"allowed_client_side_s3_buckets": ["private-bucket"]}
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+
+
 @pytest.mark.usefixtures("httpx_transport")
 def test_rag_query_search_results_carry_the_managed_file_id_ingest_returned(
     client_team_a: TestClient, respx_mock: respx.MockRouter
@@ -2471,15 +2521,24 @@ def test_rag_query_rejects_caller_embedding_selection_params(client_internal_use
 
 
 @pytest.mark.parametrize(
-    ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+    ("store_key", "provider", "expected_status", "expected_searches"),
+    [
+        ("opensearch_index_name", "opensearch", 400, 0),
+        ("opensearch_index_name", "opensearch/x", 400, 0),
+        ("opensearch_index_name", "openai", 200, 1),
+        ("opensearch_search_pipeline", "opensearch", 400, 0),
+        ("opensearch_hybrid_search", "opensearch/x", 400, 0),
+        ("opensearch_search_pipeline", "openai", 200, 1),
+        ("opensearch_text_field", "opensearch", 200, 1),
+        ("opensearch_embedding_field", "opensearch/x", 200, 1),
+    ],
 )
-def test_rag_query_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
-    client_internal_user, provider, expected_status, expected_searches
+def test_rag_query_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
+    client_internal_user, store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: retrieval_config must not pick the index an OpenSearch store searches,
-    while other providers keep ignoring the key as they did before OpenSearch support.
+    Regression: retrieval_config must not change which index, pipeline, or hybrid mode an OpenSearch
+    store searches with, while the field keys and other providers' requests are answered as before.
     """
     import litellm
     from litellm import Router
@@ -2518,12 +2577,13 @@ def test_rag_query_rejects_caller_opensearch_index_name_only_on_opensearch_store
             json={
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": "hello"}],
-                "retrieval_config": {"vector_store_id": "kb", "opensearch_index_name": "another-teams-index"},
+                "retrieval_config": {"vector_store_id": "kb", store_key: "_none"},
             },
         )
 
     assert response.status_code == expected_status, response.json()
     assert fake_search.await_count == expected_searches
+    assert expected_status == 200 or store_key in str(response.json())
 
 
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"

@@ -2,9 +2,14 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.models.alert import AlertDetection, MetricEvidence
 from litellm.models.performance_alert import (
+    SCOPES,
+    AlertThreshold,
+    PerformanceAlertThresholds,
+    PerformanceScope,
     ResourceWindow,
     SweepState,
     advance,
@@ -29,7 +34,6 @@ STEADY: Final = {
     "base_timed": 7000,
     "active_days": 7,
     "timed_days": 7,
-    "exists": True,
 }
 
 
@@ -46,6 +50,68 @@ def test_steady_usage_raises_nothing() -> None:
 
 
 @pytest.mark.parametrize(
+    ("kind", "changes", "minimum", "too_high"),
+    (
+        ("spend", {"spend": 40}, 20, 31),
+        ("traffic", {"requests": 2000}, 500, 1001),
+        ("latency", {"response_ms": 300_000}, 150, 201),
+        ("reliability", {"failed": 20}, 0.005, 0.011),
+    ),
+)
+def test_custom_multiplier_and_minimum_both_control_each_existing_rule(
+    kind: str, changes: dict[str, object], minimum: float, too_high: float
+) -> None:
+    window: Final = _window(**changes)
+    assert detect("team", window, DAY) == ()
+    thresholds: Final = PerformanceAlertThresholds.model_validate(
+        {kind: {"multiplier": 2, "minimum_increase": minimum}}
+    )
+    detected: Final = detect("team", window, DAY, thresholds)
+    assert tuple(alert.type for alert in detected) == (kind,)
+    for threshold in (
+        AlertThreshold(multiplier=5, minimum_increase=minimum),
+        AlertThreshold(multiplier=2, minimum_increase=too_high),
+    ):
+        assert detect("team", window, DAY, thresholds.model_copy(update={kind: threshold})) == ()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    (
+        {"spend": {"multiplier": 1, "minimum_increase": 1}},
+        {"spend": {"multiplier": True, "minimum_increase": 1}},
+        {"latency": {"multiplier": 2, "minimum_increase": -1}},
+        {"traffic": {"multiplier": float("inf"), "minimum_increase": 1}},
+        {"reliability": {"multiplier": 2, "minimum_increase": 1.01}},
+        {"new_rule": {"multiplier": 2, "minimum_increase": 1}},
+    ),
+)
+def test_thresholds_reject_invalid_values_and_new_rules(settings: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        PerformanceAlertThresholds.model_validate(settings)
+
+
+def test_zero_minimum_does_not_report_a_zero_error_rate_as_an_increase() -> None:
+    thresholds: Final = PerformanceAlertThresholds.model_validate(
+        {"reliability": {"multiplier": 2, "minimum_increase": 0}}
+    )
+    assert detect("team", _window(failed=0, base_failed=0), DAY, thresholds) == ()
+
+
+@pytest.mark.parametrize("scope", SCOPES)
+@pytest.mark.parametrize("requests", (0, 100))
+def test_quiet_or_idle_resources_do_not_raise_traffic_alerts(scope: PerformanceScope, requests: int) -> None:
+    window: Final = _window(
+        resource_id="a" * 64 if scope == "key" else "resource-a",
+        requests=requests,
+        failed=0,
+        response_ms=requests * 100,
+        timed=requests,
+    )
+    assert detect(scope, window, DAY) == ()
+
+
+@pytest.mark.parametrize(
     ("changes", "expected"),
     (
         ({"spend": 60.0}, ("spend",)),
@@ -57,11 +123,6 @@ def test_steady_usage_raises_nothing() -> None:
         ({"requests": 1100, "failed": 0, "response_ms": 110_000, "timed": 1100, "base_requests": 700}, ("traffic",)),
         ({"requests": 1099, "failed": 0, "response_ms": 109_900, "timed": 1099, "base_requests": 700}, ()),
         ({"requests": 50_000, "failed": 0, "active_days": 3}, ()),
-        ({"requests": 99, "failed": 0, "timed": 99, "response_ms": 9900, "base_requests": 3500}, ("traffic",)),
-        ({"requests": 100, "failed": 0, "timed": 100, "response_ms": 10_000, "base_requests": 3500}, ()),
-        ({"requests": 0, "failed": 0, "timed": 0, "response_ms": 0, "base_requests": 3500, "active_days": 6}, ()),
-        ({"requests": 0, "failed": 0, "timed": 0, "response_ms": 0, "base_requests": 3500, "exists": False}, ()),
-        ({"requests": 0, "failed": 0, "timed": 0, "response_ms": 0, "base_requests": 3493}, ()),
         ({"response_ms": 600_000}, ("latency",)),
         ({"response_ms": 599_000}, ()),
         ({"response_ms": 60_000_000, "timed": 99}, ()),
