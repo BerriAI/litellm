@@ -2555,15 +2555,36 @@ async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_st
     assert all(not (c.choices and c.choices[0].finish_reason) for c in wrapper.chunks)
 
 
+def _gemini_stream(
+    events: Sequence[Mapping[str, object]], sync_mode: bool, logging_obj: Logging
+) -> CustomStreamWrapper:
+    lines: Final = [f"data: {json.dumps(event)}" for event in events]
+    logging_obj.update_environment_variables(
+        model="gemini-3.8-flash", user=None, optional_params={}, litellm_params={"litellm_call_id": "gemini-stream"}
+    )
+    iterator: Final = GeminiModelResponseIterator(
+        streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)), sync_stream=sync_mode, logging_obj=logging_obj
+    )
+    return CustomStreamWrapper(
+        completion_stream=iter(iterator) if sync_mode else iterator,
+        model="gemini-3.8-flash",
+        custom_llm_provider="gemini",
+        logging_obj=logging_obj,
+    )
+
+
+def _gemini_candidate(*parts: Mapping[str, object]) -> dict[str, object]:
+    return {"candidates": [{"content": {"parts": list(parts), "role": "model"}, "index": 0}]}
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_gemini_stream_with_a_usage_chunk_after_its_finish_reason_still_completes(
     sync_mode: bool, logging_obj: Logging
 ) -> None:
     """Gemini marks every chunk unfinished, so its finishReason only shows up mid-stream before the usage chunk."""
-    lines: Final = [
-        f"data: {json.dumps(event)}"
-        for event in (
+    wrapper: Final = _gemini_stream(
+        (
             {"candidates": [{"content": {"parts": [{"text": "Hello"}], "role": "model"}, "index": 0}]},
             {
                 "candidates": [
@@ -2571,26 +2592,41 @@ async def test_gemini_stream_with_a_usage_chunk_after_its_finish_reason_still_co
                 ]
             },
             {"usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5}},
-        )
-    ]
-
-    logging_obj.update_environment_variables(
-        model="gemini-2.5-flash", user=None, optional_params={}, litellm_params={"litellm_call_id": "gemini-tail"}
-    )
-    iterator: Final = GeminiModelResponseIterator(
-        streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)), sync_stream=sync_mode, logging_obj=logging_obj
-    )
-    wrapper: Final = CustomStreamWrapper(
-        completion_stream=iter(iterator) if sync_mode else iterator,
-        model="gemini-2.5-flash",
-        custom_llm_provider="gemini",
-        logging_obj=logging_obj,
+        ),
+        sync_mode,
+        logging_obj,
     )
 
     received: Final = await _collect(wrapper, sync_mode)
 
     assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "Hello there"
     assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+
+
+@pytest.mark.parametrize(
+    ("events", "generated_content"),
+    [
+        (
+            (_gemini_candidate({"text": '{"findings":[{"title":'}), _gemini_candidate({"text": '"unfinished'})),
+            '{"findings":[{"title":"unfinished',
+        ),
+        ((_gemini_candidate({"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}),), ""),
+    ],
+    ids=["text", "tool_call"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_stream_that_ends_before_its_finish_reason_fails_with_the_eof_message(
+    events: tuple[dict[str, object], ...], generated_content: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    wrapper: Final = _gemini_stream(events, sync_mode, logging_obj)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _collect(wrapper, sync_mode)
+
+    assert "Stream ended before a finish_reason was received" in str(excinfo.value)
+    assert excinfo.value.generated_content == generated_content
+    assert wrapper.received_finish_reason is None
 
 
 def test_streaming_handler_with_created_time_propagation(

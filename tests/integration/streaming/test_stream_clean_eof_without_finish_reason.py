@@ -225,7 +225,7 @@ def _event_types(text: str) -> tuple[str, ...]:
     return tuple(event for event, _ in sse_events(text))
 
 
-@pytest.mark.parametrize("family", ["openai", "anthropic", "agentcore"])
+@pytest.mark.parametrize("family", ["openai", "anthropic", "gemini", "agentcore"])
 def test_chat_stream_that_ends_cleanly_without_a_finish_reason_reaches_the_client_as_an_error(
     gateway: Gateway, family: Family
 ) -> None:

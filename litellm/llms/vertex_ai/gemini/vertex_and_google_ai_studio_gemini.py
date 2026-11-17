@@ -2864,10 +2864,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         annotations: Final = chat_completion_message.get("annotations")
         provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
+        native_finish_reason: Final = candidate.get("finishReason")
         # create a streaming choice object
         choice: Final = StreamingChoices(
-            finish_reason=VertexGeminiConfig._check_finish_reason(
-                chat_completion_message, candidate.get("finishReason")
+            finish_reason=(
+                None
+                if native_finish_reason is None
+                else VertexGeminiConfig._check_finish_reason(chat_completion_message, native_finish_reason)
             ),
             index=candidate.get("index", idx),
             delta=Delta(
