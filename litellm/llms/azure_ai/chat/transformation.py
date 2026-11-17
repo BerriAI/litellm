@@ -38,7 +38,12 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import add_path_to_api_base, catalog_row_with_runtime_registrations, supports_tool_choice
+from litellm.utils import (
+    add_path_to_api_base,
+    catalog_row_with_runtime_registrations,
+    has_catalog_entry,
+    supports_tool_choice,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -208,12 +213,13 @@ def _reasoning_effort_params(
 
 class AzureAIStudioConfig(OpenAIConfig):
     @staticmethod
-    def gpt_5_base_model(base_model: str | None) -> str | None:
+    def gpt_5_base_model(model: str, base_model: str | None) -> str | None:
         """The deployment name a gpt-5-family base_model stands for, so a custom-named deployment takes the
-        params and request shape of the deployment named after its base_model."""
-        if base_model is None:
+        params and request shape of the deployment named after its base_model. A deployment named after a
+        model LiteLLM knows keeps its own name, since its base_model then only sets pricing."""
+        if base_model is None or azureAIGPT5Config.is_model_gpt_5_model(model) or has_catalog_entry(model, "azure_ai"):
             return None
-        name: Final = base_model.removeprefix("azure_ai/")
+        name: Final = base_model.rsplit("/", 1)[-1]
         return name if azureAIGPT5Config.is_model_gpt_5_model(name) else None
 
     def get_supported_openai_params(self, model: str) -> list[str]:
@@ -244,7 +250,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         base_model: str | None = None,
         allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        detection_model: Final = self.gpt_5_base_model(base_model) or model
+        detection_model: Final = self.gpt_5_base_model(model, base_model) or model
         if azureAIGPT5Config.is_model_gpt_5_model(detection_model):
             return azureAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,

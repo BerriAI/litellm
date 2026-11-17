@@ -29,6 +29,7 @@ from types import MappingProxyType
 from typing import Final, get_args
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.utils import catalog_row_with_runtime_registrations
 
@@ -128,6 +129,60 @@ def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -
     if requested in ranked or requested not in _STRENGTH_RANK or not ranked:
         return requested
     return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= _STRENGTH_RANK[requested]), ranked[-1])
+
+
+def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[str, ...] | None:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    return _declared_levels(own_info.get(_DECLARED_EFFORTS_KEY)) if own_info is not None else None
+
+
+def _requested_level(requested: object) -> str | None:
+    if isinstance(requested, str):
+        return requested
+    fields: Final = as_str_mapping(requested)
+    if fields is None:
+        return None
+    level: Final = fields.get("effort")
+    return level if isinstance(level, str) else None
+
+
+def _gpt_5_row_declared_reasoning_efforts(
+    model: str, custom_llm_provider: str, base_model: str | None
+) -> tuple[str, ...] | None:
+    from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+    from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config, AzureAIStudioConfig
+    from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+    match custom_llm_provider:
+        case "openai":
+            if not OpenAIGPT5Config.is_openai_gpt_5_model(model):
+                return None
+            return OpenAIGPT5Config.row_declared_reasoning_efforts(model)
+        case "azure":
+            azure_model: Final = base_model or model
+            if not AzureOpenAIGPT5Config.is_model_gpt_5_model(azure_model):
+                return None
+            return AzureOpenAIGPT5Config.row_declared_reasoning_efforts(azure_model)
+        case "azure_ai":
+            foundry_model: Final = AzureAIStudioConfig.gpt_5_base_model(model, base_model) or model
+            if not AzureAIGPT5Config.is_model_gpt_5_model(foundry_model):
+                return None
+            return AzureAIGPT5Config.row_declared_reasoning_efforts(foundry_model)
+        case _:
+            return None
+
+
+def gpt_5_row_refuses_reasoning_effort(
+    requested: object, *, model: str, custom_llm_provider: str, base_model: str | None, deployment_model_info: object
+) -> bool:
+    """Whether a gpt-5-family deployment's map row lists its levels and leaves the requested one out,
+    judged on the model each provider's chat mapper reads. Both gates refuse such a level on every
+    route, so a router step that adds an effort drops it, as it drops a param the deployment lacks."""
+    level: Final = _requested_level(requested)
+    if level is None or level in (deployment_reasoning_effort_levels(deployment_model_info) or ()):
+        return False
+    declared: Final = _gpt_5_row_declared_reasoning_efforts(model, custom_llm_provider, base_model)
+    return declared is not None and level not in declared
 
 
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:

@@ -72,6 +72,10 @@ from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
 )
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.router_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
+    declared_reasoning_efforts_for_map_key,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -18672,7 +18676,7 @@ class TestTierParamsTheTargetAccepts:
             "litellm_params": {"model": "novita/moonshotai/kimi-k3", "allowed_openai_params": ["reasoning_effort"]},
         }
 
-        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort", "medium") is True
 
     def test_keeps_a_token_ceiling_the_provider_spells_differently(self):
         """petals lists max_tokens but not max_completion_tokens. A tier ceiling in the unsupported
@@ -18726,19 +18730,19 @@ class TestTierParamsTheTargetAccepts:
         }
         without_hint = {"model_name": "x", "litellm_params": {"model": "azure/my-gpt5-deploy"}}
 
-        assert litellm.Router._deployment_accepts_param(by_model_info, "x", "reasoning_effort") is True
-        assert litellm.Router._deployment_accepts_param(by_litellm_params, "x", "reasoning_effort") is True
-        assert litellm.Router._deployment_accepts_param(without_hint, "x", "reasoning_effort") is False
+        assert litellm.Router._deployment_accepts_param(by_model_info, "x", "reasoning_effort", "medium") is True
+        assert litellm.Router._deployment_accepts_param(by_litellm_params, "x", "reasoning_effort", "medium") is True
+        assert litellm.Router._deployment_accepts_param(without_hint, "x", "reasoning_effort", "medium") is False
 
     def test_deployment_accepts_param_reads_the_provider(self):
         deployment = {"model_name": "x", "litellm_params": {"model": "fireworks_ai/kimi-k3"}}
 
-        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort", "medium") is True
 
     def test_deployment_accepts_param_is_false_when_the_provider_omits_it(self):
         deployment = {"model_name": "x", "litellm_params": {"model": "novita/moonshotai/kimi-k3"}}
 
-        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is False
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort", "medium") is False
 
     @pytest.mark.parametrize(
         "deployment",
@@ -18746,7 +18750,7 @@ class TestTierParamsTheTargetAccepts:
     )
     def test_deployment_accepts_param_fails_open(self, deployment):
         """An unresolvable deployment must not be the reason a param is dropped."""
-        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort", "medium") is True
 
     @pytest.mark.parametrize(
         "litellm_params",
@@ -18773,7 +18777,7 @@ class TestTierParamsTheTargetAccepts:
         monkeypatch.setattr(litellm, "get_llm_provider", _record)
         deployment = {"model_name": "x", "litellm_params": litellm_params}
 
-        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort", "medium") is True
         assert lookups == []
 
     def test_keeps_everything_for_an_unknown_group(self):
@@ -18859,6 +18863,19 @@ async def test_router_aspeech_request_voice_overrides_deployment_default(respx_m
 
     request_body = json.loads(respx_mock.calls.last.request.content)
     assert request_body["voice_id"] == "gb_oliver_neutral"
+
+
+_CLASSIFIER_METADATA: Final[Mapping[str, str]] = {"internal_call_origin": "autorouter_classifier"}
+_CHAT_LATEST_DEPLOYMENTS: Final = (
+    ("openai/chat-latest", "chat-latest", {}),
+    ("azure_ai/gpt-chat-latest", "azure_ai/gpt-chat-latest", {"api_base": "https://qa.services.ai.azure.com"}),
+    (
+        "azure_ai/qa-prod-chat",
+        "azure_ai/gpt-chat-latest",
+        {"api_base": "https://qa.services.ai.azure.com", "base_model": "azure_ai/gpt-chat-latest"},
+    ),
+    ("azure/gpt-chat-latest", "azure/gpt-chat-latest", {"api_base": "https://qa.openai.azure.com"}),
+)
 
 
 class TestRequestReasoningEffortOverride:
@@ -18973,6 +18990,37 @@ class TestRequestReasoningEffortOverride:
 
         assert ("reasoning_effort" not in kwargs) is should_drop
         assert ("reasoning_effort" not in body) is should_drop
+
+    @pytest.mark.parametrize("level", REASONING_EFFORT_ADVERTISEMENT_ORDER)
+    @pytest.mark.parametrize(
+        ("model", "row", "params"), _CHAT_LATEST_DEPLOYMENTS, ids=[d[0] for d in _CHAT_LATEST_DEPLOYMENTS]
+    )
+    def test_classifier_call_keeps_only_the_efforts_the_chat_latest_row_lists(
+        self, local_model_cost_map: None, model: str, row: str, params: Mapping[str, str], level: str
+    ):
+        declared: Final = declared_reasoning_efforts_for_map_key(row)
+        assert declared
+        kwargs: Final[dict[str, object]] = {"reasoning_effort": level, "metadata": dict(_CLASSIFIER_METADATA)}
+        deployment: Final[DeploymentTypedDict] = {"model_name": "g", "litellm_params": {"model": model, **params}}
+
+        litellm.Router(model_list=[])._drop_unsupported_classifier_reasoning_effort(deployment, "g", kwargs)
+
+        assert kwargs.get("reasoning_effort") == (level if level in declared else None)
+
+    def test_classifier_call_keeps_an_effort_the_deployment_itself_lists(self, local_model_cost_map: None):
+        kwargs: Final[dict[str, object]] = {
+            "reasoning_effort": {"effort": "low"},
+            "metadata": dict(_CLASSIFIER_METADATA),
+        }
+        deployment: Final[DeploymentTypedDict] = {
+            "model_name": "g",
+            "litellm_params": {"model": "openai/chat-latest"},
+            "model_info": {"reasoning_effort_levels": list(REASONING_EFFORT_ADVERTISEMENT_ORDER)},
+        }
+
+        litellm.Router(model_list=[])._drop_unsupported_classifier_reasoning_effort(deployment, "g", kwargs)
+
+        assert kwargs["reasoning_effort"] == {"effort": "low"}
 
 
 class TestPreRoutingTierDrivesFallbacks:
