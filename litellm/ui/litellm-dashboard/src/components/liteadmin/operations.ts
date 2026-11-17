@@ -72,8 +72,13 @@ const userFields = {
   ...limits,
 };
 const object = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape);
+// Plain regex instead of z.iso.date(): the latter serializes to a JSON Schema
+// `format: "date"` tag in tool parameters, which strict providers reject
+// (e.g. DeepSeek only accepts email/hostname/ipv4/ipv6/uuid). The regex keeps
+// the format information model-readable on every backend.
+const isoDate = () => z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO calendar date, YYYY-MM-DD.");
 const dated = <Shape extends z.ZodRawShape>(shape: Shape) =>
-  object({ start_date: z.iso.date(), end_date: z.iso.date(), ...shape }).refine((value: Record<string, unknown>) => {
+  object({ start_date: isoDate(), end_date: isoDate(), ...shape }).refine((value: Record<string, unknown>) => {
     if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
     const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
     return days >= 0 && days <= 366;
