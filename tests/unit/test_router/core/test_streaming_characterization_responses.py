@@ -25,6 +25,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.router import AllowedFailsPolicy, RetryPolicy
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
     content_policy,
@@ -456,3 +457,236 @@ async def test_the_primary_and_fallback_streams_are_closed(make_core: MakeCore, 
     core = build(make_core)
     await collect_event_types(await open_stream(core))
     assert [stream.closed for stream in opened] == [True, True]
+
+
+GROUP_A_TWICE: Final = [deployment("a", "a1"), deployment("a", "a2")]
+
+
+def retried_ok() -> Callable[..., ScriptedResponsesStream]:
+    return responses_stream(
+        Event(CREATED), Event(TEXT_DELTA), Event(COMPLETED), hidden_params={"model_id": "retry-stream"}
+    )
+
+
+async def test_a_rate_limit_before_output_is_retried_on_the_other_deployment_of_the_group(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("*", responses_stream(Event(CREATED), Event(IN_PROGRESS), error=cut()), retried_ok())
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
+    stream = await open_stream(core)
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    first, retried = host.deployments_called()
+    assert retried != first
+    assert hidden(stream)["model_id"] == "retry-stream"
+    assert hidden(stream)["additional_headers"]["x-litellm-attempted-retries"] == 1
+
+
+async def test_a_rate_limit_retry_policy_retries_a_responses_stream_when_num_retries_is_zero(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("*", responses_stream(Event(CREATED), error=cut()), retried_ok())
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=0, retry_policy=RetryPolicy(RateLimitErrorRetries=2))
+    stream = await open_stream(core)
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert len(host.deployments_called()) == 2
+    assert hidden(stream)["additional_headers"]["x-litellm-max-retries"] == 2
+
+
+async def test_once_the_stream_retries_are_spent_the_fallback_answers(make_core: MakeCore, host: ScriptedHost) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), error=cut()))
+    host.answer("openai/b", fallback_ok())
+    core = build(make_core, num_retries=1)
+    stream = await open_stream(core)
+    events = [event async for event in stream]  # pyright: ignore[reportGeneralTypeIssues]  # an async stream
+    assert [event.type for event in events] == [CREATED, TEXT_DELTA, COMPLETED]
+    called = host.deployments_called()
+    assert called[-1] == "b"
+    assert called.count("a") == 2
+    assert hidden(stream)["model_id"] == "b-stream"
+    assert all(event._hidden_params["model_id"] == "b-stream" for event in events)
+
+
+async def test_after_text_the_stream_is_not_retried_in_the_group(make_core: MakeCore, host: ScriptedHost) -> None:
+    host.answer("*", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut("Hel")), retried_ok())
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
+    stream = await open_stream(core)
+    seen: list[object] = []
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await drain_into(stream, seen)
+    assert [getattr(event, "type") for event in seen] == [CREATED, TEXT_DELTA]
+    assert len(host.deployments_called()) == 1
+
+
+async def test_a_second_failed_stream_counts_as_a_second_retry(make_core: MakeCore, host: ScriptedHost) -> None:
+    broken: Final = responses_stream(Event(CREATED), error=cut())
+    host.answer("*", broken, broken, retried_ok())
+    core = make_core(
+        model_list=[*GROUP_A_TWICE, deployment("a", "a3")],
+        num_retries=2,
+        allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=1000),
+    )
+    stream = await open_stream(core)
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert len(host.deployments_called()) == 3
+    assert hidden(stream)["additional_headers"]["x-litellm-attempted-retries"] == 2
+
+
+async def test_a_retried_stream_keeps_the_model_group_header(make_core: MakeCore, host: ScriptedHost) -> None:
+    host.answer("*", responses_stream(Event(CREATED), error=cut()), retried_ok())
+    stream = await open_stream(make_core(model_list=GROUP_A_TWICE, num_retries=1))
+    served_as: Final = hidden(stream)["additional_headers"]["x-litellm-model-group"]
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert hidden(stream)["additional_headers"]["x-litellm-model-group"] == served_as
+
+
+async def test_the_failed_stream_is_closed_before_the_retry_is_opened(make_core: MakeCore, host: ScriptedHost) -> None:
+    opened: list[ScriptedResponsesStream] = []
+    closed_when_retry_opens: list[bool] = []
+
+    def retry(**request: object) -> ScriptedResponsesStream:  # kwargs-ok: the host passes the request kwargs
+        closed_when_retry_opens.append(opened[0].closed)
+        return retried_ok()(**request)
+
+    host.answer("*", responses_stream(Event(CREATED), error=cut(), opened=opened), retry)
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
+    assert await collect_event_types(await open_stream(core)) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert closed_when_retry_opens == [True]
+
+
+OUTCOME: Final = "\n\nLiteLLM: model group 'a' failed with the error above. Fallback to b also failed: "
+FALLBACK_BOOM: Final = "litellm.InternalServerError: boom"
+
+
+def with_router_debug(make_core: MakeCore, host: ScriptedHost) -> RouterCore:
+    host.set_dynamic(expose_router_debug_in_errors=True)
+    return build(make_core)
+
+
+async def test_a_fallback_stream_failing_before_output_carries_the_primarys_error_and_the_outcome(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", responses_stream(Event(CREATED), error=cut(original=server_error())))
+    core = with_router_debug(make_core, host)
+    seen: list[object] = []
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await drain_into(await open_stream(core), seen)
+    assert [getattr(event, "type") for event in seen] == [CREATED]
+    assert raised.value.message == f"litellm.RateLimitError: slow down{OUTCOME}{FALLBACK_BOOM}"
+    assert host.deployments_called() == ["a", "b"]
+
+
+async def test_a_fallback_stream_raising_a_provider_error_before_output_carries_the_outcome(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", responses_stream(Event(CREATED), error=server_error()))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == f"litellm.RateLimitError: slow down{OUTCOME}{FALLBACK_BOOM}"
+
+
+async def test_a_primary_cut_whose_fallback_fails_to_open_carries_the_outcome(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), error=cut()))
+    host.answer("openai/b", server_error())
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == f"litellm.RateLimitError: stream cut{OUTCOME}{FALLBACK_BOOM}"
+
+
+async def test_a_primary_cut_whose_fallback_stream_fails_before_output_carries_both_errors(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), error=cut()))
+    host.answer("openai/b", responses_stream(Event(CREATED), error=cut(original=server_error())))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == f"litellm.RateLimitError: stream cut{OUTCOME}{FALLBACK_BOOM}"
+
+
+async def test_a_fallback_stream_failing_after_output_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=server_error()))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == FALLBACK_BOOM
+
+
+async def test_without_router_debug_a_fallback_stream_failing_before_output_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", responses_stream(Event(CREATED), error=cut(original=server_error())))
+    core = build(make_core)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == FALLBACK_BOOM
+
+
+@pytest.mark.parametrize("output", [TEXT_DELTA, "response.function_call_arguments.delta"])
+async def test_a_fallback_stream_cut_after_output_without_generated_text_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost, output: str
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", responses_stream(Event(CREATED), Event(output), error=cut(original=server_error())))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == FALLBACK_BOOM
+
+
+async def test_a_primary_cut_after_text_whose_continuation_fallback_fails_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA, delta="hi"), error=cut("hi")))
+    host.answer("openai/b", server_error())
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == "litellm.RateLimitError: stream cut"
+    assert host.deployments_called() == ["a", "b"]
+
+
+@pytest.mark.parametrize("generated", ["", "partial"])
+async def test_a_primary_cut_after_output_whose_fallback_stream_fails_before_output_raises_the_fallbacks_error(
+    make_core: MakeCore, host: ScriptedHost, generated: str
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut(generated, rate_limit())))
+    host.answer("openai/b", responses_stream(Event(CREATED), error=server_error()))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == FALLBACK_BOOM
+
+
+async def test_a_fallback_groups_stream_retry_failing_before_output_carries_the_primarys_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", responses_stream(Event(CREATED), error=cut(original=server_error())))
+    host.set_dynamic(expose_router_debug_in_errors=True)
+    core = make_core(model_list=GROUPS_AB, fallbacks=[{"a": ["b"]}], num_retries=1)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert host.deployments_called().count("b") == 2
+    assert raised.value.message.startswith(f"litellm.RateLimitError: slow down{OUTCOME}")
+    assert "boom" in raised.value.message.removeprefix(f"litellm.RateLimitError: slow down{OUTCOME}")
+
+
+async def test_a_traceback_in_the_primarys_error_keeps_the_fallback_outcome(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit(message="slow down\nTraceback (most recent call last):\n  File secret.py"))
+    host.answer("openai/b", responses_stream(Event(CREATED), error=server_error()))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == f"litellm.RateLimitError: slow down{OUTCOME}{FALLBACK_BOOM}"

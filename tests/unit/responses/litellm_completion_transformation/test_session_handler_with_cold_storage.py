@@ -24,7 +24,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
 )
 from litellm.types.utils import StandardLoggingMetadata
-from tests.unit.integrations.s3_v3_rust_support import scripted_bucket
+from tests.unit.integrations.s3_v2_rust_support import scripted_bucket
 
 
 class TestColdStorageObjectKeyIntegration:

@@ -1,5 +1,6 @@
 import { zodFunction } from "openai/helpers/zod";
 import { z } from "zod";
+import { v4 as uuidv4 } from "uuid";
 import { apiClient } from "@/components/networking";
 import i18n from "@/i18n/i18n";
 import { ApiError } from "@/lib/http/client";
@@ -73,11 +74,14 @@ const userFields = {
 };
 const object = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape);
 const dated = <Shape extends z.ZodRawShape>(shape: Shape) =>
-  object({ start_date: z.iso.date(), end_date: z.iso.date(), ...shape }).refine((value: Record<string, unknown>) => {
-    if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
-    const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
-    return days >= 0 && days <= 366;
-  }, "Choose an ordered date range of at most 366 days.");
+  object({ start_date: z.string().regex(z.regexes.date), end_date: z.string().regex(z.regexes.date), ...shape }).refine(
+    (value: Record<string, unknown>) => {
+      if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
+      const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
+      return days >= 0 && days <= 366;
+    },
+    "Choose an ordered date range of at most 366 days.",
+  );
 
 const keysListFields = {
   page,
@@ -165,7 +169,7 @@ export function createLiteAdminOperations(context: OperationContext) {
             mode === "read"
               ? undefined
               : {
-                  id: crypto.randomUUID(),
+                  id: uuidv4(),
                   name,
                   title,
                   arguments: {
@@ -212,7 +216,7 @@ export function createLiteAdminOperations(context: OperationContext) {
           if (name === "get_team_usage_data") reportScope = "All teams";
           if (name === "get_tag_usage_data") reportScope = "All tags";
           const source = kind === "usage" ? usageChartSource(result, args, context.access, reportScope) : undefined;
-          const sourceId = source ? crypto.randomUUID() : undefined;
+          const sourceId = source ? uuidv4() : undefined;
           if (source && sourceId) usageSources.set(sourceId, source);
           return {
             operation: name,

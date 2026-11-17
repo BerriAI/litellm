@@ -5,6 +5,7 @@ mod handler;
 mod host_answer;
 mod pre_request;
 mod reads;
+mod relay;
 pub mod route;
 mod safeguards;
 mod transport;
