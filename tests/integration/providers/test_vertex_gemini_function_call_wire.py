@@ -250,13 +250,14 @@ _TOOL_TURN_MESSAGES: Final = [
 ]
 
 
-def _tool_turn_call(gateway: Gateway, model: str) -> None:
+def _tool_turn_call(gateway: Gateway, model: str, **extra: JsonValue) -> None:
     response: Final = gateway.client.post(
         "/v1/chat/completions",
         json={
             "model": model,
             "tools": [{"type": "function", "function": function} for function in _FUNCTIONS],
             "messages": _TOOL_TURN_MESSAGES,
+            **extra,
         },
         headers={"Authorization": f"Bearer {gateway.key}"},
         timeout=30,
@@ -339,3 +340,38 @@ def test_openai_target_receives_tool_call_ids_without_thought_signature(gateway:
 
     assert request.target == "/v1/chat/completions"
     assert _sent_tool_call_ids(request) == ("call_7c1e", "call_7c1e")
+
+
+def test_vertex_gemini_alias_without_gemini_in_name_replays_tool_call_thought_signature_streaming(
+    gateway: Gateway,
+) -> None:
+    payload: Final = json.dumps(_candidate(with_signature=False))
+    with (
+        wire_server(
+            lambda _: Reply(content_type="text/event-stream", chunks=(f"data: {payload}\n\n".encode(),))
+        ) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _model(gateway, scenario, wire.url)
+        _tool_turn_call(gateway, model, stream=True)
+        (request,) = wire.drain()
+
+    assert request.target == f"{_MODEL_PATH}:streamGenerateContent?alt=sse"
+    assert _function_call_signatures(request) == (_REPLAYED_SIGNATURE,)
+
+
+def test_fallback_from_openai_to_vertex_gemini_alias_strips_then_replays_thought_signature(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _: Reply(status=500, body=b'{"error": {"message": "scripted outage"}}')) as openai_wire,
+        wire_server(lambda _: Reply(body=json.dumps(_candidate(with_signature=False)).encode())) as vertex_wire,
+        gateway.scenario() as scenario,
+    ):
+        primary: Final = scenario.model(api_base=f"{openai_wire.url}/v1")
+        fallback: Final = _model(gateway, scenario, vertex_wire.url)
+        _tool_turn_call(gateway, primary, fallbacks=[fallback], num_retries=0)
+        openai_requests: Final = openai_wire.drain()
+        (vertex_request,) = vertex_wire.drain()
+
+    assert openai_requests, "the primary deployment was never tried"
+    assert {_sent_tool_call_ids(request) for request in openai_requests} == {("call_7c1e", "call_7c1e")}
+    assert _function_call_signatures(vertex_request) == (_REPLAYED_SIGNATURE,)
