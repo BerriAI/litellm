@@ -8,6 +8,19 @@ from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.anthropic import CLAUDE_SONNET_4_6_TEST_CASE, CLAUDE_SONNET_5_5_TEST_CASE
 from integration.translation.runner import assert_translation
 
+CLAUDE_SONNET_4_6_SERVICE_TIER_RESPONSE_FIELDS: Final = {
+    "content": [{"type": "text", "text": "Hello!"}],
+    "usage": {
+        "input_tokens": 18,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 5,
+        "service_tier": "standard",
+        "inference_geo": "global",
+    },
+}
+
 CLAUDE_SONNET_4_6_SERVICE_TIER_TEST_CASE: Final = replace(
     CLAUDE_SONNET_4_6_TEST_CASE,
     scenario="service_tier",
@@ -16,9 +29,14 @@ CLAUDE_SONNET_4_6_SERVICE_TIER_TEST_CASE: Final = replace(
         **CLAUDE_SONNET_4_6_TEST_CASE.expected_provider_request,
         "service_tier": "standard_only",
     },
-    mock_provider_response={**CLAUDE_SONNET_4_6_TEST_CASE.mock_provider_response, "id": "msg_011Cg1RG36pCcTLE26htFFqC"},
+    mock_provider_response={
+        **CLAUDE_SONNET_4_6_TEST_CASE.mock_provider_response,
+        **CLAUDE_SONNET_4_6_SERVICE_TIER_RESPONSE_FIELDS,
+        "id": "msg_011Cg1RG36pCcTLE26htFFqC",
+    },
     expected_litellm_response={
         **CLAUDE_SONNET_4_6_TEST_CASE.expected_litellm_response,
+        **CLAUDE_SONNET_4_6_SERVICE_TIER_RESPONSE_FIELDS,
         "id": "msg_011Cg1RG36pCcTLE26htFFqC",
     },
 )

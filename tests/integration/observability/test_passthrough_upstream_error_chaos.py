@@ -18,6 +18,8 @@ from integration._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _GENERATE_CONTENT: Final[dict[str, JsonValue]] = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
 _NOT_FOUND_BODY: Final = json.dumps(
     {

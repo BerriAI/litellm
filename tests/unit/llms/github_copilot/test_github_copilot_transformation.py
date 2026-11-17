@@ -1,29 +1,17 @@
-import asyncio
 import json
-from datetime import datetime, timedelta
-from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
-
-import pytest
-
+from unittest.mock import MagicMock, patch
 
 import httpx
-from respx import MockRouter
+import pytest
 
 import litellm
 
 # Import at the top to make the patch work correctly
-import litellm.llms.github_copilot.chat.transformation
-from litellm import Choices, Message, ModelResponse, Usage, acompletion, completion
+from litellm import ModelResponse, completion
 from litellm.exceptions import AuthenticationError
-from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.common_utils import (
-    APIKeyExpiredError,
     GetAccessTokenError,
-    GetAPIKeyError,
-    GetDeviceCodeError,
-    RefreshAPIKeyError,
 )
 
 
@@ -37,9 +25,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = mock_api_key
     # Test with dynamic endpoint
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
 
     # Test with default values
     model = "github_copilot/gpt-4"
@@ -73,7 +59,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     assert api_base == "https://api.githubcopilot.com"
 
     # Test with authentication failure
-    config.authenticator.get_api_key.side_effect = GetAPIKeyError(
+    config.authenticator.get_api_key.side_effect = GetAccessTokenError(
         message="Failed to get API key",
         status_code=401,
     )
@@ -145,7 +131,6 @@ def test_completion_github_copilot_mock_response(
 
 def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
     """Test that system messages are converted to assistant unless disable_copilot_system_to_assistant is True."""
-    import litellm
     from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 
     # Save original value
@@ -363,10 +348,6 @@ def test_x_initiator_header_system_only_messages():
     )
 
     assert headers["X-Initiator"] == "user"
-
-
-
-
 
 
 def test_copilot_vision_request_header_with_image():
@@ -693,13 +674,8 @@ class TestGithubCopilotTransformResponse:
         assert result.choices[0].message.tool_calls is not None
         assert len(result.choices[0].message.tool_calls) == 1
         assert result.choices[0].message.tool_calls[0]["id"] == "toolu_01ABC"
-        assert (
-            result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
-        )
-        assert (
-            '"Boston, MA"'
-            in result.choices[0].message.tool_calls[0]["function"]["arguments"]
-        )
+        assert result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+        assert '"Boston, MA"' in result.choices[0].message.tool_calls[0]["function"]["arguments"]
 
     def test_transform_response_anthropic_native_multiple_text_blocks(self):
         """All text blocks must be concatenated, not only the first."""
@@ -867,12 +843,8 @@ class TestGithubCopilotTransformParsedResponseDict:
 
 
 @patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client")
-@patch(
-    "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request"
-)
-def test_openai_handler_repairs_github_copilot_empty_choices(
-    mock_request, mock_get_client
-):
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request")
+def test_openai_handler_repairs_github_copilot_empty_choices(mock_request, mock_get_client):
     """
     The OpenAI SDK handler calls convert_to_model_response_object directly on the
     SDK's parsed output, bypassing transform_response. convert raises APIError on
@@ -929,7 +901,10 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
 
     session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
     headers = config.validate_environment(
-        headers={}, model="github_copilot/gpt-4o", messages=[], optional_params={},
+        headers={},
+        model="github_copilot/gpt-4o",
+        messages=[],
+        optional_params={},
         litellm_params={"github_copilot_user_session": session},
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
@@ -946,9 +921,7 @@ def test_transform_response_carries_upstream_usage():
             "object": "chat.completion",
             "created": 1,
             "model": "github_copilot/gpt-4o",
-            "choices": [
-                {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
-            ],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
         },
     )

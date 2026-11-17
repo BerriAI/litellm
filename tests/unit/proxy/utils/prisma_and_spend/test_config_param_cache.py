@@ -72,7 +72,7 @@ def test_config_row_dataclass_shape() -> None:
     } == {
         "param_name": "alpha",
         "param_value": {"k": 1},
-        "slots": ("param_name", "param_value"),
+        "slots": ("param_name", "param_value", "reload_revision"),
     }
 
 
@@ -83,12 +83,13 @@ def test_config_row_rejects_unknown_attribute() -> None:
 
 
 def test_pack_config_row_returns_dict_for_caching() -> None:
-    row = SimpleNamespace(param_name="zeta", param_value=[1, 2, 3])
+    row = SimpleNamespace(param_name="zeta", param_value=[1, 2, 3], reload_revision=7)
     actual = _pack_config_row(row)
     expanded = {**actual, "is_dict": isinstance(actual, dict)}
     assert expanded == {
         "param_name": "zeta",
         "param_value": [1, 2, 3],
+        "reload_revision": 7,
         "is_dict": True,
     }
 
@@ -117,6 +118,21 @@ def test_unpack_config_row_round_trips_dict() -> None:
         "from_miss_sentinel": None,
         "from_other_type": None,
     }
+
+
+def test_config_row_revision_survives_the_cache_round_trip() -> None:
+    unpacked = _unpack_config_row(
+        _pack_config_row(SimpleNamespace(param_name="environment_variables", param_value={}, reload_revision=42))
+    )
+    assert unpacked is not None and unpacked.reload_revision == 42
+
+
+@pytest.mark.parametrize("cached_revision", [None, True, "42"])
+def test_unpack_config_row_without_an_integer_revision_has_none(cached_revision: object) -> None:
+    unpacked = _unpack_config_row(
+        {"param_name": "environment_variables", "param_value": {}, "reload_revision": cached_revision}
+    )
+    assert unpacked is not None and unpacked.reload_revision is None
 
 
 def test_unpack_config_row_error_on_malformed_dict() -> None:
@@ -168,7 +184,7 @@ async def test_get_config_param_cache_miss_fetches_from_db_and_caches(
     }
     assert actual == {
         "returned": db_row,
-        "cached": {"param_name": "p2", "param_value": {"y": 2}},
+        "cached": {"param_name": "p2", "param_value": {"y": 2}, "reload_revision": None},
         "db_called": 1,
         "db_args": {"key": "param_name", "value": "p2", "table_name": "config"},
     }
@@ -251,9 +267,9 @@ async def test_prefetch_config_params_populates_cache_for_each_name(
         "c": _swap_config_cache._store[_config_cache_key("c")],
     }
     assert actual == {
-        "a": {"param_name": "a", "param_value": {"av": 1}},
+        "a": {"param_name": "a", "param_value": {"av": 1}, "reload_revision": None},
         "b": utils_mod._CONFIG_CACHE_MISS,
-        "c": {"param_name": "c", "param_value": [3]},
+        "c": {"param_name": "c", "param_value": [3], "reload_revision": None},
     }
 
 

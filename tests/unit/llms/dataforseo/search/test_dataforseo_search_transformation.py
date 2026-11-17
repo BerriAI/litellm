@@ -4,6 +4,7 @@ Unit tests for DataForSEO Search functionality.
 
 import datetime
 import os
+import re
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -15,6 +16,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.conftest import in_operator_error
 
 
 @pytest.mark.asyncio
@@ -170,6 +172,19 @@ def test_dataforseo_malformed_item_is_rejected_without_naming_its_position():
         _transform(_successful_task([{"items": items}]))
 
     assert "429" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (5, in_operator_error(5)),
+        ({"tasks": 5}, "object of type 'int' has no len()"),
+        ({"tasks": [{"status_code": 20000, "result": 5}]}, "object of type 'int' has no len()"),
+    ],
+)
+def test_dataforseo_scalar_where_the_response_needs_a_container_raises_type_error(payload: object, message: str):
+    with pytest.raises(TypeError, match=re.escape(message)):
+        _transform(payload)
 
 
 @pytest.fixture(autouse=True)

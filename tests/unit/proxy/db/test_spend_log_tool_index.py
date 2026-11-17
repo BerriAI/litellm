@@ -6,7 +6,7 @@ plus the LiteLLM_DailyToolSpend rollup in one transaction.
 
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -21,6 +21,9 @@ from litellm.proxy.db.spend_log_tool_index import (
     flush_tool_usage_transactions,
     response_tool_call_names,
 )
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import ModelResponse
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -202,6 +205,36 @@ class TestResponseToolCallNames:
     def test_blank_names_are_dropped(self):
         assert response_tool_call_names(_response_with_tool_calls("  ", "real_tool")) == ("real_tool",)
 
+    @pytest.mark.parametrize("as_object", [False, True], ids=["dict", "model_response"])
+    def test_server_tool_calls_of_every_choice_are_named_before_client_tool_calls(self, as_object: bool):
+        def tool_call(call_id: str, name: str) -> dict[str, object]:
+            return {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+        response: dict[str, object] = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tool_call("call_1", "get_weather")],
+                        "provider_specific_fields": {"server_tool_calls": [tool_call("srvtoolu_01", "web_search")]},
+                    },
+                },
+                {
+                    "index": 1,
+                    "message": {
+                        "role": "assistant",
+                        "content": "done",
+                        "provider_specific_fields": {"server_tool_calls": [tool_call("srvtoolu_02", "web_fetch")]},
+                    },
+                },
+            ]
+        }
+        completion_response: Final = ModelResponse(**response) if as_object else response
+
+        assert response_tool_call_names(completion_response) == ("web_search", "web_fetch", "get_weather")
+
     def test_responses_api_output_function_calls(self):
         # Regression: /v1/responses carries invocations in output[] items of
         # type function_call, not in choices; they must reach the rollup.
@@ -221,6 +254,37 @@ class TestResponseToolCallNames:
             ]
         }
         assert response_tool_call_names(response) == ("ant_get_weather",)
+
+    def test_auto_executed_mcp_tools_count_from_the_final_responses_api_response(self):
+        final_round = ResponsesAPIResponse.model_validate(
+            {
+                "id": "resp_final",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.6",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                    }
+                ],
+            }
+        )
+        logged = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
+            final_round,
+            mcp_tools_fetched=[{"name": "demo-echo"}, {"name": "demo-add"}],
+            tool_results=[
+                {"tool_call_id": "call_1", "result": "x", "name": "demo-echo"},
+                {"tool_call_id": "call_2", "result": "3", "name": "demo-add"},
+            ],
+        )
+
+        assert response_tool_call_names(logged) == ("demo-echo", "demo-add")
+        assert response_tool_call_names(logged.model_dump()) == ("demo-echo", "demo-add")
 
 
 def _transaction(

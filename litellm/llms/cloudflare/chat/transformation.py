@@ -3,6 +3,7 @@ from typing import Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import (
@@ -57,9 +58,9 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         trimmed: Final = api_base.rstrip("/")
         if trimmed.endswith("/ai/run"):
             verbose_logger.warning(
-                "Cloudflare api_base ending in '/ai/run' is the legacy Workers AI path and no longer serves OpenAI-compatible requests; rewriting to the '/ai/v1' endpoint"
+                "Cloudflare chat completions require the OpenAI-compatible '/ai/v1' endpoint; rewriting api_base ending in '/ai/run' to '/ai/v1'. Decision models continue to use the native Workers AI '/ai/run/{model}' endpoint."
             )
-            return f"{trimmed[: -len('/ai/run')]}/ai/v1"
+            return join_api_base(trimmed[: -len("/ai/run")], "ai/v1")
         return api_base
 
     def validate_environment(

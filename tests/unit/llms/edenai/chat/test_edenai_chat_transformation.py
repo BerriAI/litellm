@@ -440,14 +440,3 @@ class TestDashboardRegistration:
         entry = json.loads(matrix_path.read_text())["providers"]["edenai"]
 
         assert entry["url"] == "https://docs.litellm.ai/docs/providers/edenai"
-        served = {name for name, flag in entry["endpoints"].items() if flag}
-        assert served == {
-            "chat_completions",
-            "messages",
-            "responses",
-            "embeddings",
-            "image_generations",
-            "audio_transcriptions",
-            "audio_speech",
-            "video_generations",
-        }

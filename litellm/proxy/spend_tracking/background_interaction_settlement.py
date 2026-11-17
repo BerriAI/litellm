@@ -275,7 +275,7 @@ class PrismaBackgroundSettlementStore:
 
 
 def _provider_credentials(router: "Router", deployment_id: str, custom_llm_provider: str) -> Mapping[str, object]:
-    credentials: Final = router.get_deployment_credentials_with_provider(model_id=deployment_id)
+    credentials: Final = router.registry().credentials(deployment_id, form="with_provider")
     if credentials is None or credentials.get("custom_llm_provider") != custom_llm_provider:
         return MappingProxyType({})
     return MappingProxyType(credentials)
@@ -286,7 +286,7 @@ def _group_deployment_credentials(router: "Router", context: BackgroundInteracti
         return MappingProxyType({})
     candidates: Final = tuple(
         credentials
-        for deployment_id in router.get_model_ids(model_name=context.model_group)
+        for deployment_id in router.registry().names(context.model_group, kind="ids")
         if (credentials := _provider_credentials(router, deployment_id, context.custom_llm_provider))
     )
     return candidates[0] if len(candidates) == 1 else MappingProxyType({})
@@ -299,7 +299,7 @@ def _deployment_credentials(
         return None
     serving: Final = (
         _provider_credentials(router, context.deployment_id, context.custom_llm_provider)
-        if context.deployment_id is not None and router.get_deployment(model_id=context.deployment_id) is not None
+        if context.deployment_id is not None and router.registry().deployment(context.deployment_id) is not None
         else _group_deployment_credentials(router, context)
     )
     return CredentialLiteLLMParams.model_validate(serving) if serving else None

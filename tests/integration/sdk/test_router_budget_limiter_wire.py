@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 import uuid
 from collections.abc import Iterator
 from typing import Final
@@ -222,3 +224,95 @@ async def test_tag_budget_blocks_exhausted_tag_but_allows_another(
     assert response.choices[0].message.content == "openai"
     assert len(requests) == 1
     assert json.loads(requests[0].body)["model"] == _MODEL
+
+
+
+_ISOLATED_SPEND_KEY: Final = "provider_spend:hosted_vllm:1d"
+_INPUT_COST_PER_TOKEN: Final = 0.001
+_OUTPUT_COST_PER_TOKEN: Final = 0.002
+
+
+def _isolated_provider_deployment(api_base: str) -> dict[str, JsonValue]:
+    """Only these two tests route to hosted_vllm, so success callbacks still draining from earlier tests cannot land here."""
+    return {
+        "model_name": "isolated-budget",
+        "litellm_params": {
+            "model": "hosted_vllm/llama-3",
+            "api_base": api_base,
+            "api_key": _API_KEY,
+            "input_cost_per_token": _INPUT_COST_PER_TOKEN,
+            "output_cost_per_token": _OUTPUT_COST_PER_TOKEN,
+        },
+        "model_info": {"id": "vllm-deployment"},
+    }
+
+
+def _isolated_budget_router(api_base: str, redis_client: Redis | None) -> Router:
+    redis_params: Final = (
+        {}
+        if redis_client is None
+        else {"redis_host": os.environ["REDIS_HOST"], "redis_port": int(os.environ["REDIS_PORT"])}
+    )
+    return Router(
+        model_list=[_isolated_provider_deployment(api_base)],
+        provider_budget_config={"hosted_vllm": BudgetConfig(budget_duration="1d", max_budget=10.0)},
+        num_retries=0,
+        disable_cooldowns=True,
+        **redis_params,
+    )
+
+
+async def _complete_and_wait_for_spend(router: Router, previous: float) -> float:
+    response: Final = await router.acompletion(
+        model="isolated-budget",
+        messages=[{"role": "user", "content": "budget tracking"}],
+    )
+    cost: Final = (
+        response.usage.prompt_tokens * _INPUT_COST_PER_TOKEN + response.usage.completion_tokens * _OUTPUT_COST_PER_TOKEN
+    )
+    deadline: Final = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        spend: float | None = router.cache.in_memory_cache.get_cache(_ISOLATED_SPEND_KEY)
+        if spend is not None and spend > previous:
+            assert spend == pytest.approx(previous + cost)
+            return spend
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"{_ISOLATED_SPEND_KEY} never rose above {previous}")
+
+
+@pytest.mark.asyncio
+async def test_router_without_redis_tracks_spend_but_queues_no_redis_increments() -> None:
+    """A Router with no Redis never flushes, so anything it queues for Redis is retained for the life of the process."""
+    with wire_server(_peer) as wire:
+        router: Final = _isolated_budget_router(f"{wire.url}/openai/v1", redis_client=None)
+        first: Final = await _complete_and_wait_for_spend(router, previous=0.0)
+        second: Final = await _complete_and_wait_for_spend(router, previous=first)
+        third: Final = await _complete_and_wait_for_spend(router, previous=second)
+        wire.drain()
+
+    assert third > second > first > 0.0
+    assert router.router_budget_logger is not None
+    assert router.router_budget_logger.redis_increment_operation_queue == []
+
+
+async def _wait_for_redis_spend(redis_client: Redis, at_least: float) -> float:
+    deadline: Final = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        raw: str | None = redis_client.get(_ISOLATED_SPEND_KEY)
+        if raw is not None and float(raw) >= at_least:
+            return float(raw)
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{_ISOLATED_SPEND_KEY} in Redis never reached {at_least}")
+
+
+@pytest.mark.asyncio
+async def test_router_with_redis_flushes_queued_spend_increments(redis_client: Redis) -> None:
+    redis_client.delete(_ISOLATED_SPEND_KEY)
+    with wire_server(_peer) as wire:
+        router: Final = _isolated_budget_router(f"{wire.url}/openai/v1", redis_client=redis_client)
+        first: Final = await _complete_and_wait_for_spend(router, previous=0.0)
+        second: Final = await _complete_and_wait_for_spend(router, previous=first)
+        redis_spend: Final = await _wait_for_redis_spend(redis_client, at_least=second)
+        wire.drain()
+
+    assert redis_spend == pytest.approx(second)
