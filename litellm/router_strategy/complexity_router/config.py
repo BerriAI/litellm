@@ -1265,6 +1265,16 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "may not name the highest one, since that would make the LLM classifier unreachable."
         ),
     )
+    heuristic_first_max_context_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        strict=True,
+        description=(
+            "Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier "
+            "even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. "
+            "Unset preserves the local shortcut. Existing session and user-turn pins still take precedence."
+        ),
+    )
     hybrid_boundary_margin: float | None = Field(
         default=None,
         ge=0,
@@ -1948,6 +1958,12 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
                 f"custom_dimensions regex work estimate is {work}; the limit across the router is "
                 f"{MAX_CUSTOM_DIMENSIONS_WORK}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_heuristic_first_context_limit(self) -> "ComplexityRouterConfig":
+        if self.heuristic_first_max_context_tokens is not None and self.classifier_type != "heuristic_first":
+            raise ValueError("heuristic_first_max_context_tokens requires classifier_type 'heuristic_first'")
         return self
 
     @field_validator("heuristic_first_max_tier", mode="before")

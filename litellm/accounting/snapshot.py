@@ -31,6 +31,7 @@ _METADATA_FIELDS: Final = frozenset(
         "compression_savings",
         "internal_call_origin",
         "billed_retry_attempt",
+        "user_api_key_customer_usage",
     }
 )
 
@@ -51,6 +52,9 @@ _ACCOUNTING_FIELDS: Final = frozenset(
         "team_id",
         "organization_id",
         "end_user",
+        "customer_member_id",
+        "customer_team_id",
+        "customer_org_id",
         "agent_id",
         "request_tags",
         "status",

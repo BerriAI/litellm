@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, Protocol, cast, runtime_checkable
 
 import httpx
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
@@ -31,11 +31,13 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     coerce_token_limit,
     drops_unsupported_params,
     map_finish_reason,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     invalid_type_message,
@@ -450,6 +452,46 @@ def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     return check is not None and not all(check(value) for value in enum_values)
 
 
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _filtered_output_subschema(value: object) -> object:
+    subschema: Final = _as_json_object(value)
+    return value if subschema is None else AnthropicConfig.filter_anthropic_output_schema(subschema)
+
+
+def _filtered_output_subschemas(value: object) -> object:
+    subschemas: Final = _as_json_object(value)
+    if subschemas is None:
+        return value
+    return {name: _filtered_output_subschema(subschema) for name, subschema in subschemas.items()}
+
+
+def _filtered_output_branches(branches: Sequence[object]) -> Sequence[object]:
+    return [_filtered_output_subschema(branch) for branch in branches]
+
+
+@runtime_checkable
+class _SupportsAdd(Protocol):
+    def __add__(self, other: object, /) -> object: ...
+
+
+def _concatenated(left: object, right: str | Sequence[object]) -> object:
+    if isinstance(left, _SupportsAdd):
+        return left + right
+    raise TypeError(f"unsupported operand type(s) for +: '{type(left).__name__}' and '{type(right).__name__}'")
+
+
+def _extended_any_of(result: Mapping[str, object], branches: Sequence[object]) -> object:
+    filtered: Final = _filtered_output_branches(branches)
+    return _concatenated(result["anyOf"], filtered) if "anyOf" in result else filtered
+
+
+def _described_with_note(description: object, note: str) -> object:
+    return _concatenated(_concatenated(description, " "), note) if description else note
+
+
 # Single, internal-only key on ``litellm_params`` used to thread the per-
 # request reverse map (sanitized -> original) from request build to response
 # parsing. ``litellm_params`` is never serialized to a provider; ``optional_
@@ -604,6 +646,22 @@ def tools_without_unsupported_tool_search(
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
 
 
+def mapped_max_output_tokens(cost_map_key: str) -> int | None:
+    row: Final = object_mapping(litellm.model_cost.get(cost_map_key)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
+    match row.get("max_output_tokens"):
+        case int() as max_tokens:
+            return max_tokens
+        case _:
+            return None
+
+
+def _own_max_output_tokens(model: str) -> int | None:
+    try:
+        return get_max_tokens(model)
+    except Exception:
+        return None
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -650,7 +708,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def get_config(cls, *, model: str | None = None, configured_max_output_tokens: int | None = None):
+    def get_config(
+        cls,
+        *,
+        model: str | None = None,
+        configured_max_output_tokens: int | None = None,
+        custom_llm_provider: str | None = None,
+    ):
         config: Final = super().get_config()
 
         # anthropic requires a default value for max_tokens
@@ -658,26 +722,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             config["max_tokens"] = (
                 configured_max_output_tokens
                 if configured_max_output_tokens is not None
-                else cls.get_max_tokens_for_model(model)
+                else cls.get_max_tokens_for_model(model, custom_llm_provider)
             )
 
         return config
 
     @staticmethod
-    def get_max_tokens_for_model(model: str | None = None) -> int:
+    def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
-        Get the max output tokens for a given model.
-        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if model is not found.
+        Get the max output tokens for a given model from its own cost-map row, then from its
+        unversioned id's row (claude-sonnet-4-6@default reads claude-sonnet-4-6), else from the
+        serving host's row (e.g. vertex_ai/claude-3-5-haiku@20241022).
+        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if no row exists.
         """
         if model is None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-        try:
-            max_tokens: Final = get_max_tokens(model)
-            if max_tokens is None:
-                return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-            return max_tokens
-        except Exception:
-            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+        own_max_tokens: Final = _own_max_output_tokens(model)
+        if own_max_tokens is not None:
+            return own_max_tokens
+        unversioned_model, version_separator, _ = model.partition("@")
+        unversioned_max_tokens: Final = mapped_max_output_tokens(unversioned_model) if version_separator else None
+        if unversioned_max_tokens is not None:
+            return unversioned_max_tokens
+        host_max_tokens: Final = (
+            None if custom_llm_provider is None else mapped_max_output_tokens(f"{custom_llm_provider}/{model}")
+        )
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if host_max_tokens is None else host_max_tokens
 
     @staticmethod
     def convert_tool_use_to_openai_format(
@@ -927,7 +997,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return params
 
     @staticmethod
-    def filter_anthropic_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    def filter_anthropic_output_schema(schema: Mapping[str, object]) -> Mapping[str, object]:
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
 
@@ -1019,16 +1089,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             note_value = json.dumps(value) if isinstance(value, (dict, list)) else value
             constraint_descriptions.append(label.format(note_value))
 
-        result: Final[dict[str, Any]] = {}
+        result: Final[dict[str, object]] = {}
 
         # Update description with removed constraint info
         if constraint_descriptions:
-            existing_desc: Final = schema.get("description", "")
             constraint_note: Final = "Note: " + ", ".join(constraint_descriptions) + "."
-            if existing_desc:
-                result["description"] = existing_desc + " " + constraint_note
-            else:
-                result["description"] = constraint_note
+            result["description"] = _described_with_note(schema.get("description"), constraint_note)
 
         drops_conflicting_type: Final = _enum_conflicts_with_declared_type(schema)
 
@@ -1041,26 +1107,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
-                nested_schemas: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
-                result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in nested_schemas.items()}
-            elif key == "items" and isinstance(value, dict):
-                nested_schema: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
-                result[key] = AnthropicConfig.filter_anthropic_output_schema(nested_schema)
-            elif key == "anyOf" and isinstance(value, list):
-                result["anyOf"] = result.get("anyOf", []) + [
-                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
-                ]
-            elif key == "allOf" and isinstance(value, list):
-                result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+            branches = as_object_list(value)
+            if key in ("properties", "$defs", "definitions"):
+                result[key] = _filtered_output_subschemas(value)
+            elif key == "items":
+                result[key] = _filtered_output_subschema(value)
+            elif key == "anyOf" and branches is not None:
+                result["anyOf"] = _extended_any_of(result, branches)
+            elif key == "allOf" and branches is not None:
+                result[key] = _filtered_output_branches(branches)
             elif key == "$ref" and isinstance(value, str):
                 result[key] = schema_fragment_ref(value)
-            elif key == "oneOf" and isinstance(value, list):
+            elif key == "oneOf" and branches is not None:
                 # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
                 # the Anthropic SDK rewrites it to anyOf, so do the same.
-                result["anyOf"] = result.get("anyOf", []) + [
-                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
-                ]
+                result["anyOf"] = _extended_any_of(result, branches)
             else:
                 result[key] = value
 
@@ -2649,7 +2710,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else None
         )
         config: Final[Mapping[str, object]] = MappingProxyType(
-            litellm.AnthropicConfig.get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            litellm.AnthropicConfig.get_config(
+                model=model,
+                configured_max_output_tokens=configured_max_output_tokens,
+                custom_llm_provider=self._resolved_provider,
+            )
         )
         for k, v in config.items():
             if (
