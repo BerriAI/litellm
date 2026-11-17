@@ -7,12 +7,14 @@ import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import OpenAIConflictError, OpenAIGatewayTimeoutError
 from litellm.harness import endpoint as endpoint_module
 from litellm.harness.endpoint import (
     ModelEndpoint,
     SSEUsageParser,
     UsageTracker,
     compute_cost,
+    error_body,
     usage_from_mapping,
     usage_mapping_of_body,
 )
@@ -191,6 +193,19 @@ async def test_gateway_error_status_preserved_and_not_counted() -> None:
             resp = await client.post("/v1/chat/completions", json={}, headers=auth(ep))
     assert resp.status_code == 429
     assert ep.usage.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("error", "reported_type"),
+    (
+        (OpenAIConflictError(message="conflict", llm_provider="openai", model="m"), "APIError"),
+        (OpenAIGatewayTimeoutError(message="slow", model="m", llm_provider="openai"), "Timeout"),
+    ),
+)
+def test_error_body_reports_the_class_an_openai_sdk_parity_error_stands_in_for(
+    error: Exception, reported_type: str
+) -> None:
+    assert error_body(error, "failed")["error"]["type"] == reported_type
 
 
 async def test_models_route() -> None:

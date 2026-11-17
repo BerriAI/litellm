@@ -15,6 +15,7 @@ from litellm import completion
 from litellm.exceptions import (
     GuardrailRaisedException,
     OpenAIConflictBadRequestError,
+    OpenAIConnectionError,
     OpenAIServerErrorBadRequestError,
     OpenAIServiceUnavailableError,
     OpenAIUnprocessableEntityError,
@@ -3540,7 +3541,7 @@ def _sdk_error(reply: int | Literal["refused"], error_type: str = "x") -> openai
 
 
 def _litellm_error(reply: int | Literal["refused"], error_type: str = "x") -> Exception:
-    with pytest.raises(Exception) as raised:
+    with pytest.raises(openai.APIError) as raised:
         completion(
             model="openai/gpt-5.6",
             messages=[{"role": "user", "content": "hi"}],
@@ -3618,6 +3619,7 @@ _SENT: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions
         (_wrapped_500(httpx.ReadTimeout("slow", request=_SENT)), False),
         (_wrapped_500(ValueError("not a transport failure")), False),
         (_wrapped_500(litellm.APIConnectionError(message="mapped elsewhere", llm_provider="openai", model="m")), False),
+        (_wrapped_500(OpenAIConnectionError(message="mapped already", llm_provider="openai", model="m")), False),
         (
             _wrapped_500(
                 httpx.ConnectError("refused", request=_SENT),

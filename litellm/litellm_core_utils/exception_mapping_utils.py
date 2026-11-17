@@ -337,15 +337,19 @@ _OPENAI_INVALID_REQUEST_CLASSES: Final[Mapping[object, type[BadRequestError]]] =
 )
 
 
+def _is_connection_failure(error: BaseException) -> bool:
+    """An SDK or httpx failure to reach the provider; timeouts and LiteLLM's own connection classes do not count."""
+    if isinstance(error, (openai.APITimeoutError, APIConnectionError, OpenAIConnectionError, httpx.TimeoutException)):
+        return False
+    return isinstance(error, (openai.APIConnectionError, httpx.TransportError))
+
+
 def _caused_by_connection_failure(error: BaseException) -> bool:
     cause: BaseException | None = error  # rebind-ok: walks the exception chain
     for _ in range(_CONNECTION_FAILURE_CHAIN_DEPTH):
         if cause is None:
             return False
-        if (
-            isinstance(cause, openai.APIConnectionError)
-            and not isinstance(cause, (openai.APITimeoutError, APIConnectionError, OpenAIConnectionError))
-        ) or (isinstance(cause, httpx.TransportError) and not isinstance(cause, httpx.TimeoutException)):
+        if _is_connection_failure(cause):
             return True
         cause = cause.__cause__ or cause.__context__
     return False

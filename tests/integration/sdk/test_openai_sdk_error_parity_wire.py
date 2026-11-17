@@ -152,12 +152,13 @@ def _upstream(
 
 
 async def _raised(model: str, api_base: str, mode: Mode) -> Exception:
-    with pytest.raises(Exception) as caught:
-        if mode == "sync":
+    if mode == "sync":
+        with pytest.raises(openai.APIError) as caught:
             litellm.completion(
                 model=model, messages=list(MESSAGES), api_base=api_base, api_key="sk-fake-parity", max_retries=0
             )
-        else:
+    else:
+        with pytest.raises(openai.APIError) as caught:
             await litellm.acompletion(
                 model=model, messages=list(MESSAGES), api_base=api_base, api_key="sk-fake-parity", max_retries=0
             )
@@ -307,7 +308,7 @@ def _router(api_base: str, **settings: object) -> Router:
 
 async def _router_attempts(status: int, reply: Callable[[int], Reply] = _error, **settings: object) -> int:
     with wire_server(lambda _request: reply(status)) as wire:
-        with pytest.raises(Exception):
+        with pytest.raises(openai.APIError):
             await _router(wire.url, **settings).acompletion(model="parity", messages=list(MESSAGES))
         return sum(1 for request in wire.drain() if request.method == "POST")
 
