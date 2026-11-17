@@ -103036,5 +103036,75 @@
         "mode": "moderation",
         "output_cost_per_token": 0.0,
         "source": "https://developers.openai.com/api/docs/guides/csam-classifier"
+    },
+    "fal_ai/speridlabs/iris-z/depth-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills speridlabs/iris-z/depth-to-image at $0.14 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price prices the default 1 MP output like the sibling flux entries"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.14,
+        "output_cost_per_pixel": 1.33514404296875e-07,
+        "source": "https://fal.ai/models/speridlabs/iris-z/depth-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/speridlabs/iris-z/small/depth-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills speridlabs/iris-z/small/depth-to-image at $0.05 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price prices the default 1 MP output like the sibling flux entries"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "output_cost_per_pixel": 4.76837158203125e-08,
+        "source": "https://fal.ai/models/speridlabs/iris-z/small/depth-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/speridlabs/iris-z/small/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills speridlabs/iris-z/small/text-to-image at $0.03 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price prices the default 1 MP output like the sibling flux entries"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "output_cost_per_pixel": 2.86102294921875e-08,
+        "source": "https://fal.ai/models/speridlabs/iris-z/small/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/speridlabs/iris-z/small/text-to-rgbd": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills speridlabs/iris-z/small/text-to-rgbd at $0.05 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price prices the default 1 MP output like the sibling flux entries"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "output_cost_per_pixel": 4.76837158203125e-08,
+        "source": "https://fal.ai/models/speridlabs/iris-z/small/text-to-rgbd",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/speridlabs/iris-z/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills speridlabs/iris-z/text-to-image at $0.1 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price prices the default 1 MP output like the sibling flux entries"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "output_cost_per_pixel": 9.5367431640625e-08,
+        "source": "https://fal.ai/models/speridlabs/iris-z/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/speridlabs/iris-z/text-to-rgbd": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"fal bills speridlabs/iris-z/text-to-rgbd at $0.14 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price prices the default 1 MP output like the sibling flux entries"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.14,
+        "output_cost_per_pixel": 1.33514404296875e-07,
+        "source": "https://fal.ai/models/speridlabs/iris-z/text-to-rgbd",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
     }
 }
