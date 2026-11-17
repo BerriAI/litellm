@@ -14201,17 +14201,24 @@ async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_mete
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "team_id, key_team_rpm_limit, team_rpm_limit, cache_order, refused",
+    "team_id, key_rpm_limit, key_team_rpm_limit, team_rpm_limit, cache_order, limited_by",
     [
-        pytest.param("team-a", 1, 1000, ("key", "team"), False, id="team-limit-raised-after-key-cached"),
-        pytest.param("team-a", 1000, 1, ("key", "team"), True, id="team-limit-lowered-after-key-cached"),
-        pytest.param("team-a", 1, 1000, ("team", "key"), True, id="key-cached-after-team"),
-        pytest.param("team-a", 1, 1000, ("key",), False, id="team-not-cached"),
-        pytest.param("litellm-dashboard", 1, 1000, ("key",), True, id="dashboard-session-key"),
+        pytest.param("team-a", None, 1, 1000, ("key", "team"), None, id="team-limit-raised-after-key-cached"),
+        pytest.param("team-a", None, 1000, 1, ("key", "team"), "team", id="team-limit-lowered-after-key-cached"),
+        pytest.param("team-a", None, 1, 1000, ("team", "key"), "team", id="key-cached-after-team"),
+        pytest.param("team-a", None, 1, 1000, ("key",), None, id="team-not-cached"),
+        pytest.param("team-a", None, 1, 1000, ("key", "unreadable_team"), None, id="team-entry-unreadable"),
+        pytest.param("team-a", 1, 1000, 1000, ("key",), "api_key", id="key-limit-with-team-not-cached"),
+        pytest.param("litellm-dashboard", None, 1, 1000, ("key",), "team", id="dashboard-session-key"),
     ],
 )
 async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply(
-    team_id: str, key_team_rpm_limit: int, team_rpm_limit: int, cache_order: tuple[str, ...], refused: bool
+    team_id: str,
+    key_rpm_limit: int | None,
+    key_team_rpm_limit: int,
+    team_rpm_limit: int,
+    cache_order: tuple[str, ...],
+    limited_by: str | None,
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import _reject_from_headers_before_reading_body
     from litellm.proxy.utils import hash_token
@@ -14219,7 +14226,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
     api_key: Final = "sk-team-limited-key"
     limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
-        UserAPIKeyAuth(api_key=hash_token(api_key), team_id=team_id, team_rpm_limit=1000),
+        UserAPIKeyAuth(api_key=hash_token(api_key), team_id=team_id, rpm_limit=key_rpm_limit, team_rpm_limit=1000),
         DualCache(),
         {"model": "gpt-5.6", "messages": []},
         "acompletion",
@@ -14231,7 +14238,11 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
                 cache_key_object,
                 hashed_token=hash_token(api_key),
                 user_api_key_obj=UserAPIKeyAuth(
-                    token=hash_token(api_key), team_id=team_id, team_rpm_limit=key_team_rpm_limit, models=["gpt-5.6"]
+                    token=hash_token(api_key),
+                    team_id=team_id,
+                    rpm_limit=key_rpm_limit,
+                    team_rpm_limit=key_team_rpm_limit,
+                    models=["gpt-5.6"],
                 ),
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=None,
@@ -14242,6 +14253,9 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
                 team_table=LiteLLM_TeamTableCachedObj(team_id=team_id, rpm_limit=team_rpm_limit),
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=None,
+            ),
+            "unreadable_team": partial(
+                user_api_key_cache.async_set_cache, key=f"team_id:{team_id}", value="not a team"
             ),
         }
     )
@@ -14271,7 +14285,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
         rejection is None,
         getattr(rejection, "code", None),
         getattr(rejection, "headers", {}).get("rate_limited_by"),
-    ) == ((False, "429", "team") if refused else (True, None, None))
+    ) == ((True, None, None) if limited_by is None else (False, "429", limited_by))
 
 
 @pytest.mark.asyncio

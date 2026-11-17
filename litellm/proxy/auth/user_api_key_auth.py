@@ -2265,10 +2265,19 @@ async def _cached_team_fields_for_key(
 ) -> Mapping[str, object] | None:
     if key.team_id is None or key.team_id == UI_TEAM_ID:
         return MappingProxyType({})
-    team: Final = await get_team_object_from_cache(
-        key=f"team_id:{key.team_id}", user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
-    )
-    return None if team is None else _team_fields_newer_than_key(key, team)
+    try:
+        team: Final = await get_team_object_from_cache(
+            key=f"team_id:{key.team_id}", user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
+        )
+        return None if team is None else _team_fields_newer_than_key(key, team)
+    except Exception:  # noqa: BLE001  # an unreadable team entry is treated like a team cache miss
+        return None
+
+
+def _refused_by_team_limit(rejection: HTTPException) -> bool:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    return isinstance(rejection, ProxyRateLimitError) and rejection.descriptor_key == "team"
 
 
 async def _reject_from_headers_before_reading_body(
@@ -2333,15 +2342,10 @@ async def _reject_from_headers_before_reading_body(
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return
-    try:
-        team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
-    except Exception:  # noqa: BLE001  # an unreadable team entry defers to the full auth path below
-        return
-    if team_fields is None:
-        return
+    team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
     rate_limited: Final = cached_key.model_copy(
         update={
-            **team_fields,
+            **(team_fields or {}),
             "api_key": cached_key.api_key or hashed_token,
             "parent_otel_span": parent_otel_span,
             "request_route": normalize_request_route(route),
@@ -2350,6 +2354,8 @@ async def _reject_from_headers_before_reading_body(
     try:
         await limiter.raise_if_over_limit_before_body(rate_limited)
     except HTTPException as rejection:
+        if team_fields is None and _refused_by_team_limit(rejection):
+            return
         failure_data: Final = dict(await _preflight_failure_request_data(request, route, rate_limited))
         transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
             request_data=failure_data,
