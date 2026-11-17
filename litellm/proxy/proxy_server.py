@@ -110,6 +110,7 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -15628,17 +15629,23 @@ def _with_client_identity(
     client_user_profile_id: str | None,
     deployment_litellm_params: Mapping[str, object],
 ) -> BaseTokenCounter | None:
+    counts_claude: Final = names_a_claude_model(str(deployment_litellm_params.get("model") or ""))
+    claude_client_user_profile_id: Final = client_user_profile_id if counts_claude else None
     user_profile_id: Final = (
-        pinned_user_profile_id
-        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
-        or client_user_profile_id
+        (
+            pinned_user_profile_id
+            or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+            or client_user_profile_id
+        )
+        if counts_claude
+        else None
     )
     match counter:
         case AnthropicTokenCounter() if client_oauth_token is not None:
             return AnthropicTokenCounter(
                 client_oauth_token=client_oauth_token,
                 user_profile_id=user_profile_id,
-                client_user_profile_id=client_user_profile_id,
+                client_user_profile_id=claude_client_user_profile_id,
             )
         case AnthropicTokenCounter() if user_profile_id:
             return AnthropicTokenCounter(user_profile_id=user_profile_id)

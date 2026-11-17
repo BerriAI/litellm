@@ -229,13 +229,19 @@ async def test_allm_passthrough_route_hosted_vllm_on_the_vllm_api_base_sends_its
 
 
 @pytest.mark.parametrize(
-    ("model", "forwarded_profile_id"),
-    [("azure_ai/claude-sonnet-5-5", "uprof_key"), ("azure_ai/gpt-5", None)],
-    ids=["claude_model", "other_model"],
+    ("model", "pinned_profile_id", "forwarded_profile_id"),
+    [
+        ("azure_ai/claude-sonnet-5-5", "uprof_pin", "uprof_pin"),
+        ("azure_ai/gpt-5", "uprof_pin", "uprof_caller"),
+        ("azure_ai/claude-sonnet-5-5", None, "uprof_caller"),
+        ("azure_ai/gpt-5", None, "uprof_caller"),
+        ("hosted_vllm/claude-sonnet-5-5", "uprof_pin", "uprof_caller"),
+    ],
+    ids=["claude_pin", "other_model_pin", "claude_no_pin", "other_model_no_pin", "other_provider_pin"],
 )
 @pytest.mark.asyncio
-async def test_allm_passthrough_route_sends_an_x_pass_user_profile_id_to_claude_models_only(
-    respx_mock: respx.MockRouter, model: str, forwarded_profile_id: str | None
+async def test_allm_passthrough_route_puts_a_pin_over_the_x_pass_user_profile_id_for_claude_models_only(
+    respx_mock: respx.MockRouter, model: str, pinned_profile_id: str | None, forwarded_profile_id: str
 ) -> None:
     upstream: Final = respx_mock.route(host="example.services.ai.azure.com").respond(json={"ok": True})
 
@@ -245,10 +251,11 @@ async def test_allm_passthrough_route_sends_an_x_pass_user_profile_id_to_claude_
         model=model,
         api_base="https://example.services.ai.azure.com/models",
         api_key="sk-foundry",
-        request_headers={"content-type": "application/json", "X-Pass-Anthropic-User-Profile-Id": "uprof_key"},
+        request_headers={"content-type": "application/json", "X-Pass-Anthropic-User-Profile-Id": "uprof_caller"},
         json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
         client=AsyncHTTPHandler(),
+        anthropic_user_profile_id_pin=pinned_profile_id,
     )
 
     assert response.status_code == 200
-    assert upstream.calls.last.request.headers.get("anthropic-user-profile-id") == forwarded_profile_id
+    assert upstream.calls.last.request.headers.get_list("anthropic-user-profile-id") == [forwarded_profile_id]

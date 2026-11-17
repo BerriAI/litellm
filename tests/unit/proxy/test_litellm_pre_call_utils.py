@@ -1459,9 +1459,10 @@ async def test_malformed_stored_team_profile_is_skipped() -> None:
         ({}, _PROXY_AND_PROVIDER_KEYS, {"forward_llm_provider_auth_headers": True}, "anthropic", "uprof_client"),
         ({}, _PROXY_AND_PROVIDER_KEYS, {}, "anthropic", "uprof_key"),
         ({"api_key": " "}, {}, {}, "anthropic", "uprof_key"),
-        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "azure_ai", "uprof_key"),
-        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "bedrock_mantle", "uprof_key"),
-        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "vertex_ai", "uprof_key"),
+        ({"api_key": "caller-foundry-key"}, {}, {}, "azure_ai", "uprof_client"),
+        ({"api_key": "caller-bedrock-key"}, {}, {}, "bedrock", "uprof_client"),
+        ({"api_key": "caller-bedrock-key"}, {}, {}, "bedrock_mantle", "uprof_client"),
+        ({"api_key": "caller-key"}, {}, {}, "vertex_ai", "uprof_key"),
     ],
     ids=[
         "body-api-key-on-anthropic",
@@ -1469,11 +1470,12 @@ async def test_malformed_stored_team_profile_is_skipped() -> None:
         "x-api-key-not-forwarded",
         "blank-body-api-key",
         "body-api-key-on-azure-ai",
+        "body-api-key-on-bedrock",
         "body-api-key-on-bedrock-mantle",
         "body-api-key-on-vertex-ai",
     ],
 )
-async def test_a_caller_anthropic_api_key_keeps_its_own_profile_id_only_on_anthropic(
+async def test_a_caller_api_key_keeps_its_own_profile_id_where_the_provider_sends_it(
     sent: dict[str, object],
     request_headers: dict[str, str],
     general_settings: dict[str, object],
@@ -1519,9 +1521,8 @@ async def test_caller_credentials_keep_body_profiles_without_changing_shared_cre
         model="claude-sonnet-5-5",
         provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider=provider
     )
-    assert forwarded.get(USER_PROFILE_ID_HEADER) == (
-        profile or None if credential != "shared" and provider == "anthropic" else "uprof_key"
-    )
+    keeps_caller_profile: Final = credential == "api-key" or (credential == "oauth" and provider == "anthropic")
+    assert forwarded.get(USER_PROFILE_ID_HEADER) == (profile or None if keeps_caller_profile else "uprof_key")
 
 
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:

@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_provider_specific_headers import ANTHROPIC_USER_PROFILE_ID_PROVIDERS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
     _request_blocked_callback_params,
@@ -4912,18 +4913,16 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
 _NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
     (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value)
 )
-_ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = frozenset(
+_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
+_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
+_CALLER_API_KEY_PROVIDERS: Final = frozenset(
     (
         LlmProviders.ANTHROPIC.value,
         LlmProviders.AZURE_AI.value,
         LlmProviders.BEDROCK.value,
         LlmProviders.BEDROCK_MANTLE.value,
-        LlmProviders.VERTEX_AI.value,
     )
 )
-_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
-_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
-_CALLER_API_KEY_PROVIDERS: Final = frozenset((LlmProviders.ANTHROPIC.value,))
 
 
 def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
@@ -4996,7 +4995,7 @@ def add_provider_specific_headers_to_request(
                 native_anthropic_messages_only=True,
             ),
             _user_profile_id_header(
-                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers,
+                ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers,
                 user_profile_id or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
                 yields_to_configured=user_profile_id is None,
             ),

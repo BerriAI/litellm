@@ -81,7 +81,11 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     require_attributes,
 )
-from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model, override_headers
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
+    names_a_claude_model,
+    override_headers,
+)
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1329,10 +1333,14 @@ def _profile_pin_for_generic_routes(
     user_api_key_dict: UserAPIKeyAuth,
     request_headers: Mapping[str, str],
     route_headers: Mapping[str, object],
+    custom_llm_provider: str | None,
 ) -> Callable[[Mapping[str, str], Mapping[str, object] | None], Mapping[str, str]]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
 
-    if upstream_headers_filter is not None:
+    vendor_route: Final = (
+        custom_llm_provider is not None and custom_llm_provider not in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
+    )
+    if upstream_headers_filter is not None or vendor_route:
         return _headers_unchanged
     route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
     caller_credentials: Final[Mapping[str, str]] = (
@@ -1699,7 +1707,11 @@ async def pass_through_request(
             parent_span=user_api_key_dict.parent_otel_span,
         )
         profile_pin: Final = _profile_pin_for_generic_routes(
-            upstream_headers_filter, user_api_key_dict, safe_get_request_headers(request), custom_headers
+            upstream_headers_filter,
+            user_api_key_dict,
+            safe_get_request_headers(request),
+            custom_headers,
+            custom_llm_provider,
         )
 
         requested_query_params: dict | None = (

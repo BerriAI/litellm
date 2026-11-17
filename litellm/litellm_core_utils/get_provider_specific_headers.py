@@ -5,7 +5,7 @@ from typing import Final, TypeVar
 from pydantic import TypeAdapter
 
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
-from litellm.types.utils import ProviderSpecificHeader
+from litellm.types.utils import LlmProviders, ProviderSpecificHeader
 
 _PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]] = TypeAdapter(
     ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None
@@ -20,6 +20,17 @@ def override_headers(
 ) -> dict[str, _HeaderValue]:  # mutable-ok: legacy callers pass the merged headers on as a dict
     overridden: Final = frozenset(name.lower() for name in overrides) & _CASE_INSENSITIVE_OVERRIDES
     return {**{name: value for name, value in headers.items() if name.lower() not in overridden}, **overrides}
+
+
+ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = frozenset(
+    (
+        LlmProviders.ANTHROPIC.value,
+        LlmProviders.AZURE_AI.value,
+        LlmProviders.BEDROCK.value,
+        LlmProviders.BEDROCK_MANTLE.value,
+        LlmProviders.VERTEX_AI.value,
+    )
+)
 
 
 def names_a_claude_model(model: str | None) -> bool:

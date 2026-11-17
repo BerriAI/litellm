@@ -7887,24 +7887,7 @@ class TestRouterModelRelayUnderAUserProfilePin:
             receive,
         )
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "model_group,metadata,forwarded_profile_id",
-        [
-            ("foundry-claude", {"anthropic_user_profile_id": "uprof_key"}, "uprof_key"),
-            ("foundry-gpt", {"anthropic_user_profile_id": "uprof_key"}, None),
-            ("foundry-claude", {}, "uprof_forwarded"),
-        ],
-        ids=["claude_key_pin", "non_claude_key_pin", "no_pin"],
-    )
-    async def test_a_pinned_key_sends_its_pin_to_a_claude_router_model_only(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        respx_mock: respx.MockRouter,
-        model_group: str,
-        metadata: Mapping[str, str],
-        forwarded_profile_id: str | None,
-    ) -> None:
+    def _route_foundry_models(self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
         import litellm.proxy.proxy_server as proxy_server
 
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -7934,6 +7917,28 @@ class TestRouterModelRelayUnderAUserProfilePin:
                 ]
             ),
         )
+        return upstream
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model_group,metadata,forwarded_profile_id",
+        [
+            ("foundry-claude", {"anthropic_user_profile_id": "uprof_key"}, "uprof_key"),
+            ("foundry-gpt", {"anthropic_user_profile_id": "uprof_key"}, "uprof_forwarded"),
+            ("foundry-claude", {}, "uprof_forwarded"),
+            ("foundry-gpt", {}, "uprof_forwarded"),
+        ],
+        ids=["claude_key_pin", "non_claude_key_pin", "claude_no_pin", "non_claude_no_pin"],
+    )
+    async def test_a_pinned_key_sends_its_pin_to_a_claude_router_model_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        model_group: str,
+        metadata: Mapping[str, str],
+        forwarded_profile_id: str,
+    ) -> None:
+        upstream: Final = self._route_foundry_models(monkeypatch, respx_mock)
 
         await azure_proxy_route(
             endpoint=f"openai/deployments/{model_group}/chat/completions",
@@ -7943,7 +7948,25 @@ class TestRouterModelRelayUnderAUserProfilePin:
         )
 
         assert upstream.call_count == 1
-        assert upstream.calls[0].request.headers.get("anthropic-user-profile-id") == forwarded_profile_id
+        assert upstream.calls[0].request.headers.get_list("anthropic-user-profile-id") == [forwarded_profile_id]
+
+    @pytest.mark.asyncio
+    async def test_a_pinned_key_sends_its_pin_through_the_vllm_route_to_a_claude_router_model(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ) -> None:
+        upstream: Final = self._route_foundry_models(monkeypatch, respx_mock)
+
+        await vllm_proxy_route(
+            endpoint="chat/completions",
+            request=self._request("foundry-claude"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-caller-virtual-key", metadata={"anthropic_user_profile_id": "uprof_key"}
+            ),
+        )
+
+        assert upstream.call_count == 1
+        assert upstream.calls[0].request.headers.get_list("anthropic-user-profile-id") == ["uprof_key"]
 
 
 class TestPassthroughRouterModelBudgetReservation:
