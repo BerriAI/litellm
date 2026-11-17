@@ -29,8 +29,8 @@ from types import MappingProxyType
 from typing import Final, get_args
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import REASONING_EFFORT
+from litellm.utils import catalog_row_with_runtime_registrations
 
 REASONING_EFFORT_ADVERTISEMENT_ORDER: Final[tuple[str, ...]] = get_args(REASONING_EFFORT)
 _EMPTY_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
@@ -78,7 +78,10 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     validate-model-prices-json, but an operator can put this key on a config.yaml model_info block
     where that schema never runs, and one mistyped level must not fail every sibling on the proxy."""
     own: Final = model_info.get(_DECLARED_EFFORTS_KEY)
-    raw: Final = own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY)
+    return _declared_levels(own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY))
+
+
+def _declared_levels(raw: object) -> tuple[str, ...] | None:
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         return None
     declared: Final = frozenset(effort for effort in raw if isinstance(effort, str))
@@ -95,17 +98,17 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
     it does not know: a provider config runs on the request path for every model it serves, most of
     which the map never named, and a lookup miss there must not fail the call.
     """
-    entry: Final = _map_entry(f"{custom_llm_provider}/{model}") or _map_entry(model)
-    return declared_reasoning_efforts(entry) if entry is not None else None
+    entry: Final = litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model)
+    if not isinstance(entry, dict):
+        return None
+    return declared_reasoning_efforts(entry)
 
 
 def declared_reasoning_efforts_for_map_key(key: str) -> tuple[str, ...] | None:
-    entry: Final = _map_entry(key)
-    return declared_reasoning_efforts(entry) if entry is not None else None
-
-
-def _map_entry(key: str) -> Mapping[str, object] | None:
-    return as_str_mapping(litellm.model_cost.get(key))
+    """The levels the catalog row itself lists, never a router deployment's copy of its own
+    model_info on the shared key, since that copy would gate every sibling deployment of the model."""
+    row: Final = catalog_row_with_runtime_registrations(key)
+    return _declared_levels(row.get(_DECLARED_EFFORTS_KEY)) if row is not None else None
 
 
 REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "xhigh", "max")

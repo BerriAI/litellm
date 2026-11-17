@@ -95,7 +95,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -3635,6 +3635,13 @@ _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # muta
 def durable_model_cost_registration(key: str) -> Mapping[str, object] | None:
     """What ``register_model`` recorded for ``key`` to replay on reload, never a router deployment's registration."""
     return _runtime_registered_model_cost.get(key)
+
+
+def catalog_row_with_runtime_registrations(key: str) -> Mapping[str, object] | None:
+    """The loaded catalog row plus ``register_model`` calls, without what routers register for their deployments."""
+    loaded: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    registered: Final = durable_model_cost_registration(key)
+    return loaded if registered is None else {**(loaded or {}), **registered}
 
 
 def runtime_model_cost_registrations(

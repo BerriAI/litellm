@@ -38,7 +38,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import add_path_to_api_base, durable_model_cost_registration, supports_tool_choice
+from litellm.utils import add_path_to_api_base, catalog_row_with_runtime_registrations, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -94,16 +94,10 @@ azureAIGPT5Config: Final = AzureAIGPT5Config()
 _REASONING_EFFORT: Final = "reasoning_effort"
 
 
-def _registered_catalog_row(key: str) -> Mapping[str, object] | None:
-    loaded: Final = GetModelCostMap.loaded_model_cost_map().get(key)
-    registered: Final = durable_model_cost_registration(key)
-    return loaded if registered is None else {**(loaded or {}), **registered}
-
-
 def _catalog_row(key: str) -> Mapping[str, object] | None:
     canonical: Final = GetModelCostMap.loaded_model_cost_map_key(key)
-    catalog_row: Final = _registered_catalog_row(canonical) if canonical is not None else None
-    registered_row: Final = _registered_catalog_row(key)
+    catalog_row: Final = catalog_row_with_runtime_registrations(canonical) if canonical is not None else None
+    registered_row: Final = catalog_row_with_runtime_registrations(key)
     if catalog_row is None or registered_row is None:
         return registered_row if catalog_row is None else catalog_row
     return {**catalog_row, **registered_row}

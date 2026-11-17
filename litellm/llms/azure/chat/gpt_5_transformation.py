@@ -5,13 +5,15 @@ from typing import ClassVar, Final
 import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import (
     OpenAIGPT5Config,
+    is_chat_latest_name,
     is_gpt_reasoning_series_name,
 )
 from litellm.types.llms.openai import AllMessageValues
 
 from .gpt_transformation import AzureOpenAIConfig
 
-AZURE_GPT5_DEPLOYMENT_PARAMS: Final = ("tool_choice", "user")
+AZURE_GPT5_DEPLOYMENT_PARAMS: Final = ("tool_choice",)
+AZURE_CHAT_LATEST_DEPLOYMENT_PARAMS: Final = ("tool_choice", "user")
 
 
 class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
@@ -65,9 +67,12 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         """
         params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
 
-        # Azure supports tool_choice and user for GPT-5 deployments, but the base GPT-5 config
-        # can drop them when the deployment name isn't in the OpenAI model registry.
-        dropped_deployment_params: Final = tuple(param for param in AZURE_GPT5_DEPLOYMENT_PARAMS if param not in params)
+        # Azure supports tool_choice for GPT-5 deployments (and user for chat-latest ones), but the base
+        # GPT-5 config can drop them when the deployment name isn't in the OpenAI model registry.
+        deployment_params: Final = (
+            AZURE_CHAT_LATEST_DEPLOYMENT_PARAMS if is_chat_latest_name(model) else AZURE_GPT5_DEPLOYMENT_PARAMS
+        )
+        dropped_deployment_params: Final = tuple(param for param in deployment_params if param not in params)
         params.extend(dropped_deployment_params)
 
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
