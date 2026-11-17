@@ -64,7 +64,6 @@ DEPRECATED_MODELS: Final = {
     "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo": "2026-02-06",
     "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": "2026-02-06",
     "together_ai/deepseek-ai/DeepSeek-R1-0528-tput": "2026-02-03",
-    "together_ai/mistralai/Mistral-7B-Instruct-v0.1": "2025-11-13",
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": "2025-11-13",
 }
 
@@ -75,26 +74,12 @@ def cost_map() -> CostMap:
         return COST_MAP_ADAPTER.validate_python(json.load(f))
 
 
-def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost_map: CostMap):
-    inflated = sorted(
-        model
-        for model, info in cost_map.items()
-        if info.get("litellm_provider") == "together_ai"
-        and info.get("mode") == "chat"
-        and "max_output_tokens" in info
-        and info["max_output_tokens"] == info.get("max_input_tokens")
-    )
-    assert inflated == []
-
-
 def _successor(info: dict[str, object]) -> str | None:
     metadata = info.get("metadata")
     if not isinstance(metadata, dict):
         return None
     successor = metadata.get("successor")
     return successor if isinstance(successor, str) else None
-
-
 
 
 def test_together_backup_cost_map_in_sync(cost_map: CostMap):

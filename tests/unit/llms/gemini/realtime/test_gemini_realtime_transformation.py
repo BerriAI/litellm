@@ -1,3 +1,4 @@
+import base64
 import json
 from collections.abc import Mapping
 from typing import Final, cast
@@ -7,7 +8,7 @@ import pytest
 
 
 import litellm
-from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+from litellm.llms.gemini.realtime.transformation import GEMINI_LIVE_DOCUMENTED_VOICES, GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 
 
@@ -439,6 +440,51 @@ def test_gemini_realtime_session_update_with_tools():
     assert "parameters" in function_decl
 
 
+def _schema_nodes(schema: object):
+    if isinstance(schema, dict):
+        yield schema
+        for value in schema.values():
+            yield from _schema_nodes(value)
+    elif isinstance(schema, list):
+        for value in schema:
+            yield from _schema_nodes(value)
+
+
+def test_gemini_session_update_converts_flat_realtime_tool_schemas_to_gemini_schemas():
+    session_update: Final = {
+        "type": "session.update",
+        "session": {
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_weather",
+                    "description": "Look up the weather in a city.",
+                    "parameters": {
+                        "type": "object",
+                        "$defs": {
+                            "City": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+                        },
+                        "properties": {"city": {"$ref": "#/$defs/City"}, "note": {"type": ["string", "null"]}},
+                        "required": ["city"],
+                    },
+                }
+            ]
+        },
+    }
+
+    messages: Final = GeminiRealtimeConfig().transform_realtime_request(
+        json.dumps(session_update), "gemini-2.5-flash", session_configuration_request=None
+    )
+
+    declaration: Final = json.loads(messages[0])["setup"]["tools"][0]["function_declarations"][0]
+    assert declaration["name"] == "lookup_weather"
+    parameters: Final = declaration["parameters"]
+    assert parameters["properties"]["city"]["properties"]["name"]["type"] == "string"
+    nodes: Final = tuple(_schema_nodes(parameters))
+    assert not any("$defs" in node or "$ref" in node for node in nodes)
+    assert all(isinstance(node["type"], str) for node in nodes if "type" in node)
+
+
 def test_gemini_session_update_defaults_to_audio_modality():
     config = GeminiRealtimeConfig()
 
@@ -611,6 +657,35 @@ def test_gemini_audio_only_live_models_drop_text_from_text_audio_combo(patch_gem
 
     setup = json.loads(messages[0])["setup"]
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+@pytest.mark.parametrize("output_modalities", ["text", ["text"]])
+def test_gemini_session_update_accepts_a_single_string_output_modality(output_modalities):
+    """Regression: a bare string was iterated per character, so output_modalities
+    "text" reached Vertex as responseModalities ["T"], which it rejects with 1007."""
+    config = GeminiRealtimeConfig()
+    session_update = {"type": "session.update", "session": {"type": "realtime", "output_modalities": output_modalities}}
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.parametrize(
+    ("output_modalities", "expected"),
+    [(["video", "text"], ["TEXT"]), (["video"], ["AUDIO"]), (None, ["AUDIO"])],
+)
+def test_gemini_session_update_drops_modalities_live_cannot_produce(output_modalities, expected):
+    config = GeminiRealtimeConfig()
+    session_update = {"type": "session.update", "session": {"type": "realtime", "output_modalities": output_modalities}}
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == expected
 
 
 def test_gemini_non_live_model_preserves_text_modality():
@@ -1396,22 +1471,71 @@ def test_gemini_input_audio_buffer_clear_is_local_noop():
     assert messages == []
 
 
-def test_gemini_input_audio_buffer_commit_maps_to_activity_end_when_manual_vad():
+_MANUAL_VAD_SETUP = json.dumps({"setup": {"realtimeInputConfig": {"automaticActivityDetection": {"disabled": True}}}})
+_APPEND = json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\x00\x01" * 80).decode()})
+
+
+def _realtime_input_keys(config: GeminiRealtimeConfig, client_event: str, setup: str | None) -> list[str]:
+    frames = config.transform_realtime_request(client_event, "gemini-live-2.5-flash-native-audio", setup)
+    return [key for frame in frames for key in json.loads(frame)["realtimeInput"]]
+
+
+@pytest.mark.parametrize("turn_end", ["input_audio_buffer.commit", "response.create"])
+def test_gemini_manual_vad_wraps_each_audio_turn_in_activity_start_and_end(turn_end):
+    """With activity detection off, Gemini Live answers only after activityEnd closes an
+    activityStart, and it closes the socket on any other shape of those markers."""
     config = GeminiRealtimeConfig()
-    setup = {
-        "setup": {
-            "realtimeInputConfig": {
-                "automaticActivityDetection": {"disabled": True},
-            }
-        }
-    }
-    messages = config.transform_realtime_request(
-        json.dumps({"type": "input_audio_buffer.commit"}),
-        "gemini-live-2.5-flash-native-audio",
-        session_configuration_request=json.dumps(setup),
+    end = json.dumps({"type": turn_end})
+
+    turns = [
+        [_realtime_input_keys(config, event, _MANUAL_VAD_SETUP) for event in (_APPEND, _APPEND, end, end)]
+        for _ in range(2)
+    ]
+
+    assert turns == [[["activityStart", "audio"], ["audio"], ["activityEnd"], []]] * 2
+
+
+def test_gemini_manual_vad_activity_markers_are_empty_messages():
+    config = GeminiRealtimeConfig()
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+
+    first_append = config.transform_realtime_request(_APPEND, "gemini-live-2.5-flash", _MANUAL_VAD_SETUP)
+    turn_end = config.transform_realtime_request(commit, "gemini-live-2.5-flash", _MANUAL_VAD_SETUP)
+
+    assert json.loads(first_append[0]) == {"realtimeInput": {"activityStart": {}}}
+    assert [json.loads(frame) for frame in turn_end] == [{"realtimeInput": {"activityEnd": {}}}]
+
+
+@pytest.mark.parametrize(
+    ("session", "expected_keys"),
+    [
+        ({"turn_detection": None}, [["activityStart", "audio"], ["activityEnd"]]),
+        ({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, [["activityStart", "audio"], ["activityEnd"]]),
+        ({"type": "realtime", "audio": {"input": {}}}, [["audio"], ["audioStreamEnd"]]),
+    ],
+)
+def test_gemini_null_turn_detection_makes_the_client_mark_each_turn(session, expected_keys):
+    """OpenAI's turn_detection null turns server VAD off, so the client commits each turn itself."""
+    config = GeminiRealtimeConfig()
+    setup = config.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}), "gemini-live-2.5-flash-native-audio", None
     )
-    assert len(messages) == 1
-    assert json.loads(messages[0]) == {"realtimeInput": {"activityEnd": True}}
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+
+    keys = [_realtime_input_keys(config, event, setup[0]) for event in (_APPEND, commit)]
+
+    assert keys == expected_keys
+
+
+def test_gemini_automatic_vad_sends_no_activity_markers():
+    config = GeminiRealtimeConfig()
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+    response_create = json.dumps({"type": "response.create"})
+
+    keys = [_realtime_input_keys(config, event, None) for event in (_APPEND, commit)]
+
+    assert keys == [["audio"], ["audioStreamEnd"]]
+    assert config.transform_realtime_request(response_create, "gemini-live-2.5-flash", None) == []
 
 
 def test_gemini_tool_call_id_to_name_evicts_oldest_when_capped():
@@ -1883,11 +2007,73 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
     """
     cfg = GeminiRealtimeConfig()
 
-    dropped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
+    dropped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"}, model="gemini-3.8-live")
     assert "speechConfig" not in dropped.get("generationConfig", {})
 
-    passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
+    passthrough = cfg.map_openai_params(
+        optional_params={}, non_default_params={"voice": "Kore"}, model="gemini-3.8-live"
+    )
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+_DOCUMENTED_VOICE: Final = sorted(GEMINI_LIVE_DOCUMENTED_VOICES)[0].capitalize()
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_google_ai_studio_forwards_a_documented_voice(drop_params):
+    config: Final = GeminiRealtimeConfig(drop_params=drop_params)
+    mapped: Final = config.map_openai_params(
+        optional_params={}, non_default_params={"voice": _DOCUMENTED_VOICE}, model="gemini-3.8-live"
+    )
+
+    speech_config: Final = mapped["generationConfig"]["speechConfig"]
+    assert speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == _DOCUMENTED_VOICE
+    assert config.setup_session_update_rejection("gemini-3.8-live", {"voice": _DOCUMENTED_VOICE}, setup_sent=False) is None
+
+
+@pytest.mark.parametrize(
+    ("session", "param"),
+    [
+        ({"voice": "Nova"}, "session.voice"),
+        ({"type": "realtime", "audio": {"output": {"voice": "Nova"}}}, "session.audio.output.voice"),
+    ],
+)
+def test_google_ai_studio_rejects_an_undocumented_voice_on_the_session_update(session, param):
+    rejection: Final = GeminiRealtimeConfig().setup_session_update_rejection(
+        "gemini-2.5-flash-native-audio-preview-12-2025", session, setup_sent=False
+    )
+
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", param)
+
+
+def _setup_speech_config(config: GeminiRealtimeConfig, model: str, session: dict[str, object]) -> object:
+    messages: Final = config.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}), model, session_configuration_request=None
+    )
+    return json.loads(messages[0])["setup"].get("generationConfig", {}).get("speechConfig")
+
+
+@pytest.mark.parametrize(
+    "session",
+    [{"voice": "Nova"}, {"type": "realtime", "audio": {"output": {"voice": "Nova"}}}],
+)
+def test_google_ai_studio_drops_an_undocumented_voice_with_drop_params(session):
+    config: Final = GeminiRealtimeConfig(drop_params=True)
+    model: Final = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+    assert config.setup_session_update_rejection(model, session, setup_sent=False) is None
+    assert _setup_speech_config(config, model, session) is None
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "gemini-3.1-flash-live-preview"])
+def test_google_ai_studio_forwards_any_voice_to_models_that_accept_it(model, drop_params):
+    config: Final = GeminiRealtimeConfig(drop_params=drop_params)
+
+    assert config.setup_session_update_rejection(model, {"voice": "Nova"}, setup_sent=False) is None
+    speech_config: Final = _setup_speech_config(config, model, {"voice": "Nova"})
+    assert speech_config == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Nova"}}}
 
 
 @pytest.fixture(autouse=False)
@@ -1952,6 +2138,55 @@ def test_gemini_transcribe_live_coerces_audio_modality_to_text(modalities, patch
 
     setup = json.loads(messages[0])["setup"]
     assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.parametrize("model", ["gemini-3.5-transcribe-live", "gemini/gemini-3.5-transcribe-live"])
+def test_gemini_transcribe_live_synthetic_session_created_reports_text_output(
+    model, patch_gemini_transcribe_live_cost_map_entry
+):
+    session = GeminiRealtimeConfig().transform_session_created_event(model, "sess_transcribe")["session"]
+
+    assert session["modalities"] == ["text"]
+
+
+@pytest.mark.parametrize(
+    ("model", "modalities", "producible"),
+    [
+        ("gemini-3.5-transcribe-live", ["audio"], False),
+        ("gemini-3.5-transcribe-live", ["audio", "text"], True),
+        ("gemini-live-2.5-flash-native-audio", ["text"], False),
+        ("gemini-live-2.5-flash-native-audio", ["text", "audio"], True),
+    ],
+)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_gemini_live_rejects_only_output_modalities_the_model_cannot_produce_at_all(
+    model,
+    modalities,
+    producible,
+    drop_params,
+    patch_gemini_transcribe_live_cost_map_entry,
+    patch_gemini_audio_cost_map_entries,
+):
+    rejection = GeminiRealtimeConfig(drop_params=drop_params).setup_session_update_rejection(
+        model, {"output_modalities": modalities}, setup_sent=False
+    )
+
+    assert (rejection is None) is (drop_params or producible)
+    assert rejection is None or rejection.param == "session.output_modalities"
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_gemini_provider_realtime_config_carries_drop_params(drop_params):
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    model = "gemini-live-2.5-flash-native-audio"
+    config = ProviderConfigManager.get_provider_realtime_config(
+        model=model, provider=LlmProviders.GEMINI, drop_params=drop_params
+    )
+
+    rejection = config.setup_session_update_rejection(model, {"modalities": ["text"]}, setup_sent=False)
+    assert (rejection is None) is drop_params
 
 
 def test_gemini_chat_model_with_text_output_modalities_keeps_audio_eager_setup(
@@ -2167,6 +2402,47 @@ def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_tra
     }
     assert usage == expected
     assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
+
+
+def test_gemini_realtime_two_output_modalities_collapse_to_audio():
+    """Gemini Live closes the socket with 1007 when the setup names two response
+    modalities, so a GA session.update asking for ["text", "audio"] must reach the
+    backend as AUDIO only, the same choice the beta shim makes."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"output_modalities": ["text", "audio"], "instructions": "Be brief."},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_gemini_realtime_inf_max_response_output_tokens_is_not_forwarded():
+    """OpenAI's default max_response_output_tokens is the string "inf", which Gemini
+    rejects with 1007 (TYPE_INT32), so only integer limits map to maxOutputTokens."""
+    config = GeminiRealtimeConfig()
+
+    def generation_config_for(limit):
+        session_update = {
+            "type": "session.update",
+            "session": {"modalities": ["text"], "max_response_output_tokens": limit},
+        }
+        messages = config.transform_realtime_request(
+            json.dumps(session_update),
+            "gemini-live-2.5-flash",
+            session_configuration_request=None,
+        )
+        return json.loads(messages[0])["setup"]["generationConfig"]
+
+    assert "maxOutputTokens" not in generation_config_for("inf")
+    assert generation_config_for(200)["maxOutputTokens"] == 200
 
 
 def _grounded_live_frame(grounding_metadata: Mapping[str, object] | None) -> Mapping[str, object]:

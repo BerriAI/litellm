@@ -406,14 +406,14 @@ def test_openai_route_sends_a_custom_deployment_key_at_the_top_level_of_the_body
     assert _body(request) == {"input": [text], "input_type": "query", "model": SERVED_MODEL}, request.body
 
 
-def test_deployment_extra_body_wins_over_the_callers_encoding_format(proxy: Gateway, wire: Wire) -> None:
+def test_callers_encoding_format_wins_over_deployment_extra_body(proxy: Gateway, wire: Wire) -> None:
     text: Final = _text()
     created: Final = _sdk(proxy).embeddings.create(
         model="sm-openai-pinned", input=[text], extra_body={"cache": _NO_CACHE}
     )
     assert [row.embedding for row in created.data] == [[0.25, -0.5, 1.0]], created
     request: Final = _only_request(wire)
-    assert _body(request) == {"input": [text], "encoding_format": "float", "model": SERVED_MODEL}, request.body
+    assert _body(request) == {"input": [text], "encoding_format": "base64", "model": SERVED_MODEL}, request.body
 
 
 def test_openai_route_returns_the_base64_string_a_raw_caller_asked_for_unchanged(proxy: Gateway, wire: Wire) -> None:
@@ -533,7 +533,8 @@ def test_container_outage_errors_reach_the_caller_and_every_attempt_carries_the_
     attempts: Final = wire.drain()
     assert len(attempts) >= 1, attempts
     assert {attempt.headers[COMPONENT_HEADER] for attempt in attempts} == {COMPONENT}, attempts
-    assert {attempt.body for attempt in attempts} == {json.dumps({"input": [text], "model": SERVED_MODEL}).encode()}
+    for attempt in attempts:
+        assert _body(attempt) == {"input": [text], "model": SERVED_MODEL}, attempt.body
     assert _spend_row(response)["status"] == "failure"
 
 
@@ -668,12 +669,12 @@ def test_an_extra_body_that_is_not_a_populated_object_adds_nothing_to_the_body(
     assert _body(request) == {"input": [text]}, request.body
 
 
-def test_a_caller_sent_model_id_overrides_the_deployments_inference_component(proxy: Gateway, wire: Wire) -> None:
+def test_a_caller_sent_model_id_cannot_override_the_deployments_inference_component(proxy: Gateway, wire: Wire) -> None:
     text: Final = _text()
     response: Final = _embed(proxy, "sm-openai", [text], model_id="caller-chosen-component")
     assert response.status_code == 200, response.text
     request: Final = _only_request(wire)
-    assert request.headers[COMPONENT_HEADER] == "caller-chosen-component", dict(request.headers)
+    assert request.headers[COMPONENT_HEADER] == COMPONENT, dict(request.headers)
     assert _body(request) == {"input": [text], "model": SERVED_MODEL}, request.body
 
 

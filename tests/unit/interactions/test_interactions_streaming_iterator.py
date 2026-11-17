@@ -16,7 +16,10 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.interactions import streaming_iterator as interactions_streaming_iterator_module
-from litellm.interactions.streaming_iterator import InteractionsAPIStreamingIterator
+from litellm.interactions.streaming_iterator import (
+    InteractionsAPIStreamingIterator,
+    SyncInteractionsAPIStreamingIterator,
+)
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
@@ -148,3 +151,43 @@ async def test_stream_logs_its_first_event_time_measured_from_the_call_start():
 
     assert first_event_at is not None
     assert recorder.logged == [(call_start, first_event_at)]
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+async def _first_event(
+    iterator: InteractionsAPIStreamingIterator | SyncInteractionsAPIStreamingIterator,
+) -> InteractionsAPIStreamingResponse:
+    if isinstance(iterator, InteractionsAPIStreamingIterator):
+        return await iterator.__anext__()
+    return next(iterator)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("iterator_cls", [InteractionsAPIStreamingIterator, SyncInteractionsAPIStreamingIterator])
+async def test_stream_keeps_unicode_line_separators_inside_the_delta_text(
+    iterator_cls: type[InteractionsAPIStreamingIterator] | type[SyncInteractionsAPIStreamingIterator],
+) -> None:
+    delta: Final = {"type": "text", "text": _LINE_SEPARATED_TEXT}
+    event: Final = {"event_type": "step.delta", "id": "interaction-1", "delta": delta}
+    iterator: Final = iterator_cls(
+        response=httpx.Response(
+            200, stream=httpx.ByteStream(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
+        ),
+        model="gemini/gemini-3.1-pro-preview",
+        interactions_api_config=GoogleAIStudioInteractionsConfig(),
+        logging_obj=LitellmLogging(
+            model="gemini/gemini-3.1-pro-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="ainteraction",
+            start_time=datetime(2026, 10, 9, 12, 0, 0),
+            litellm_call_id="interactions-separators",
+            function_id="interactions-separators",
+        ),
+    )
+
+    first: Final = await _first_event(iterator)
+
+    assert first.delta == delta

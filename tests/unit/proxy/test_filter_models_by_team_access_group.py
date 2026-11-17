@@ -13,6 +13,7 @@ import pytest
 
 
 from litellm.proxy.proxy_server import _filter_models_by_team_id
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _make_model(model_name: str, model_id: str, access_groups: list[str] = None):
@@ -57,7 +58,7 @@ async def test_filter_resolves_access_group_names():
     all_models = [gpt4o, gpt5, claude]
 
     # Router mock
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     # get_model_access_groups returns {group_name: [model_names]}
     mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
@@ -113,7 +114,7 @@ async def test_filter_resolves_mix_of_access_groups_and_literal_names():
 
     all_models = [gpt4o, gpt5, claude, mistral]
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
         "Group-B": ["claude-3"],
@@ -158,7 +159,7 @@ async def test_filter_excludes_models_from_other_access_group():
 
     all_models = [gpt4o, claude, llama]
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o"],
         "Group-B": ["claude-3", "llama-4"],
@@ -197,7 +198,7 @@ async def test_filter_db_fallback_receives_resolved_model_names():
     gpt4o = _make_model("gpt-4o", "id-1", ["Group-A"])
     all_models = [gpt4o]
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
     }

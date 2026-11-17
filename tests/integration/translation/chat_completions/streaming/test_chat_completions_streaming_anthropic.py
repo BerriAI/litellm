@@ -6,7 +6,7 @@ from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import SSEFrame, StreamingTranslationTestCase
 from integration.translation.chat_completions.bases.anthropic import (
-    CLAUDE_HAIKU_5_5_TEST_CASE,
+    CLAUDE_OPUS_4_8_TEST_CASE,
     CLAUDE_SONNET_5_5_TEST_CASE,
 )
 from integration.translation.runner import assert_streaming_translation
@@ -152,34 +152,33 @@ def _place_delta(partial_json: str) -> SSEFrame:
     )
 
 
-def _place_chunk(delta: dict[str, JsonValue], *, finish_reason: str | None = None) -> SSEFrame:
-    finish: Final = {} if finish_reason is None else {"finish_reason": finish_reason}
+def _place_chunk(delta: dict[str, JsonValue]) -> SSEFrame:
     return SSEFrame(
         data={
             "id": ANY,
             "object": "chat.completion.chunk",
             "created": ANY,
-            "model": "anthropic/claude-haiku-5-5",
-            "choices": [{"index": 0, "delta": delta, **finish}],
+            "model": "anthropic/claude-opus-4-8",
+            "choices": [{"index": 0, "delta": delta}],
         }
     )
 
 
-CLAUDE_HAIKU_5_5_JSON_SCHEMA_CUT_STREAM_TEST_CASE: Final = StreamingTranslationTestCase(
+CLAUDE_OPUS_4_8_JSON_SCHEMA_CUT_STREAM_TEST_CASE: Final = StreamingTranslationTestCase(
     scenario="json_schema_cut_stream",
-    litellm_endpoint=CLAUDE_HAIKU_5_5_TEST_CASE.litellm_endpoint,
+    litellm_endpoint=CLAUDE_OPUS_4_8_TEST_CASE.litellm_endpoint,
     litellm_request={
-        "model": "anthropic/claude-haiku-5-5",
+        "model": "anthropic/claude-opus-4-8",
         "max_tokens": 128,
         "messages": [{"role": "user", "content": PLACE_PROMPT}],
         "response_format": {"type": "json_schema", "json_schema": {"name": "place", "schema": PLACE_SCHEMA}},
         "cache": {"no-cache": True},
         "stream": True,
     },
-    expected_provider_endpoint=CLAUDE_HAIKU_5_5_TEST_CASE.expected_provider_endpoint,
-    expected_provider_headers=CLAUDE_HAIKU_5_5_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint=CLAUDE_OPUS_4_8_TEST_CASE.expected_provider_endpoint,
+    expected_provider_headers=CLAUDE_OPUS_4_8_TEST_CASE.expected_provider_headers,
     expected_provider_request={
-        "model": "claude-haiku-5-5",
+        "model": "claude-opus-4-8",
         "messages": [{"role": "user", "content": [{"type": "text", "text": PLACE_PROMPT}]}],
         "max_tokens": 128,
         "tool_choice": {"name": "json_tool_call", "type": "tool"},
@@ -192,7 +191,7 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_CUT_STREAM_TEST_CASE: Final = StreamingTranslationT
             data={
                 "type": "message_start",
                 "message": {
-                    "model": "claude-haiku-5-5",
+                    "model": "claude-opus-4-8",
                     "id": "msg_011CgCoP5RkexwE6N7PRZEca",
                     "type": "message",
                     "role": "assistant",
@@ -245,19 +244,30 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_CUT_STREAM_TEST_CASE: Final = StreamingTranslationT
         _place_chunk({"content": 'try": "'}),
         _place_chunk({"content": 'France"'}),
         _place_chunk({"content": "}"}),
-        _place_chunk({}, finish_reason="stop"),
+        SSEFrame(
+            data={
+                "error": {
+                    "message": (
+                        "litellm.APIConnectionError: AnthropicException - "
+                        "Stream ended before a finish_reason was received"
+                    ),
+                    "type": "internal_server_error",
+                    "param": None,
+                    "code": "500",
+                }
+            }
+        ),
         SSEFrame(data="[DONE]"),
     ),
     expected_litellm_response={
         "id": ANY,
         "object": "chat.completion",
         "created": ANY,
-        "model": "anthropic/claude-haiku-5-5",
+        "model": "anthropic/claude-opus-4-8",
         "choices": [
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": '{"city": "Paris", "country": "France"}'},
-                "finish_reason": "stop",
             }
         ],
     },
@@ -266,7 +276,7 @@ CLAUDE_HAIKU_5_5_JSON_SCHEMA_CUT_STREAM_TEST_CASE: Final = StreamingTranslationT
 
 @pytest.mark.parametrize(
     "case",
-    [CLAUDE_SONNET_5_5_STREAMING_TEST_CASE, CLAUDE_HAIKU_5_5_JSON_SCHEMA_CUT_STREAM_TEST_CASE],
+    [CLAUDE_SONNET_5_5_STREAMING_TEST_CASE, CLAUDE_OPUS_4_8_JSON_SCHEMA_CUT_STREAM_TEST_CASE],
     ids=lambda case: case.id,
 )
 def test_chat_completions_streaming_anthropic(

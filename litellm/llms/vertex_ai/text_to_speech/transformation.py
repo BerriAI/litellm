@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     speech_media_type_from_audio_bytes,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -55,17 +55,45 @@ _LyriaVoice: TypeAlias = str | dict | None
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
-_GEMINI_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
+_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
     {
         **dict.fromkeys(
-            ("us", "us-central1", "us-east1", "us-east4", "us-east5", "us-south1", "us-west1", "us-west4"), "us"
+            (
+                "us",
+                "us-central1",
+                "us-east1",
+                "us-east4",
+                "us-east5",
+                "us-south1",
+                "us-west1",
+                "us-west2",
+                "us-west3",
+                "us-west4",
+                "us-west5",
+            ),
+            "us",
         ),
         **dict.fromkeys(
-            ("eu", "europe-central2", "europe-north1", "europe-southwest1", "europe-west1", "europe-west4"), "eu"
+            (
+                "eu",
+                "europe-central2",
+                "europe-north1",
+                "europe-north2",
+                "europe-southwest1",
+                "europe-west1",
+                "europe-west3",
+                "europe-west4",
+                "europe-west8",
+                "europe-west9",
+                "europe-west10",
+                "europe-west12",
+            ),
+            "eu",
         ),
         "northamerica-northeast1": "northamerica-northeast1",
     }
 )
+_CLOUD_TTS_MULTI_REGIONS: Final = frozenset(("us", "eu"))
 
 
 _DEFAULT_GEMINI_TTS_VOICE: Final = "Kore"
@@ -563,7 +591,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         # Resolve Vertex AI credentials using VertexBase helpers
         vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params_dict)
         vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params_dict)
-        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
+        vertex_location: Final = (
+            self.safe_get_vertex_ai_location(litellm_params_dict)
+            if self._is_gemini_tts_model(model)
+            else self.explicit_vertex_ai_location(litellm_params_dict)
+        )
 
         mapped_voice, mapped_params = (
             self.map_openai_params(
@@ -732,7 +764,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if api_base:
             return api_base
 
-        return self.TTS_API_URL
+        location: Final = _JSON_OBJECT.validate_python(litellm_params).get("vertex_location")
+        cloud_tts_location: Final = _CLOUD_TTS_LOCATIONS.get(location) if isinstance(location, str) else None
+        if cloud_tts_location not in _CLOUD_TTS_MULTI_REGIONS:
+            return self.TTS_API_URL
+        return f"https://{cloud_tts_location}-texttospeech.googleapis.com/v1/text:synthesize"
 
     def _get_gemini_tts_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         if api_base:
@@ -748,7 +784,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_location: Final = location if isinstance(location, str) else self.get_default_vertex_location()
         if vertex_location == "global":
             return self.TTS_API_URL
-        cloud_tts_location: Final = _GEMINI_CLOUD_TTS_LOCATIONS.get(vertex_location)
+        cloud_tts_location: Final = _CLOUD_TTS_LOCATIONS.get(vertex_location)
         if cloud_tts_location is None:
             raise UnsupportedParamsError(
                 message=(
@@ -1075,13 +1111,14 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                 },
             )
         location: Final = self.safe_get_vertex_ai_location(litellm_params) or self.get_default_vertex_location()
-        base_url: Final = self.get_api_base(api_base=api_base, vertex_location=location).rstrip("/")
+        base_url: Final = self.get_api_base(api_base=api_base, vertex_location=location)
         encoded_project: Final = encode_url_path_segment(project, field_name="project")
         encoded_location: Final = encode_url_path_segment(location, field_name="location")
         encoded_model: Final = encode_url_path_segment(base_model, field_name="model")
-        return (
-            f"{base_url}/v1/projects/{encoded_project}/locations/{encoded_location}"
-            f"/publishers/google/models/{encoded_model}:predict"
+        return join_api_base(
+            base_url,
+            f"v1/projects/{encoded_project}/locations/{encoded_location}"
+            f"/publishers/google/models/{encoded_model}:predict",
         )
 
     def transform_text_to_speech_request(
