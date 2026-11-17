@@ -188,6 +188,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     pre_call_served_model,
     request_served_model,
+    sanitize_for_log,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_committed_budget_spend,
@@ -5108,7 +5109,7 @@ async def enforce_key_and_fallback_model_access(
     if config != {}:
         model_list: Final = config.get("model_list", [])
         new_model_list: Final = model_list
-        verbose_proxy_logger.debug("\n new llm router model list %s", new_model_list)
+        verbose_proxy_logger.debug("new llm router model list %s", sanitize_for_log(new_model_list))
     elif isinstance(valid_token.models, list) and "all-team-models" in valid_token.models:
         pass
     else:
