@@ -7950,12 +7950,13 @@ class TestConversationHeaderPins:
                 {"model": "reasoning", "tier": "REASONING"},
                 60,
             )
-            await self._route(
+            replayed: Final = await self._route(
                 router, "chat", {"x-app-conversation": "Ab", "X-Session-Id": "message-0001"}, None, self.CONTINUED
             )
-            await self._route(
+            fresh: Final = await self._route(
                 router, "chat", {"x-app-conversation": "Ab", "X-Session-Id": "message-0002"}, None, self.SIMPLE
             )
+            assert (replayed.rsplit("-", 1)[0], fresh.rsplit("-", 1)[0]) == ("reasoning", "simple")
         finally:
             router.discard()
 
