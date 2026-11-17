@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -529,3 +530,71 @@ def test_vispark_models_are_listed_for_the_provider():
     assert expected
     assert set(litellm.models_by_provider["vispark"]) == expected
     assert expected <= set(get_valid_models(custom_llm_provider="vispark"))
+
+
+def test_vispark_endpoint_matrix_matches_between_root_and_backup():
+    backup_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    root_path: Final = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
+
+    backup_entry: Final = json.loads(backup_path.read_text())["providers"]["vispark"]
+    root_entry: Final = json.loads(root_path.read_text())["providers"]["vispark"]
+
+    assert backup_entry == root_entry
+    assert root_entry["endpoints"]["chat_completions"] is True
+
+
+@pytest.mark.parametrize("text_completion", (False, True))
+def test_vispark_missing_key_rejects_before_openai_fallback(monkeypatch: pytest.MonkeyPatch, text_completion: bool):
+    monkeypatch.delenv("VISPARK_LAB_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__regex=r"https://api\.lab\.vispark\.in/v1/.*").respond(200, json=_CHAT_COMPLETION)
+        if text_completion:
+            with pytest.raises(litellm.AuthenticationError, match="VISPARK_LAB_API_KEY"):
+                litellm.text_completion(model="vispark/vision-small", prompt="Hello")
+        else:
+            with pytest.raises(litellm.AuthenticationError, match="VISPARK_LAB_API_KEY"):
+                litellm.completion(model="vispark/vision-medium", messages=[{"role": "user", "content": "Hello"}])
+    assert route.call_count == 0
+
+
+def test_vispark_text_completion_uses_authenticated_client(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("VISPARK_LAB_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="vispark-client-key", base_url="https://api.lab.vispark.in/v1") as client:
+        with respx.mock() as upstream:
+            route: Final = upstream.post("https://api.lab.vispark.in/v1/completions").respond(200, json=_TEXT_COMPLETION)
+            response: Final = litellm.text_completion(model="vispark/vision-small", prompt="Hello", client=client)
+    assert route.calls.last.request.headers["authorization"] == "Bearer vispark-client-key"
+    assert response.choices[0].text == "Hello from Vispark"
+
+
+def test_vispark_chat_completion_uses_authenticated_client(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("VISPARK_LAB_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="vispark-client-key", base_url="https://api.lab.vispark.in/v1") as client:
+        with respx.mock() as upstream:
+            route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+            response: Final = litellm.completion(
+                model="vispark/vision-medium", messages=[{"role": "user", "content": "Hello"}], client=client
+            )
+    assert route.calls.last.request.headers["authorization"] == "Bearer vispark-client-key"
+    assert response.choices[0].message.content == "Hello from Vispark"
+
+
+def test_vispark_http_transport_rejects_unused_sdk_credentials(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("VISPARK_LAB_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    with OpenAI(api_key="vispark-client-key", base_url="https://api.lab.vispark.in/v1") as client:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+            with pytest.raises(litellm.AuthenticationError, match="VISPARK_LAB_API_KEY"):
+                litellm.completion(model="vispark/vision-medium", messages=[{"role": "user", "content": "Hello"}], client=client)
+    assert route.call_count == 0

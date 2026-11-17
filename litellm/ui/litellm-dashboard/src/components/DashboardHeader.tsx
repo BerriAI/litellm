@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import { usePathname } from "next/navigation";
 import { useTerminology } from "@/contexts/TerminologyContext";
-import { getBreadcrumb } from "@/components/leftnav";
+import { getBreadcrumb } from "@/components/LeftNav";
 import { CommandPaletteTrigger } from "@/components/CommandPalette/CommandPaletteTrigger";
 import { DashboardCommunityLinks } from "@/components/Navbar/DashboardResources";
 import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";

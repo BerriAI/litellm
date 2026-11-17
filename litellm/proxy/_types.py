@@ -418,6 +418,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vertex_ai",
         "/cohere",
         "/cursor",
+        "/cursor-cli",
         "/gemini",
         "/anthropic",
         "/langfuse",

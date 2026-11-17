@@ -2445,6 +2445,40 @@ def _provider_error(status_code: int) -> httpx.Response:
             True,
             id="provider 400",
         ),
+        *(
+            pytest.param(
+                litellm.BadRequestError(
+                    message="request rejected", model="m", llm_provider="openai", response=_provider_error(status)
+                ),
+                True,
+                id=f"provider {status}",
+            )
+            for status in (413, 422)
+        ),
+        *(
+            pytest.param(
+                litellm.BadRequestError(
+                    message="request rejected", model="m", llm_provider="", response=_provider_error(status)
+                ),
+                False,
+                id=f"providerless {status} keeps falling back",
+            )
+            for status in (413, 422)
+        ),
+        pytest.param(
+            litellm.BadRequestError(
+                message="conflict", model="m", llm_provider="openai", response=_provider_error(409)
+            ),
+            False,
+            id="provider 409 wrapped as BadRequestError",
+        ),
+        pytest.param(
+            litellm.UnprocessableEntityError(
+                message="unprocessable", model="m", llm_provider="replicate", response=_provider_error(422)
+            ),
+            False,
+            id="422 outside BadRequestError still falls back",
+        ),
         pytest.param(
             litellm.UnsupportedParamsError(
                 message="reasoning_effort is not supported", model="m", llm_provider="openai"
@@ -2496,7 +2530,7 @@ def _provider_error(status_code: int) -> httpx.Response:
         ),
     ],
 )
-def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_is_off(
+def test_is_bad_request_without_fallback_only_stops_on_a_provider_bad_request_when_the_flag_is_off(
     exception: Exception, stops_fallbacks: bool
 ) -> None:
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=False) is stops_fallbacks

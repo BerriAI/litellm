@@ -5668,12 +5668,16 @@ def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_mo
     )
 
 
-def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_row(_local_model_cost_map):
+def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_row(
+    _local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
     """Mantle's native Messages API answers with Anthropic's canonical model name and the proxy
     resolves a Mantle region for every call, so the first cost candidate is
-    bedrock_mantle/<region>/claude-sonnet-5. That name has no row of its own and must fall through to
-    the deployment's bare Bedrock row instead of stopping on an unpriced capability rule at $0."""
+    bedrock_mantle/<region>/claude-sonnet-5. When the model has no Mantle row of its own, that name
+    must fall through to the deployment's bare Bedrock row instead of stopping on an unpriced
+    capability rule at $0."""
 
+    monkeypatch.delitem(litellm.model_cost, "bedrock_mantle/anthropic.claude-sonnet-5", raising=False)
     response = litellm.ModelResponse(
         id="msg_x",
         choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
@@ -5791,13 +5795,16 @@ def test_cost_per_token_gov_region_prices_mantle_claude_on_the_gov_row(_local_mo
     )
 
 
-def test_completion_cost_legacy_mantle_route_prices_after_router_registration(local_model_cost_map):
+def test_completion_cost_legacy_mantle_route_prices_after_router_registration(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
     """The proxy registers every deployment under its provider-prefixed key at boot. A
-    bedrock/mantle/<model> deployment must resolve to the bare Bedrock row there, otherwise the boot
-    entry is a cost-less capability rule that shadows the priced row and every call on the deployment,
-    /v1/chat/completions and /v1/messages alike, bills $0."""
+    bedrock/mantle/<model> deployment with no row of its own must resolve to the bare Bedrock row
+    there, otherwise the boot entry is a cost-less capability rule that shadows the priced row and
+    every call on the deployment, /v1/chat/completions and /v1/messages alike, bills $0."""
     from litellm import Router
 
+    monkeypatch.delitem(litellm.model_cost, "bedrock/mantle/anthropic.claude-sonnet-5", raising=False)
     Router(
         model_list=[
             {

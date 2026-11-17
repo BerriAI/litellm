@@ -12,6 +12,11 @@ vi.mock("@/app/(dashboard)/hooks/claudeCodeMarketplace/useClaudeCodeMarketplaceR
   useClaudeCodeMarketplaceRequiresKey: () => mockUseMarketplaceRequiresKey(),
 }));
 
+vi.mock("@/components/networking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/networking")>()),
+  getProxyBaseUrl: () => "https://gateway.example.test/proxy/",
+}));
+
 beforeEach(() => {
   mockUseMarketplaceRequiresKey.mockReturnValue(false);
 });
@@ -76,7 +81,11 @@ describe("SkillDetail marketplace setup", () => {
 
   it("offers the add command and a keyless snippet when the marketplace is open", () => {
     renderSetupTab();
-    expect(screen.getByText(/^\/plugin marketplace add .*\/claude-code\/marketplace\.json$/)).toBeInTheDocument();
+    const command = "/plugin marketplace add https://gateway.example.test/proxy/claude-code/marketplace.json";
+    expect(screen.getByText(command)).toBeInTheDocument();
+    expect(screen.getByText(/"extraKnownMarketplaces"/)).toHaveTextContent(
+      '"url": "https://gateway.example.test/proxy/claude-code/marketplace.json"',
+    );
     expect(screen.queryByText(/Bearer/)).not.toBeInTheDocument();
     expect(screen.queryByText(/\/plugin marketplace remove/)).not.toBeInTheDocument();
   });
@@ -86,6 +95,9 @@ describe("SkillDetail marketplace setup", () => {
     renderSetupTab();
     expect(screen.queryByText(/\/plugin marketplace add/)).not.toBeInTheDocument();
     expect(screen.getByText(/"Authorization": "Bearer <your-litellm-key>"/)).toBeInTheDocument();
+    expect(screen.getByText(/"extraKnownMarketplaces"/)).toHaveTextContent(
+      '"url": "https://gateway.example.test/proxy/claude-code/marketplace.json"',
+    );
     expect(screen.getByText("/plugin marketplace remove litellm")).toBeInTheDocument();
     expect(screen.getByText(/uninstalls the plugins you installed from it/)).toBeInTheDocument();
   });
