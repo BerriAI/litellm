@@ -4560,6 +4560,17 @@ async def test_apply_guardrail_still_scans_message_text_sent_with_an_image(mocke
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_refuses_message_text_a_bedrock_guardrail_would_not_scan(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (), {"images": [_PNG], "messages": [{"role": "user", "content": "hello"}]}
+    )
+
+    assert call.response.status_code == 422
+    assert "ignores 'messages'" in call.response.text
+    assert call.bedrock_payloads == ()
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_refuses_an_image_for_a_guardrail_that_cannot_scan_it(mocker: MockerFixture) -> None:
     call: Final = await _apply_bedrock_guardrail_over_http(
         mocker, (), {"text": "hello", "images": [_PNG]}, guardrail=_another_provider_guard

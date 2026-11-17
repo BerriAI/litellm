@@ -53,5 +53,9 @@ async def scan_images(
         )
 
 
+def ignores_messages(guardrail: CustomGuardrail) -> bool:
+    return isinstance(guardrail, BedrockGuardrail) and not guardrail.experimental_use_latest_role_message_only
+
+
 def _not_scanned(detail: str) -> HTTPException:
     return HTTPException(status_code=422, detail=detail)

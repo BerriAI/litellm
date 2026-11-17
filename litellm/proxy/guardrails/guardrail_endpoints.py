@@ -32,7 +32,7 @@ from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PRE
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
-from litellm.proxy.guardrails.endpoint_image_scan import scan_images
+from litellm.proxy.guardrails.endpoint_image_scan import ignores_messages, scan_images
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     await_with_timeout,
@@ -2543,6 +2543,14 @@ async def _run_guardrail(
     input_type: Literal["request", "response"],
 ) -> GenericGuardrailAPIInputs:
     if request.images:
+        if request.messages and not request.text and ignores_messages(active_guardrail):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Guardrail '{request.guardrail_name}' scans 'text' and ignores 'messages', "
+                    "so put the text to scan in 'text'."
+                ),
+            )
         await scan_images(active_guardrail, request.images, request_data, input_type)
         if not request.text and not request.messages:
             return {"texts": []}
