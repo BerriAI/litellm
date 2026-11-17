@@ -936,6 +936,23 @@ _SYNC_CALL_TYPES: Final = frozenset(
 )
 
 
+def _router_model_infos(litellm_params: object) -> Iterator[Mapping[str, object]]:
+    params: Final = as_str_mapping(litellm_params) or {}
+    for key in ("litellm_metadata", "metadata"):
+        yield as_str_mapping((as_str_mapping(params.get(key)) or {}).get("model_info")) or {}
+
+
+def _priced_router_model_id(litellm_params: object) -> str | None:
+    info: Final = next((info for info in _router_model_infos(litellm_params) if info.get("id") is not None), None)
+    if info is None:
+        return None
+    model_id: Final = str(info["id"])
+    original_model_id: Final = info.get("original_model_id")
+    if model_id in litellm.model_cost or not isinstance(original_model_id, str):
+        return model_id
+    return original_model_id if original_model_id in litellm.model_cost else model_id
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -1419,18 +1436,9 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if not hasattr(self, "litellm_params"):
             return None
-        for key in ("litellm_metadata", "metadata"):
-            meta = self.litellm_params.get(key, {}) or {}
-            info = meta.get("model_info", {}) or {}
-            model_id = info.get("id")
-            if model_id is not None:
-                if model_id in litellm.model_cost:
-                    return model_id
-                original_model_id: Final = info.get("original_model_id")
-                if isinstance(original_model_id, str) and original_model_id in litellm.model_cost:
-                    return original_model_id
-                return model_id
-        return None
+        return _priced_router_model_id(
+            self.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
 
     def get_router_pricing_provider(self) -> str | None:
         """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
