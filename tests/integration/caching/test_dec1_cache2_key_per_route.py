@@ -186,9 +186,15 @@ def test_responses_previous_response_id_is_part_of_the_key(gateway: Gateway) -> 
 
 def test_responses_reasoning_is_part_of_the_key(gateway: Gateway) -> None:
     """Same ``input``, ``reasoning: {"effort": "low"}`` then ``{"effort": "high"}``. The second
-    ``/v1/responses`` request must reach the upstream.
+    ``/v1/responses`` request must reach the upstream. ``drop_params`` is sent because the ``gpt-4o-mini`` probe
+    has no ``supports_reasoning`` and refuses ``reasoning.effort`` otherwise.
     """
-    _miss(gateway, RESPONSES_ROUTE, {"reasoning": {"effort": "low"}}, {"reasoning": {"effort": "high"}})
+    _miss(
+        gateway,
+        RESPONSES_ROUTE,
+        {"reasoning": {"effort": "low"}, "drop_params": True},
+        {"reasoning": {"effort": "high"}, "drop_params": True},
+    )
 
 
 def test_responses_text_format_is_part_of_the_key(gateway: Gateway) -> None:
@@ -314,12 +320,16 @@ def test_rerank_document_order_is_part_of_the_key(gateway: Gateway) -> None:
 @pytest.mark.parametrize(
     ("first", "second"),
     (
-        pytest.param({"reasoning_effort": "low"}, {"reasoning_effort": "high"}, id="reasoning_effort"),
+        pytest.param(
+            {"reasoning_effort": "low", "drop_params": True},
+            {"reasoning_effort": "high", "drop_params": True},
+            id="reasoning_effort",
+        ),
         pytest.param({"service_tier": "default"}, {"service_tier": "flex"}, id="service_tier"),
         pytest.param({"store": False}, {"store": True}, id="store"),
         pytest.param(
-            {"thinking": {"type": "enabled", "budget_tokens": 1024}},
-            {"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            {"thinking": {"type": "enabled", "budget_tokens": 1024}, "drop_params": True},
+            {"thinking": {"type": "enabled", "budget_tokens": 2048}, "drop_params": True},
             id="thinking",
         ),
         pytest.param({"modalities": ["text"]}, {"modalities": ["text", "audio"]}, id="modalities"),
@@ -331,7 +341,9 @@ def test_newer_chat_parameters_are_part_of_the_key(
     """For each newer chat parameter, two chat requests that differ only in it must both reach the upstream.
     ``reasoning_effort``, ``service_tier``, ``store`` and ``modalities`` are in the OpenAI
     ``CompletionCreateParams`` annotations; ``thinking`` is added on purpose as a litellm provider-specific
-    chat parameter (``get_litellm_provider_specific_params_for_chat_params``).
+    chat parameter (``get_litellm_provider_specific_params_for_chat_params``). The probe model is
+    ``gpt-4o-mini``, which refuses ``reasoning_effort`` and ``thinking`` with UnsupportedParamsError, so those cells
+    send ``drop_params: true``. UNVERIFIED: the cache key is computed from the request before params are dropped.
     """
     _miss(gateway, CHAT_ROUTE, first, second)
 

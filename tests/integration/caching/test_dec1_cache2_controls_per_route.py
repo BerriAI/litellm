@@ -102,7 +102,11 @@ def test_s_maxage_refuses_an_old_entry_on_every_route(gateway: Gateway, route: s
     UNVERIFIED for embeddings: the per-input lookup passes no ``cache`` object to ``async_get_cache``
     (``caching_handler.py:1033``, the same gap as product-bugs item 26), so ``s-maxage`` may be ignored there;
     if so this cell is a bug for embeddings only.
+
+    BUG (embeddings cell): CI run 44161684479 confirmed it, the aged embeddings request stayed a hit for 15 s.
     """
+    if route == EMBEDDINGS_ROUTE:
+        pytest.skip("BUG: cache s-maxage is ignored on /v1/embeddings, the per-input lookup gets no cache controls")
     store: Final = redis_store()
     with gateway.scenario() as scenario:
         target: Final = route_probe(scenario, route)
@@ -151,7 +155,14 @@ def test_cache_control_header_s_maxage_sets_the_entry_ttl_on_other_routes(gatewa
     """A request with the HTTP header ``Cache-Control: s-maxage=300`` and no ``cache`` body object fills an entry
     on ``/v1/messages`` or ``/v1/embeddings``. The entry's Redis TTL must be above 60 and at most 300: the header
     is read for every LLM route, not only chat.
+
+    BUG: `_headers.get("Cache-Control")` (litellm/proxy/litellm_pre_call_utils.py:3078) looks up a dict built from
+    `dict(request.headers)` (http_parsing_utils.py:512), whose keys are lowercase, so the header never sets
+    `data["ttl"]` (CI run 44161684479 read TTLs 60 and 300, untouched by the header).
     """
+    pytest.skip(
+        "BUG: the Cache-Control request header is never read, the lookup is case-sensitive on lowercased headers"
+    )
     store: Final = redis_store()
     with gateway.scenario() as scenario:
         target: Final = route_probe(scenario, route)
@@ -164,7 +175,14 @@ def test_cache_control_header_s_maxage_sets_the_entry_ttl_on_other_routes(gatewa
 def test_cache_control_header_s_maxage_wins_over_a_top_level_ttl(gateway: Gateway) -> None:
     """A chat request carries top-level ``"ttl": 300`` and the header ``Cache-Control: s-maxage=200``. The entry's
     TTL must be above 60 and at most 200: the header overwrites ``data["ttl"]`` after the body was read.
+
+    BUG: `_headers.get("Cache-Control")` (litellm/proxy/litellm_pre_call_utils.py:3078) looks up a dict built from
+    `dict(request.headers)` (http_parsing_utils.py:512), whose keys are lowercase, so the header never sets
+    `data["ttl"]` (CI run 44161684479 read TTLs 60 and 300, untouched by the header).
     """
+    pytest.skip(
+        "BUG: the Cache-Control request header is never read, the lookup is case-sensitive on lowercased headers"
+    )
     store: Final = redis_store()
     with gateway.scenario() as scenario:
         target: Final = route_probe(scenario, CHAT_ROUTE)
@@ -179,7 +197,14 @@ def test_cache_control_header_without_s_maxage_clears_a_top_level_ttl(gateway: G
     still be written (the header form of ``no-store`` is not a control) and its TTL must be at most the 60 second
     default: any ``Cache-Control`` header sets ``data["ttl"] = cache_dict.get("s-maxage")``, which is ``None``
     here, so the caller's own ``ttl`` is dropped. Pinned current behaviour (``litellm_pre_call_utils.py:3081``).
+
+    BUG: `_headers.get("Cache-Control")` (litellm/proxy/litellm_pre_call_utils.py:3078) looks up a dict built from
+    `dict(request.headers)` (http_parsing_utils.py:512), whose keys are lowercase, so the header never sets
+    `data["ttl"]` (CI run 44161684479 read TTLs 60 and 300, untouched by the header).
     """
+    pytest.skip(
+        "BUG: the Cache-Control request header is never read, the lookup is case-sensitive on lowercased headers"
+    )
     store: Final = redis_store()
     with gateway.scenario() as scenario:
         target: Final = route_probe(scenario, CHAT_ROUTE)

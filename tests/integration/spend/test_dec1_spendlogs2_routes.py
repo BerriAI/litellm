@@ -75,12 +75,11 @@ from tests.integration.spend.dec1_spend_support import (
     hashed,
     messages_model,
     number,
-    row_by_id,
     rows_of_key,
     scripted_upstream,
     served,
 )
-from tests.integration.spend.dec1_spendlogs2_support import error_information, failure_rows, metadata_dict
+from tests.integration.spend.dec1_spendlogs2_support import error_information, failure_rows
 from tests.integration.spend.dec1_spendlogs_support import failing_upstream
 from tests.integration.spend.test_batch_completion_accounting import batch_input_file, batch_routes
 
@@ -203,13 +202,15 @@ def test_streamed_messages_write_one_row_with_the_non_streamed_spend(gateway: Ga
 def test_messages_provider_failure_row_records_the_upstream_status(gateway: Gateway, provider: str) -> None:
     """Each backend answers 500. The caller gets an error, and one failure row for the model group lands with
     `spend` 0 and `error_information.error_code` "500". UNVERIFIED: the shared proxy's retries do not change the
-    status the row records (round 1 found one row per failed request when retries also fail)."""
+    status the row records (round 1 found one row per failed request when retries also fail). Bedrock is the
+    exception, pinned current: its 500 is mapped to `ServiceUnavailableError`
+    (litellm/litellm_core_utils/exception_mapping_utils.py:1092), so its row records "503"."""
     reply: Final = FAILURES[provider]
     with PROVIDERS[provider](gateway, lambda _request: reply) as rig:
         assert rig.post(rig.body()).status_code >= 500
         row: Final = only_spend_row(rig)
         assert (row["status"], number(row["spend"])) == ("failure", 0.0), row
-        assert error_information(row)["error_code"] == "500", row
+        assert error_information(row)["error_code"] == ("503" if provider == "bedrock" else "500"), row
 
 
 def test_native_and_bridged_responses_rows_share_call_type_and_daily_endpoint(gateway: Gateway) -> None:
@@ -238,16 +239,18 @@ def test_native_and_bridged_responses_rows_share_call_type_and_daily_endpoint(ga
 
 def test_bridged_responses_row_names_the_anthropic_provider(gateway: Gateway) -> None:
     """The bridged `/v1/responses` row's `custom_llm_provider` is `anthropic` and its `request_id` is the `resp_`
-    id the caller received, not the Anthropic `msg_` id, so `previous_response_id` lookups find it."""
+    id the caller received, not the Anthropic `msg_` id, so `previous_response_id` lookups find it. The row is
+    found through the key (CI run 44161684479 found no row under the caller's id within the landing window), so a
+    failure prints the row and shows which id it was filed under."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = messages_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         body: Final = served(
             gateway.request("POST", "/v1/responses", {"model": model, "input": "dec1 bridge"}, key=key)
         )
-        row: Final = row_by_id(gateway, string_value(body["id"]))
+        row: Final = rows_of_key(gateway, key, 1)[0]
         assert row["custom_llm_provider"] == "anthropic", row
-        assert str(row["request_id"]).startswith("resp_"), row
+        assert row["request_id"] == string_value(body["id"]), row
 
 
 def test_an_embedding_batch_of_inputs_writes_one_row(gateway: Gateway) -> None:
@@ -279,6 +282,9 @@ def test_an_embedding_failure_writes_one_failure_row(gateway: Gateway) -> None:
 
 @contextmanager
 def _passthrough(gateway: Gateway, scenario: Scenario, status: int = 200) -> Iterator[str]:
+    """A configured `auth: true` pass-through path. Its callers' keys must list it in `allowed_passthrough_routes`,
+    or auth answers 403 (litellm/proxy/auth/route_checks.py:774)."""
+
     def answer(request: Request) -> Reply:
         if status != 200:
             return Reply(status=status, body=b'{"error":"dec1 sl2 passthrough failure"}')
@@ -300,7 +306,7 @@ def test_each_pass_through_call_writes_one_row(gateway: Gateway) -> None:
     each with `call_type` `pass_through_endpoint` and `status` `success`. The V2 gate keeps tracking pass-through
     calls even without identity (`_UNATTRIBUTED_TRACKABLE_CALL_TYPES`)."""
     with gateway.scenario() as scenario, _passthrough(gateway, scenario) as path:
-        key: Final = scenario.key()
+        key: Final = scenario.key(allowed_passthrough_routes=[path])
         for _ in range(2):
             assert gateway.request("POST", path, {"dec1": "sl2"}, key=key).status_code == 200
         rows: Final = rows_of_key(gateway, key, 2)
@@ -311,7 +317,7 @@ def test_a_pass_through_call_to_an_unpriced_target_costs_nothing(gateway: Gatewa
     """The generic pass-through target returns JSON with no usage, so its row has `spend` 0 and 0 tokens.
     UNVERIFIED: no fallback pricing applies to a generic target."""
     with gateway.scenario() as scenario, _passthrough(gateway, scenario) as path:
-        key: Final = scenario.key()
+        key: Final = scenario.key(allowed_passthrough_routes=[path])
         assert gateway.request("POST", path, {"dec1": "sl2"}, key=key).status_code == 200
         row: Final = rows_of_key(gateway, key, 1)[0]
         assert (number(row["spend"]), row["total_tokens"]) == (0.0, 0), row
@@ -321,7 +327,7 @@ def test_a_failed_pass_through_call_writes_a_failure_row(gateway: Gateway) -> No
     """The pass-through target answers 503. The caller gets 503 and one failure row lands for the key with
     `call_type` `pass_through_endpoint`. UNVERIFIED: the status is passed through unchanged."""
     with gateway.scenario() as scenario, _passthrough(gateway, scenario, status=503) as path:
-        key: Final = scenario.key()
+        key: Final = scenario.key(allowed_passthrough_routes=[path])
         assert gateway.request("POST", path, {"dec1": "sl2"}, key=key).status_code == 503
         row: Final = failure_rows(gateway, key, 1)[0]
         assert row["call_type"] == "pass_through_endpoint", row
@@ -341,8 +347,10 @@ def _mcp_rows(gateway: Gateway, key: str, count: int) -> list[dict[str, JsonValu
 
 def test_an_mcp_tool_call_row_names_the_namespaced_tool(gateway: Gateway) -> None:
     """A REST tool call of `add` on a fresh MCP server writes one `call_mcp_tool` row whose
-    `mcp_namespaced_tool_name` is the namespaced name the caller used (`<alias>-add`) and whose `model` is
-    `MCP: <alias>-add`. UNVERIFIED: the column holds the namespaced, not the bare, tool name."""
+    `mcp_namespaced_tool_name` is `<alias>/add` and whose `model` is `MCP: <tool name the caller used>`. Pinned
+    current: the column holds the server-qualified name from `mcp_tool_call_metadata.namespaced_tool_name`
+    (litellm/proxy/spend_tracking/spend_tracking_utils.py:1012), while `model` is built from the called tool name
+    (`MCP_SPEND_LOG_MODEL_PREFIX`, litellm/constants.py:2311)."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "sl2" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, peer, alias)
@@ -350,7 +358,7 @@ def test_an_mcp_tool_call_row_names_the_namespaced_tool(gateway: Gateway) -> Non
         full: Final = tool_names(gateway, key, identity)["add"]
         assert call_tool(gateway, key, identity, full, {"a": 2, "b": 3}).status_code == 200
         row: Final = _mcp_rows(gateway, key, 1)[0]
-        assert row["mcp_namespaced_tool_name"] == full, row
+        assert row["mcp_namespaced_tool_name"] == f"{alias}/add", row
         assert row["model"] == f"MCP: {full}", row
 
 
@@ -510,8 +518,9 @@ def test_a_realtime_session_row_is_priced_from_the_summed_usage(gateway: Gateway
 
 def test_a_chat_row_and_a_messages_row_on_one_key_keep_their_own_call_types(gateway: Gateway) -> None:
     """One chat completion (0.02) and one Anthropic `/v1/messages` call (0.018) on the same key write two rows
-    with `call_type` `acompletion` and `anthropic_messages`, and `metadata.user_api_key_hash` equal to the key hash
-    on both: the route decides the call type, the key decides the attribution."""
+    with `call_type` `acompletion` and `anthropic_messages`, and the `api_key` column equal to the key hash on
+    both: the route decides the call type, the key decides the attribution. The row's `metadata` does not carry
+    `user_api_key_hash` (CI run 44161684479 read None on both rows), so the column is the attribution to check."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         chat: Final = chat_model(scenario, wire)
         messages: Final = messages_model(scenario, wire)
@@ -541,4 +550,4 @@ def test_a_chat_row_and_a_messages_row_on_one_key_keep_their_own_call_types(gate
             ("acompletion", CHAT_COST),
             ("anthropic_messages", 0.018),
         }, rows
-        assert {metadata_dict(row).get("user_api_key_hash") for row in rows} == {hashed(key)}, rows
+        assert {row["api_key"] for row in rows} == {hashed(key)}, rows

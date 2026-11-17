@@ -127,16 +127,17 @@ def test_metadata_records_the_callers_user_agent(gateway: Gateway) -> None:
 
 
 def test_metadata_status_and_status_column_agree_on_success(gateway: Gateway) -> None:
-    """A served call writes `status` `success` in the column and `metadata.status` `success` as well, and
-    `metadata.error_information` is null. The status column is derived from `metadata.status`
-    (`_get_status_for_spend_log`, spend_tracking_utils.py:2367), so the two must never disagree."""
+    """A served call writes `status` `success` in the column, `metadata.status` is null and
+    `metadata.error_information` is null. Pinned current: only a failure sets `metadata.status`, and the column
+    reads anything other than "failure" as success (`_get_status_for_spend_log`, spend_tracking_utils.py:2376),
+    so the two never disagree."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         row: Final = row_by_id(gateway, served_id(ask(gateway, model, key)))
         metadata: Final = metadata_of(row)
         assert row["status"] == "success", row
-        assert metadata["status"] == "success", metadata
+        assert metadata.get("status") is None, metadata
         assert metadata.get("error_information") is None, metadata
 
 
@@ -276,14 +277,15 @@ def test_metadata_never_contains_the_raw_virtual_key_even_under_an_alias(gateway
 
 def test_cache_key_column_says_cache_off_when_the_response_cache_is_disabled(gateway: Gateway, tmp_path: Path) -> None:
     """An owned proxy runs with `litellm_settings.cache: false`. A served chat call writes `cache_key` exactly
-    `Cache OFF` and `cache_hit` `False` (spend_tracking_utils.py:1022). Reports that count cacheable traffic rely
-    on this sentinel."""
+    `Cache OFF` and `cache_hit` `None` (spend_tracking_utils.py:1022 stores `str(cache_hit)`, and with no cache the
+    logging kwargs carry `cache_hit` None, pinned current). Reports that count cacheable traffic rely on this
+    sentinel."""
     with owned_spend_proxy(gateway, tmp_path, litellm_settings={"cache": False}) as (owned, scenario, wire):
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         row: Final = row_by_id(owned, served_id(ask(owned, model, key)))
         assert row["cache_key"] == "Cache OFF", row
-        assert row["cache_hit"] == "False", row
+        assert row["cache_hit"] == "None", row
 
 
 def test_messages_column_stays_empty_for_chat_even_when_prompts_are_stored(gateway: Gateway, tmp_path: Path) -> None:

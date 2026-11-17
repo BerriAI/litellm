@@ -76,14 +76,15 @@ CALL_TYPES: Final[Mapping[str, str]] = {
     CHAT_ROUTE: "acompletion",
     TEXT_ROUTE: "atext_completion",
     RESPONSES_ROUTE: "aresponses",
-    MESSAGES_ROUTE: "aanthropic_messages",
+    MESSAGES_ROUTE: "anthropic_messages",  # the spend row stores the sync name for /v1/messages (CI run 44161684479)
     EMBEDDINGS_ROUTE: "aembedding",
     RERANK_ROUTE: "arerank",
 }
 
 
-def route_body(route: str, model: str, text: str, **extra: JsonValue) -> dict[str, JsonValue]:
-    """The smallest valid body of ``route`` whose prompt (or query, or input) is ``text``."""
+def route_body(route: str, model: str, text: str, /, **extra: JsonValue) -> dict[str, JsonValue]:
+    """The smallest valid body of ``route`` whose prompt (or query, or input) is ``text``. The leading
+    parameters are positional-only so body fields named ``text`` or ``model`` can travel in ``extra``."""
     if route == CHAT_ROUTE:
         return chat_body(model, text, **extra)
     if route == MESSAGES_ROUTE:
@@ -117,6 +118,7 @@ class RouteProbe:
     def ask(
         self,
         text: str,
+        /,
         *,
         key: str | None = None,
         headers: Mapping[str, str] | None = None,
@@ -144,8 +146,9 @@ class RouteProbe:
         """The text the stored Redis entry of ``exchange`` must contain."""
         return self.marker if self.marker is not None else self.answer_id(exchange)
 
-    def fill(self, store: Redis[bytes], text: str, **extra: JsonValue) -> tuple[Exchange, str]:
-        """Ask once, require that it reached the upstream, and return it with the Redis key it was written under."""
+    def fill(self, store: Redis[bytes], text: str, /, **extra: JsonValue) -> tuple[Exchange, str]:
+        """Ask once, require that it reached the upstream, and return it with the Redis key it was written under.
+        Positional-only, so body fields named ``store`` or ``text`` travel in ``extra``."""
         first: Final = self.ask(text, **extra)
         assert first.reached_upstream, f"the filling request was served from the cache: {first.response.text}"
         return first, await_named_entry(store, self.needle(first))

@@ -207,8 +207,23 @@ def fleet(
             )
         built: Final = Fleet(gateways[0], gateways[1], upstream, cache, database)
         if cache is not None:
-            eventually(built.subscribers, lambda count: count >= 2, seconds=30)
+            channels: Final = frozenset(
+                sync_channel(block)
+                for block in (cache_params, second_cache_params if second_cache_params is not None else cache_params)
+            )
+            eventually(
+                lambda: sum(built.subscribers(channel) for channel in channels), lambda count: count >= 2, seconds=30
+            )
         yield built
+
+
+def sync_channel(cache_params: Mapping[str, JsonValue] | None) -> str:
+    """The config sync channel an instance subscribes to: prefixed `<namespace>:` when its cache has a namespace.
+
+    The subscriber listens on the coordination Redis, which is the response cache's Redis with its namespace
+    (`config_sync_channel`, litellm/proxy/common_utils/config_sync_pubsub.py:93)."""
+    namespace: Final = (cache_params or {}).get("namespace")
+    return CONFIG_SYNC_CHANNEL if not isinstance(namespace, str) else f"{namespace}:{CONFIG_SYNC_CHANNEL}"
 
 
 def ask(

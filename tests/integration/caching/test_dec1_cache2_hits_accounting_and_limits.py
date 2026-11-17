@@ -52,7 +52,7 @@ REMAINING_REQUESTS: Final = "x-ratelimit-api_key-remaining-requests"
 @pytest.mark.parametrize("route", ROUTE_PARAMS)
 def test_a_hit_writes_a_zero_spend_hit_row_on_every_route(gateway: Gateway, route: str) -> None:
     """On each route a priced model is asked twice by one key; the second is a hit. Two spend rows must exist,
-    both with the route's ``call_type`` (``atext_completion``, ``aresponses``, ``aanthropic_messages``,
+    both with the route's ``call_type`` (``atext_completion``, ``aresponses``, ``anthropic_messages``,
     ``aembedding`` or ``arerank``); exactly one has ``cache_hit = 'True'`` and its ``spend`` must be 0, while the
     other row's ``cache_hit`` is not ``'True'``.
     """

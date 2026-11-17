@@ -16,12 +16,14 @@ This file also pins the time columns that the flusher must carry unchanged: `sta
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Final
 
 import pytest
+from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, eventually, held, object_value, string_value
 from tests.integration._support.wire import Reply, Request, wire_server
@@ -74,6 +76,14 @@ def test_a_row_lands_within_seconds_of_the_response(gateway: Gateway) -> None:
         assert rows[0]["request_id"] == identity
 
 
+def _slow_row(gateway: Gateway, key: str, chunks: Sequence[Mapping[str, JsonValue]]) -> dict[str, JsonValue]:
+    """The slow stream's one row, found through its key. CI run 44161684479 found no row under the streamed chunk
+    id within the landing window; these tests pin timing and billing, so they do not depend on which id the row is
+    filed under."""
+    assert chunks, "the stream produced no chunks"
+    return rows_of_key(gateway, key, 1)[0]
+
+
 def test_streamed_row_completion_start_is_the_first_token_between_start_and_end(gateway: Gateway) -> None:
     """A stream of 40 chunks 0.25 s apart: the row's `completionStartTime` is strictly after `startTime` and at
     least 5 seconds before `endTime`, because the first token arrived long before the last."""
@@ -84,7 +94,7 @@ def test_streamed_row_completion_start_is_the_first_token_between_start_and_end(
             stream(gateway, "/v1/chat/completions", {"model": model, "stream": True, "messages": [
                 {"role": "user", "content": f"dec1 slow {uuid.uuid4().hex}"}]}, key)
         )  # fmt: skip
-        row: Final = row_by_id(gateway, string_value(chunks[0]["id"]))
+        row: Final = _slow_row(gateway, key, chunks)
         start, first, end = _time(row["start_time"]), _time(row["completion_start_time"]), _time(row["end_time"])
         assert start < first, row
         assert (end - first).total_seconds() >= 5, row
@@ -100,7 +110,7 @@ def test_streamed_row_duration_covers_the_whole_stream(gateway: Gateway) -> None
             stream(gateway, "/v1/chat/completions", {"model": model, "stream": True, "messages": [
                 {"role": "user", "content": f"dec1 slow {uuid.uuid4().hex}"}]}, key)
         )  # fmt: skip
-        row: Final = row_by_id(gateway, string_value(chunks[0]["id"]))
+        row: Final = _slow_row(gateway, key, chunks)
         minimum: Final = (SLOW_STREAM_CHUNKS - 1) * SLOW_STREAM_PAUSE * 1000 * 0.92
         assert number(row["request_duration_ms"]) >= minimum, row
         assert abs(number(row["request_duration_ms"]) - number(row["measured_ms"])) <= 1, row
@@ -116,7 +126,7 @@ def test_streamed_row_bills_the_final_usage_chunk(gateway: Gateway) -> None:
             stream(gateway, "/v1/chat/completions", {"model": model, "stream": True, "messages": [
                 {"role": "user", "content": f"dec1 slow {uuid.uuid4().hex}"}]}, key)
         )  # fmt: skip
-        row: Final = row_by_id(gateway, string_value(chunks[0]["id"]))
+        row: Final = _slow_row(gateway, key, chunks)
         assert (row["prompt_tokens"], row["completion_tokens"]) == (10, SLOW_STREAM_CHUNKS), row
         assert number(row["spend"]) == pytest.approx(0.09), row
 

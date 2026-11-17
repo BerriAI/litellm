@@ -48,6 +48,7 @@ from tests.integration.spend.dec1_spendlogs3_support import (
     daily_table_rows,
     stored_json,
     utc_today,
+    wait_rows,
 )
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -97,7 +98,8 @@ def test_two_keys_of_one_team_get_separate_daily_team_rows(gateway: Gateway) -> 
 
 
 def test_a_daily_team_row_keeps_model_provider_and_group(gateway: Gateway) -> None:
-    """The team's daily row for a chat call has `model` `gpt-4o-mini` (the provider model), `custom_llm_provider`
+    """The team's daily row for a chat call has `model` `openai/gpt-4o-mini` (the request row's `model`, which is
+    the deployment's `litellm_params.model`, projection.py:276), `custom_llm_provider`
     `openai`, `model_group` the public name, an empty `mcp_namespaced_tool_name` and token counters 10 and 5
     (`shared_key` and `model_group` value, projection.py:178-215; NULL key columns are normalized to '')."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
@@ -106,7 +108,11 @@ def test_a_daily_team_row_keeps_model_provider_and_group(gateway: Gateway) -> No
         key: Final = scenario.key(models=[model], team_id=team)
         served(ask(gateway, model, key))
         row: Final = daily_table_rows(gateway, "LiteLLM_DailyTeamSpend", "team_id", team, 1)[0]
-        assert (row["model"], row["custom_llm_provider"], row["model_group"]) == ("gpt-4o-mini", "openai", model), row
+        assert (row["model"], row["custom_llm_provider"], row["model_group"]) == (
+            "openai/gpt-4o-mini",
+            "openai",
+            model,
+        ), row
         assert row["mcp_namespaced_tool_name"] == "", row
         assert counters(row, "prompt_tokens", "completion_tokens") == (10, 5), row
 
@@ -171,14 +177,20 @@ def test_a_tag_longer_than_2000_bytes_gets_no_daily_tag_row_but_the_call_is_bill
 
 def test_a_tag_of_exactly_2000_bytes_still_gets_a_daily_tag_row(gateway: Gateway) -> None:
     """The guard is "longer than 2000 bytes": a 2000 character ASCII tag is projected, so it has one daily tag
-    row for the key with `api_requests` 1 (`len(text.encode()) <= _MAX_INDEXED_TEXT_BYTES`, projection.py:250)."""
+    row for the key with `api_requests` 1 (`len(text.encode()) <= _MAX_INDEXED_TEXT_BYTES`, projection.py:250).
+    The key also gets the proxy's own `User-Agent: ...` tag rows, so only the row for this tag is counted."""
     edge_tag: Final = "e" * MAX_INDEXED_BYTES
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         served(ask(gateway, model, key, metadata={"tags": [edge_tag]}))
-        rows: Final = daily_table_rows(gateway, "LiteLLM_DailyTagSpend", "api_key", hashed(key), 1)
-        assert (rows[0]["tag"], counters(rows[0], "api_requests")) == (edge_tag, (1,)), rows
+        rows: Final = wait_rows(
+            gateway,
+            'SELECT tag, api_requests FROM "LiteLLM_DailyTagSpend" WHERE api_key = %s AND tag = %s',
+            (hashed(key), edge_tag),
+            1,
+        )
+        assert rows[0]["api_requests"] == 1, rows
 
 
 def test_a_multibyte_tag_is_measured_in_bytes_not_characters(gateway: Gateway) -> None:

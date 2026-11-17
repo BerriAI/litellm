@@ -43,7 +43,6 @@ from tests.integration.spend.dec1_spend_support import (
 )
 from tests.integration.spend.dec1_spendlogs2_support import (
     BLOCKING_CODE,
-    call_id_of,
     custom_code_guardrail,
     daily_user_counters,
     error_information,
@@ -77,8 +76,9 @@ def test_an_unknown_virtual_key_writes_one_failure_row_hashed_under_that_key(gat
 
 def test_an_auth_failure_row_carries_no_tokens_and_no_provider(gateway: Gateway) -> None:
     """The same unknown key refusal stores `prompt_tokens`, `completion_tokens` and `total_tokens` 0, because no
-    provider call was made, and its `litellm_call_id` equals the `x-litellm-call-id` the caller was given.
-    UNVERIFIED: that the 401 carries the call id header; `openai_error_payload.py:261` adds it to error replies."""
+    provider call was made. Pinned current: the 401 carries no `x-litellm-call-id` header (CI run 44161684479),
+    because auth refuses before the endpoint that sets the call id header runs, so the caller cannot match the
+    refusal to its row by call id."""
     stranger: Final = f"sk-dec1-sl2-unknown-{uuid.uuid4().hex}"
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
@@ -86,7 +86,7 @@ def test_an_auth_failure_row_carries_no_tokens_and_no_provider(gateway: Gateway)
         assert response.status_code == 401, response.text
         row: Final = failure_rows(gateway, stranger, 1)[0]
         assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (0, 0, 0), row
-        assert row["litellm_call_id"] == call_id_of(response), row
+        assert "x-litellm-call-id" not in response.headers, dict(response.headers)
 
 
 @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/embeddings"])
@@ -143,7 +143,8 @@ def test_an_expired_key_failure_row_keeps_the_owner_user_id(gateway: Gateway) ->
 
 
 def test_a_model_the_key_may_not_use_writes_a_failure_row_naming_the_requested_model(gateway: Gateway) -> None:
-    """A key limited to model A asks for model B and is refused (401, `key_model_access_denied`). One failure row
+    """A key limited to model A asks for model B and is refused (403, `key_model_access_denied`, with the client
+    message of litellm/proxy/auth/model_access_denied.py:5; pinned current, it used to be 401). One failure row
     lands with `model_group` B, so per-model refusal reports keep working.
     UNVERIFIED: `model_group` on a refusal before routing is taken from the request body model
     (`_routed_metadata_fallback`, proxy_track_cost_callback.py:216); it may be empty."""
@@ -152,7 +153,8 @@ def test_a_model_the_key_may_not_use_writes_a_failure_row_naming_the_requested_m
         other: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[allowed])
         response: Final = ask(gateway, other, key)
-        assert response.status_code == 401, response.text
+        assert response.status_code == 403, response.text
+        assert "key_model_access_denied" in response.text, response.text
         assert provider_calls(wire) == ()
         row: Final = failure_rows(gateway, key, 1)[0]
         assert row["model_group"] == other, row

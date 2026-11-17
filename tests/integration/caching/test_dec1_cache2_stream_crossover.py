@@ -99,7 +99,8 @@ def test_a_replayed_messages_stream_carries_the_cache_key_header(gateway: Gatewa
 def test_a_replayed_messages_stream_writes_one_zero_spend_hit_row(gateway: Gateway) -> None:
     """A key on a priced Anthropic model streams the same ``/v1/messages`` request until one stream is replayed.
     There must be exactly one spend row per request sent, exactly one with ``cache_hit = 'True'``, and that row's
-    ``spend`` must be 0 and its ``call_type`` ``aanthropic_messages``: the replay logs once, when it ends.
+    ``spend`` must be 0 and its ``call_type`` ``anthropic_messages`` (the row keeps the sync name, pinned
+    current): the replay logs once, when it ends.
     """
     with gateway.scenario() as scenario:
         target: Final = probe(scenario, MESSAGE_STREAM, model=MESSAGES_MODEL, **PRICED)
@@ -115,7 +116,7 @@ def test_a_replayed_messages_stream_writes_one_zero_spend_hit_row(gateway: Gatew
         rows: Final = await_spend_rows(gateway, key, len(sent))
         hits: Final = [row for row in rows if row["cache_hit"] == "True"]
         assert len(hits) == 1, rows
-        assert float(str(hits[0]["spend"])) == 0 and hits[0]["call_type"] == "aanthropic_messages", hits
+        assert float(str(hits[0]["spend"])) == 0 and hits[0]["call_type"] == "anthropic_messages", hits
 
 
 def test_a_non_stream_responses_entry_is_not_replayed_to_a_responses_stream(gateway: Gateway) -> None:

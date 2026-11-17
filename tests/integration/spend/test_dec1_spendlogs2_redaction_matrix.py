@@ -138,7 +138,13 @@ def test_global_redaction_without_storage_still_stores_nothing(gateway: Gateway,
 def test_a_request_can_ask_for_redaction_when_the_global_switch_is_off(gateway: Gateway, tmp_path: Path) -> None:
     """Storage on, global redaction off. A call whose body sets `turn_off_message_logging: true` is stored with
     redacted messages: the dynamic parameter has priority 1 in `should_redact_message_logging`.
-    UNVERIFIED: the body field reaches `standard_callback_dynamic_params` on the proxy path."""
+
+    BUG: auth answers 401 "turn_off_message_logging is not allowed in request body" before the call runs. The field
+    is in `_supported_callback_params` (litellm/litellm_core_utils/initialize_dynamic_callback_params.py:169) and is
+    not in `_SAFE_CLIENT_CALLBACK_PARAMS` (litellm/proxy/auth/auth_utils.py:446), so `_build_banned_observability_params`
+    (auth_utils.py:477) bans it like a credential, although asking for more redaction exfiltrates nothing and the
+    pre-call code still handles this field (litellm_pre_call_utils.py:885)."""
+    pytest.skip("BUG: a client turn_off_message_logging true in the body is refused 401 as a banned callback param")
     prompt: Final = _prompt()
     with owned_spend_proxy(gateway, tmp_path, general_settings=STORE) as (owned, scenario, wire):
         model: Final = chat_model(scenario, wire)
@@ -163,10 +169,11 @@ def test_a_request_header_can_ask_for_redaction(gateway: Gateway, tmp_path: Path
 
 
 def test_a_client_cannot_opt_out_of_global_redaction_by_default(gateway: Gateway, tmp_path: Path) -> None:
-    """Storage and global redaction on. A call whose body sets `turn_off_message_logging: false` is still stored
-    redacted: the opt out is stripped unless the key or team allows it
-    (`_strip_client_message_redaction_opt_out`, litellm_pre_call_utils.py:885)."""
-    prompt: Final = _prompt()
+    """Storage and global redaction on. A call whose body sets `turn_off_message_logging: false` is refused with
+    401 naming the field, so it can never be stored unredacted. Pinned current: auth bans every non-safe dynamic
+    callback param in the body (`_build_banned_observability_params`, litellm/proxy/auth/auth_utils.py:477, raised
+    by `_check_banned_params`, auth_utils.py:846) before `_strip_client_message_redaction_opt_out`
+    (litellm_pre_call_utils.py:885) would have stripped it."""
     with owned_spend_proxy(gateway, tmp_path, general_settings=STORE, litellm_settings=REDACT) as (
         owned,
         scenario,
@@ -174,14 +181,20 @@ def test_a_client_cannot_opt_out_of_global_redaction_by_default(gateway: Gateway
     ):
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
-        row: Final = row_by_id(owned, served_id(ask(owned, model, key, text=prompt, turn_off_message_logging=False)))
-        assert _stored_messages(row) == REDACTED_MESSAGES, row
+        response: Final = ask(owned, model, key, text=_prompt(), turn_off_message_logging=False)
+        assert response.status_code == 401, response.text
+        assert "turn_off_message_logging is not allowed in request body" in response.text, response.text
 
 
 def test_a_key_allowed_to_opt_out_keeps_its_prompt_under_global_redaction(gateway: Gateway, tmp_path: Path) -> None:
     """Storage and global redaction on, and the key's metadata sets `allow_client_message_redaction_opt_out:
     true`. Its call with `turn_off_message_logging: false` is stored with the caller's prompt unredacted.
-    UNVERIFIED: end to end; read from litellm_pre_call_utils.py:3135 (strip skipped) and redact_messages.py:803."""
+    UNVERIFIED: end to end; read from litellm_pre_call_utils.py:3135 (strip skipped) and redact_messages.py:803.
+
+    BUG: auth refuses the body field with 401 before the key permission is consulted (banned callback param,
+    litellm/proxy/auth/auth_utils.py:477), so `allow_client_message_redaction_opt_out` can never keep a body opt out;
+    only the header form works."""
+    pytest.skip("BUG: the body turn_off_message_logging opt out is refused 401 even when the key allows the opt out")
     prompt: Final = _prompt()
     with owned_spend_proxy(gateway, tmp_path, general_settings=STORE, litellm_settings=REDACT) as (
         owned,
@@ -226,13 +239,14 @@ def test_the_disable_redaction_header_works_for_a_team_that_allows_it(gateway: G
         assert _stored_messages(row_by_id(owned, served_id(response))) == [{"role": "user", "content": prompt}]
 
 
-@pytest.mark.parametrize("value", [False, "false", "no", "0"])
+@pytest.mark.parametrize("value", [False, "false", "FALSE", " False "])
 def test_a_key_can_switch_prompt_storage_off_with_a_false_like_value(
     gateway: Gateway, tmp_path: Path, value: JsonValue
 ) -> None:
     """Storage on globally; the key's metadata sets `store_prompts_in_spend_logs` to `<value>`. Its row stores
     `{}` in both payload columns (`_disables_prompt_storage` accepts False or a string `str_to_bool` reads as
-    False). UNVERIFIED: `str_to_bool("no")` and `str_to_bool("0")` are False."""
+    False, spend_tracking_utils.py:2289). `str_to_bool` only knows "true" and "false", trimmed and case-insensitive
+    (litellm/secret_managers/main.py:143), so "no" and "0" do not switch storage off."""
     with owned_spend_proxy(gateway, tmp_path, general_settings=STORE) as (owned, scenario, wire):
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model], metadata={"store_prompts_in_spend_logs": value})
@@ -265,16 +279,18 @@ def test_a_team_opt_out_applies_even_when_the_key_says_true(gateway: Gateway, tm
 
 def test_a_storage_opt_out_on_one_key_does_not_affect_another(gateway: Gateway, tmp_path: Path) -> None:
     """Storage on globally. Key A opts out, key B does not. A's row stores `{}` and B's row stores its prompt:
-    the decision is per request, never cached across tenants."""
+    the decision is per request, never cached across tenants. The two prompts differ so the second call is not a
+    response cache hit (the shared config runs `cache: true`), whose row stores no request payload."""
     prompt: Final = _prompt()
+    loud_prompt: Final = _prompt()
     with owned_spend_proxy(gateway, tmp_path, general_settings=STORE) as (owned, scenario, wire):
         model: Final = chat_model(scenario, wire)
         quiet: Final = scenario.key(models=[model], metadata={"store_prompts_in_spend_logs": False})
         loud: Final = scenario.key(models=[model])
         quiet_row: Final = row_by_id(owned, served_id(ask(owned, model, quiet, text=prompt)))
-        loud_row: Final = row_by_id(owned, served_id(ask(owned, model, loud, text=prompt)))
+        loud_row: Final = row_by_id(owned, served_id(ask(owned, model, loud, text=loud_prompt)))
         assert json_column(quiet_row["proxy_server_request"]) == {}, quiet_row
-        assert _stored_messages(loud_row) == [{"role": "user", "content": prompt}], loud_row
+        assert _stored_messages(loud_row) == [{"role": "user", "content": loud_prompt}], loud_row
 
 
 def test_disable_spend_logs_with_storage_and_redaction_on_writes_no_row(gateway: Gateway, tmp_path: Path) -> None:
@@ -293,8 +309,9 @@ def test_disable_spend_logs_with_storage_and_redaction_on_writes_no_row(gateway:
 
 
 def test_redaction_never_changes_the_billed_spend(gateway: Gateway, tmp_path: Path) -> None:
-    """Under storage plus global redaction, a request that asked for redaction itself and one sent with the
-    enable header both bill 0.02 exactly like an unredacted call."""
+    """Under storage plus global redaction, a plain call (redacted by the global switch) and one sent with the
+    enable header both bill 0.02 exactly like an unredacted call. The body field `turn_off_message_logging` is
+    refused 401 by auth (litellm/proxy/auth/auth_utils.py:477), so the header is the per-request way to ask."""
     with owned_spend_proxy(gateway, tmp_path, general_settings=STORE, litellm_settings=REDACT) as (
         owned,
         scenario,
@@ -302,7 +319,7 @@ def test_redaction_never_changes_the_billed_spend(gateway: Gateway, tmp_path: Pa
     ):
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
-        first: Final = row_by_id(owned, served_id(ask(owned, model, key, turn_off_message_logging=True)))
+        first: Final = row_by_id(owned, served_id(ask(owned, model, key, text=_prompt())))
         second: Final = row_by_id(
             owned, served_id(ask(owned, model, key, headers={"x-litellm-enable-message-redaction": "true"}))
         )

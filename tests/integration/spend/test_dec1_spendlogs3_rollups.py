@@ -26,6 +26,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -51,6 +52,7 @@ from tests.integration.spend.dec1_spend_support import (
 )
 from tests.integration.spend.dec1_spendlogs2_support import error_information, failure_rows
 from tests.integration.spend.dec1_spendlogs3_support import (
+    REQUEST_ERRORS_QUERY,
     TOOL_DAY_QUERY,
     TOOL_INDEX_QUERY,
     counters,
@@ -196,18 +198,19 @@ def test_a_budget_refusal_counts_a_422_request_error(gateway: Gateway) -> None:
         assert (row["status_code"], row["failed_requests"]) == (422, 1), row
 
 
-def test_disable_error_logs_still_counts_request_errors(gateway: Gateway, tmp_path: Path) -> None:
-    """With `general_settings.disable_error_logs: true` a provider failure writes no failure row
-    (`keep_spend_logs` is false for failures), but `_record_request_error_safely` runs on the ledger path
-    regardless (db_spend_update_writer.py:958), so the key still gets a request error row with status 500."""
+def test_disable_error_logs_also_drops_the_request_error_rollup(gateway: Gateway, tmp_path: Path) -> None:
+    """With `general_settings.disable_error_logs: true` a provider failure writes no failure row and no request
+    error row either. Pinned current: the failure hook returns before reaching the DB writer when
+    `_should_track_errors_in_db()` is False and the call cost nothing (proxy_track_cost_callback.py:509), so
+    `_record_request_error_safely` (db_spend_update_writer.py:958) never runs. Unlike `disable_spend_logs`, this
+    flag turns off error accounting, not only the row."""
     with owned_spend_proxy(
         gateway, tmp_path, general_settings={"disable_error_logs": True}, upstream=_failing_upstream
     ) as (owned, scenario, wire):
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         assert ask(owned, model, key, num_retries=0).status_code == 500
-        row: Final = request_error_rows(owned, key, 1)[0]
-        assert (row["status_code"], row["failed_requests"]) == (500, 1), row
+        stays_empty(owned, REQUEST_ERRORS_QUERY, (hashed(key),))
         assert owned.rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE api_key = %s', (hashed(key),)) == []
 
 
@@ -243,7 +246,10 @@ def test_a_tool_the_answer_calls_is_indexed_under_the_request_id(gateway: Gatewa
 
 def test_the_tool_index_start_time_is_the_spend_rows_start_time(gateway: Gateway) -> None:
     """The index row's `start_time` is the request's `startTime` (both built from the spend payload's
-    `startTime`, spend_log_tool_index.py:170), so a drill-down from a tool lands on the right row."""
+    `startTime`, spend_log_tool_index.py:170), so a drill-down from a tool lands on the right row. Pinned current:
+    the two may differ by one millisecond, because the index parses the payload's microsecond ISO time
+    (litellm/proxy/db/spend_log_tool_index.py:161) and Postgres rounds it to the column's milliseconds while the
+    request row stores it truncated (CI run 44161684479 read .527 against .526)."""
     tool: Final = fresh_tool_name()
     with tool_call_upstream(tool) as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
@@ -253,7 +259,11 @@ def test_the_tool_index_start_time_is_the_spend_rows_start_time(gateway: Gateway
         stored: Final = gateway.rows(
             'SELECT "startTime"::text AS start_time FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)
         )
-        assert stored and stored[0]["start_time"] == indexed["start_time"], (stored, indexed)
+        assert stored, indexed
+        gap: Final = datetime.fromisoformat(str(stored[0]["start_time"])) - datetime.fromisoformat(
+            str(indexed["start_time"])
+        )
+        assert abs(gap) <= timedelta(milliseconds=1), (stored, indexed)
 
 
 def test_each_called_tool_gets_its_own_day_row_with_the_whole_request_spend(gateway: Gateway) -> None:
@@ -343,7 +353,8 @@ def test_disable_spend_logs_skips_the_tool_rollup(gateway: Gateway, tmp_path: Pa
 def test_an_mcp_tool_call_is_indexed_under_its_namespaced_name(gateway: Gateway) -> None:
     """A REST call of the MCP `add` tool writes a `call_mcp_tool` row; the tool index holds one row for that
     request whose `tool_name` is the namespaced name, and the tool's day row has `request_count` 1 and `spend`
-    0 (unpriced tool). The MCP name comes from `mcp_namespaced_tool_name` (spend_log_tool_index.py:157)."""
+    0 (unpriced tool). The MCP name comes from `mcp_namespaced_tool_name` (spend_log_tool_index.py:157), which is
+    `<alias>/<tool>` (pinned current, spend_tracking_utils.py:1012), not the name the caller used."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "sl3" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, peer, alias)
@@ -359,8 +370,8 @@ def test_an_mcp_tool_call_is_indexed_under_its_namespaced_name(gateway: Gateway)
             seconds=LANDING_SECONDS,
         )[0]
         indexed: Final = tool_index_rows(gateway, string_value(row["request_id"]), 1)
-        assert [entry["tool_name"] for entry in indexed] == [full], indexed
-        day: Final = tool_day_row(gateway, full)
+        assert [entry["tool_name"] for entry in indexed] == [f"{alias}/add"], indexed
+        day: Final = tool_day_row(gateway, f"{alias}/add")
         assert (counters(day, "request_count"), number(day["spend"])) == ((1,), 0.0), day
 
 
@@ -408,14 +419,19 @@ def test_two_task_types_on_one_model_group_get_separate_rows(gateway: Gateway) -
 
 
 def test_model_usage_is_keyed_by_the_rows_model_and_provider(gateway: Gateway) -> None:
-    """The model usage row of a served call has the request row's `model` (`gpt-4o-mini`) and
+    """The model usage row of a served call has the request row's `model` (`openai/gpt-4o-mini`, the deployment's
+    `litellm_params.model`, projection.py:276) and
     `custom_llm_provider` (`openai`) as key columns, and the token counters 10 and 5 (projection.py:276-281)."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         served(ask(gateway, model, key))
         row: Final = model_usage_rows(gateway, model, 1)[0]
-        assert (row["model"], row["custom_llm_provider"], row["date"]) == ("gpt-4o-mini", "openai", utc_today()), row
+        assert (row["model"], row["custom_llm_provider"], row["date"]) == (
+            "openai/gpt-4o-mini",
+            "openai",
+            utc_today(),
+        ), row
         assert counters(row, "prompt_tokens", "completion_tokens") == (10, 5), row
 
 
