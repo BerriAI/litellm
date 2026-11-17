@@ -159,3 +159,21 @@ def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_con
                 assert result.is_error is False and result.content[0].text == "7"
 
             asyncio.run(exercise())
+
+
+def test_virtual_tool_call_url_elicitation_is_a_rest_error_result_and_an_mcp_jsonrpc_error(gateway: Gateway) -> None:
+    with wire_server(_protocol_peer(URL_ELICITATION_ERROR)) as upstream, gateway.scenario() as scenario:
+        alias: Final = "elicit" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, McpPeer(upstream.url + "/mcp", queue.Queue()), alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity], "mcp_tool_search_enabled": True})
+        caller: Final = McpCaller(gateway, key, "rest")
+        elicitation: Final = caller.call("mcp_tool_call", {"tool_name": f"{alias}-fail", "arguments": {}})
+        assert elicitation.status == 200, elicitation.raw
+        assert elicitation.error == f"MCPError: {URL_ELICITATION_ERROR['message']}", elicitation.raw
+        control: Final = caller.call("mcp_tool_call", {"tool_name": f"{alias}-add", "arguments": {"a": 3, "b": 5}})
+        assert control.ok and control.text == "8", control.raw
+        mcp_caller: Final = McpCaller(gateway, key, "mcp")
+        assert mcp_caller.initialize().ok
+        relayed: Final = mcp_caller.call("mcp_tool_call", {"tool_name": f"{alias}-fail", "arguments": {}})
+        assert relayed.status == 200 and relayed.text is None and relayed.error, relayed.raw
+        assert json.loads(relayed.error) == URL_ELICITATION_ERROR, relayed.raw

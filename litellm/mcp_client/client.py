@@ -1256,6 +1256,8 @@ class MCPClient:
             verbose_logger.debug("MCP client tool call traceback:\n%s", error_trace)
             # Log detailed error information
             error_type: Final = type(e).__name__
+            if is_url_elicitation_required(e):
+                raise
             # When the caller opted into raise_on_error it owns the exception and logs it at the
             # level that fits (an expected pass-through re-auth 401 is info, not an operator-actionable
             # error), so log at debug here to avoid an error-level line that would trip error-rate
@@ -1277,8 +1279,6 @@ class MCPClient:
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
             if raise_on_error:
-                raise
-            if is_url_elicitation_required(e):
                 raise
             # Return a default error result instead of raising
             return self.error_tool_result(e)

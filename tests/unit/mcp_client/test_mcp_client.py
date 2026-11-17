@@ -2,6 +2,7 @@ import asyncio
 import base64
 import importlib
 import json
+import logging
 import os
 import queue
 import sys
@@ -1686,23 +1687,33 @@ def _tool_call_error_client(code: int) -> _MockTransportClient:
 
 
 @pytest.mark.asyncio
-async def test_call_tool_raises_upstream_url_elicitation_required_with_data_when_swallowing_errors() -> None:
+async def test_call_tool_raises_upstream_url_elicitation_required_with_data_when_swallowing_errors(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
     client: Final = _tool_call_error_client(URL_ELICITATION_REQUIRED)
     with anyio.fail_after(10), pytest.raises(MCPError) as raised:
         await client.call_tool(CallToolRequestParams(name="add", arguments={}))
     assert raised.value.error.code == URL_ELICITATION_REQUIRED
     assert raised.value.error.message == "upstream refused"
     assert raised.value.error.data == _URL_ELICITATION_DATA
+    assert not [record.message for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 @pytest.mark.asyncio
-async def test_call_tool_still_swallows_other_upstream_error_codes_into_an_error_result() -> None:
+async def test_call_tool_still_swallows_other_upstream_error_codes_into_an_error_result(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
     client: Final = _tool_call_error_client(INVALID_PARAMS)
     with anyio.fail_after(10):
         result: Final = await client.call_tool(CallToolRequestParams(name="add", arguments={}))
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
     assert result.content == [TextContent(type="text", text="MCPError: upstream refused")]
+    assert any(
+        record.levelno == logging.ERROR and "MCP client call_tool failed" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

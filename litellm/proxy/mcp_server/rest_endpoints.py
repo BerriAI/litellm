@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from traceback import walk_tb
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar
 from uuid import uuid4
 
 import anyio
@@ -334,6 +334,16 @@ if MCP_AVAILABLE:
             request_path=request.scope.get("_original_path") or request.url.path,
         )
 
+    _ToolResult: Final = TypeVar("_ToolResult")
+
+    async def _url_elicitation_as_error_result(execution: Awaitable[_ToolResult]) -> "_ToolResult | CallToolResult":
+        try:
+            return await execution
+        except Exception as e:
+            if is_url_elicitation_required(e):
+                return error_text_result(e)
+            raise
+
     async def _handle_virtual_mcp_tool(
         request: Request,
         data: dict[str, Any],
@@ -412,7 +422,7 @@ if MCP_AVAILABLE:
                 general_settings=general_settings,
             )
             _tool_start_time: Final = datetime.now()
-            result: Final = await handle_mcp_tool_call(
+            virtual_execution: Final = handle_mcp_tool_call(
                 tool_name=tool_arguments.get("tool_name", ""),
                 arguments=tool_arguments.get("arguments") or {},
                 user_api_key_dict=user_api_key_dict,
@@ -425,6 +435,7 @@ if MCP_AVAILABLE:
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
                 incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             )
+            result: Final = await _url_elicitation_as_error_result(virtual_execution)
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
             await _safe_fire_mcp_tool_call_failure_logging(
@@ -1271,33 +1282,28 @@ if MCP_AVAILABLE:
             else None
         )
         tool_start_time: Final = datetime.now()
-        try:
-            executed: Final = await execute_mcp_tool(
-                name=tool_name,
-                arguments=TypeAdapter(dict[str, object]).validate_python(tool_arguments),
-                allowed_mcp_servers=list(allowed_mcp_servers),
-                start_time=tool_start_time,
-                user_api_key_auth=TypeAdapter(UserAPIKeyAuth | None).validate_python(
-                    execution_data.get("user_api_key_auth")
-                ),
-                mcp_auth_header=TypeAdapter(str | None).validate_python(execution_data.get("mcp_auth_header")),
-                mcp_server_auth_headers=TypeAdapter(dict[str, dict[str, str]] | None).validate_python(
-                    execution_data.get("mcp_server_auth_headers")
-                ),
-                oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
-                raw_headers=TypeAdapter(dict[str, str] | None).validate_python(execution_data.get("raw_headers")),
-                client_ip=IPAddressUtils.get_mcp_client_ip(request),
-                litellm_logging_obj=logging_obj,
-                guardrail_context=MCPRequestContext.resolve_guardrail_context(execution_data),
-                requested_server_id=canonical_server_id,
-                incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
-                guardrail_auth=guardrail_auth,
-            )
-        except Exception as e:
-            if is_url_elicitation_required(e):
-                return error_text_result(e), tool_start_time
-            raise
-        return executed, tool_start_time
+        execution: Final = execute_mcp_tool(
+            name=tool_name,
+            arguments=TypeAdapter(dict[str, object]).validate_python(tool_arguments),
+            allowed_mcp_servers=list(allowed_mcp_servers),
+            start_time=tool_start_time,
+            user_api_key_auth=TypeAdapter(UserAPIKeyAuth | None).validate_python(
+                execution_data.get("user_api_key_auth")
+            ),
+            mcp_auth_header=TypeAdapter(str | None).validate_python(execution_data.get("mcp_auth_header")),
+            mcp_server_auth_headers=TypeAdapter(dict[str, dict[str, str]] | None).validate_python(
+                execution_data.get("mcp_server_auth_headers")
+            ),
+            oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
+            raw_headers=TypeAdapter(dict[str, str] | None).validate_python(execution_data.get("raw_headers")),
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+            litellm_logging_obj=logging_obj,
+            guardrail_context=MCPRequestContext.resolve_guardrail_context(execution_data),
+            requested_server_id=canonical_server_id,
+            incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
+            guardrail_auth=guardrail_auth,
+        )
+        return await _url_elicitation_as_error_result(execution), tool_start_time
 
     async def _rest_tool_call_server_and_auth(
         user_api_key_auth: UserAPIKeyAuth,
