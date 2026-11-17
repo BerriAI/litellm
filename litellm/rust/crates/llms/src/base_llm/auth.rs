@@ -149,6 +149,9 @@ pub async fn log_in_to_vertex(
             vertex_project(&params, secrets),
         )
         .await?;
+    // Deliberately keeps Python's exact-key behaviour: a caller's `authorization` header in another
+    // casing is not replaced, so both tokens reach the provider joined as "Bearer <caller>, Bearer
+    // <google>". Kept for parity (owner ruling 2026-11-17).
     Ok((
         ValidatedEnvironment {
             headers: with_python_authorization_bearer(headers, login.token.expose()),
