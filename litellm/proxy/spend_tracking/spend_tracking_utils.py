@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.batch_utils import (
     charged_poll_cost,
     charged_video_id,
     pays_only_its_guardrail,
+    without_deployment_hint,
 )
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
@@ -398,8 +399,6 @@ JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX: Final = "_guardrail_cost"
 
 
 def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
-    if call_type == CallTypes.aretrieve_batch.value:
-        return BATCH_COST_REQUEST_ID_SUFFIX
     if settles_background_response(call_type, metadata, kwargs):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
@@ -429,6 +428,8 @@ def get_spend_logs_id(
     call_id: Final = kwargs.get("litellm_call_id")
     if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
         return f"{call_id}{JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX}"
+    if call_type == CallTypes.aretrieve_batch.value:
+        return f"{without_deployment_hint(resolved_id)}{BATCH_COST_REQUEST_ID_SUFFIX}"
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 
@@ -1121,7 +1122,7 @@ def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -
     poller builds its own logging context, so per-request trace ids can never link them."""
     if call_type not in _BATCH_TRACE_CALL_TYPES or not request_id:
         return None
-    return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
+    return without_deployment_hint(request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX))
 
 
 def caller_session_for_accounting(kwargs: Mapping[str, object]) -> str | None:

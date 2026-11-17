@@ -1,5 +1,7 @@
+import base64
 import io
 import json
+import re
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -33,8 +35,35 @@ POLLED_BATCH_COST_IS_FINAL_KWARG: Final = "polled_batch_cost_is_final"
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
+_MODEL_EMBEDDED_ID_PREFIXES: Final = ("file-", "batch_")
+_DEPLOYMENT_HINT: Final = re.compile(r";deployment,[^;]*")
+
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
 _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+
+
+def _model_embedded_id_parts(encoded_id: str) -> tuple[str, str] | None:
+    prefix: Final = next((prefix for prefix in _MODEL_EMBEDDED_ID_PREFIXES if encoded_id.startswith(prefix)), "")
+    b64_part: Final = encoded_id[len(prefix) :]
+    try:
+        decoded: Final = base64.urlsafe_b64decode(b64_part + "=" * (-len(b64_part) % 4)).decode()
+    except ValueError:
+        return None
+    return (prefix, decoded) if decoded.startswith("litellm:") and ";model," in decoded else None
+
+
+def model_embedded_payload(encoded_id: object) -> str | None:
+    parts: Final = _model_embedded_id_parts(encoded_id) if isinstance(encoded_id, str) else None
+    return parts[1] if parts is not None else None
+
+
+def without_deployment_hint(encoded_id: str) -> str:
+    parts: Final = _model_embedded_id_parts(encoded_id)
+    if parts is None or ";deployment," not in parts[1]:
+        return encoded_id
+    prefix, payload = parts
+    unhinted: Final = base64.urlsafe_b64encode(_DEPLOYMENT_HINT.sub("", payload).encode()).decode().rstrip("=")
+    return f"{prefix}{unhinted}"
 
 
 class InMemoryFile(io.BytesIO):
@@ -489,7 +518,7 @@ def _charged_batch(kwargs: Mapping[str, object], response_obj: object, response_
     polled: Final = _polled_batch(kwargs, response_obj)
     if polled is None or not polled.cost_is_final or response_cost <= 0:
         return None
-    return ChargeOnceJob(kind="batch", job_id=polled.id)
+    return ChargeOnceJob(kind="batch", job_id=without_deployment_hint(polled.id))
 
 
 def job_to_charge_once(

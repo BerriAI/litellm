@@ -640,6 +640,24 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     assert create_session == cost_session == "batch-uid-1"
 
 
+def test_a_batch_read_under_different_deployment_hints_writes_one_cost_row_in_its_create_rows_session():
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
+
+    def hinted(deployment_id: str | None) -> str:
+        return encode_file_id_with_model("batch_abc", "gpt-mixed", id_type="batch", deployment_id=deployment_id)
+
+    cost_row_ids: Final = frozenset(
+        get_spend_logs_id("aretrieve_batch", {"id": hinted(deployment_id)}, {"litellm_call_id": deployment_id})
+        for deployment_id in ("batch-before-key-rotation", "batch-after-key-rotation")
+    )
+    assert cost_row_ids == {f"{hinted(None)}_batch_cost"}
+    (cost_row_id,) = cost_row_ids
+    assert _get_batch_trace_session_id(call_type="acreate_batch", request_id=hinted("batch-before-key-rotation")) == (
+        _get_batch_trace_session_id(call_type="aretrieve_batch", request_id=cost_row_id)
+    )
+
+
 def test_non_batch_call_types_derive_no_batch_session():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 

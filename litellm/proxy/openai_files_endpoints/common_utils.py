@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.batch_utils import (
     batch_cost_is_final,
     batch_create_routing,
     is_batch_capable,
+    model_embedded_payload,
     without_deployments_that_cannot_batch,
 )
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
@@ -421,29 +422,17 @@ def encode_listed_file_ids(page: object, model: str | None, deployment_id: str |
     )
 
 
-def _model_embedded_payload(encoded_id: object) -> str | None:
-    if not isinstance(encoded_id, str):
-        return None
-    prefix: Final = next((prefix for prefix in ("file-", "batch_") if encoded_id.startswith(prefix)), "")
-    b64_part: Final = encoded_id[len(prefix) :]
-    try:
-        decoded: Final = base64.urlsafe_b64decode(b64_part + "=" * (-len(b64_part) % 4)).decode()
-    except ValueError:
-        return None
-    return decoded if decoded.startswith("litellm:") and ";model," in decoded else None
-
-
 def decode_model_from_file_id(encoded_id: object) -> str | None:
     """
     Extract model name from an encoded file/batch ID.
     Handles IDs that start with "file-" or "batch_" prefix.
     """
-    match: Final = re.search(r";model,([^;]+)", _model_embedded_payload(encoded_id) or "")
+    match: Final = re.search(r";model,([^;]+)", model_embedded_payload(encoded_id) or "")
     return match.group(1).strip() if match else None
 
 
 def decode_deployment_from_file_id(encoded_id: object) -> str | None:
-    match: Final = re.search(r";deployment,([^;]+)", _model_embedded_payload(encoded_id) or "")
+    match: Final = re.search(r";deployment,([^;]+)", model_embedded_payload(encoded_id) or "")
     return match.group(1) if match else None
 
 
@@ -452,7 +441,7 @@ def get_original_file_id(encoded_id: str) -> str:
     Extract the original provider file/batch ID from an encoded ID.
     Handles IDs that start with "file-" or "batch_" prefix.
     """
-    match: Final = re.search(r"litellm:([^;]+);model,", _model_embedded_payload(encoded_id) or "")
+    match: Final = re.search(r"litellm:([^;]+);model,", model_embedded_payload(encoded_id) or "")
     return match.group(1) if match else encoded_id
 
 
@@ -659,16 +648,21 @@ async def get_authorized_credentials_for_model(
 _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(Mapping[str, object])
 
 
+def _listed_deployment_id(deployment: Mapping[str, object]) -> str | None:
+    deployment_id: Final = _DEPLOYMENT_MODEL_INFO.validate_python(deployment.get("model_info") or {}).get("id")
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
 def _unpaused_deployment_id(deployment: Mapping[str, object]) -> str | None:
     model_info: Final = _DEPLOYMENT_MODEL_INFO.validate_python(deployment.get("model_info") or {})
-    deployment_id: Final = model_info.get("id")
-    if model_info.get("blocked") is True or not isinstance(deployment_id, str):
-        return None
-    return deployment_id
+    return None if model_info.get("blocked") is True else _listed_deployment_id(deployment)
 
 
 def batch_deployment_id(
-    llm_router: Optional["Router"], model: str, preferred_deployment_id: str | None = None
+    llm_router: Optional["Router"],
+    model: str,
+    preferred_deployment_id: str | None = None,
+    preferred_may_be_paused: bool = False,
 ) -> str | None:
     if llm_router is None:
         return None
@@ -682,7 +676,8 @@ def batch_deployment_id(
     ready_ids: Final = tuple(
         deployment_id for deployment_id in map(_unpaused_deployment_id, batch_ready) if deployment_id is not None
     )
-    if preferred_deployment_id is not None and preferred_deployment_id in ready_ids:
+    preferable_ids: Final = tuple(map(_listed_deployment_id, batch_ready)) if preferred_may_be_paused else ready_ids
+    if preferred_deployment_id is not None and preferred_deployment_id in preferable_ids:
         return preferred_deployment_id
     if len(batch_ready) == len(group):
         return None
@@ -700,9 +695,15 @@ def _group_default_deployment_id(llm_router: "Router", model: str) -> str | None
     return deployment.model_info.id if deployment is not None else None
 
 
-def hinted_batch_deployment_id(llm_router: Optional["Router"], model: str, encoded_id: str) -> str | None:
+def hinted_batch_deployment_id(
+    llm_router: Optional["Router"], model: str, encoded_id: str, reads_existing_object: bool = False
+) -> str | None:
     hint: Final = decode_deployment_from_file_id(encoded_id)
-    return batch_deployment_id(llm_router, model, preferred_deployment_id=hint) if hint else None
+    if not hint:
+        return None
+    return batch_deployment_id(
+        llm_router, model, preferred_deployment_id=hint, preferred_may_be_paused=reads_existing_object
+    )
 
 
 def batch_routed_model_id(llm_router: Optional["Router"], model: str, hinted_file_id: str | None) -> str:
@@ -1148,7 +1149,7 @@ async def handle_model_based_routing(
             model_id=model_from_id,
             user_api_key_dict=user_api_key_dict,
             operation_context="file operation (file created with model)",
-            deployment_id=hinted_batch_deployment_id(llm_router, model_from_id, file_id),
+            deployment_id=hinted_batch_deployment_id(llm_router, model_from_id, file_id, reads_existing_object=True),
         )
         original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials

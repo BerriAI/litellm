@@ -6,17 +6,19 @@
 ######################################################################
 import asyncio
 import os
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime
+from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.litellm_core_utils.batch_utils import model_embedded_payload
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
@@ -55,6 +57,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     authorize_model_for_key,
     batch_cost_poller_is_active,
     batch_deployment_id,
+    decode_deployment_from_file_id,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
@@ -103,6 +106,81 @@ class _UserBatchLister(Protocol):
 def _hidden_param_string(hidden_params: Mapping[str, object], key: str) -> str:
     value: Final = hidden_params.get(key)
     return value if isinstance(value, str) else ""
+
+
+_DEFAULT_BATCH_LIST_LIMIT: Final = 20
+_ListBatchPage: TypeAlias = Callable[[str | None, str | None, int | None], Awaitable[object]]
+
+
+async def _list_batches_on_deployment(
+    deployment_id: str | None,
+    after: str | None,
+    limit: int | None,
+    *,
+    model: str,
+    data: Mapping[str, object],
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    list_provider_batches: Callable[..., Awaitable[object]],
+) -> object:
+    credentials: Final = await get_authorized_credentials_for_model(
+        llm_router=llm_router,
+        model_id=model,
+        user_api_key_dict=user_api_key_dict,
+        operation_context="batch listing",
+        deployment_id=deployment_id,
+    )
+    page_data: Final = dict(data)
+    prepare_data_with_credentials(data=page_data, credentials=credentials)
+    page: Final = await list_provider_batches(
+        custom_llm_provider=credentials["custom_llm_provider"], after=after, limit=limit, **page_data
+    )
+    for batch in iter_items(attribute_or_none(page, "data") or ()):
+        encode_batch_response_ids(batch, model=model, deployment_id=deployment_id)
+    return page
+
+
+def _page_listing(page: object, batches: Sequence[object], has_more: bool) -> object:
+    if not isinstance(page, BaseModel):
+        return page
+    ids: Final = tuple(attribute_or_none(batch, "id") for batch in batches)
+    return page.model_copy(
+        update={
+            "data": [*batches],
+            "has_more": has_more,
+            "first_id": ids[0] if ids else None,
+            "last_id": ids[-1] if ids else None,
+        }
+    )
+
+
+def _listed_batches(page: object) -> tuple[object, ...]:
+    return tuple(iter_items(attribute_or_none(page, "data") or ()))
+
+
+async def _list_mixed_group_batches(
+    list_page: _ListBatchPage, batch_deployment: str, after: str | None, limit: int | None
+) -> object:
+    page_size: Final = limit or _DEFAULT_BATCH_LIST_LIMIT
+    if (
+        after is not None
+        and model_embedded_payload(after) is not None
+        and decode_deployment_from_file_id(after) is None
+    ):
+        group_page: Final = await list_page(None, get_original_file_id(after), page_size)
+        group_has_more: Final = attribute_or_none(group_page, "has_more") is True
+        return _page_listing(group_page, _listed_batches(group_page), group_has_more)
+    batch_page: Final = await list_page(batch_deployment, get_original_file_id(after) if after else None, page_size)
+    on_batch_deployment: Final = _listed_batches(batch_page)
+    remaining: Final = page_size - len(on_batch_deployment)
+    if attribute_or_none(batch_page, "has_more") is True or remaining <= 0:
+        return _page_listing(batch_page, on_batch_deployment, True)
+    first_group_page: Final = await list_page(None, None, remaining)
+    return _page_listing(
+        first_group_page,
+        (*on_batch_deployment, *_listed_batches(first_group_page)),
+        attribute_or_none(first_group_page, "has_more") is True,
+    )
 
 
 def _require_batch_response(response: LLMResponseTypes) -> LiteLLMBatch:
@@ -717,7 +795,9 @@ async def retrieve_batch(
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
-            retrieve_deployment_id: Final = hinted_batch_deployment_id(llm_router, model_from_id, batch_id)
+            retrieve_deployment_id: Final = hinted_batch_deployment_id(
+                llm_router, model_from_id, batch_id, reads_existing_object=True
+            )
             credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,
@@ -947,29 +1027,19 @@ async def list_batches(
             list_deployment_id: Final = (
                 batch_deployment_id(llm_router, model_param) if isinstance(model_param, str) else None
             )
-            credentials: Final = await get_authorized_credentials_for_model(
+            list_page: Final = partial(
+                _list_batches_on_deployment,
+                model=model_param,
+                data=data,
                 llm_router=llm_router,
-                model_id=model_param,
                 user_api_key_dict=user_api_key_dict,
-                operation_context="batch listing",
-                deployment_id=list_deployment_id,
+                list_provider_batches=litellm.alist_batches,
             )
-
-            prepare_data_with_credentials(data=data, credentials=credentials)
-
-            response = await litellm.alist_batches(
-                custom_llm_provider=credentials["custom_llm_provider"],
-                after=after,
-                limit=limit,
-                **data,
+            response = (
+                await list_page(None, after, limit)
+                if list_deployment_id is None
+                else await _list_mixed_group_batches(list_page, list_deployment_id, after, limit)
             )
-
-            # Encode batch IDs in the list response so clients can use
-            # them for retrieve/cancel/file downloads through the proxy.
-            response_data: Final = attribute_or_none(response, "data")
-            if response_data:
-                for batch in iter_items(response_data):
-                    encode_batch_response_ids(batch, model=model_param, deployment_id=list_deployment_id)
 
             verbose_proxy_logger.debug("Listed batches using model: %s", model_param)
 
@@ -1149,7 +1219,9 @@ async def cancel_batch(
 
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
-            cancel_deployment_id: Final = hinted_batch_deployment_id(llm_router, model_from_id, batch_id)
+            cancel_deployment_id: Final = hinted_batch_deployment_id(
+                llm_router, model_from_id, batch_id, reads_existing_object=True
+            )
             credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,

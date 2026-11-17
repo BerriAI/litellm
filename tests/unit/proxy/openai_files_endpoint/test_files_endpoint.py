@@ -1076,9 +1076,10 @@ _MIXED_GROUP_SKUS: Final = ("chat-sku", "batch-sku", "other-sku")
 
 
 @pytest.fixture
-def mixed_azure_group(monkeypatch):
+def mixed_azure_group(monkeypatch, request):
     import litellm.proxy.proxy_server as ps
 
+    paused_deployment_ids: Final = getattr(request, "param", frozenset())
     router: Final = Router(
         model_list=[
             {
@@ -1089,7 +1090,7 @@ def mixed_azure_group(monkeypatch):
                     "api_key": f"{sku}-key",
                     "api_version": "2025-04-01-preview",
                 },
-                "model_info": {"id": deployment_id, "mode": mode},
+                "model_info": {"id": deployment_id, "mode": mode, "blocked": deployment_id in paused_deployment_ids},
             }
             for model_group, sku, mode, deployment_id in (
                 ("gpt-mixed", "chat-sku", "chat", "chat-id"),
@@ -1172,6 +1173,24 @@ def test_file_content_of_a_mixed_azure_group_id_comes_from_the_deployment_its_hi
 
     assert response.status_code == 200, response.text
     assert response.content == f"rows from {reached_sku}".encode()
+
+
+@pytest.mark.parametrize("mixed_azure_group", [frozenset({"batch-id"})], indirect=True)
+def test_file_content_of_a_paused_batch_deployment_is_refused_rather_than_read_from_the_chat_resource(
+    mixed_azure_group: respx.MockRouter,
+):
+    content_routes: Final = tuple(
+        mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files/file-out/content$").mock(
+            return_value=httpx.Response(200, content=f"rows from {sku}".encode())
+        )
+        for sku in _MIXED_GROUP_SKUS
+    )
+    output_file_id: Final = encode_file_id_with_model("file-out", "gpt-mixed", deployment_id="batch-id")
+
+    response: Final = client.get(f"/v1/files/{output_file_id}/content", headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 400, response.text
+    assert [route.call_count for route in content_routes] == [0, 0, 0]
 
 
 @pytest.mark.parametrize(

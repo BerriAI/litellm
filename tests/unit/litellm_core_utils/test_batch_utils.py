@@ -613,6 +613,24 @@ def test_a_finished_batch_that_cost_nothing_itself_is_still_charged_once_for_its
     assert job_to_charge_once(kwargs, finished_batch, 0.01) == ChargeOnceJob(kind="batch", job_id="job-budget")
 
 
+def test_a_batch_read_under_different_deployment_hints_is_charged_as_one_job() -> None:
+    from litellm.litellm_core_utils.batch_utils import job_to_charge_once
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    def charged_job(deployment_id: str | None) -> ChargeOnceJob | None:
+        polled_id: Final = encode_file_id_with_model(
+            "job-budget", "gpt-mixed", id_type="batch", deployment_id=deployment_id
+        )
+        return job_to_charge_once(
+            {"call_type": "aretrieve_batch"}, _completed_batch().model_copy(update={"id": polled_id}), 0.43
+        )
+
+    assert charged_job("batch-before-key-rotation") == charged_job("batch-after-key-rotation") == charged_job(None)
+    assert charged_job(None) == ChargeOnceJob(
+        kind="batch", job_id=encode_file_id_with_model("job-budget", "gpt-mixed", id_type="batch")
+    )
+
+
 def test_a_completed_batch_still_waiting_on_its_output_does_not_take_the_charge_its_real_cost_needs() -> None:
     """Its first retrieve can report completed before the output file exists, and settling on that guardrail-only
     retrieve would leave the batch's real cost nothing to charge once the output arrives."""

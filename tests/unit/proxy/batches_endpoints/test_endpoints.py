@@ -43,6 +43,8 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from openai.pagination import AsyncCursorPage
+from openai.types import Batch
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
 import litellm
@@ -3617,7 +3619,7 @@ async def test_cancel__executed_batch_rejects_key_without_model_grant(cancel_har
     cancel_harness.router_acancel.assert_not_called()
 
 
-def _mixed_azure_group_router() -> Router:
+def _mixed_azure_group_router(paused_deployment_ids: frozenset[str] = frozenset()) -> Router:
     return Router(
         model_list=[
             {
@@ -3628,7 +3630,7 @@ def _mixed_azure_group_router() -> Router:
                     "api_key": f"{sku}-key",
                     "api_version": "2025-04-01-preview",
                 },
-                "model_info": {"id": deployment_id, "mode": mode},
+                "model_info": {"id": deployment_id, "mode": mode, "blocked": deployment_id in paused_deployment_ids},
             }
             for model_group, sku, mode, deployment_id in (
                 ("gpt-mixed", "chat-sku", "chat", "chat-id"),
@@ -3701,18 +3703,49 @@ async def test_create__model_header_on_a_mixed_group_reaches_its_batch_deploymen
     assert _decoded(resp.input_file_id) == ("gpt-mixed", "file-provider-input", "batch-id")
 
 
+def _azure_like_batch_list(batch_ids_by_api_base: Mapping[str, tuple[str, ...]]) -> AsyncMock:
+    async def list_batches(*, api_base: str, after: str | None, limit: int, **_: object) -> AsyncCursorPage[Batch]:
+        listed: Final = batch_ids_by_api_base[api_base]
+        start: Final = listed.index(after) + 1 if after is not None else 0
+        page: Final = listed[start : start + limit]
+        return AsyncCursorPage[Batch].model_validate(
+            {
+                "object": "list",
+                "data": [make_batch(id=batch_id).model_dump() for batch_id in page],
+                "first_id": page[0] if page else None,
+                "last_id": page[-1] if page else None,
+                "has_more": start + limit < len(listed),
+            }
+        )
+
+    return AsyncMock(side_effect=list_batches)
+
+
 @pytest.mark.asyncio
-async def test_list__model_header_on_a_mixed_group_reaches_its_batch_deployment(list_harness):
-    provider_list: Final = AsyncMock(return_value=FakeListPage([make_batch(id="batch-1")]))
+async def test_list__model_header_on_a_mixed_group_pages_through_its_batch_then_its_chat_resource(list_harness):
+    provider_list: Final = _azure_like_batch_list(
+        {_BATCH_SKU[0]: ("batch-b1", "batch-b2", "batch-b3"), _CHAT_SKU[0]: ("batch-a1", "batch-a2")}
+    )
+
+    async def pages_from(after: str | None) -> tuple[tuple[str | None, str, str | None], ...]:
+        page: Final = await call_list(list_harness, limit=2, after=after, headers={"x-litellm-model": "gpt-mixed"})
+        listed: Final = tuple(map(_decoded, (batch.id for batch in page.data)))
+        assert (page.first_id, page.last_id) == (page.data[0].id, page.data[-1].id)
+        return listed + (await pages_from(page.data[-1].id) if page.has_more else ())
 
     with (
         patch.object(proxy_server, "llm_router", _mixed_azure_group_router()),
         patch.object(litellm, "alist_batches", provider_list),
     ):
-        resp: Final = await call_list(list_harness, headers={"x-litellm-model": "gpt-mixed"})
+        listed: Final = await pages_from(None)
 
-    assert _reached(provider_list.call_args.kwargs) == _BATCH_SKU
-    assert _decoded(resp.data[0].id) == ("gpt-mixed", "batch-1", "batch-id")
+    assert listed == (
+        ("gpt-mixed", "batch-b1", "batch-id"),
+        ("gpt-mixed", "batch-b2", "batch-id"),
+        ("gpt-mixed", "batch-b3", "batch-id"),
+        ("gpt-mixed", "batch-a1", None),
+        ("gpt-mixed", "batch-a2", None),
+    )
 
 
 @pytest.mark.asyncio
@@ -3751,6 +3784,43 @@ async def test_cancel__mixed_group_batch_reaches_the_deployment_its_hint_names(
 
     assert _reached(cancel_harness.acancel_kwargs()) == reached
     assert _decoded(resp.id) == ("gpt-mixed", "batch-provider-id", kept_hint)
+
+
+_PAUSED_BATCH_DEPLOYMENT: Final = frozenset({"batch-id"})
+_HINTED_BATCH_ID: Final = encode_file_id_with_model(
+    "batch-provider-id", "gpt-mixed", id_type="batch", deployment_id="batch-id"
+)
+
+
+@pytest.mark.asyncio
+async def test_retrieve__a_batch_on_a_paused_batch_deployment_is_refused_rather_than_read_from_the_chat_resource(
+    retrieve_harness,
+):
+    provider_retrieve: Final = AsyncMock(return_value=make_batch(output_file_id="file-out"))
+
+    with (
+        patch.object(proxy_server, "llm_router", _mixed_azure_group_router(_PAUSED_BATCH_DEPLOYMENT)),
+        patch.object(litellm, "aretrieve_batch", provider_retrieve),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await call_retrieve(retrieve_harness, _HINTED_BATCH_ID)
+
+    assert exc_info.value.code == "400"
+    provider_retrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__a_batch_on_a_paused_batch_deployment_is_refused_rather_than_sent_to_the_chat_resource(
+    cancel_harness,
+):
+    with (
+        patch.object(proxy_server, "llm_router", _mixed_azure_group_router(_PAUSED_BATCH_DEPLOYMENT)),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await call_cancel(cancel_harness, _HINTED_BATCH_ID)
+
+    assert exc_info.value.code == "400"
+    cancel_harness.litellm_acancel.assert_not_called()
 
 
 @pytest.mark.asyncio
