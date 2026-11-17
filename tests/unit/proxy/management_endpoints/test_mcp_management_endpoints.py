@@ -5066,9 +5066,11 @@ class TestMCPRegistryEndpoint:
             (None, "fim"),
         ],
     )
-    def test_registry_entry_uses_saved_description(
+    def test_registry_entry_uses_saved_description_and_server_name(
         self, mcp_info: dict[str, str] | None, expected_description: str
     ) -> None:
+        from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
         client: Final = create_mcp_router_test_client()
         server: Final = MCPServer(
             server_id="server-fim",
@@ -5077,23 +5079,22 @@ class TestMCPRegistryEndpoint:
             server_name="figma_mcp",
             url="https://figma.example.com/mcp",
             transport=MCPTransport.http,
+            available_on_public_internet=True,
             mcp_info=mcp_info,
         )
-        mock_manager: Final = MagicMock()
-        mock_manager.get_filtered_registry.return_value = {server.server_id: server}
+        manager: Final = MCPServerManager()
+        manager.registry = {server.server_id: server}
 
         with (
             patch_proxy_general_settings({"enable_mcp_registry": True}),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-                mock_manager,
-            ),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
         ):
             response: Final = client.get("/v1/mcp/registry.json")
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         entry: Final = response.json()["servers"][1]["server"]
         assert entry["description"] == expected_description
+        assert entry["title"] == "figma_mcp"
         assert entry["name"] == "fim"
         assert entry["remotes"][0]["url"].endswith("/fim/mcp")
 
