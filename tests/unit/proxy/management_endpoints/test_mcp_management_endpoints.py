@@ -388,6 +388,25 @@ async def test_remove_mcp_server_unpublishes_it_so_a_new_server_reusing_its_id_s
 
 
 @pytest.mark.asyncio
+async def test_remove_mcp_server_keeps_it_public_when_no_server_was_deleted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: Final = _replica_publishing_servers(monkeypatch)
+    monkeypatch.setattr(mgmt_endpoints, "delete_mcp_server", AsyncMock(return_value=None))
+
+    with pytest.raises(HTTPException) as not_found:
+        await mgmt_endpoints.remove_mcp_server(
+            server_id="server-1",
+            user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert not_found.value.status_code == 404
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == ["server-1", "server-2"]
+    assert litellm.public_mcp_servers == ["server-1", "server-2"]
+
+
+@pytest.mark.asyncio
 async def test_remove_mcp_server_still_deletes_when_the_config_file_owns_the_public_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

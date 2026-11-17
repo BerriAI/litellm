@@ -6693,11 +6693,21 @@ class ProxyConfig:
         on_written: Callable[[tuple[str, ...]], None],
         aliases: Callable[[str], frozenset[str]] = _listed_only_as_itself,
     ) -> None:
-        if _settings_db_client() is not None and self._settings_stores[section_name].owned_by_config(key):
+        if _settings_db_client() is None or self._settings_stores[section_name].owned_by_config(key):
             return
-        await self.apply_list_setting_delta(
-            section_name=section_name, key=key, requested=(), previous=(item,), on_written=on_written, aliases=aliases
-        )
+        from prisma.errors import PrismaError
+
+        try:
+            await self.apply_list_setting_delta(
+                section_name=section_name,
+                key=key,
+                requested=(),
+                previous=(item,),
+                on_written=on_written,
+                aliases=aliases,
+            )
+        except (ValidationError, PrismaError):
+            verbose_proxy_logger.exception("Could not remove %s from %s.%s", item, section_name, key)
 
     async def apply_mapping_setting_delta(
         self,

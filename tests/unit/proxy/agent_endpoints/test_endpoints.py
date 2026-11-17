@@ -1304,7 +1304,7 @@ _PROXY_ADMIN: Final = UserAPIKeyAuth(user_id="test-user", user_role=LitellmUserR
 
 
 def _replica_that_missed_a_publish(
-    monkeypatch: pytest.MonkeyPatch, *, stored_public_agent_groups: list[str], store_model_in_db: bool = True
+    monkeypatch: pytest.MonkeyPatch, *, stored_public_agent_groups: list[str | int], store_model_in_db: bool = True
 ) -> tuple[ConfigRows, AgentRegistry]:
     import litellm
     from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
@@ -1570,6 +1570,21 @@ async def test_make_agents_public_stores_one_id_when_both_ids_of_a_config_agent_
     assert rows.stored("litellm_settings")["public_agent_groups"] == [legacy_id, "agent-1"]
 
 
+def _deletable_agent_one(monkeypatch: pytest.MonkeyPatch, rows: ConfigRows, registry: AgentRegistry) -> AsyncMock:
+    agents_table: Final = SimpleNamespace(
+        find_unique=AsyncMock(return_value={"agent_id": "agent-1", "agent_name": "Agent One"})
+    )
+    delete_agent_from_db: Final = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        ReplicaPrisma(rows, tables={"litellm_agentstable": agents_table}),
+    )
+    monkeypatch.setattr(
+        agent_endpoints, "AGENT_REGISTRY", MagicMock(wraps=registry, delete_agent_from_db=delete_agent_from_db)
+    )
+    return delete_agent_from_db
+
+
 @pytest.mark.asyncio
 async def test_delete_agent_unpublishes_it_so_a_new_agent_reusing_its_id_starts_private(
     monkeypatch: pytest.MonkeyPatch,
@@ -1577,22 +1592,52 @@ async def test_delete_agent_unpublishes_it_so_a_new_agent_reusing_its_id_starts_
     import litellm
 
     rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1", "agent-2"])
-    agents_table: Final = SimpleNamespace(
-        find_unique=AsyncMock(return_value={"agent_id": "agent-1", "agent_name": "Agent One"})
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.prisma_client",
-        ReplicaPrisma(rows, tables={"litellm_agentstable": agents_table}),
-    )
-    monkeypatch.setattr(
-        agent_endpoints, "AGENT_REGISTRY", MagicMock(wraps=registry, delete_agent_from_db=AsyncMock())
-    )
+    _ = _deletable_agent_one(monkeypatch, rows, registry)
 
     response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
 
     assert response == {"message": "Agent agent-1 deleted successfully"}
     assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-2"]
     assert litellm.public_agent_groups == ["agent-2"]
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_leaves_the_config_file_alone_when_settings_are_not_stored_in_the_db(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[], store_model_in_db=False)
+    config_file: Final = tmp_path / "config.yaml"
+    config_text: Final = (
+        "# operator note\n"
+        "general_settings:\n"
+        "  master_key: os.environ/AGENT_DELETE_TEST_MASTER_KEY\n"
+        "litellm_settings:\n"
+        "  public_agent_groups: [agent-1, agent-2]\n"
+    )
+    config_file.write_text(config_text)
+    monkeypatch.setenv("AGENT_DELETE_TEST_MASTER_KEY", "sk-must-stay-out-of-the-file")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+    delete_agent_from_db: Final = _deletable_agent_one(monkeypatch, rows, registry)
+
+    response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+
+    assert response == {"message": "Agent agent-1 deleted successfully"}
+    delete_agent_from_db.assert_awaited_once()
+    assert config_file.read_text() == config_text
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_still_deletes_when_the_stored_public_list_cannot_be_rewritten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1", 7])
+    delete_agent_from_db: Final = _deletable_agent_one(monkeypatch, rows, registry)
+
+    response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+
+    assert response == {"message": "Agent agent-1 deleted successfully"}
+    delete_agent_from_db.assert_awaited_once()
+    assert [agent.agent_name for agent in registry.get_agent_list()] == ["Agent Two"]
 
 
 @pytest.mark.asyncio
