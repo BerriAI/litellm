@@ -1364,9 +1364,8 @@ def function_setup(
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
-        all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
-
         with litellm.logging_callback_manager.callback_lists_lock:
+            all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
             if len(all_callbacks) > 0:
                 for callback in all_callbacks:
                     # check if callback is a string - e.g. "lago", "openmeter"
