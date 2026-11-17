@@ -1,7 +1,7 @@
 //! The credentials a `vertex_credentials` value names, read as Python's
 //! `load_vertex_credentials_source` reads them and parsed once into typed credentials.
 
-use std::path::Path;
+use std::{io::Read, path::Path};
 
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -17,6 +17,7 @@ use crate::config::is_base64_encoded_json;
 
 const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}', '"', '\''];
 const MAX_CREDENTIALS_FILE_CHARACTERS: usize = 1 << 20;
+const MAX_CREDENTIALS_FILE_BYTES: u64 = 4 * MAX_CREDENTIALS_FILE_CHARACTERS as u64;
 const NOT_A_JSON_OBJECT: &str = "is JSON but not a JSON object, it may be quoted or encoded twice";
 const PRIVATE_KEY_HINT: &str = "Check for unescaped newlines in private_key.";
 const LEADING_NOISE_HINT: &str = "Remove the quotes or byte-order mark before the opening `{`.";
@@ -190,21 +191,36 @@ fn inline_not_json(detail: &str, hint: &str) -> GoogleLoginFailure {
 }
 
 fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
-    let bytes = std::fs::read(path).map_err(|error| {
+    let unreadable = |error: std::io::Error| {
         GoogleLoginFailure::credentials_file(UnusableFile::Unreadable {
             path: path.into(),
             reason: error.to_string(),
         })
-    })?;
-    let contents =
-        String::from_utf8(bytes).map_err(|_| invalid_file(path, "is not UTF-8 text".into()))?;
-    if contents.chars().count() > MAX_CREDENTIALS_FILE_CHARACTERS {
-        return Err(invalid_file(
+    };
+    let too_large = || {
+        invalid_file(
             path,
             format!(
                 "is over {MAX_CREDENTIALS_FILE_CHARACTERS} characters, larger than any credentials file"
             ),
-        ));
+        )
+    };
+    // At most four UTF-8 bytes a character, so one byte past that is over the limit whatever it
+    // decodes to, and a file such as `/dev/zero` is never read further.
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| {
+            file.take(MAX_CREDENTIALS_FILE_BYTES + 1)
+                .read_to_end(&mut bytes)
+        })
+        .map_err(unreadable)?;
+    if bytes.len() as u64 > MAX_CREDENTIALS_FILE_BYTES {
+        return Err(too_large());
+    }
+    let contents =
+        String::from_utf8(bytes).map_err(|_| invalid_file(path, "is not UTF-8 text".into()))?;
+    if contents.chars().count() > MAX_CREDENTIALS_FILE_CHARACTERS {
+        return Err(too_large());
     }
     match parse_json_object(&contents) {
         Parsed::Object(info) => Ok(CredentialsJson {
@@ -352,6 +368,16 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), " ".repeat(MAX_CREDENTIALS_FILE_CHARACTERS + 1)).unwrap();
         let failure = load_vertex_credentials_source(file.path().to_str().unwrap()).unwrap_err();
+        assert!(matches!(
+            failure.file,
+            Some(UnusableFile::Invalid { problem, .. }) if problem == "is over 1048576 characters, larger than any credentials file"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn an_endless_file_is_refused_by_its_size_without_reading_it_all() {
+        let failure = load_vertex_credentials_source("/dev/zero").unwrap_err();
         assert!(matches!(
             failure.file,
             Some(UnusableFile::Invalid { problem, .. }) if problem == "is over 1048576 characters, larger than any credentials file"
