@@ -761,6 +761,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    request_routing_metadata,
     request_served_model,
     sanitize_for_log,
 )
@@ -16106,6 +16107,7 @@ def _router_default_litellm_params(router: Router | None) -> Mapping[str, object
 class CountRoute:
     served: str
     select_request: Mapping[str, object]
+    routable: tuple[Mapping[str, object], ...]
     deployment: Mapping[str, object] | None
 
 
@@ -16234,7 +16236,17 @@ def _caller_tag_scope(caller: UserAPIKeyAuth) -> Mapping[str, object]:
     return {"tags": list(inherited), "inherited_tags": inherited} if inherited else {}
 
 
-def _caller_routing_kwargs(caller: UserAPIKeyAuth | None) -> Mapping[str, object]:
+def _caller_affinity_keys(caller: UserAPIKeyAuth) -> Mapping[str, object]:
+    key_hash: Final = LiteLLMProxyRequestSetup.get_logged_api_key(caller)
+    return {
+        **({"user_api_key_hash": key_hash} if key_hash else {}),
+        **({"user_api_key_user_id": caller.user_id} if caller.user_id else {}),
+    }
+
+
+def _caller_routing_kwargs(
+    caller: UserAPIKeyAuth | None, request_routing: Mapping[str, object]
+) -> Mapping[str, object]:
     if caller is None:
         return {}
     team_scope: Final = {"user_api_key_team_id": caller.team_id} if caller.team_id else {}
@@ -16242,7 +16254,9 @@ def _caller_routing_kwargs(caller: UserAPIKeyAuth | None) -> Mapping[str, object
         "metadata": {
             "user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(caller),
             **team_scope,
+            **_caller_affinity_keys(caller),
             **_caller_tag_scope(caller),
+            **request_routing,
         }
     }
 
@@ -16432,6 +16446,7 @@ async def token_counter(
             ),
             litellm_call_id=call_id,
             caller=user_api_key_dict,
+            request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
         ),
         call_id,
         http_request,
@@ -16451,6 +16466,7 @@ async def count_request_tokens(
     client_oauth_token: str | None = None,
     count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     caller: UserAPIKeyAuth | None = None,
+    request_routing: Mapping[str, object] = MappingProxyType({}),
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -16459,7 +16475,7 @@ async def count_request_tokens(
             call_id,
             request.model,
         )
-    count_route: Final = await route_count(request.model, responses_request, caller)
+    count_route: Final = await route_count(request.model, responses_request, caller, request_routing)
     count: Final = _count_request_tokens(
         request=request,
         count_route=count_route,
@@ -16487,8 +16503,16 @@ async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -
         raise ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400) from e
 
 
-async def _routed_count_deployment(served: str, select_request: Mapping[str, object]) -> Mapping[str, object] | None:
+def _routable_count_deployments(served: str, select_request: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     if llm_router is None:
+        return ()
+    return tuple(llm_router.registry().deployments(served, source="routable", request=select_request))
+
+
+async def _routed_count_deployment(
+    served: str, select_request: Mapping[str, object], routable: tuple[Mapping[str, object], ...]
+) -> Mapping[str, object] | None:
+    if llm_router is None or not routable:
         return None
     try:
         routed: Final = await llm_router.select(served, dict(select_request))
@@ -16501,7 +16525,10 @@ async def _routed_count_deployment(served: str, select_request: Mapping[str, obj
 
 
 async def route_count(
-    model: str, responses_request: Mapping[str, object] | None, caller: UserAPIKeyAuth | None
+    model: str,
+    responses_request: Mapping[str, object] | None,
+    caller: UserAPIKeyAuth | None,
+    request_routing: Mapping[str, object] = MappingProxyType({}),
 ) -> CountRoute:
     settings: Final = await _caller_router_settings(caller)
     served: Final = (
@@ -16511,12 +16538,14 @@ async def route_count(
         "model": served,
         **_responses_routing_kwargs(responses_request),
         **_router_settings_kwargs(settings),
-        **_caller_routing_kwargs(caller),
+        **_caller_routing_kwargs(caller, request_routing),
     }
+    routable: Final = _routable_count_deployments(served, select_request)
     return CountRoute(
         served=served,
         select_request=select_request,
-        deployment=await _routed_count_deployment(served, select_request),
+        routable=routable,
+        deployment=await _routed_count_deployment(served, select_request, routable),
     )
 
 

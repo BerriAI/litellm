@@ -70,6 +70,7 @@ from litellm.proxy._types import LitellmUserRoles, ProxyException, TokenCountReq
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.common_utils.token_count_settings import (
     ProviderCountFailure,
     TokenCountModel,
@@ -245,18 +246,27 @@ async def test_count_runs_on_the_deployment_the_callers_team_routes_to(
     assert response.model_used == expected_model_used
 
 
-def _tag_routed_router(tag_routing_prefix: str) -> Router:
+def _tag_routed_router(tag_routing_prefix: str, model_name: str = "tagged-model") -> Router:
     return Router(
         model_list=[
             {
-                "model_name": "tagged-model",
+                "model_name": model_name,
                 "litellm_params": {"model": "groq/default-backend", "api_key": "sk-test", "tags": ["default"]},
                 "model_info": {"id": "default-deployment"},
             },
             {
-                "model_name": "tagged-model",
+                "model_name": model_name,
                 "litellm_params": {"model": "groq/team-x-backend", "api_key": "sk-test", "tags": ["team-x"]},
                 "model_info": {"id": "team-x-deployment"},
+            },
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "groq/claude-code-backend",
+                    "api_key": "sk-test",
+                    "tag_regex": ["^User-Agent: claude-cli/"],
+                },
+                "model_info": {"id": "claude-code-deployment"},
             },
         ],
         enable_tag_filtering=True,
@@ -348,25 +358,31 @@ async def test_count_routes_with_the_callers_router_settings(
     assert response.model_used == expected_model_used
 
 
-async def _count_on_utils_route(caller: UserAPIKeyAuth) -> object:
+async def _count_on_utils_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
     return await token_counter(
         request=TokenCountRequest(model="shared-model", messages=[{"role": "user", "content": "hello"}]),
-        http_request=_json_request({}, "python-httpx/0.28.1"),
+        http_request=_json_request({}, "python-httpx/0.28.1", headers),
         fastapi_response=Response(),
         user_api_key_dict=caller,
     )
 
 
-async def _count_on_messages_route(caller: UserAPIKeyAuth) -> object:
+async def _count_on_messages_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
     body: Final = {"model": "shared-model", "messages": [{"role": "user", "content": "hello"}]}
-    return await anthropic_count_tokens(_json_request(body, "python-httpx/0.28.1"), Response(), caller)
+    return await anthropic_count_tokens(_json_request(body, "python-httpx/0.28.1", headers), Response(), caller)
 
 
-async def _count_on_responses_route(caller: UserAPIKeyAuth) -> object:
+async def _count_on_responses_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
     from litellm.proxy.response_api_endpoints.endpoints import responses_input_tokens
 
     return await responses_input_tokens(
-        request=_json_request({"model": "shared-model", "input": "hello"}, "python-httpx/0.28.1"),
+        request=_json_request({"model": "shared-model", "input": "hello"}, "python-httpx/0.28.1", headers),
         fastapi_response=Response(),
         general_settings=MappingProxyType({}),
         token_counter=count_request_tokens,
@@ -377,19 +393,26 @@ async def _count_on_responses_route(caller: UserAPIKeyAuth) -> object:
     )
 
 
-async def _count_on_google_route(caller: UserAPIKeyAuth) -> object:
+async def _count_on_google_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
     from litellm.proxy.google_endpoints.endpoints import google_count_tokens
 
     body: Final = {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
-    return await google_count_tokens(_json_request(body, "python-httpx/0.28.1"), "shared-model", Response(), caller)
+    return await google_count_tokens(
+        _json_request(body, "python-httpx/0.28.1", headers), "shared-model", Response(), caller
+    )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
+_EVERY_COUNT_ROUTE: Final = pytest.mark.parametrize(
     "count_on_route",
     [_count_on_utils_route, _count_on_messages_route, _count_on_responses_route, _count_on_google_route],
     ids=["utils", "messages", "responses", "google"],
 )
+
+
+@pytest.mark.asyncio
+@_EVERY_COUNT_ROUTE
 async def test_every_count_route_counts_on_the_callers_team_deployment(
     monkeypatch: pytest.MonkeyPatch,
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
@@ -400,6 +423,85 @@ async def test_every_count_route_counts_on_the_callers_team_deployment(
     await count_on_route(UserAPIKeyAuth(team_id="team-a"))
 
     assert tuple(line["model_id"] for line in token_count_log_lines()) == ("team-a-deployment",)
+
+
+@pytest.mark.asyncio
+@_EVERY_COUNT_ROUTE
+async def test_every_count_route_counts_on_the_deployment_the_request_tags_header_routes_to(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    count_on_route: Callable[[UserAPIKeyAuth, Mapping[str, str]], Coroutine[None, None, object]],
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tag_routed_router("", model_name="shared-model"))
+
+    await count_on_route(UserAPIKeyAuth(), {"x-litellm-tags": "team-x"})
+
+    assert tuple(line["model_id"] for line in token_count_log_lines()) == ("team-x-deployment",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_agent", "expected_model_id"),
+    [("claude-cli/2.1.299 (external, cli)", "claude-code-deployment"), ("python-httpx/0.28.1", "default-deployment")],
+)
+async def test_messages_count_tokens_counts_on_the_deployment_the_user_agent_tag_regex_routes_to(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    user_agent: str,
+    expected_model_id: str,
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tag_routed_router("", model_name="shared-model"))
+    body: Final = {"model": "shared-model", "messages": [{"role": "user", "content": "hello"}]}
+
+    await anthropic_count_tokens(_json_request(body, user_agent), Response(), UserAPIKeyAuth())
+
+    assert tuple(line["model_id"] for line in token_count_log_lines()) == (expected_model_id,)
+
+
+def _affinity_router(pre_call_check: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "pinned-model",
+                "litellm_params": {"model": f"groq/backend-{deployment_id}", "api_key": "sk-test"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("deployment-1", "deployment-2", "deployment-3", "deployment-4")
+        ],
+        optional_pre_call_checks=[pre_call_check],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pre_call_check", "session_id"),
+    [("deployment_affinity", None), ("session_affinity", "2f1c9d4e-7b3a-4c61-9e0f-5d8a2b6c4e17")],
+)
+async def test_messages_count_tokens_counts_on_the_deployment_inference_pinned_for_the_caller(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    pre_call_check: str,
+    session_id: str | None,
+):
+    router: Final = _affinity_router(pre_call_check)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    caller: Final = UserAPIKeyAuth(api_key="sk-pinned-caller", user_id="pinned-user")
+    inference: Final = await router.acompletion(
+        model="pinned-model",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+        metadata={
+            "user_api_key_hash": LiteLLMProxyRequestSetup.get_logged_api_key(caller),
+            **({"session_id": session_id} if session_id else {}),
+        },
+    )
+    session_headers: Final = {"x-claude-code-session-id": session_id} if session_id else {}
+    body: Final = {"model": "pinned-model", "messages": [{"role": "user", "content": "hello"}]}
+
+    for _ in range(8):
+        await anthropic_count_tokens(_json_request(body, "claude-cli/2.1.299", session_headers), Response(), caller)
+
+    assert {line["model_id"] for line in token_count_log_lines()} == {inference._hidden_params["model_id"]}
 
 
 @pytest.mark.asyncio
@@ -1714,7 +1816,9 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         proxy_server.count_request_tokens = original_token_counter
 
 
-def _json_request(body: Mapping[str, object], user_agent: str) -> Request:
+def _json_request(
+    body: Mapping[str, object], user_agent: str, headers: Mapping[str, str] = MappingProxyType({})
+) -> Request:
     payload: Final = json.dumps(body).encode()
 
     async def receive() -> Message:
@@ -1726,7 +1830,11 @@ def _json_request(body: Mapping[str, object], user_agent: str) -> Request:
             "method": "POST",
             "path": "/v1/messages/count_tokens",
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json"), (b"user-agent", user_agent.encode())],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"user-agent", user_agent.encode()),
+                *((name.encode(), value.encode()) for name, value in headers.items()),
+            ],
         },
         receive,
     )

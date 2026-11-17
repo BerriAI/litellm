@@ -1626,7 +1626,7 @@ async def handle_bedrock_count_tokens(
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _bedrock_count_tokens(user_api_key_dict, request_body, litellm_call_id),
+        _bedrock_count_tokens(request, user_api_key_dict, request_body, litellm_call_id),
         litellm_call_id,
         request,
         fastapi_response,
@@ -1634,10 +1634,11 @@ async def handle_bedrock_count_tokens(
 
 
 async def _bedrock_count_tokens(
-    user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
+    request: Request, user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import route_count
 
     try:
@@ -1653,7 +1654,10 @@ async def _bedrock_count_tokens(
                 None,
             )
 
-        deployment: Final = (await route_count(model, None, user_api_key_dict)).deployment
+        route: Final = await route_count(
+            model, None, user_api_key_dict, request_routing_metadata(request, request_body, user_api_key_dict)
+        )
+        deployment: Final = route.deployment if route.deployment is not None else next(iter(route.routable), None)
         model_litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
         deployment_model: Final = None if model_litellm_params is None else model_litellm_params.get("model")
         resolved_model: Final = deployment_model if isinstance(deployment_model, str) else model

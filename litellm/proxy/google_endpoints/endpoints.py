@@ -126,6 +126,7 @@ def _input_schema(declaration: _GoogleCountTokensFunctionDeclaration) -> object:
     return {"type": "object", "properties": {}}
 
 
+_COUNT_REQUEST_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _GOOGLE_RPC_STATUS: Final = MappingProxyType(
     {
         400: "INVALID_ARGUMENT",
@@ -361,6 +362,7 @@ async def _google_count_tokens(
     request: Request, model_name: str, litellm_call_id: str, caller: UserAPIKeyAuth
 ) -> JSONResponse | TokenCountDetailsResponse:
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import count_request_tokens
 
     data: Final = await read_request_body(request=request)
@@ -383,7 +385,11 @@ async def _google_count_tokens(
 
     try:
         token_response: Final = await count_request_tokens(
-            request=token_request, call_endpoint=True, litellm_call_id=litellm_call_id, caller=caller
+            request=token_request,
+            call_endpoint=True,
+            litellm_call_id=litellm_call_id,
+            caller=caller,
+            request_routing=request_routing_metadata(request, _COUNT_REQUEST_FIELDS.validate_python(data), caller),
         )
     except ProxyException as error:
         return _google_error_response(request, error)

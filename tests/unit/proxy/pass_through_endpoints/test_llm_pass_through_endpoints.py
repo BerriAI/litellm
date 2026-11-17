@@ -8524,16 +8524,17 @@ async def _bedrock_native_count(
         _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "count-log-bedrock-deployment"}),
     ),
     caller: UserAPIKeyAuth | None = None,
+    cooled_down_ids: Sequence[str] = (),
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         handle_bedrock_count_tokens,
     )
 
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.llm_router",
-        litellm.Router(model_list=[dict(deployment) for deployment in model_list]),
-    )
+    router: Final = litellm.Router(model_list=[dict(deployment) for deployment in model_list])
+    for deployment_id in cooled_down_ids:
+        router.health().cooldowns.add_deployment_to_cooldown(deployment_id, Exception("429 throttled"), 429, 60)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path__regex=r"/count-tokens$").mock(
         return_value=aws_reply
     )
@@ -8616,6 +8617,53 @@ async def test_bedrock_native_count_tokens_counts_on_the_deployment_the_callers_
 
     assert result == {"input_tokens": 12}
     assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_keeps_the_deployments_region_and_keys_while_it_is_cooling_down(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        caller=UserAPIKeyAuth(api_key="sk-cooldown-caller"),
+        cooled_down_ids=("count-log-bedrock-deployment",),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert respx_mock.calls.last.request.headers["authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIATESTACCESSKEY/"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_for_a_model_the_router_does_not_serve_logs_no_error(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAENVACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        result: Final = await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 7}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "model": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+            caller=UserAPIKeyAuth(api_key="sk-direct-caller"),
+        )
+
+    assert result == {"input_tokens": 7}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 @pytest.mark.asyncio
