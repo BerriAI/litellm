@@ -25,7 +25,9 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockCatalog,
     CodexStockModel,
     codex_models_response_json,
+    generic_service_tier,
 )
+from litellm.proxy.common_utils.codex_model_translation import CodexServiceTier
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, is_pkce_login, load_token, login
@@ -586,6 +588,7 @@ class _DeploymentInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     team_public_model_name: str | None = None
+    team_id: str | None = None
     blocked: bool | None = None
     service_tiers: JsonValue = None
     display_name: JsonValue = None
@@ -692,23 +695,27 @@ def _fetch_validated(
         return None
 
 
-def _left_to_the_proxy(
-    listed: frozenset[str], deployments: Sequence[_Deployment], field: Callable[[_DeploymentInfo], JsonValue]
+def _is_team_row(deployment: _Deployment) -> bool:
+    return deployment.model_info is not None and deployment.model_info.team_id is not None
+
+
+def _configured_names(
+    deployments: Sequence[_Deployment], field: Callable[[_DeploymentInfo], JsonValue]
 ) -> frozenset[str]:
-    deployed: Final = frozenset(_public_name(d) for d in deployments)
-    configured: Final = frozenset(
-        _public_name(d) for d in deployments if d.model_info is not None and field(d.model_info) is not None
-    )
-    return configured | (listed - deployed)
+    shared: Final = frozenset(_public_name(d) for d in deployments if not _is_team_row(d))
+    deciding: Final = tuple(d for d in deployments if not _is_team_row(d) or _public_name(d) not in shared)
+    return frozenset(_public_name(d) for d in deciding if d.model_info is not None and field(d.model_info) is not None)
 
 
-def _served_tiers(model: CodexStockModel) -> JsonValue:
-    return [{"id": tier.id, "name": tier.name, "description": tier.description} for tier in model.service_tiers]
+def _served_tier(tier: CodexServiceTier) -> JsonValue:
+    if tier == generic_service_tier(tier.id):
+        return tier.id
+    return {"id": tier.id, "name": tier.name, "description": tier.description}
 
 
 def _served_info(model: CodexStockModel, named: frozenset[str], tiered: frozenset[str]) -> ConfiguredModelInfo:
     return ConfiguredModelInfo(
-        service_tiers=(_served_tiers(model),) if model.slug in tiered else (),
+        service_tiers=([_served_tier(tier) for tier in model.service_tiers],) if model.slug in tiered else (),
         display_name=model.display_name if model.slug in named else None,
     )
 
@@ -721,19 +728,24 @@ def _fetch_configured(
     client_version: str | None,
     *,
     get: Callable[..., requests.Response],
+    warn: Callable[[str], None],
 ) -> Mapping[str, ConfiguredModelInfo]:
-    if deployments is None or client_version is None:
+    if deployments is None:
         return _NO_CONFIGURED
-    listed: Final = frozenset(m.id for m in models)
-    named: Final = _left_to_the_proxy(listed, deployments, lambda info: info.display_name)
-    tiered: Final = _left_to_the_proxy(listed, deployments, lambda info: info.service_tiers)
+    named: Final = _configured_names(deployments, lambda info: info.display_name)
+    tiered: Final = _configured_names(deployments, lambda info: info.service_tiers)
     if not named | tiered:
+        return _NO_CONFIGURED
+    if client_version is None:
+        warn("litellm: Codex keeps its own display names and service tiers: `codex --version` printed no version")
         return _NO_CONFIGURED
     url: Final = f"{base_url.rstrip('/')}/v1/models?{urlencode({'client_version': client_version})}"
     served: Final = _fetch_validated(url, api_key, CodexStockCatalog, get=get)
     if served is None:
+        warn(f"litellm: Codex keeps its own display names and service tiers: {url} served no Codex catalog")
         return _NO_CONFIGURED
-    return MappingProxyType({m.slug: _served_info(m, named, tiered) for m in served.models})
+    undeployed: Final = frozenset(m.id for m in models) - frozenset(_public_name(d) for d in deployments)
+    return MappingProxyType({m.slug: _served_info(m, named | undeployed, tiered | undeployed) for m in served.models})
 
 
 class _OpenCodeLimit(LiteLLMBaseModel):
@@ -1016,6 +1028,7 @@ def codex_model_sync_args(
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     home: Callable[[], Path] = Path.home,
     instructions_path: Path = CODEX_BASE_INSTRUCTIONS_PATH,
+    warn: Callable[[str], None] = _warn,
 ) -> ModelSyncArgs | ModelSyncSkipped:
     """`-c model_catalog_json=...` pointing Codex at the proxy's model list, or why it was skipped.
 
@@ -1026,17 +1039,22 @@ def codex_model_sync_args(
     included when every unpaused deployment /v1/model/info lists for it routes
     to the same OpenAI model and Codex knows that model, and its version, so a
     model it does not know offers only reasoning efforts it can parse. A name
-    /v1/model/info shows a deployment setting `display_name` or `service_tiers`
-    on, or lists no deployment for (a key's or team's alias), takes that field
-    from the catalog the proxy serves this key at `/v1/models?client_version=...`,
-    so the proxy's own team, alias and tier rules decide it. It then
+    whose deployments on /v1/model/info set `display_name` or `service_tiers`
+    (its shared deployments when it has any, since a team's copy only serves that
+    team's keys) takes that field from the catalog the proxy serves this key at
+    `/v1/models?client_version=...`, so the proxy's own team, alias and tier rules
+    decide it, and a tier the proxy could only name generically takes the installed
+    Codex's name for it. A listed name with no deployment (a key's or team's alias)
+    takes both fields from that catalog too once any name is configured, since only
+    the proxy can resolve its target. It then
     reads the file back once before it is handed over. The key never lands in
     the file. A failed fetch, read, listing, write or read-back is reported
     rather than raised: Codex still launches with its built-in catalog and takes
     a proxy model by name via -m, and a rejected file stays on disk to be looked
     at. An unavailable /v1/model/info only leaves every alias on the fallback entry
     and every model on Codex's own display name and service tiers, and so does an
-    unavailable served catalog or an unreadable Codex version.
+    unavailable served catalog or an unreadable Codex version, which `warn` reports
+    when a name is configured.
     """
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
@@ -1062,7 +1080,7 @@ def codex_model_sync_args(
         stock,
         instructions,
         _upstreams_by_public_name(deployments or ()),
-        _fetch_configured(base_url, api_key, listing, deployments, version, get=get),
+        _fetch_configured(base_url, api_key, listing, deployments, version, get=get, warn=warn),
         groups,
         version,
     )

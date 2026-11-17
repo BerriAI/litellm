@@ -768,13 +768,14 @@ class TestCodexModelSync:
     def _sync(
         self, listing, codex_home, base_url="http://localhost:4000/", run=None, groups=(), model_info=None, served=None
     ):
-        captured = {}
+        captured = {"warnings": []}
         result = codex_model_sync_args(
             {"CODEX_HOME": str(codex_home)},
             base_url,
             "sk-key",
             get=_routed_get(captured, listing, groups, model_info, served),
             run=_FakeRun() if run is None else run,
+            warn=captured["warnings"].append,
         )
         return captured, result
 
@@ -795,7 +796,6 @@ class TestCodexModelSync:
             "http://localhost:4000/v1/models",
             "http://localhost:4000/v1/model/info",
             "http://localhost:4000/model_group/info",
-            "http://localhost:4000/v1/models?client_version=0.165.0",
         ]
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
         path = self._catalog_path(result)
@@ -1062,6 +1062,7 @@ class TestCodexModelSync:
                     "model_name": "model_name_team-1_d1",
                     "model": "openai/gpt-5.6-terra",
                     "team_public_model_name": "api-terra",
+                    "team_id": "team-1",
                 },
                 "terra-hash",
             ),
@@ -1112,25 +1113,79 @@ class TestCodexModelSync:
         entry = self._entries(tmp_path)["gpt-5.5"]
         assert (entry["display_name"], entry["service_tiers"]) == expected
 
-    def test_a_name_with_no_deployment_row_takes_what_the_proxy_serves(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [({"display_name": "Configured"}, ("My Fast", [_STOCK_FAST_TIER])), ({}, ("my-fast", []))],
+        ids=["another_name_is_configured", "nothing_is_configured"],
+    )
+    def test_a_name_with_no_deployment_row_takes_what_the_proxy_serves_once_a_name_is_configured(
+        self, tmp_path, configured, expected
+    ):
         self._sync(
-            self._listing(self._row("gpt-5.5"), self._row("my-fast")),
+            self._listing(self._row("gpt-5.5"), self._row("gpt-5.6-terra"), self._row("my-fast")),
             tmp_path,
-            model_info=self._deployments(self._deployment("gpt-5.5", "openai/gpt-5.5")),
+            model_info=self._deployments(
+                self._deployment("gpt-5.5", "openai/gpt-5.5"),
+                self._deployment("gpt-5.6-terra", "openai/gpt-5.6-terra", **configured),
+            ),
             served=self._served(
-                ("gpt-5.5", "Served", [_generic_tier("flex")]), ("my-fast", "My Fast", [_STOCK_FAST_TIER])
+                ("gpt-5.5", "Served", [_generic_tier("flex")]),
+                ("gpt-5.6-terra", "Configured", []),
+                ("my-fast", "My Fast", [_STOCK_FAST_TIER]),
             ),
         )
 
         entries = self._entries(tmp_path)
-        assert (entries["my-fast"]["display_name"], entries["my-fast"]["service_tiers"]) == (
-            "My Fast",
-            [_STOCK_FAST_TIER],
-        )
+        assert (entries["my-fast"]["display_name"], entries["my-fast"]["service_tiers"]) == expected
         assert (entries["gpt-5.5"]["display_name"], entries["gpt-5.5"]["service_tiers"]) == (
             "GPT-5.5",
             [_STOCK_FAST_TIER],
         )
+
+    def test_a_team_copy_of_a_shared_name_leaves_the_shared_name_on_the_installed_codex_values(self, tmp_path):
+        self._sync(
+            self._listing(self._row("gpt-5.5")),
+            tmp_path,
+            model_info=self._deployments(
+                self._deployment("gpt-5.5", "openai/gpt-5.5"),
+                self._deployment(
+                    "model_name_team-1_d1",
+                    "openai/gpt-5.5",
+                    team_id="team-1",
+                    team_public_model_name="gpt-5.5",
+                    display_name="Team",
+                    service_tiers=["flex"],
+                ),
+            ),
+            served=self._served(("gpt-5.5", "Older GPT-5.5", [])),
+        )
+
+        entry = self._entries(tmp_path)["gpt-5.5"]
+        assert (entry["display_name"], entry["service_tiers"]) == ("GPT-5.5", [_STOCK_FAST_TIER])
+
+    @pytest.mark.parametrize(
+        ("configured", "served_tiers", "expected"),
+        [
+            (
+                ["priority", "flex"],
+                [_generic_tier("priority"), _generic_tier("flex")],
+                [_STOCK_FAST_TIER, _generic_tier("flex")],
+            ),
+            ([], [], []),
+        ],
+        ids=["a_tier_the_proxy_names_generically_takes_the_installed_codex_name", "an_empty_list_offers_no_tier"],
+    )
+    def test_configured_tiers_are_named_the_way_the_installed_codex_names_them(
+        self, tmp_path, configured, served_tiers, expected
+    ):
+        self._sync(
+            self._listing(self._row("gpt-5.5")),
+            tmp_path,
+            model_info=self._deployments(self._deployment("gpt-5.5", "openai/gpt-5.5", service_tiers=configured)),
+            served=self._served(("gpt-5.5", "GPT-5.5", served_tiers)),
+        )
+
+        assert self._entries(tmp_path)["gpt-5.5"]["service_tiers"] == expected
 
     def test_the_served_catalog_is_asked_for_with_the_installed_codex_version_and_the_key(self, tmp_path):
         captured, _ = self._sync(
@@ -1179,6 +1234,41 @@ class TestCodexModelSync:
 
         entry = self._entries(tmp_path)["gpt-5.5"]
         assert (entry["display_name"], entry["service_tiers"]) == ("GPT-5.5", [_STOCK_FAST_TIER])
+
+    @pytest.mark.parametrize(
+        ("model_info", "served", "run", "expected"),
+        [
+            ({}, None, None, []),
+            (
+                {"display_name": "Configured"},
+                _FakeResponse(500),
+                None,
+                [
+                    "litellm: Codex keeps its own display names and service tiers: "
+                    "http://localhost:4000/v1/models?client_version=0.165.0 served no Codex catalog"
+                ],
+            ),
+            (
+                {"display_name": "Configured"},
+                None,
+                _FakeRun(version=None),
+                ["litellm: Codex keeps its own display names and service tiers: `codex --version` printed no version"],
+            ),
+        ],
+        ids=["nothing_configured", "served_catalog_fails", "codex_version_unreadable"],
+    )
+    def test_a_configured_name_left_on_the_installed_codex_values_is_reported(
+        self, tmp_path, model_info, served, run, expected
+    ):
+        captured, _ = self._sync(
+            self._listing(self._row("gpt-5.5")),
+            tmp_path,
+            model_info=self._deployments(self._deployment("gpt-5.5", **model_info)),
+            served=served,
+            run=run,
+        )
+
+        assert captured["warnings"] == expected
 
     @pytest.mark.parametrize(
         ("model_info", "run"),
