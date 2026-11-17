@@ -1,9 +1,9 @@
-from contextlib import asynccontextmanager
 import asyncio
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
@@ -16,10 +16,6 @@ from httpx import ASGITransport, AsyncClient, ConnectError
 from pytest_mock import MockerFixture
 
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
-from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -33,6 +29,8 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     GroupMemberExtractionResult,
     SCIMRosterSyncError,
@@ -65,6 +63,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     user_api_key_auth,
 )
 from litellm.proxy.management_endpoints.team_endpoints import DeletedTeams
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.management_helpers.bulk_user_creation import BULK_NEW_USER_CONCURRENCY
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
@@ -74,6 +73,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
