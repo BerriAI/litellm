@@ -6,10 +6,13 @@ import {
   E2E_INTERNAL_USER_KEY_ALIAS,
   E2E_TEAM_CRUD_ALIAS,
   E2E_TEAM_CRUD_ID,
+  E2E_TEAM_ADMIN_USER_ID,
+  E2E_INTERNAL_USER_ID,
+  E2E_INTERNAL_USER_EMAIL,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
-import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { captureRequestBody, readBack, runWithCleanup } from "../../helpers/roundTrip";
 import { masterKey } from "../../helpers/traffic";
 import { proxyIsPremium } from "../../helpers/premium";
 
@@ -34,6 +37,67 @@ async function createDeletableKey(page: PlaywrightPage): Promise<string> {
   });
   expect(res.ok(), `POST /key/generate failed (${res.status()}): ${await res.text()}`).toBe(true);
   return alias;
+}
+
+async function readKeyStates(page: PlaywrightPage, aliases: string[]) {
+  const keys = await Promise.all(aliases.map((alias) => findKeyByAlias(page, alias)));
+  return keys.map(
+    (key) =>
+      key && {
+        token: key.token,
+        key_alias: key.key_alias,
+        team_id: key.team_id,
+        user_id: key.user_id,
+        max_budget: key.max_budget,
+        budget_duration: key.budget_duration,
+        models: key.models,
+        metadata: key.metadata,
+        tpm_limit: key.tpm_limit,
+        rpm_limit: key.rpm_limit,
+        expires: key.expires,
+      },
+  );
+}
+
+async function withBulkKeys(page: PlaywrightPage, action: (aliases: string[]) => Promise<void>) {
+  const prefix = `e2e-bulk-${test.info().workerIndex}-${Date.now()}`;
+  const aliases = [`${prefix}-first`, `${prefix}-second`, `${prefix}-keep`];
+  const headers = { Authorization: `Bearer ${masterKey()}` };
+  await runWithCleanup(
+    async () => {
+      for (const key_alias of aliases) {
+        const response = await page.request.post("/key/generate", {
+          headers,
+          data: {
+            key_alias,
+            user_id: E2E_TEAM_ADMIN_USER_ID,
+            max_budget: 100,
+            budget_duration: "30d",
+            tpm_limit: 123,
+            rpm_limit: 45,
+            metadata: { bulk_edit_test: prefix },
+          },
+        });
+        expect(response.ok(), `create disposable key ${key_alias}`).toBe(true);
+      }
+      const initial = await readKeyStates(page, aliases);
+      expect(initial.map((key) => key?.token)).toEqual(aliases.map(() => expect.any(String)));
+      await navigateToPage(page, Page.ApiKeys);
+      await page.getByTestId("datatable-search").fill(prefix);
+      await expect(page.getByRole("row").filter({ hasText: aliases[0] })).toBeVisible();
+      await expect(page.getByRole("checkbox")).toHaveCount(0);
+      await page.getByRole("button", { name: "Select keys", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Actions", exact: true })).toHaveCount(0);
+      await action(aliases);
+    },
+    async () => {
+      const remaining = await readKeyStates(page, aliases);
+      const tokens = remaining.flatMap((key) => (typeof key?.token === "string" ? [key.token] : []));
+      if (tokens.length === 0) return true;
+      const response = await page.request.post("/key/delete", { headers, data: { keys: tokens } });
+      return response.ok();
+    },
+  );
 }
 
 test.describe("Proxy Admin - Keys", () => {
@@ -194,6 +258,95 @@ test.describe("Proxy Admin - Keys", () => {
       .toBeUndefined();
   });
 
+  test("Bulk delete only selected keys after confirmation", async ({ page }) => {
+    await withBulkKeys(page, async (aliases) => {
+      const before = await readKeyStates(page, aliases);
+      for (const alias of aliases.slice(0, 2)) {
+        await page.getByRole("row").filter({ hasText: alias }).getByRole("checkbox").check();
+      }
+      await page.getByRole("button", { name: "Actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Delete selected (2)" }).click();
+      const modal = page.getByRole("dialog", { name: /Delete/ });
+      await expect(modal.getByText(aliases[0], { exact: true })).toBeVisible();
+      await expect(modal.getByText(aliases[1], { exact: true })).toBeVisible();
+      await expect(modal.getByText(aliases[2], { exact: true })).toHaveCount(0);
+      const deleteButton = modal.getByRole("button", { name: "Delete", exact: true });
+      await expect(deleteButton).toBeDisabled();
+      await modal.getByRole("textbox").fill("Confirm delete");
+      await expect(deleteButton).toBeDisabled();
+      await modal.getByRole("textbox").fill("confirm delete");
+      await expect(deleteButton).toBeEnabled();
+      await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(await readKeyStates(page, aliases)).toEqual(before);
+
+      await page.getByRole("button", { name: "Actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Delete selected (2)" }).click();
+      await expect(modal.getByRole("textbox")).toHaveValue("");
+      await expect(deleteButton).toBeDisabled();
+      await modal.getByRole("textbox").fill("confirm delete");
+      const body = await captureRequestBody<{ keys: string[] }>(
+        page,
+        { method: "POST", urlIncludes: "/key/delete" },
+        () => deleteButton.click(),
+      );
+      expect(body.keys).toEqual(expect.arrayContaining(before.slice(0, 2).map((key) => key?.token)));
+      expect(body.keys).toHaveLength(2);
+      await expect.poll(() => readKeyStates(page, aliases)).toEqual([undefined, undefined, before[2]]);
+      for (const alias of aliases.slice(0, 2)) {
+        await expect(page.getByRole("row").filter({ hasText: alias })).toHaveCount(0);
+      }
+      await page.reload();
+      await expect(page.getByRole("row").filter({ hasText: aliases[2] })).toBeVisible();
+      await expect(page.getByRole("checkbox")).toHaveCount(0);
+    });
+  });
+
+  test("Bulk edit team, user, and budget only for selected keys", async ({ page }) => {
+    await withBulkKeys(page, async (aliases) => {
+      for (const [action, changes] of [
+        ["Move to team", { team_id: E2E_TEAM_CRUD_ID }],
+        ["Assign to user", { user_id: E2E_INTERNAL_USER_ID }],
+        ["Set budget", { max_budget: 25.5, budget_duration: "7d" }],
+      ] as const) {
+        await test.step(action, async () => {
+          const before = await readKeyStates(page, aliases);
+          for (const alias of aliases.slice(0, 2)) {
+            await page.getByRole("row").filter({ hasText: alias }).getByRole("checkbox").check();
+          }
+          await page.getByRole("button", { name: "Actions", exact: true }).click();
+          await page.getByRole("menuitem", { name: action, exact: true }).click();
+          const dialog = page.getByRole("dialog", { name: action, exact: true });
+          if ("team_id" in changes) {
+            await dialog.getByRole("combobox", { name: "Team", exact: true }).fill(E2E_TEAM_CRUD_ALIAS);
+            await page.getByRole("option", { name: new RegExp(E2E_TEAM_CRUD_ALIAS) }).click();
+          } else if ("user_id" in changes) {
+            await dialog.getByRole("combobox", { name: "User", exact: true }).fill(E2E_INTERNAL_USER_EMAIL);
+            await page.getByRole("option", { name: new RegExp(E2E_INTERNAL_USER_ID) }).click();
+          } else {
+            await expect(dialog.getByRole("button", { name: "Apply to 2 keys" })).toBeDisabled();
+            await dialog.getByRole("spinbutton", { name: "Budget per key (USD)" }).fill("25.5");
+            const period = dialog.getByRole("combobox", { name: "Reset period" });
+            await expect(period).toContainText(/monthly/i);
+            await period.click();
+            await page.getByRole("option", { name: /^weekly$/i }).click();
+          }
+          await dialog.getByRole("button", { name: "Apply to 2 keys" }).click();
+          await expect(dialog).toBeHidden();
+          const expected = before.map((key, index) => (index < 2 ? { ...key, ...changes } : key));
+          await expect.poll(() => readKeyStates(page, aliases)).toEqual(expected);
+          await expect(page.getByText("0 keys selected", { exact: true })).toBeVisible();
+          await expect(page.getByRole("button", { name: "Actions", exact: true })).toHaveCount(0);
+        });
+      }
+      await page.getByRole("button", { name: "Cancel selection" }).click();
+      await expect(page.getByRole("checkbox")).toHaveCount(0);
+      await page.reload();
+      for (const alias of aliases) {
+        await expect(page.getByRole("row").filter({ hasText: alias })).toBeVisible();
+      }
+    });
+  });
+
   test("See internal user keys in team", async ({ page }) => {
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
@@ -254,7 +407,9 @@ test.describe("Proxy Admin - Keys", () => {
     // verify it can call /chat/completions for the model it was scoped to.
     // The mock LLM server (fixtures/mock_llm_server/server.py) replies with
     // a fixed "This is a mock response." body.
-    const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").filter({ hasText: /^sk-/ }).innerText()).trim();
+    const apiKey = (
+      await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").filter({ hasText: /^sk-/ }).innerText()
+    ).trim();
     expect(apiKey).toMatch(/^sk-/);
 
     const response = await page.request.post("/chat/completions", {
