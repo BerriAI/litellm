@@ -601,9 +601,19 @@ class TestVertexBatchOutputTransformation:
                 True,
             ),
             ({"generationConfig": {"responseModalities": ["AUDIO"]}}, False),
+            (
+                {
+                    "generationConfig": None,
+                    "generation_config": {
+                        "response_modalities": ["AUDIO"],
+                        "response_format": {"audio": {"mime_type": "AUDIO_WAV"}},
+                    },
+                },
+                True,
+            ),
             (None, False),
         ],
-        ids=["wav-asked", "no-mime-type", "null-request"],
+        ids=["wav-asked", "no-mime-type", "wav-asked-under-snake-case-beside-null", "null-request"],
     )
     def test_tts_batch_output_audio_follows_the_mime_type_its_request_named(
         self, config: VertexAIFilesConfig, request_body: Mapping[str, object] | None, keeps_wav: bool
