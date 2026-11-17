@@ -1316,8 +1316,8 @@ async def test_user_api_key_auth_live_websocket_ignores_query_model():
     mock_user_api_key_auth.assert_called_once()
 
 
-def _header_websocket(headers: dict[str, str]) -> MagicMock:
-    websocket = MagicMock(spec=WebSocket)
+def _header_websocket(headers: Mapping[str, str]) -> MagicMock:
+    websocket: Final = MagicMock(spec=WebSocket)
     websocket.headers = headers
     websocket.scope = {"headers": [(name.encode(), value.encode()) for name, value in headers.items()]}
     websocket.url = URL(url="/elevenlabs/v1/text-to-speech/voice1/stream-input")
@@ -1339,14 +1339,16 @@ def _header_websocket(headers: dict[str, str]) -> MagicMock:
         ),
     ],
 )
-async def test_websocket_auth_reads_the_key_from_the_headers_the_route_names(headers, api_key_headers, expected):
+async def test_websocket_auth_reads_the_key_from_the_headers_the_route_names(
+    headers: Mapping[str, str], api_key_headers: tuple[str, ...], expected: str
+) -> None:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
 
-    async def authenticate(request, api_key):
+    async def authenticate(request: FastAPIRequest, api_key: str) -> SimpleNamespace:
         return SimpleNamespace(presented_key=api_key)
 
     with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", side_effect=authenticate):
-        authorized = await user_api_key_auth_websocket_for_model(
+        authorized: Final = await user_api_key_auth_websocket_for_model(
             _header_websocket(headers), "eleven_flash_v2_5", api_key_headers=api_key_headers
         )
 
@@ -1354,10 +1356,10 @@ async def test_websocket_auth_reads_the_key_from_the_headers_the_route_names(hea
 
 
 @pytest.mark.asyncio
-async def test_websocket_auth_refuses_a_key_in_a_header_the_route_did_not_name():
+async def test_websocket_auth_refuses_a_key_in_a_header_the_route_did_not_name() -> None:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
 
-    websocket = _header_websocket({"xi-api-key": "sk-x"})
+    websocket: Final = _header_websocket({"xi-api-key": "sk-x"})
     with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
         with pytest.raises(HTTPException) as refusal:
             await user_api_key_auth_websocket_for_model(websocket, "gpt-realtime")

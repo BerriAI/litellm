@@ -3019,11 +3019,16 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
 
 
+def _no_session_model_group(target: str) -> str | None:
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class WebsocketFramePolicy:
     client_text: Callable[[str], ClientTextDecision]
     recorded_upstream_frame: Callable[[Mapping[str, object]], Mapping[str, object]]
     client_binary_refusal: RefusedClientText | None = None
+    session_model_group: Callable[[str], str | None] = _no_session_model_group
 
 
 def _forward_client_text_unchanged(text: str) -> ClientTextDecision:
@@ -3292,6 +3297,13 @@ def _stamp_billed_turn(kwargs: Mapping[str, object], turn: _TurnAuthorization) -
     metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(turn.access_groups)
     if turn.requested_model is not None:
         metadata["model_group"] = turn.requested_model
+
+
+def _pin_model_group(kwargs: Mapping[str, object], model_group: str | None) -> None:
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    metadata: Final = None if litellm_params is None else litellm_params.get("metadata")
+    if model_group is not None and isinstance(metadata, MutableMapping):
+        metadata["model_group"] = model_group
 
 
 def _opening_model(target: str) -> str | None:
@@ -3600,6 +3612,7 @@ async def websocket_passthrough_request(
     kwargs: Final = init_call_kwargs(user_api_key_dict, passthrough_logging_payload, litellm_call_id, logging_obj)
 
     def start_call_logging(call_logging: LiteLLMLoggingObj, call_kwargs: Mapping[str, object]) -> None:
+        _pin_model_group(call_kwargs, frame_policy.session_model_group(target))
         call_logging.update_environment_variables(
             model="unknown",
             user="unknown",

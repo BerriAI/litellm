@@ -3,7 +3,7 @@ import base64
 import json
 import threading
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -39,7 +39,7 @@ COST_MAP: Final = TypeAdapter(dict[str, dict[str, object]])
 class Upgrade:
     target: str
     provider_key: str | None
-    frames: tuple[dict[str, JsonValue], ...]
+    frames: tuple[Mapping[str, JsonValue], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +50,7 @@ class Peer:
 
 @dataclass(frozen=True, slots=True)
 class Session:
-    frames: tuple[dict[str, JsonValue], ...]
+    frames: tuple[Mapping[str, JsonValue], ...]
     close_code: int | None
     close_reason: str
 
@@ -62,7 +62,7 @@ def _per_character(model_id: str) -> float:
     return rate
 
 
-async def _client_frames(connection: ServerConnection) -> AsyncIterator[dict[str, JsonValue]]:
+async def _client_frames(connection: ServerConnection) -> AsyncIterator[Mapping[str, JsonValue]]:
     async for raw in connection:
         frame: Final = JSON_OBJECT.validate_json(raw)
         yield frame
@@ -134,14 +134,14 @@ def _ws_url(proxy: OwnedProxy, voice_id: str, query: str) -> str:
     return f"{base}/elevenlabs/v1/text-to-speech/{voice_id}/stream-input?{query}"
 
 
-async def _received(connection: websockets.ClientConnection) -> AsyncIterator[dict[str, JsonValue]]:
+async def _received(connection: websockets.ClientConnection) -> AsyncIterator[Mapping[str, JsonValue]]:
     async for raw in connection:
         yield JSON_OBJECT.validate_json(raw)
 
 
 async def _exchange(
     connection: websockets.ClientConnection, key: str, texts: tuple[str, ...]
-) -> tuple[dict[str, JsonValue], ...]:
+) -> tuple[Mapping[str, JsonValue], ...]:
     try:
         await connection.send(json.dumps({"text": " ", "voice_settings": VOICE_SETTINGS, "xi_api_key": key}))
         for text in texts:
@@ -168,7 +168,7 @@ def _upgrade_for(peer: Peer, voice_id: str) -> Upgrade:
     return upgrade
 
 
-def _spend_rows(key: str) -> list[dict[str, JsonValue]]:
+def _spend_rows(key: str) -> Sequence[Mapping[str, JsonValue]]:
     return eventually(
         lambda: read_rows(SPEND_SQL, (sha256(key.encode()).hexdigest(),)),
         lambda rows: len(rows) == 1,

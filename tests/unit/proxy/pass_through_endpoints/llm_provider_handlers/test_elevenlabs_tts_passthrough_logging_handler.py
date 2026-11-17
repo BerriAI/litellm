@@ -1,8 +1,10 @@
+from collections.abc import Mapping
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -21,19 +23,16 @@ pytestmark: Final = pytest.mark.usefixtures("local_model_cost_map")
 FLASH_URL: Final = "wss://api.elevenlabs.io/v1/text-to-speech/voice1/stream-input?model_id=eleven_flash_v2_5"
 SESSION_TEXT: Final = (" ", "Hello world. ", "¿Qué tal? ", "")
 SPOKEN_TEXT: Final = ("Hello world.", "¿Qué tal?")
+_STANDARD_LOGGING_PAYLOAD: Final = TypeAdapter(StandardLoggingPayload)
 
 
-def _client_frames(*texts: str) -> dict[str, object]:
+def _client_frames(*texts: str) -> Mapping[str, object]:
     return {"client_frames": [{"text": text} for text in texts]}
 
 
-def _spoken(*texts: str) -> tuple[dict[str, object], ...]:
+def _spoken(*texts: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
-        dict(
-            elevenlabs_tts_recorded_upstream_frame(
-                {"audio": "AAAA", "alignment": {"chars": list(text)}, "isFinal": None}
-            )
-        )
+        elevenlabs_tts_recorded_upstream_frame({"audio": "AAAA", "alignment": {"chars": list(text)}, "isFinal": None})
         for text in texts
     )
 
@@ -71,16 +70,16 @@ def _logging_obj(call_id: str = "call-el") -> LiteLLMLoggingObj:
         ("", False),
     ],
 )
-def test_is_elevenlabs_tts_websocket_route(url_route, expected):
+def test_is_elevenlabs_tts_websocket_route(url_route: str, expected: bool) -> None:
     assert ElevenLabsTextToSpeechPassthroughLoggingHandler.is_elevenlabs_tts_websocket_route(url_route) is expected
 
 
-def test_handler_bills_the_characters_elevenlabs_spoke_at_the_registry_rate_and_names_the_model():
-    logging_obj = _logging_obj()
-    characters = sum(len(text) for text in SPOKEN_TEXT)
-    upstream_frames = (*_spoken(*SPOKEN_TEXT), {"isFinal": True})
+def test_handler_bills_the_characters_elevenlabs_spoke_at_the_registry_rate_and_names_the_model() -> None:
+    logging_obj: Final = _logging_obj()
+    characters: Final = sum(len(text) for text in SPOKEN_TEXT)
+    upstream_frames: Final = (*_spoken(*SPOKEN_TEXT), {"isFinal": True})
 
-    handler_result = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+    handler_result: Final = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
         request_body=_client_frames(*SESSION_TEXT),
         upstream_frames=upstream_frames,
         logging_obj=logging_obj,
@@ -88,7 +87,7 @@ def test_handler_bills_the_characters_elevenlabs_spoke_at_the_registry_rate_and_
         kwargs={"litellm_params": {"metadata": {}}},
     )
 
-    expected_cost = _registry_cost("eleven_flash_v2_5", characters)
+    expected_cost: Final = _registry_cost("eleven_flash_v2_5", characters)
     assert handler_result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
     assert handler_result["kwargs"]["model"] == "eleven_flash_v2_5"
     assert handler_result["kwargs"]["custom_llm_provider"] == "elevenlabs"
@@ -107,14 +106,14 @@ def test_handler_bills_the_characters_elevenlabs_spoke_at_the_registry_rate_and_
     }
 
 
-def test_handler_bills_the_model_the_session_ran_on():
-    flash = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+def test_handler_bills_the_model_the_session_ran_on() -> None:
+    flash: Final = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
         request_body=_client_frames("x" * 1000),
         upstream_frames=_spoken("x" * 1000),
         logging_obj=_logging_obj(),
         upstream_url=FLASH_URL,
     )
-    multilingual = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+    multilingual: Final = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
         request_body=_client_frames("x" * 1000),
         upstream_frames=_spoken("x" * 1000),
         logging_obj=_logging_obj(),
@@ -126,14 +125,14 @@ def test_handler_bills_the_model_the_session_ran_on():
     assert multilingual["kwargs"]["model"] == "eleven_multilingual_v2"
 
 
-def test_handler_charges_in_proportion_to_the_text_spoken():
-    short = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+def test_handler_charges_in_proportion_to_the_text_spoken() -> None:
+    short: Final = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
         request_body=_client_frames("abcde"),
         upstream_frames=_spoken("abcde"),
         logging_obj=_logging_obj(),
         upstream_url=FLASH_URL,
     )
-    long = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+    long: Final = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
         request_body=_client_frames("abcde", "fghij", "klmno"),
         upstream_frames=_spoken("abcde", "fghij", "klmno"),
         logging_obj=_logging_obj(),
@@ -144,10 +143,10 @@ def test_handler_charges_in_proportion_to_the_text_spoken():
     assert long["kwargs"]["response_cost"] == pytest.approx(3 * short["kwargs"]["response_cost"])
 
 
-def test_handler_records_no_cost_rather_than_a_stand_in_rate_for_an_unpriced_model():
-    unpriced_url = FLASH_URL.replace("eleven_flash_v2_5", "eleven_not_in_registry")
+def test_handler_records_no_cost_rather_than_a_stand_in_rate_for_an_unpriced_model() -> None:
+    unpriced_url: Final = FLASH_URL.replace("eleven_flash_v2_5", "eleven_not_in_registry")
 
-    handler_result = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+    handler_result: Final = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
         request_body=_client_frames("Hello "),
         upstream_frames=_spoken("Hello"),
         logging_obj=_logging_obj(),
@@ -159,8 +158,8 @@ def test_handler_records_no_cost_rather_than_a_stand_in_rate_for_an_unpriced_mod
     assert handler_result["result"]["response"]["characters"] == len("Hello")
 
 
-def test_handler_with_no_audio_back_bills_nothing():
-    handler_result = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+def test_handler_with_no_audio_back_bills_nothing() -> None:
+    handler_result: Final = ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
         request_body=_client_frames(*SESSION_TEXT),
         upstream_frames=({"isFinal": True},),
         logging_obj=_logging_obj(),
@@ -174,23 +173,27 @@ def test_handler_with_no_audio_back_bills_nothing():
 class _CapturingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.payloads: list[StandardLoggingPayload] = []
+        self.payloads: tuple[StandardLoggingPayload, ...] = ()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.payloads.append(kwargs["standard_logging_object"])
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.payloads = (*self.payloads, _STANDARD_LOGGING_PAYLOAD.validate_python(kwargs["standard_logging_object"]))
 
 
 @pytest.mark.asyncio
-async def test_success_handler_dispatches_elevenlabs_tts_and_logs_character_spend_without_audio(monkeypatch):
-    capturing_logger = _CapturingLogger()
+async def test_success_handler_dispatches_elevenlabs_tts_and_logs_character_spend_without_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capturing_logger: Final = _CapturingLogger()
     monkeypatch.setattr(litellm, "_async_success_callback", [capturing_logger])
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
-    logging_obj = _logging_obj("call-el-e2e")
-    request_body = _client_frames(*SESSION_TEXT)
-    upstream_frames = [*_spoken(*SPOKEN_TEXT), {"isFinal": True}]
-    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", team_id="team-tts", user_id="user-1")
-    metadata = {
+    logging_obj: Final = _logging_obj("call-el-e2e")
+    request_body: Final = dict(_client_frames(*SESSION_TEXT))
+    upstream_frames: Final = [*_spoken(*SPOKEN_TEXT), {"isFinal": True}]
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="hashed-key", team_id="team-tts", user_id="user-1")
+    metadata: Final = {
         "user_api_key": user_api_key_dict.api_key,
         "user_api_key_team_id": user_api_key_dict.team_id,
         "user_api_key_user_id": user_api_key_dict.user_id,
@@ -225,7 +228,7 @@ async def test_success_handler_dispatches_elevenlabs_tts_and_logs_character_spen
     )
 
     assert len(capturing_logger.payloads) == 1
-    payload = capturing_logger.payloads[0]
+    payload: Final = capturing_logger.payloads[0]
     assert payload["model"] == "eleven_flash_v2_5"
     assert payload["custom_llm_provider"] == "elevenlabs"
     assert payload["response_cost"] == pytest.approx(

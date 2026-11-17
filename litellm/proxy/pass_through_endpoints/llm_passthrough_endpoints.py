@@ -4120,6 +4120,7 @@ ELEVENLABS_TTS_FRAME_POLICY: Final = WebsocketFramePolicy(
     client_text=elevenlabs_tts_client_text,
     recorded_upstream_frame=elevenlabs_tts_recorded_upstream_frame,
     client_binary_refusal=ELEVENLABS_TTS_BINARY_FRAME_REFUSAL,
+    session_model_group=elevenlabs_tts_registry_key,
 )
 
 

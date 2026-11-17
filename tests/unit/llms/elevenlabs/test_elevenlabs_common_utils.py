@@ -1,10 +1,12 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.llms.elevenlabs.common_utils import (
+    ElevenLabsTextToSpeechStream,
     elevenlabs_tts_characters,
     elevenlabs_tts_client_text,
     elevenlabs_tts_is_priced,
@@ -86,7 +88,9 @@ FLASH_URL: Final = f"{STREAM_INPUT}?model_id=eleven_flash_v2_5"
         ),
     ],
 )
-def test_websocket_target(api_base, stream, query_string, expected):
+def test_websocket_target(
+    api_base: str | None, stream: ElevenLabsTextToSpeechStream, query_string: str, expected: str
+) -> None:
     assert elevenlabs_tts_websocket_target(api_base, "voice1", stream, query_string) == expected
 
 
@@ -100,14 +104,14 @@ def test_websocket_target(api_base, stream, query_string, expected):
         ("output_format=pcm_16000", DEFAULT_MODEL),
     ],
 )
-def test_requested_model_is_the_model_the_target_carries(query_string, expected):
-    target = elevenlabs_tts_websocket_target(None, "voice1", "stream-input", query_string)
+def test_requested_model_is_the_model_the_target_carries(query_string: str, expected: str) -> None:
+    target: Final = elevenlabs_tts_websocket_target(None, "voice1", "stream-input", query_string)
     assert elevenlabs_tts_model(target) == expected
     assert elevenlabs_tts_requested_model(query_string) == elevenlabs_tts_registry_key(target) == f"elevenlabs/{expected}"
 
 
 @pytest.mark.parametrize("voice_id", ["21m00Tcm4TlvDq8ikWAM", "my_voice-2", "a"])
-def test_plain_voice_ids_are_accepted(voice_id):
+def test_plain_voice_ids_are_accepted(voice_id: str) -> None:
     assert is_elevenlabs_voice_id(voice_id)
 
 
@@ -115,15 +119,15 @@ def test_plain_voice_ids_are_accepted(voice_id):
     "voice_id",
     ["", "..", "a/b", "a?model_id=eleven_v3", "a#b", "a%2Fb", "a b", "voixé", "abc\n", "a\\b"],
 )
-def test_voice_ids_that_could_change_the_upstream_url_are_refused(voice_id):
+def test_voice_ids_that_could_change_the_upstream_url_are_refused(voice_id: str) -> None:
     assert not is_elevenlabs_voice_id(voice_id)
 
 
-def test_shipped_flash_row_is_priced():
+def test_shipped_flash_row_is_priced() -> None:
     assert elevenlabs_tts_is_priced(FLASH_URL)
 
 
-def test_operator_added_per_character_row_is_priced(monkeypatch):
+def test_operator_added_per_character_row_is_priced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "elevenlabs/eleven_operator_custom",
@@ -148,13 +152,15 @@ def test_operator_added_per_character_row_is_priced(monkeypatch):
         ),
     ],
 )
-def test_models_without_a_per_character_rate_are_unpriced(monkeypatch, model_id, row):
+def test_models_without_a_per_character_rate_are_unpriced(
+    monkeypatch: pytest.MonkeyPatch, model_id: str, row: Mapping[str, object] | None
+) -> None:
     if row is not None:
         monkeypatch.setitem(litellm.model_cost, f"elevenlabs/{model_id}", row)
     assert not elevenlabs_tts_is_priced(FLASH_URL.replace("eleven_flash_v2_5", model_id))
 
 
-def test_a_row_under_another_key_does_not_price_the_elevenlabs_model(monkeypatch):
+def test_a_row_under_another_key_does_not_price_the_elevenlabs_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "eleven_bare_key_only",
@@ -185,8 +191,10 @@ def test_a_row_under_another_key_does_not_price_the_elevenlabs_model(monkeypatch
         pytest.param('{"text": "a", "text": "bbbb"}', {"text": "bbbb"}, ({"text": "bbbb"},), id="last duplicate wins"),
     ],
 )
-def test_client_text_forwards_the_parsed_frame_and_records_the_text_it_carries(text, forwarded, recorded):
-    decision = elevenlabs_tts_client_text(text)
+def test_client_text_forwards_the_parsed_frame_and_records_the_text_it_carries(
+    text: str, forwarded: Mapping[str, object], recorded: tuple[Mapping[str, object], ...]
+) -> None:
+    decision: Final = elevenlabs_tts_client_text(text)
 
     assert isinstance(decision, ForwardedClientText)
     assert json.loads(decision.text) == forwarded
@@ -202,8 +210,8 @@ def test_client_text_forwards_the_parsed_frame_and_records_the_text_it_carries(t
         pytest.param('{"text": " ", "xi\\u005fapi_key": "sk-litellm-virtual", "voice_settings": {"a": 1}}', id="esc"),
     ],
 )
-def test_caller_credential_fields_never_reach_elevenlabs(text):
-    decision = elevenlabs_tts_client_text(text)
+def test_caller_credential_fields_never_reach_elevenlabs(text: str) -> None:
+    decision: Final = elevenlabs_tts_client_text(text)
 
     assert isinstance(decision, ForwardedClientText)
     assert "sk-litellm-virtual" not in decision.text
@@ -222,15 +230,17 @@ def test_caller_credential_fields_never_reach_elevenlabs(text):
         pytest.param('["xi_api_key"]', id="array"),
     ],
 )
-def test_client_text_the_billing_parser_cannot_read_is_refused_instead_of_forwarded(text):
-    decision = elevenlabs_tts_client_text(text)
+def test_client_text_the_billing_parser_cannot_read_is_refused_instead_of_forwarded(text: str) -> None:
+    decision: Final = elevenlabs_tts_client_text(text)
 
     assert isinstance(decision, RefusedClientText)
     assert decision.code == 1007
 
 
-def _audio_frame(spoken: str | None) -> dict[str, object]:
-    alignment = None if spoken is None else {"chars": list(spoken), "charStartTimesMs": [0], "charDurationsMs": [50]}
+def _audio_frame(spoken: str | None) -> Mapping[str, object]:
+    alignment: Final = (
+        None if spoken is None else {"chars": list(spoken), "charStartTimesMs": [0], "charDurationsMs": [50]}
+    )
     return {
         "audio": "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYxLjcuMTAw",
         "alignment": alignment,
@@ -240,7 +250,7 @@ def _audio_frame(spoken: str | None) -> dict[str, object]:
     }
 
 
-def test_recorded_upstream_frame_drops_audio_and_alignment_but_keeps_the_aligned_character_count():
+def test_recorded_upstream_frame_drops_audio_and_alignment_but_keeps_the_aligned_character_count() -> None:
     assert elevenlabs_tts_recorded_upstream_frame(_audio_frame("Hello")) == {
         "contextId": "ctx",
         "isFinal": None,
@@ -258,26 +268,26 @@ def test_recorded_upstream_frame_drops_audio_and_alignment_but_keeps_the_aligned
     }
 
 
-def _session(client_texts: tuple[str, ...], *upstream: dict[str, object]) -> int:
+def _session(client_texts: tuple[str, ...], *upstream: Mapping[str, object]) -> int:
     return elevenlabs_tts_characters(
         tuple({"text": text} for text in client_texts),
         tuple(elevenlabs_tts_recorded_upstream_frame(frame) for frame in upstream),
     )
 
 
-def test_characters_are_the_ones_elevenlabs_spoke_not_the_ones_sent():
-    sent = (" ", "Hello world. ", "¿Qué tal? ", "This part was cut off before it was spoken. ")
+def test_characters_are_the_ones_elevenlabs_spoke_not_the_ones_sent() -> None:
+    sent: Final = (" ", "Hello world. ", "¿Qué tal? ", "This part was cut off before it was spoken. ")
 
-    spoken = (_audio_frame("Hello world. "), _audio_frame(None), _audio_frame(" ¿Qué tal? "), {"isFinal": True})
+    spoken: Final = (_audio_frame("Hello world. "), _audio_frame(None), _audio_frame(" ¿Qué tal? "), {"isFinal": True})
 
     assert _session(sent, *spoken) == len("Hello world.") + len(" ¿Qué tal?")
 
 
-def test_a_segment_that_is_only_whitespace_bills_nothing():
+def test_a_segment_that_is_only_whitespace_bills_nothing() -> None:
     assert _session((" ", "  "), _audio_frame("  "), {"isFinal": True}) == 0
 
 
-def test_a_session_that_got_no_audio_back_bills_nothing():
+def test_a_session_that_got_no_audio_back_bills_nothing() -> None:
     assert _session((" ", "Text that never reached the generation threshold "), {"isFinal": True}) == 0
     assert (
         _session(
@@ -287,8 +297,8 @@ def test_a_session_that_got_no_audio_back_bills_nothing():
     )
 
 
-def test_audio_without_any_alignment_bills_every_character_sent():
-    sent = (" ", "Hello world. ", "¿Qué tal? ", "")
+def test_audio_without_any_alignment_bills_every_character_sent() -> None:
+    sent: Final = (" ", "Hello world. ", "¿Qué tal? ", "")
 
     assert _session(sent, _audio_frame(None), _audio_frame(None), {"isFinal": True}) == (
         1 + len("Hello world. ") + len("¿Qué tal? ")

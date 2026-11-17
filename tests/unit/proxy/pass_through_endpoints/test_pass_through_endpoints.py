@@ -8,13 +8,13 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
-from typing import Final, Optional, cast
+from typing import Final, Optional, TypeAlias, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import UUID
 
@@ -9759,10 +9759,10 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     assert success_handler.call_args.kwargs["passthrough_logging_payload"]["request_body"] == {}
 
 
-ELEVENLABS_TTS_TARGET = (
+ELEVENLABS_TTS_TARGET: Final = (
     "wss://api.elevenlabs.io/v1/text-to-speech/voice1/stream-input?model_id=eleven_flash_v2_5&sync_alignment=true"
 )
-ELEVENLABS_AUDIO_FRAME = json.dumps(
+ELEVENLABS_AUDIO_FRAME: Final = json.dumps(
     {
         "audio": base64.b64encode(bytes(range(64))).decode(),
         "alignment": {"chars": ["H"], "charStartTimesMs": [0], "charDurationsMs": [40]},
@@ -9773,40 +9773,40 @@ ELEVENLABS_AUDIO_FRAME = json.dumps(
 
 
 class FrameCountingUpstreamWebSocket:
-    def __init__(self, expected_client_frames: int, *frames: str | bytes):
+    def __init__(self, expected_client_frames: int, *frames: str | bytes) -> None:
         self._expected_client_frames = expected_client_frames
         self._frames = iter(frames)
         self._client_frames_arrived = asyncio.Event()
-        self.sent: list[str | bytes] = []
+        self.sent: tuple[str | bytes, ...] = ()
         self.close = AsyncMock()
 
     async def send(self, message: str | bytes) -> None:
-        self.sent.append(message)
+        self.sent = (*self.sent, message)
         if len(self.sent) >= self._expected_client_frames:
             self._client_frames_arrived.set()
 
-    async def recv(self, decode: bool | None = None):
+    async def recv(self, decode: bool | None = None) -> str | bytes:
         from websockets.exceptions import ConnectionClosedOK
         from websockets.frames import Close
 
         await self._client_frames_arrived.wait()
-        frame = next(self._frames, None)
+        frame: Final = next(self._frames, None)
         if frame is None:
             raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
         return frame
 
 
 class DrainingUpstreamWebSocket:
-    def __init__(self, buffered_frame: str):
+    def __init__(self, buffered_frame: str) -> None:
         self._buffered_frame = buffered_frame
         self._closing = asyncio.Event()
         self._drained = asyncio.Event()
-        self.sent: list[str | bytes] = []
+        self.sent: tuple[str | bytes, ...] = ()
 
     async def send(self, message: str | bytes) -> None:
-        self.sent.append(message)
+        self.sent = (*self.sent, message)
 
-    async def recv(self, decode: bool | None = None):
+    async def recv(self, decode: bool | None = None) -> str:
         from websockets.exceptions import ConnectionClosedOK
         from websockets.frames import Close
 
@@ -9821,13 +9821,16 @@ class DrainingUpstreamWebSocket:
         await self._drained.wait()
 
 
-def _client_sends_then_waits(*frames: str | bytes):
-    messages = iter(
+_ClientReceive: TypeAlias = Callable[[], Awaitable[Mapping[str, str | bytes] | None]]
+
+
+def _client_sends_then_waits(*frames: str | bytes) -> _ClientReceive:
+    messages: Final = iter(
         [{"type": "websocket.receive", ("bytes" if isinstance(frame, bytes) else "text"): frame} for frame in frames]
     )
 
-    async def receive():
-        message = next(messages, None)
+    async def receive() -> Mapping[str, str | bytes] | None:
+        message: Final = next(messages, None)
         if message is None:
             await asyncio.Event().wait()
         return message
@@ -9835,8 +9838,12 @@ def _client_sends_then_waits(*frames: str | bytes):
     return receive
 
 
-async def _relay_elevenlabs_tts(upstream_ws, client_receive, client_send_text=None):
-    websocket = _client_websocket(client_receive)
+async def _relay_elevenlabs_tts(
+    upstream_ws: FrameCountingUpstreamWebSocket | DrainingUpstreamWebSocket,
+    client_receive: _ClientReceive,
+    client_send_text: AsyncMock | None = None,
+) -> tuple[MagicMock, AsyncMock]:
+    websocket: Final = _client_websocket(client_receive)
     if client_send_text is not None:
         websocket.send_text = client_send_text
     with (
@@ -9861,14 +9868,14 @@ async def _relay_elevenlabs_tts(upstream_ws, client_receive, client_send_text=No
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_elevenlabs_policy_keeps_caller_keys_upstream_side_and_audio_out_of_logs():
-    initial_frame = json.dumps(
+async def test_websocket_passthrough_elevenlabs_policy_keeps_caller_keys_upstream_side_and_audio_out_of_logs() -> None:
+    initial_frame: Final = json.dumps(
         {"text": " ", "xi_api_key": "sk-litellm-virtual", "voice_settings": {"stability": 0.5, "similarity_boost": 0.8}}
     )
-    text_frame = json.dumps({"text": "Hola, ¿qué tal?  ", "try_trigger_generation": True}, ensure_ascii=False)
-    end_frame = json.dumps({"text": ""})
-    final_frame = json.dumps({"isFinal": True})
-    upstream_ws = FrameCountingUpstreamWebSocket(3, ELEVENLABS_AUDIO_FRAME, final_frame)
+    text_frame: Final = json.dumps({"text": "Hola, ¿qué tal?  ", "try_trigger_generation": True}, ensure_ascii=False)
+    end_frame: Final = json.dumps({"text": ""})
+    final_frame: Final = json.dumps({"isFinal": True})
+    upstream_ws: Final = FrameCountingUpstreamWebSocket(3, ELEVENLABS_AUDIO_FRAME, final_frame)
 
     websocket, success_handler = await _relay_elevenlabs_tts(
         upstream_ws, _client_sends_then_waits(initial_frame, text_frame, end_frame)
@@ -9880,18 +9887,30 @@ async def test_websocket_passthrough_elevenlabs_policy_keeps_caller_keys_upstrea
         {"text": ""},
     ]
     assert [call.args[0] for call in websocket.send_text.await_args_list] == [ELEVENLABS_AUDIO_FRAME, final_frame]
-    success_call = success_handler.call_args.kwargs
-    expected_request_body = {"client_frames": [{"text": " "}, {"text": "Hola, ¿qué tal?  "}, {"text": ""}]}
+    success_call: Final = success_handler.call_args.kwargs
+    expected_request_body: Final = {"client_frames": [{"text": " "}, {"text": "Hola, ¿qué tal?  "}, {"text": ""}]}
     assert success_call["request_body"] == expected_request_body
     assert success_call["passthrough_logging_payload"]["request_body"] == expected_request_body
     assert success_call["response_body"] == [{"isFinal": None, "aligned_characters": 1}, {"isFinal": True}]
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_elevenlabs_refuses_a_frame_its_counter_cannot_read_and_bills_the_rest():
-    upstream_ws = DrainingUpstreamWebSocket(ELEVENLABS_AUDIO_FRAME)
-    unreadable_frame = '{"text": "a long passage nobody pays for", "x": "\\ud800"}'
-    send_after_close = AsyncMock(side_effect=RuntimeError('Cannot call "send" once a close message has been sent.'))
+async def test_websocket_passthrough_elevenlabs_logs_the_session_under_the_model_its_key_was_checked_against() -> None:
+    upstream_ws: Final = FrameCountingUpstreamWebSocket(1, ELEVENLABS_AUDIO_FRAME, json.dumps({"isFinal": True}))
+
+    _, success_handler = await _relay_elevenlabs_tts(upstream_ws, _client_sends_then_waits(json.dumps({"text": "H"})))
+
+    metadata: Final = success_handler.call_args.kwargs["litellm_params"]["metadata"]
+    assert metadata["model_group"] == "elevenlabs/eleven_flash_v2_5"
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_elevenlabs_refuses_a_frame_its_counter_cannot_read_and_bills_the_rest() -> None:
+    upstream_ws: Final = DrainingUpstreamWebSocket(ELEVENLABS_AUDIO_FRAME)
+    unreadable_frame: Final = '{"text": "a long passage nobody pays for", "x": "\\ud800"}'
+    send_after_close: Final = AsyncMock(
+        side_effect=RuntimeError('Cannot call "send" once a close message has been sent.')
+    )
 
     websocket, success_handler = await _relay_elevenlabs_tts(
         upstream_ws,
@@ -9907,10 +9926,12 @@ async def test_websocket_passthrough_elevenlabs_refuses_a_frame_its_counter_cann
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_elevenlabs_closes_on_a_binary_frame_without_sending_it_upstream():
-    upstream_ws = DrainingUpstreamWebSocket(ELEVENLABS_AUDIO_FRAME)
-    binary_frame = json.dumps({"text": "unbilled text ", "xi_api_key": "sk-litellm-virtual"}).encode()
-    send_after_close = AsyncMock(side_effect=RuntimeError('Cannot call "send" once a close message has been sent.'))
+async def test_websocket_passthrough_elevenlabs_closes_on_a_binary_frame_without_sending_it_upstream() -> None:
+    upstream_ws: Final = DrainingUpstreamWebSocket(ELEVENLABS_AUDIO_FRAME)
+    binary_frame: Final = json.dumps({"text": "unbilled text ", "xi_api_key": "sk-litellm-virtual"}).encode()
+    send_after_close: Final = AsyncMock(
+        side_effect=RuntimeError('Cannot call "send" once a close message has been sent.')
+    )
 
     websocket, success_handler = await _relay_elevenlabs_tts(
         upstream_ws, _client_sends_then_waits(json.dumps({"text": " "}), binary_frame), send_after_close
@@ -9924,13 +9945,13 @@ async def test_websocket_passthrough_elevenlabs_closes_on_a_binary_frame_without
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_bills_the_session_when_the_client_drops_while_audio_streams():
+async def test_websocket_passthrough_bills_the_session_when_the_client_drops_while_audio_streams() -> None:
     from starlette.websockets import WebSocketDisconnect
 
-    upstream_ws = FrameCountingUpstreamWebSocket(
+    upstream_ws: Final = FrameCountingUpstreamWebSocket(
         2, ELEVENLABS_AUDIO_FRAME, ELEVENLABS_AUDIO_FRAME, json.dumps({"isFinal": True})
     )
-    client_send_text = AsyncMock(side_effect=[None, WebSocketDisconnect(code=1006)])
+    client_send_text: Final = AsyncMock(side_effect=[None, WebSocketDisconnect(code=1006)])
 
     _, success_handler = await _relay_elevenlabs_tts(
         upstream_ws,
@@ -9939,7 +9960,7 @@ async def test_websocket_passthrough_bills_the_session_when_the_client_drops_whi
     )
 
     assert client_send_text.await_count == 2
-    success_call = success_handler.call_args.kwargs
+    success_call: Final = success_handler.call_args.kwargs
     assert success_call["request_body"] == {"client_frames": [{"text": " "}, {"text": "Hello there "}]}
     assert success_call["response_body"] == [
         {"isFinal": None, "aligned_characters": 1},
