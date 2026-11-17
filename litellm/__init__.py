@@ -130,6 +130,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
+    "prefix_block_hashes",
     "generic_api",
     "resend_email",
     "sendgrid_email",
@@ -702,7 +703,7 @@ streamlake_models: Final[Set[str]] = set()
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
-vispark_models: Set[str] = set()
+vispark_models: Final[Set[str]] = set()
 morph_models: Set = set()
 opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()

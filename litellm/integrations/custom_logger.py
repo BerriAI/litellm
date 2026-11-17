@@ -71,6 +71,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
     wants_failed_prompt_token_estimate: ClassVar[bool] = False
     wants_chat_completion_hooks_on_bridged_chat: ClassVar[bool] = False
+    runs_on_no_log_requests: ClassVar[bool] = False
+    """Proxy accounting hooks that must see every request, ``no-log`` ones included. A class named ``_PROXY_*``
+    counts as one without setting this."""
 
     enforces_request_content: bool = False
     """

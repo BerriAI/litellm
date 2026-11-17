@@ -306,6 +306,15 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "wally": {
+    "base_url": "https://inference.runanywhere.ai/v1",
+    "api_key_env": "WALLY_API_KEY",
+    "api_base_env": "WALLY_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
+  },
   "vispark": {
     "base_url": "https://api.lab.vispark.in/v1",
     "api_key_env": "VISPARK_LAB_API_KEY",
@@ -317,15 +326,9 @@
       "convert_file_parts_to_image_url": true,
       "remove_additional_properties_from_response_format": true
     },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/completions"]
-  },
-  "wally": {
-    "base_url": "https://inference.runanywhere.ai/v1",
-    "api_key_env": "WALLY_API_KEY",
-    "api_base_env": "WALLY_API_BASE",
-    "provider_info": {
-      "supports_function_calling": true,
-      "supports_reasoning": true
-    }
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/completions"
+    ]
   }
 }
