@@ -5741,16 +5741,16 @@ READ_BOTH: Final = {
     **_function_tool_call("call_read", "read", _concatenated_json({"path": "/a"}, {"path": "/b"})),
     "cache_control": {"type": "ephemeral"},
 }
-LOOK_C: Final = _function_tool_call("call_look", "look", '{"path":"/c"}')
+LOOK_SIBLING: Final = _function_tool_call("call_read__concat_t1_1", "look", '{"path":"/c"}')
 
 
 @pytest.mark.parametrize(
     ("tool_calls", "real_results"),
     [
         ((READ_BOTH,), {"call_read": "contents of /a"}),
-        ((READ_BOTH, LOOK_C), {"call_read": "contents of /a", "call_look": "contents of /c"}),
+        ((READ_BOTH, LOOK_SIBLING), {"call_read": "contents of /a", "call_read__concat_t1_1": "contents of /c"}),
     ],
-    ids=["alone", "beside-another-call"],
+    ids=["alone", "beside-a-call-holding-the-first-split-id"],
 )
 def test_anthropic_messages_pt_pairs_every_split_concatenated_tool_call_with_one_result(
     tool_calls: tuple[Mapping[str, object], ...], real_results: Mapping[str, str]

@@ -2144,8 +2144,21 @@ def _parsed_client_tool_calls(
     )
 
 
-def _client_call_ids(call_id: str, object_count: int, turn: int) -> tuple[str, ...]:
-    return (call_id, *(f"{call_id}__concat_t{turn}_{n}" for n in range(1, object_count)))
+def _client_call_ids(call_id: str, object_count: int, turn: int, turn_ids: frozenset[str]) -> tuple[str, ...]:
+    candidates: Final = (f"{call_id}__concat_t{turn}_{n}" for n in itertools.count(1))
+    free: Final = (candidate for candidate in candidates if sanitize_anthropic_tool_use_id(candidate) not in turn_ids)
+    return (call_id, *itertools.islice(free, max(object_count - 1, 0)))
+
+
+def _turn_tool_call_ids(turn_messages: Sequence[object]) -> frozenset[str]:
+    tool_calls: Final = itertools.chain.from_iterable(
+        parts_of(message_field(message, "tool_calls")) for message in turn_messages
+    )
+    return frozenset(
+        sanitize_anthropic_tool_use_id(call_id)
+        for tool_call in tool_calls
+        if isinstance(call_id := message_field(tool_call, "id"), str)
+    )
 
 
 def _turn_client_tool_calls(
@@ -2157,9 +2170,10 @@ def _turn_client_tool_calls(
         )
     )
     occurrences: Final = Counter(call_id for call_id, _ in parsed)
+    turn_ids: Final = _turn_tool_call_ids(turn_messages)
     return MappingProxyType(
         {
-            call_id: _ClientToolCall(_client_call_ids(call_id, len(arguments.objects), turn), arguments)
+            call_id: _ClientToolCall(_client_call_ids(call_id, len(arguments.objects), turn, turn_ids), arguments)
             for call_id, arguments in parsed
             if occurrences[call_id] == 1
         }
