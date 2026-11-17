@@ -1,6 +1,8 @@
 name: Spend logs guard
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     branches:
       - main
@@ -10,18 +12,20 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   spend-logs-guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        if: github.event_name == 'pull_request'
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
       - name: Fetch the pull request head, its merge base and its reviews
+        if: github.event_name == 'pull_request'
         id: revisions
         env:
           GH_TOKEN: ${{ github.token }}
@@ -34,10 +38,12 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp | jq 'add // []' > "$RUNNER_TEMP/reviews.json"
           echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
       - name: Set up uv
+        if: github.event_name == 'pull_request'
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
       - name: Run the guard
+        if: github.event_name == 'pull_request'
         env:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

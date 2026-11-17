@@ -1,6 +1,8 @@
 name: Image Scan
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     branches:
       - main
@@ -39,7 +41,7 @@ permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   IMAGE: litellm-image-scan:${{ github.sha }}
