@@ -177,6 +177,9 @@ pub struct ThinkingContext {
     /// The provider accepts `display: "updates"` on thinking translated from the legacy shape
     /// (Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`).
     pub keeps_display_updates: bool,
+    /// Python's Mantle routes log why they drop `thinking: {"type": "disabled"}` on a model that
+    /// always thinks.
+    pub warns_dropped_disabled_thinking: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesTransformContext {
@@ -202,11 +205,24 @@ impl MessagesTransformContext {
                 budgets: ThinkingBudgets::from_lookup(env),
                 drop_params,
                 keeps_display_updates: false,
+                warns_dropped_disabled_thinking: false,
             },
             drop_params,
             drops_unsupported_params: false,
             global_drop_params: false,
             claude_base_model: false,
+        }
+    }
+
+    /// The same context for a route that warns when it drops a disabled `thinking`.
+    #[must_use]
+    pub fn warning_dropped_disabled_thinking(&self) -> Self {
+        Self {
+            thinking: ThinkingContext {
+                warns_dropped_disabled_thinking: true,
+                ..self.thinking
+            },
+            ..*self
         }
     }
 

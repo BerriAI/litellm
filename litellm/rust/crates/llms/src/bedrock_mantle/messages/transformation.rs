@@ -1082,4 +1082,52 @@ mod tests {
         .unwrap();
         MessagesResponse { usage, ..response }
     }
+
+    struct Warnings(std::sync::mpsc::Sender<String>);
+
+    impl litellm_tracing::Sink for Warnings {
+        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+            *metadata.level() == litellm_tracing::Level::WARN
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.send(record.message.clone()).unwrap();
+        }
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, true)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, true)]
+    #[case::bedrock_invoke(&crate::bedrock::messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG, false)]
+    #[case::anthropic(&crate::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG, false)]
+    fn dropping_disabled_thinking_warns_only_on_mantle(
+        #[case] config: &dyn BaseMessagesConfig,
+        #[case] warns: bool,
+    ) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let request: MessagesRequest = serde_json::from_value(request(
+            "anthropic.claude-test",
+            json!({"thinking": {"type": "disabled"}}),
+        ))
+        .unwrap();
+        let context = MessagesTransformContext::new(
+            MessagesModelCapabilities {
+                thinking_always_on: true,
+                ..MessagesModelCapabilities::default()
+            },
+            false,
+        );
+        let (sent, _) = litellm_tracing::Logger::new(Warnings(sender)).scope(|| {
+            let request = config
+                .transform_anthropic_messages_request(request, &context)
+                .unwrap();
+            config.finalize_request(request, vec![], &context).unwrap()
+        });
+        let warned = receiver.try_iter().any(|message| {
+            message.starts_with(
+                "Dropping `thinking={'type': 'disabled'}` for model=anthropic.claude-test:",
+            ) && message.ends_with("billed as output tokens.")
+        });
+        assert_eq!((sent.params.thinking, warned), (None, warns));
+    }
 }
