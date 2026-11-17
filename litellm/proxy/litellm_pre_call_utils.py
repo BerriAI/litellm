@@ -4375,7 +4375,8 @@ def _add_guardrails_from_policies_in_metadata(
         return
 
     # Build context for policy resolution (model from request data)
-    context: Final = PolicyMatchContext(model=data.get("model"))
+    request_model: Final = data.get("model")
+    context: Final = PolicyMatchContext(model=request_model if isinstance(request_model, str) else None)
 
     # Get all policies from registry
     all_policies: Final = registry.get_all_policies()
