@@ -104,7 +104,12 @@ else:
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatible_endpoint
 from litellm.llms.openai.data_residency import infer_openai_data_residency
-from litellm.types.litellm_params import PROMPT_TEMPLATE_APPLIED, PromptManagement, prompt_management_applied
+from litellm.types.litellm_params import (
+    PROMPT_TEMPLATE_APPLIED,
+    PromptManagement,
+    params_the_prompt_hook_changed,
+    prompt_management_applied,
+)
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
@@ -778,10 +783,14 @@ def _prompt_template_marker(
     model: str,
     client_messages_before_the_hook: Sequence[AllMessageValues],
     merged_input: Sequence[AllMessageValues],
+    params_the_hook_saw: Mapping[str, object],
+    merged_optional_params: Mapping[str, object],
 ) -> Mapping[str, PromptManagement]:
     return (
         PROMPT_TEMPLATE_APPLIED
-        if model != original_model or tuple(merged_input) != tuple(client_messages_before_the_hook)
+        if model != original_model
+        or tuple(merged_input) != tuple(client_messages_before_the_hook)
+        or len(params_the_prompt_hook_changed(params_the_hook_saw, merged_optional_params)) > 0
         else MappingProxyType({})
     )
 
@@ -1046,6 +1055,7 @@ async def aresponses(
                 ),
             ):
                 _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
+                params_the_hook_saw: Final[Mapping[str, object]] = MappingProxyType({**kwargs})
                 (
                     model,
                     merged_input,
@@ -1084,7 +1094,12 @@ async def aresponses(
                     requested_provider, custom_llm_provider, kwargs.get("model_info")
                 ),
                 prompt_management_marker=_prompt_template_marker(
-                    original_model, model, client_messages_before_the_hook, merged_input
+                    original_model,
+                    model,
+                    client_messages_before_the_hook,
+                    merged_input,
+                    params_the_hook_saw,
+                    merged_optional_params,
                 ),
             )
 
@@ -1246,6 +1261,7 @@ def _apply_prompt_management_to_responses_call(
             ),
         ):
             _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
+            params_the_hook_saw: Final[Mapping[str, object]] = MappingProxyType({**kwargs})
             (
                 model,
                 merged_input,
@@ -1289,7 +1305,14 @@ def _apply_prompt_management_to_responses_call(
             model,
             resolved_provider,
             _deployment_model_info_after_prompt_swap(custom_llm_provider, resolved_provider, kwargs.get("model_info")),
-            _prompt_template_marker(original_model, model, client_messages_before_the_hook, merged_input),
+            _prompt_template_marker(
+                original_model,
+                model,
+                client_messages_before_the_hook,
+                merged_input,
+                params_the_hook_saw,
+                merged_optional_params,
+            ),
         )
 
     return input, model, custom_llm_provider, kwargs.get("model_info"), MappingProxyType({})

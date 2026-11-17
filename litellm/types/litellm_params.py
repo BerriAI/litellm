@@ -82,6 +82,16 @@ def prompt_template_applied(request_kwargs: Mapping[str, object]) -> bool:
     return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.TEMPLATE_APPLIED
 
 
+def params_the_prompt_hook_changed(
+    params_the_hook_saw: Mapping[str, object], params_it_returned: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        key: value
+        for key, value in params_it_returned.items()
+        if key not in params_the_hook_saw or params_the_hook_saw[key] is not value
+    }
+
+
 WIRE_NAME: Final = "wire_name"
 
 

@@ -1639,7 +1639,7 @@ class Logging(LiteLLMLoggingBaseClass):
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
         injected_for_every_deployment: bool = False,
         template_applied: bool = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
         custom_logger: Final = prompt_management_logger or self.get_custom_logger_for_prompt_management(
@@ -1691,7 +1691,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
         injected_for_every_deployment: bool = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
         custom_logger: Final = prompt_management_logger or self.get_custom_logger_for_prompt_management(

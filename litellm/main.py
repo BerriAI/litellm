@@ -178,6 +178,7 @@ from litellm.types.litellm_params import (
     PROMPT_MANAGEMENT_APPLIED,
     ControlOptions,
     RetryStrategy,
+    params_the_prompt_hook_changed,
     prompt_management_applied,
     prompt_template_applied,
 )
@@ -852,11 +853,7 @@ async def acompletion(
     )
     request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
     prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
-    prompt_overrides: Final = {
-        key: value
-        for key, value in prompt_params.items()
-        if key not in request_kwargs or request_kwargs[key] is not value
-    }
+    prompt_overrides: Final = params_the_prompt_hook_changed(request_kwargs, prompt_params)
     prompt_management_marker: Final[Mapping[str, object]] = (
         PROMPT_MANAGEMENT_APPLIED
         if prompt_hook_result is not None

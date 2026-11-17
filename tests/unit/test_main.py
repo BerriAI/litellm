@@ -7008,11 +7008,16 @@ PROMPT_TEMPLATES: Final[Mapping[str, tuple[AllMessageValues, Mapping[str, object
         "one-sentence-at-low-temperature": (ONE_SENTENCE_INSTRUCTION, MappingProxyType({"temperature": 0.25})),
     }
 )
+SETTINGS_ONLY_TEMPLATES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {"low-temperature": MappingProxyType({"temperature": 0.25})}
+)
 
 
 def _render_prompt(
     prompt_id: str | None, model: str, messages: list[AllMessageValues], non_default_params: Mapping[str, object]
 ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
+    if prompt_id in SETTINGS_ONLY_TEMPLATES:
+        return model, list(messages), {**non_default_params, **SETTINGS_ONLY_TEMPLATES[prompt_id]}
     instruction, settings = PROMPT_TEMPLATES[prompt_id or "one-word"]
     return model, [instruction, *messages], {**non_default_params, **settings}
 
@@ -7476,6 +7481,32 @@ async def test_a_responses_call_handed_to_chat_still_places_the_cache_points_on_
     assert json.loads(route.calls.last.request.content)["system"] == [
         {"type": "text", "text": ONE_WORD, "cache_control": {"type": "ephemeral"}}
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
+async def test_a_responses_call_whose_template_only_sets_parameters_still_places_the_cache_points(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = _anthropic_answering_blue(respx_mock)
+    request: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            "model": "anthropic/backup",
+            "input": "What color is the sky?",
+            "instructions": ONE_WORD,
+            "prompt_id": "low-temperature",
+            "callbacks": [_PromptManager()],
+            "api_key": "sk-test",
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        }
+    )
+
+    _ = await litellm.aresponses(**request) if asynchronous else litellm.responses(**request)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["temperature"] == 0.25
+    assert sent["system"] == [{"type": "text", "text": ONE_WORD, "cache_control": {"type": "ephemeral"}}]
 
 
 _PROMPT_SETTINGS_API_BASE: Final = "https://prompt-settings.test/v1"
