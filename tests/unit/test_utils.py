@@ -1227,6 +1227,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_pdf_input": {"type": "boolean"},
             "prompt_cache_min_tokens": {"type": "number"},
             "supports_prompt_cache_breakpoint": {"type": "boolean"},
+            "supports_bedrock_converse_cache_point": {"type": "boolean"},
             "supports_thinking_cache_preservation": {"type": "boolean"},
             "supports_prompt_caching": {"type": "boolean"},
             "supports_response_schema": {"type": "boolean"},
