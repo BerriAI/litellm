@@ -6,6 +6,7 @@ use litellm_core_utils::{
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
 use litellm_http::request::with_default_headers;
+use litellm_llms::anthropic::messages::transformation::is_claude_model;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
@@ -91,7 +92,14 @@ fn prepare_provider_request(
         without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
     let transformed = config.transform_anthropic_messages_request(
         trimmed,
-        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
+        &MessagesTransformContext {
+            claude_base_model: shaping
+                .settings
+                .base_model
+                .as_deref()
+                .is_some_and(is_claude_model),
+            ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
+        },
     )?;
 
     let scoped =

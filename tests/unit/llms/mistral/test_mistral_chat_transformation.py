@@ -1,7 +1,11 @@
-from typing import List, cast
+import json
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
+from openai import AsyncOpenAI
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.mistral.chat.transformation import (
@@ -957,3 +961,59 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+def _chat_completion_reply() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "mistral-small-latest",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_codestral_call_after_an_openai_call_sends_an_uploaded_file_by_its_id(
+    respx_mock: respx.MockRouter,
+) -> None:
+    import litellm
+
+    openai_api_base: Final = "https://api.openai.com/v1"
+    respx_mock.post(f"{openai_api_base}/chat/completions").mock(return_value=_chat_completion_reply())
+    await litellm.acompletion(
+        model="openai/gpt-4.1",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="openai-key",
+        max_retries=0,
+        client=AsyncOpenAI(api_key="openai-key", base_url=openai_api_base, http_client=httpx.AsyncClient()),
+    )
+
+    codestral_api_base: Final = "https://codestral.mistral.ai/v1"
+    codestral_route: Final = respx_mock.post(f"{codestral_api_base}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    await litellm.acompletion(
+        model="codestral/codestral-latest",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Review this file"},
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                ],
+            }
+        ],
+        api_base=codestral_api_base,
+        api_key="codestral-key",
+        max_retries=0,
+        client=AsyncOpenAI(api_key="codestral-key", base_url=codestral_api_base, http_client=httpx.AsyncClient()),
+    )
+
+    sent_content: Final = json.loads(codestral_route.calls.last.request.content)["messages"][0]["content"]
+    assert sent_content[1] == {"type": "file", "file_id": "file-12345"}
