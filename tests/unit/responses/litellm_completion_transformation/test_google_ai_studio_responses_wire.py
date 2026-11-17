@@ -208,7 +208,7 @@ async def test_an_empty_trailing_user_item_reaches_gemini_as_a_user_turn(empty_u
     "dropped_user_item",
     [pytest.param({"role": "user", "content": None}, id="null"), pytest.param({"role": "user"}, id="missing")],
 )
-async def test_a_dropped_trailing_user_item_reaches_gemini_as_the_configured_continue_message(
+async def test_a_dropped_trailing_user_item_reaches_an_alternating_gemini_deployment_as_a_blank_user_turn(
     dropped_user_item: dict[str, object],
 ) -> None:
     contents: Final = await _gemini_contents_for(
@@ -220,5 +220,5 @@ async def test_a_dropped_trailing_user_item_reaches_gemini_as_the_configured_con
     assert contents == [
         {"role": "user", "parts": [{"text": "Hi"}]},
         {"role": "model", "parts": [{"text": "Hello!"}]},
-        {"role": "user", "parts": [{"text": "Keep going"}]},
+        {"role": "user", "parts": [{"text": " "}]},
     ]

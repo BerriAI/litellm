@@ -6106,7 +6106,7 @@ async def test_a_dropped_trailing_user_message_adds_no_user_turn_for_a_target_th
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_chat_bridge_httpx")
 @pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
-async def test_an_empty_trailing_user_message_reaches_gemini_as_the_configured_continue_message(
+async def test_an_empty_trailing_user_message_reaches_an_alternating_gemini_deployment_as_a_blank_user_turn(
     respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
 ) -> None:
     route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
@@ -6123,7 +6123,7 @@ async def test_an_empty_trailing_user_message_reaches_gemini_as_the_configured_c
     assert json.loads(route.calls.last.request.read())["contents"] == [
         {"role": "user", "parts": [{"text": "Hi"}]},
         {"role": "model", "parts": [{"text": "Hello!"}]},
-        {"role": "user", "parts": [{"text": "Keep going"}]},
+        {"role": "user", "parts": [{"text": " "}]},
     ]
 
 
