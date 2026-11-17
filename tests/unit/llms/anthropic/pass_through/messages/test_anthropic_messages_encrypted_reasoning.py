@@ -152,6 +152,35 @@ def test_unsigned_thinking_is_dropped_when_the_pending_tool_turn_never_opened_wi
     assert sent[2:] == messages[2:]
 
 
+@pytest.mark.parametrize(
+    ("base_model", "sent_opening"),
+    [
+        ("anthropic/claude-sonnet-4-5", {"type": "text", "text": "Draft."}),
+        ("deepseek/deepseek-v4-pro", {"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        (None, {"type": "thinking", "thinking": "open model plan", "signature": ""}),
+    ],
+    ids=["claude-base-model", "open-base-model", "no-base-model"],
+)
+def test_an_alias_strips_unsigned_thinking_only_when_its_base_model_names_claude(
+    base_model: str | None, sent_opening: dict[str, object]
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        {"role": "user", "content": "Refine it."},
+    ]
+
+    sent: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="prod-sonnet",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(base_model=base_model),
+        headers={},
+    )["messages"]
+
+    assert sent[1]["content"][0] == sent_opening
+
+
 def test_a_non_object_message_item_reaches_claude_as_sent() -> None:
     messages: Final = ["hi", 7, {"role": "user", "content": "Solve it."}]
 

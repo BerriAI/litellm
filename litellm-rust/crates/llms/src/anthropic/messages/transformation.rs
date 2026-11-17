@@ -136,7 +136,7 @@ pub(crate) fn transform_messages_request(
         strip_advisor_blocks(request.messages)
     };
     let messages = strip_encrypted_reasoning_blocks(messages);
-    let messages = if is_claude_model(&request.model) {
+    let messages = if context.claude_base_model || is_claude_model(&request.model) {
         strip_unsigned_thinking_blocks(messages)
     } else {
         messages
@@ -152,7 +152,7 @@ pub(crate) fn transform_messages_request(
     })
 }
 
-fn is_claude_model(model: &str) -> bool {
+pub fn is_claude_model(model: &str) -> bool {
     model.to_lowercase().contains("claude")
 }
 
@@ -863,6 +863,7 @@ mod tests {
                         },
                     },
                     drop_params: true,
+                    claude_base_model: false,
                 }
             );
             return;
