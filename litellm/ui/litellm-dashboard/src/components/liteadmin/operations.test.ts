@@ -53,6 +53,7 @@ describe.each(accessModes)("Aria tool schemas for %j", (access) => {
     for (const tool of tools) {
       const parameters: unknown = JSON.parse(JSON.stringify(tool.function.parameters));
       for (const format of formats(parameters)) {
+        // DeepSeek /beta/chat/completions error, observed 2026-11-17: "Invalid tool parameters schema : unknown variant `date`, expected one of `email`, `hostname`, `ipv4`, `ipv6`, `uuid`" (https://github.com/BerriAI/litellm/issues/52184).
         expect(["email", "hostname", "ipv4", "ipv6", "uuid"], tool.function.name).toContain(format);
       }
     }
