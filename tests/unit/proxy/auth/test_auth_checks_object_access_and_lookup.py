@@ -104,6 +104,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.utils import get_utc_datetime
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -1574,6 +1575,33 @@ async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeyp
     # `max_budget` was None, as our function's job is to delegate, not to set defaults.
     assert data_arg.team_id == team_id_to_create
     assert data_arg.max_budget is None
+
+
+@pytest.mark.parametrize(
+    ("default_team_params", "expected_models"),
+    [
+        ({"models": ["approved-model"], "max_budget": 10.0}, ["approved-model"]),
+        (DefaultTeamSSOParams(models=["approved-model"]), ["approved-model"]),
+        ({"max_budget": 10.0}, []),
+        (None, []),
+    ],
+    ids=["dict-defaults", "typed-defaults", "defaults-without-models", "no-defaults"],
+)
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+async def test_get_team_db_check_upserts_the_team_with_only_the_default_team_models(
+    mock_new_team, monkeypatch, default_team_params, expected_models
+):
+    monkeypatch.setattr(litellm, "default_team_params", default_team_params)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+    mock_new_team.return_value = {"team_id": "new-jwt-team"}
+
+    await _get_team_db_check(team_id="new-jwt-team", prisma_client=mock_prisma_client, team_id_upsert=True)
+
+    created: Final = mock_new_team.call_args.kwargs["data"]
+    assert (created.team_id, created.models, created.max_budget) == ("new-jwt-team", expected_models, None)
 
 
 @pytest.mark.asyncio

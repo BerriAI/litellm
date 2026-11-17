@@ -228,7 +228,8 @@ def test_sso_sign_in_upserts_the_team_id_jwt_field_team_only_when_team_id_upsert
         "enable_jwt_auth": enable_jwt_auth,
         "litellm_jwtauth": {"team_id_jwt_field": "dept", "team_id_upsert": team_id_upsert},
     }
-    with _sso_gateway(tmp_path, {}, jwtauth) as gateway, contextlib.ExitStack() as cleanups:
+    default_team_params: Final = {"default_team_params": {"models": ["sso-default-team-model"]}}
+    with _sso_gateway(tmp_path, default_team_params, jwtauth) as gateway, contextlib.ExitStack() as cleanups:
         cleanups.callback(gateway.request, "POST", "/team/delete", {"team_ids": [team_id]})
         cleanups.callback(_delete_user, gateway, subject)
         if team_exists_before:
@@ -238,9 +239,12 @@ def test_sso_sign_in_upserts_the_team_id_jwt_field_team_only_when_team_id_upsert
         callback: Final = _sign_in(gateway, subject)
 
         assert callback.status_code == 303, f"{callback.status_code} {callback.text}"
-        teams: Final = gateway.rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
+        teams: Final = gateway.rows('SELECT models FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
         user: Final = gateway.rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
-        assert (len(teams), user) == (int(expect_member), [{"teams": [team_id] if expect_member else []}])
+        expected_teams: Final = (
+            [{"models": [] if team_exists_before else ["sso-default-team-model"]}] if expect_member else []
+        )
+        assert (teams, user) == (expected_teams, [{"teams": [team_id] if expect_member else []}])
 
 
 def test_sso_sign_in_with_db_team_mappings_creates_the_team_id_jwt_field_team_and_only_joins_groups(
