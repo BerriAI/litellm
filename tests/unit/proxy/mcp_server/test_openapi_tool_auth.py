@@ -7,18 +7,26 @@ MCP server tools.
 """
 
 from datetime import datetime, timezone
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp.types import CallToolResult
 
+import litellm
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 @pytest.mark.asyncio
@@ -478,6 +486,47 @@ async def test_legacy_local_tool_fallback_still_dispatches_entitled_caller(
     assert result.is_error is False
     assert executed == [{}]
     assert "legacy local tool ran" in result.content[0].text
+
+
+class _ResultMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="result-mask", event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(texts=[text.replace("ran", "[MASKED]") for text in inputs.get("texts", [])])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("listed", "expected"), [(("result-mask",), "legacy local tool [MASKED]"), (None, "legacy local tool ran")]
+)
+async def test_legacy_local_tool_fallback_runs_the_checked_servers_listed_guardrails(
+    legacy_local_tool, monkeypatch: pytest.MonkeyPatch, listed: tuple[str, ...] | None, expected: str
+) -> None:
+    server, _executed = legacy_local_tool
+    listed_server: Final = server.model_copy(update={"guardrails": listed})
+    monkeypatch.setattr(litellm, "callbacks", [_ResultMaskingGuardrail()])
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    try:
+        result = await mcp_operations.execute_mcp_tool(
+            name=f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}",
+            arguments={},
+            allowed_mcp_servers=[listed_server],
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=_caller_entitled_to([LEGACY_TOOL]),
+        )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert result.content[0].text == expected
 
 
 @pytest.mark.asyncio

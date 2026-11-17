@@ -294,6 +294,7 @@ _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
 _UNTYPED_VALUE: Final = TypeAdapter(object)
+_GUARDRAIL_NAMES: Final[TypeAdapter[tuple[str, ...] | None]] = TypeAdapter(tuple[str, ...] | None)
 
 
 def _www_authenticate_header(headers: Mapping[str, str]) -> str | None:
@@ -2938,7 +2939,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
-                guardrails=tuple(server_config.get("guardrails") or ()) or None,
+                guardrails=_GUARDRAIL_NAMES.validate_python(server_config.get("guardrails")),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
                 env_vars=server_config.get("env_vars", None),

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -52,6 +53,15 @@ def test_unlisted_guardrail_does_not_run_on_another_server(server_guardrails: li
     assert guardrail.should_run_guardrail(data, GuardrailEventHooks.pre_mcp_call) is False
 
 
+@pytest.mark.parametrize(("stream_scope", "expected"), [("streaming", False), ("non_streaming", True)])
+def test_listed_guardrail_still_honours_its_stream_scope(stream_scope: str, expected: bool) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name=SCOPED, event_hook=GuardrailEventHooks.pre_mcp_call, stream_scope=stream_scope
+    )
+    data: Final = {MCP_SERVER_GUARDRAILS_KEY: [SCOPED]}
+    assert guardrail.should_run_guardrail(data, GuardrailEventHooks.pre_mcp_call) is expected
+
+
 def test_listed_guardrail_still_honours_its_mode() -> None:
     guardrail: Final = _guardrail(GuardrailEventHooks.post_mcp_call)
     data: Final = {MCP_SERVER_GUARDRAILS_KEY: [SCOPED]}
@@ -80,6 +90,17 @@ async def test_config_guardrails_are_loaded_onto_the_server(
     )
     servers: Final = [s for s in manager.config_mcp_servers.values() if s.name == "tickets"]
     assert [s.guardrails for s in servers] == [(SCOPED,)]
+
+
+@pytest.mark.asyncio
+async def test_config_guardrails_given_as_a_single_name_are_rejected(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    manager: Final = config_only_mcp_manager_factory()
+    with pytest.raises(ValidationError):
+        await manager.load_servers_from_config(
+            {"tickets": {"url": "https://example.com/mcp", "transport": "http", "guardrails": SCOPED}}
+        )
 
 
 @pytest.mark.asyncio

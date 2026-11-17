@@ -2549,10 +2549,7 @@ async def _execute_mcp_tool(
             # would happily return a server the caller holds no grant for,
             # and matching anything other than `name` would accept a server
             # the check never validated.
-            prefix_server: Final = next(
-                (candidate for candidate in allowed_mcp_servers if candidate.name == server_name),
-                None,
-            )
+            prefix_server: Final = _server_named(allowed_mcp_servers, server_name)
             if prefix_server is None:
                 # A non-empty prefix that passed the server-level check
                 # always matches here, so this arm only fires when the
@@ -2613,14 +2610,19 @@ async def _execute_mcp_tool(
     converted: Final = to_call_tool_result(response, wire_compat)
     if isinstance(converted, InputRequiredResult):
         return converted
+    checked_server: Final = mcp_server or _server_named(allowed_mcp_servers, server_name)
     return await _run_post_mcp_call_guardrails(
         result=converted,
         litellm_logging_obj=litellm_logging_obj,
         original_auth=user_api_key_auth,
         guardrail_auth=effective_guardrail_auth,
         request_data=kwargs,
-        server_guardrails=tuple(mcp_server.guardrails or ()) if mcp_server is not None else (),
+        server_guardrails=tuple(checked_server.guardrails or ()) if checked_server is not None else (),
     )
+
+
+def _server_named(servers: Sequence[MCPServer], name: str) -> MCPServer | None:
+    return next((candidate for candidate in servers if candidate.name == name), None)
 
 
 def _guarded_progress_callback(

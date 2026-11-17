@@ -1422,8 +1422,9 @@ class CustomGuardrail(CustomLogger):
         if self._suppressed_by_auto_router_compression():
             return False
 
-        if self._attached_to_mcp_server(cast(object, data), event_type):  # cast-ok: untyped data param
-            return self._event_hook_is_event_type(event_type)
+        attached_data: Final = cast(object, data)  # cast-ok: untyped data param
+        if self._attached_to_mcp_server(attached_data, event_type):
+            return self._event_hook_is_event_type(event_type) and self.stream_scope_allows(attached_data, event_type)
 
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)
         disable_global_guardrail: Final = self.get_disable_global_guardrail(data)
