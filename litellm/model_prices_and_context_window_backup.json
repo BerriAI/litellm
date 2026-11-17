@@ -16461,7 +16461,7 @@
         "output_cost_per_token": 5e-07
     },
     "gpt-4o-transcribe-diarize": {
-        "input_cost_per_audio_token": 2.5e-06,
+        "input_cost_per_audio_token": 6e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16000,
@@ -36544,7 +36544,7 @@
         "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-search-preview"
     },
     "gpt-4o-mini-transcribe": {
-        "input_cost_per_audio_token": 1.25e-06,
+        "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16000,
@@ -60686,7 +60686,7 @@
         "deprecation_date": "2027-02-26",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-live-transcribe",
-        "input_cost_per_audio_token": 1.25e-06,
+        "input_cost_per_audio_token": 3e-06,
         "input_cost_per_second": 5e-05,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
