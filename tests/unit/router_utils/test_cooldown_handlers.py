@@ -20,6 +20,14 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.exceptions import (
+    ConflictBadRequestError,
+    GatewayTimeoutError,
+    OpenAIBadGatewayError,
+    OpenAIServiceUnavailableError,
+    UnprocessableEntityBadRequestError,
+    UpstreamConnectionError,
+)
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
@@ -202,6 +210,62 @@ class TestResolveAllowedFailsFromPolicy:
         policy = {"BadRequestErrorAllowedFails": 10, "ContentPolicyViolationErrorAllowedFails": 2}
         exc = litellm.ContentPolicyViolationError("flagged content", "openai", "gpt-4")
         assert _resolve_allowed_fails_from_policy(policy, exc) == 2
+
+
+_SENT_REQUEST: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+
+
+@pytest.mark.parametrize(
+    ("replaced", "parity", "policy_field"),
+    [
+        (
+            litellm.Timeout("504", "gpt-5.6", "openai", exception_status_code=504),
+            GatewayTimeoutError("504", "gpt-5.6", "openai", exception_status_code=504),
+            "TimeoutErrorAllowedFails",
+        ),
+        (
+            litellm.InternalServerError("refused", "openai", "gpt-5.6"),
+            UpstreamConnectionError("refused", "openai", "gpt-5.6"),
+            "InternalServerErrorAllowedFails",
+        ),
+        (
+            litellm.BadRequestError("422", "gpt-5.6", "openai", response=httpx.Response(422, request=_SENT_REQUEST)),
+            UnprocessableEntityBadRequestError(
+                "422", "gpt-5.6", "openai", response=httpx.Response(422, request=_SENT_REQUEST)
+            ),
+            "BadRequestErrorAllowedFails",
+        ),
+        (
+            litellm.BadRequestError("409", "gpt-5.6", "openai", response=httpx.Response(409, request=_SENT_REQUEST)),
+            ConflictBadRequestError("409", "gpt-5.6", "openai", response=httpx.Response(409, request=_SENT_REQUEST)),
+            "BadRequestErrorAllowedFails",
+        ),
+        (
+            litellm.BadGatewayError("502", "openai", "gpt-5.6"),
+            OpenAIBadGatewayError("502", "openai", "gpt-5.6"),
+            "BadGatewayErrorAllowedFails",
+        ),
+        (
+            litellm.ServiceUnavailableError("503", "openai", "gpt-5.6"),
+            OpenAIServiceUnavailableError("503", "openai", "gpt-5.6"),
+            "ServiceUnavailableErrorAllowedFails",
+        ),
+    ],
+)
+def test_parity_error_counts_against_the_allowed_fails_of_the_error_it_replaced(
+    replaced: Exception, parity: Exception, policy_field: str
+) -> None:
+    ctx: Final = _ctx_double(deployment_dict={"litellm_params": {}, "model_info": {}})
+    policy: Final = {policy_field: 1}
+
+    cooled_down: Final = tuple(
+        _should_cooldown_based_on_deployment_policy(
+            ctx, "dep-1", error, policy, None, is_single_deployment_model_group=False
+        )
+        for error in (replaced, parity)
+    )
+
+    assert cooled_down == (False, True)
 
 
 class TestShouldCooldownBasedOnDeploymentPolicy:

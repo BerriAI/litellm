@@ -12,7 +12,14 @@ from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm import completion
-from litellm.exceptions import GuardrailRaisedException, logged_class_name, router_class_names
+from litellm.exceptions import (
+    ConflictBadRequestError,
+    GuardrailRaisedException,
+    OpenAIServiceUnavailableError,
+    UnprocessableEntityBadRequestError,
+    logged_class_name,
+    reported_class_names,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -1400,6 +1407,9 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
     assert message in excinfo.value.message
 
 
+_OPENAI_INVALID_REQUEST_CLASS: Final = {409: ConflictBadRequestError, 422: UnprocessableEntityBadRequestError}
+
+
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
 @pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
 def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
@@ -1416,7 +1426,8 @@ def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_
             custom_llm_provider=provider,
         )
 
-    assert type(excinfo.value) is litellm.BadRequestError
+    assert type(excinfo.value) is _OPENAI_INVALID_REQUEST_CLASS.get(status_code, litellm.BadRequestError)
+    assert isinstance(excinfo.value, litellm.BadRequestError)
     assert message in excinfo.value.message
 
 
@@ -1517,7 +1528,11 @@ PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
 
 STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
 
-OPENAI_MAPPED: Final = {402: (litellm.APIError, 402), 422: (litellm.UnprocessableEntityBadRequestError, 422)}
+OPENAI_MAPPED: Final = {
+    402: (litellm.APIError, 402),
+    422: (UnprocessableEntityBadRequestError, 422),
+    503: (OpenAIServiceUnavailableError, 503),
+}
 
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "ai21": OPENAI_MAPPED,
@@ -3501,29 +3516,29 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.request.content == b""
 
 
-def _openai_client_answering(reply: int | Literal["refused"]) -> OpenAI:
+def _openai_client_answering(reply: int | Literal["refused"], error_type: str = "x") -> OpenAI:
     def answer(request: httpx.Request) -> httpx.Response:
         if reply == "refused":
             raise httpx.ConnectError("connection refused", request=request)
-        return httpx.Response(reply, json={"error": {"message": f"upstream {reply}", "type": "x", "code": None}})
+        return httpx.Response(reply, json={"error": {"message": f"upstream {reply}", "type": error_type, "code": None}})
 
     return OpenAI(api_key="sk-fake", max_retries=0, http_client=httpx.Client(transport=httpx.MockTransport(answer)))
 
 
-def _sdk_error(reply: int | Literal["refused"]) -> openai.APIError:
+def _sdk_error(reply: int | Literal["refused"], error_type: str = "x") -> openai.APIError:
     with pytest.raises(openai.APIError) as raised:
-        _openai_client_answering(reply).chat.completions.create(
+        _openai_client_answering(reply, error_type).chat.completions.create(
             model="gpt-5.6", messages=[{"role": "user", "content": "hi"}]
         )
     return raised.value
 
 
-def _litellm_error(reply: int | Literal["refused"]) -> Exception:
+def _litellm_error(reply: int | Literal["refused"], error_type: str = "x") -> Exception:
     with pytest.raises(Exception) as raised:
         completion(
             model="openai/gpt-5.6",
             messages=[{"role": "user", "content": "hi"}],
-            client=_openai_client_answering(reply),
+            client=_openai_client_answering(reply, error_type),
         )
     return raised.value
 
@@ -3541,7 +3556,7 @@ def _mro_names(cls: type) -> tuple[str, ...]:
 
 
 @pytest.mark.parametrize(
-    ("reply", "litellm_class", "status_code", "router_names"),
+    ("reply", "litellm_class", "status_code", "reported_names"),
     [
         (409, litellm.APIError, 409, _mro_names(litellm.APIError)),
         (422, litellm.BadRequestError, 422, _mro_names(litellm.BadRequestError)),
@@ -3551,8 +3566,8 @@ def _mro_names(cls: type) -> tuple[str, ...]:
         ("refused", litellm.InternalServerError, 500, _mro_names(litellm.InternalServerError)),
     ],
 )
-def test_openai_error_keeps_its_litellm_class_status_message_and_router_names(
-    reply: int | Literal["refused"], litellm_class: type[Exception], status_code: int, router_names: tuple[str, ...]
+def test_openai_error_keeps_its_litellm_class_status_message_and_reported_names(
+    reply: int | Literal["refused"], litellm_class: type[Exception], status_code: int, reported_names: tuple[str, ...]
 ) -> None:
     litellm_error: Final = _litellm_error(reply)
 
@@ -3560,7 +3575,19 @@ def test_openai_error_keeps_its_litellm_class_status_message_and_router_names(
     assert getattr(litellm_error, "status_code") == status_code
     assert str(litellm_error).startswith(f"litellm.{litellm_class.__name__}: ")
     assert logged_class_name(litellm_error) == litellm_class.__name__
-    assert router_class_names(litellm_error) == router_names
+    assert reported_class_names(litellm_error) == reported_names
+
+
+@pytest.mark.parametrize("reply", [409, 422])
+def test_openai_invalid_request_error_is_also_the_sdk_class_and_stays_a_bad_request(reply: int) -> None:
+    sdk_error: Final = _sdk_error(reply, "invalid_request_error")
+    litellm_error: Final = _litellm_error(reply, "invalid_request_error")
+
+    assert isinstance(litellm_error, type(sdk_error)), (type(litellm_error).__mro__, type(sdk_error))
+    assert isinstance(litellm_error, litellm.BadRequestError)
+    assert getattr(litellm_error, "status_code") == reply
+    assert str(litellm_error).startswith("litellm.BadRequestError: ")
+    assert reported_class_names(litellm_error) == _mro_names(litellm.BadRequestError)
 
 
 def _wrapped_500(cause: BaseException, response: httpx.Response | None = None) -> OpenAIError:

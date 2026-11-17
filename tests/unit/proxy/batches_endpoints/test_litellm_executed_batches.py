@@ -13,6 +13,15 @@ import pytest
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
+from litellm.exceptions import (
+    ConflictBadRequestError,
+    ConflictError,
+    GatewayTimeoutError,
+    OpenAIBadGatewayError,
+    OpenAIServiceUnavailableError,
+    UnprocessableEntityBadRequestError,
+    UpstreamConnectionError,
+)
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.batches_endpoints import litellm_executed_batches
@@ -847,6 +856,46 @@ async def test_create_splits_failed_rows_into_the_error_file() -> None:
     assert response["body"] == {
         "error": {"message": str(failure), "type": "ProviderRateLimited", "param": None, "code": None}
     }
+
+
+_SENT: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+
+
+@pytest.mark.parametrize(
+    ("failure", "reported_type"),
+    [
+        (ConflictError("APIError: OpenAIException - conflict", "openai", "gpt-5.6"), "APIError"),
+        (
+            ConflictBadRequestError(
+                "OpenAIException - conflict", "gpt-5.6", "openai", response=httpx.Response(409, request=_SENT)
+            ),
+            "BadRequestError",
+        ),
+        (
+            UnprocessableEntityBadRequestError(
+                "OpenAIException - bad", "gpt-5.6", "openai", response=httpx.Response(422, request=_SENT)
+            ),
+            "BadRequestError",
+        ),
+        (OpenAIBadGatewayError("BadGatewayError: OpenAIException - x", "openai", "gpt-5.6"), "BadGatewayError"),
+        (
+            OpenAIServiceUnavailableError("ServiceUnavailableError: OpenAIException - x", "openai", "gpt-5.6"),
+            "ServiceUnavailableError",
+        ),
+        (GatewayTimeoutError("Timeout Error: OpenAIException - slow", "gpt-5.6", "openai"), "Timeout"),
+        (UpstreamConnectionError("Connection error.", "openai", "gpt-5.6"), "InternalServerError"),
+    ],
+)
+async def test_error_file_reports_an_openai_sdk_parity_error_under_the_class_it_replaced(
+    failure: Exception, reported_type: str
+) -> None:
+    harness: Final = make_runner()
+    harness.router.acompletion.side_effect = failure
+    await harness.create_and_finish()
+
+    response: Final = next(iter(harness.uploads.calls[-1].lines().values()))["response"]
+    assert isinstance(response, dict)
+    assert response["body"]["error"]["type"] == reported_type
 
 
 async def test_create_rejects_an_unsupported_endpoint() -> None:

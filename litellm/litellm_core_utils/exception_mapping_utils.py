@@ -2,7 +2,7 @@ import inspect
 import json
 import re
 import traceback
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
@@ -31,12 +31,15 @@ from ..exceptions import (
     AuthenticationError,
     BadGatewayError,
     BadRequestError,
+    ConflictBadRequestError,
     ConflictError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     GatewayTimeoutError,
     InternalServerError,
     NotFoundError,
+    OpenAIBadGatewayError,
+    OpenAIServiceUnavailableError,
     PaymentRequiredError,
     PermissionDeniedError,
     RateLimitError,
@@ -326,23 +329,20 @@ def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
     return response if response is not None and (response.headers or response.content) else None
 
 
-def _exception_chain(error: BaseException | None, depth: int) -> Iterator[BaseException]:
-    if error is None or depth == 0:
-        return
-    yield error
-    yield from _exception_chain(error.__cause__ or error.__context__, depth - 1)
+_CONNECTION_FAILURE_CHAIN_DEPTH: Final = 8
 
 
-def _is_connection_failure(error: BaseException) -> bool:
-    if isinstance(error, openai.APIConnectionError):
-        return not isinstance(error, openai.APITimeoutError)
-    return isinstance(error, httpx.TransportError) and not isinstance(error, httpx.TimeoutException)
-
-
-def _caused_by_connection_failure(error: object) -> bool:
-    return isinstance(error, BaseException) and any(
-        _is_connection_failure(cause) for cause in _exception_chain(error, 8)
-    )
+def _caused_by_connection_failure(error: BaseException) -> bool:
+    cause: BaseException | None = error  # rebind-ok: walks the exception chain
+    for _ in range(_CONNECTION_FAILURE_CHAIN_DEPTH):
+        if cause is None:
+            return False
+        if (isinstance(cause, openai.APIConnectionError) and not isinstance(cause, openai.APITimeoutError)) or (
+            isinstance(cause, httpx.TransportError) and not isinstance(cause, httpx.TimeoutException)
+        ):
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
 
 
 def _map_openai_exception(
@@ -473,7 +473,14 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
                 body=getattr(original_exception, "body", None),
             )
-        raise BadRequestError(
+        invalid_request_class: Final = (
+            ConflictBadRequestError
+            if invalid_request_status == 409
+            else UnprocessableEntityBadRequestError
+            if invalid_request_status == 422
+            else BadRequestError
+        )
+        raise invalid_request_class(
             message=f"{exception_provider} - {message}",
             llm_provider=custom_llm_provider,
             model=model,
@@ -585,11 +592,14 @@ def _map_openai_exception(
                 body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 500:
-            raise (
+            server_error_class: Final = (
                 UpstreamConnectionError
-                if _upstream_reply(response) is None and _caused_by_connection_failure(original_exception)
+                if _upstream_reply(response) is None
+                and isinstance(original_exception, BaseException)
+                and _caused_by_connection_failure(original_exception)
                 else InternalServerError
-            )(
+            )
+            raise server_error_class(
                 message=f"InternalServerError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -598,7 +608,7 @@ def _map_openai_exception(
                 body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 502:
-            raise BadGatewayError(
+            raise OpenAIBadGatewayError(
                 message=f"BadGatewayError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -606,7 +616,7 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
             )
         elif original_exception.status_code == 503:
-            raise ServiceUnavailableError(
+            raise OpenAIServiceUnavailableError(
                 message=f"ServiceUnavailableError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,

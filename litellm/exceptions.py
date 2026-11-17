@@ -13,11 +13,11 @@ import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from types import MappingProxyType
-from typing import Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+from typing import Any, ClassVar, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
 import httpx
 import openai
+from pydantic import TypeAdapter
 from typing_extensions import Buffer
 
 import litellm
@@ -630,7 +630,7 @@ class SyncRequestOverDeploymentTpmError(RequestOverDeploymentTpmError, ValueErro
 
 def logged_class_name(error: BaseException) -> str:
     logged: Final[object] = getattr(error, "logged_error_class", None)
-    return logged if isinstance(logged, str) else type(error).__name__
+    return logged if isinstance(logged, str) else reported_class_names(error)[0]
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
@@ -808,7 +808,7 @@ class ContentPolicyViolationError(BadRequestError):
         return _message
 
 
-class ServiceUnavailableError(openai.InternalServerError):
+class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
         self,
         message,
@@ -848,7 +848,7 @@ class ServiceUnavailableError(openai.InternalServerError):
         return _message
 
 
-class BadGatewayError(openai.InternalServerError):
+class BadGatewayError(openai.APIStatusError):
     response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
     request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
 
@@ -1040,7 +1040,7 @@ class UnprocessableEntityBadRequestError(  # pyright: ignore[reportIncompatibleV
     The two LiteLLM constructors take different arguments, so this one fills ``BadRequestError``'s fields and
     hands the reply straight to ``openai.APIStatusError``, whose own ``super()`` lands on ``openai.APIError``."""
 
-    logged_error_class: Final = "BadRequestError"
+    sdk_parity_bases: ClassVar[tuple[type, ...]] = (UnprocessableEntityError, openai.UnprocessableEntityError)
 
     def __init__(
         self,
@@ -1070,7 +1070,7 @@ class UnprocessableEntityBadRequestError(  # pyright: ignore[reportIncompatibleV
 class ConflictError(APIError, openai.ConflictError):
     """A 409 from an OpenAI-style provider, also the ``openai.ConflictError`` the SDK raises for it"""
 
-    logged_error_class: Final = "APIError"
+    sdk_parity_bases: ClassVar[tuple[type, ...]] = (openai.ConflictError, openai.APIStatusError)
 
     def __init__(
         self,
@@ -1107,7 +1107,7 @@ class ConflictError(APIError, openai.ConflictError):
 class GatewayTimeoutError(Timeout, openai.InternalServerError):
     """A 504 from an OpenAI-style provider, also the ``openai.InternalServerError`` the SDK raises for it"""
 
-    logged_error_class: Final = "Timeout"
+    sdk_parity_bases: ClassVar[tuple[type, ...]] = (openai.InternalServerError, openai.APIStatusError)
 
     def __init__(
         self,
@@ -1143,7 +1143,7 @@ class GatewayTimeoutError(Timeout, openai.InternalServerError):
 class UpstreamConnectionError(InternalServerError, openai.APIConnectionError):
     """A provider LiteLLM could not reach, also the ``openai.APIConnectionError`` the SDK raises for it"""
 
-    logged_error_class: Final = "InternalServerError"
+    sdk_parity_bases: ClassVar[tuple[type, ...]] = (openai.APIConnectionError,)
 
     def __init__(
         self,
@@ -1170,32 +1170,44 @@ class UpstreamConnectionError(InternalServerError, openai.APIConnectionError):
         self.type = "internal_server_error"
 
 
-_SDK_PARITY_BASES: Final[Mapping[type, tuple[type, ...]]] = MappingProxyType(
-    {
-        BadGatewayError: (openai.InternalServerError,),
-        ServiceUnavailableError: (openai.InternalServerError,),
-        UnprocessableEntityBadRequestError: (
-            UnprocessableEntityBadRequestError,
-            UnprocessableEntityError,
-            openai.UnprocessableEntityError,
-        ),
-        ConflictError: (ConflictError, openai.ConflictError, openai.APIStatusError),
-        GatewayTimeoutError: (GatewayTimeoutError, openai.InternalServerError, openai.APIStatusError),
-        UpstreamConnectionError: (UpstreamConnectionError, openai.APIConnectionError),
-    }
-)
+class ConflictBadRequestError(  # pyright: ignore[reportIncompatibleVariableOverride]  # both bases pin status_code, the reply sets it
+    BadRequestError, openai.ConflictError
+):
+    """A 409 ``invalid_request_error`` from an OpenAI-style provider, also the ``openai.ConflictError`` the SDK raises
+    for it"""
+
+    sdk_parity_bases: ClassVar[tuple[type, ...]] = (openai.ConflictError,)
 
 
-def router_class_names(error: BaseException) -> tuple[str, ...]:
-    """The class names the router keys retry, allowed-fails and cooldown policies on, and the class name
-    batch output reports first.
+class OpenAIBadGatewayError(BadGatewayError, openai.InternalServerError):
+    """A 502 from an OpenAI-style provider, also the ``openai.InternalServerError`` the SDK raises for it"""
 
-    Some errors gained an OpenAI SDK base, or are a class that exists only to add one, so they are also
-    what the SDK raises for the same reply. The router matches by bare name, and ``openai.InternalServerError``
-    shares a name with ``litellm.InternalServerError``, so ``_SDK_PARITY_BASES`` lists what each class added
-    and this leaves those out, keeping the names these readers saw before."""
+    sdk_parity_bases: ClassVar[tuple[type, ...]] = (openai.InternalServerError,)
+
+
+class OpenAIServiceUnavailableError(ServiceUnavailableError, openai.InternalServerError):
+    """A 503 from an OpenAI-style provider, also the ``openai.InternalServerError`` the SDK raises for it"""
+
+    sdk_parity_bases: ClassVar[tuple[type, ...]] = (openai.InternalServerError,)
+
+
+_CLASSES: Final = TypeAdapter(tuple[type, ...])
+
+
+def _sdk_parity_classes(cls: type) -> tuple[type, ...]:
+    declared: Final[object] = vars(cls).get("sdk_parity_bases")
+    return () if declared is None else (cls, *_CLASSES.validate_python(declared))
+
+
+def reported_class_names(error: BaseException) -> tuple[str, ...]:
+    """The class names an error is reported under: retry, allowed-fails and cooldown policies, logs and batch output.
+
+    A class that declares ``sdk_parity_bases`` exists only so the error is also what the OpenAI SDK raises for the
+    same reply. That class and the bases it lists are left out, so readers keep seeing the class it stands in for.
+    The names matter because the router matches by bare name, and ``openai.InternalServerError`` shares a name with
+    ``litellm.InternalServerError``."""
     mro: Final = type(error).__mro__
-    hidden: Final = frozenset(chain.from_iterable(_SDK_PARITY_BASES.get(cls, ()) for cls in mro))
+    hidden: Final = frozenset(chain.from_iterable(_sdk_parity_classes(cls) for cls in mro))
     return tuple(cls.__name__ for cls in mro if cls not in hidden)
 
 

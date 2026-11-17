@@ -522,9 +522,9 @@ class RustCoreUnsupported(AttributeError):
 
 
 def failure_kind(error: BaseException) -> str:
-    from litellm.exceptions import router_class_names
+    from litellm.exceptions import reported_class_names
 
-    names: Final = router_class_names(error)
+    names: Final = reported_class_names(error)
     if not _DECLINED.isdisjoint(names):
         return "Declined"
     if is_guardrail_intervention(error):  # pyright: ignore[reportArgumentType]  # every attempt error is an Exception
@@ -548,7 +548,7 @@ def retry_after_seconds(error: BaseException) -> float | None:
 
 
 def attempt_failure(error: BaseException) -> Mapping[str, object]:
-    from litellm.exceptions import router_class_names
+    from litellm.exceptions import reported_class_names
 
     status: Final = getattr(error, "status_code", None)
     num_retries: Final = getattr(error, "num_retries", None)
@@ -565,7 +565,7 @@ def attempt_failure(error: BaseException) -> Mapping[str, object]:
         "num_retries": num_retries if isinstance(num_retries, int) and num_retries >= 0 else None,
         "failed_deployment_id": named_deployment if isinstance(named_deployment, str) else None,
         "detail": str(error),
-        "classes": list(router_class_names(error)),
+        "classes": list(reported_class_names(error)),
         "llm_provider": bool(getattr(error, "llm_provider", "")),
         "agentic_followup": is_agentic_followup_failure(error),
     }
