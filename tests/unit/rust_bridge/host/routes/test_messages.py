@@ -3408,7 +3408,9 @@ def _mantle_logger() -> Logging:
     )
 
 
-def test_a_mantle_route_refusal_logs_and_raises_the_model_id_rust_names() -> None:
+def test_a_mantle_route_refusal_logs_the_route_model_and_raises_the_model_id_rust_names() -> None:
+    """Python's handler logs the route model before the Mantle config's transform refuses the call
+    with the model id it hands the Bedrock invoke transform."""
     text: Final = "Bedrock does not support Anthropic's server-side web search tool"
     rust_error: Final = _refused(
         text,
@@ -3424,7 +3426,7 @@ def test_a_mantle_route_refusal_logs_and_raises_the_model_id_rust_names() -> Non
 
     assert type(mapped) is litellm.BadRequestError
     assert mapped.model == "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
-    assert logger.model == "anthropic.claude-sonnet-5-5"
+    assert logger.model == "mantle/anthropic.claude-sonnet-5-5"
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
