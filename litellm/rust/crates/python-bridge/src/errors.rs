@@ -667,8 +667,8 @@ mod tests {
 
     #[rstest::rstest]
     #[case::plain(
-        GoogleLoginFailure::new(PythonException::Type, "Expected project_id to be a str"),
-        ("TypeError".into(), "Expected project_id to be a str".into())
+        GoogleLoginFailure::new(PythonException::Refresh, "invalid_grant"),
+        ("google.auth.exceptions.RefreshError".into(), "invalid_grant".into())
     )]
     #[case::file_failure(
         GoogleLoginFailure::new(PythonException::Value, "file failure"),

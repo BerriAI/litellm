@@ -4,12 +4,13 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use litellm_secret_value::SecretValue;
-use serde_json::Value;
+use serde::Deserialize;
 use time::OffsetDateTime;
 
 use super::{
     builders::{TokenSource, token_failure},
-    failure::{GoogleLoginFailure, PythonException, json_kind, python_str},
+    failure::{GoogleLoginFailure, PythonException},
+    source::present,
 };
 
 /// `google.auth._helpers.REFRESH_THRESHOLD`: a token this close to its expiry is stale.
@@ -36,12 +37,12 @@ pub(crate) enum Expiry {
     Managed,
 }
 
+/// A token a refresh minted: `None` when the token endpoint's reply named its access token null,
+/// which google-auth keeps as a token it can never use.
 #[derive(Clone, Debug)]
 pub(crate) struct Minted {
-    pub(crate) value: SecretValue,
+    pub(crate) token: Option<SecretValue>,
     pub(crate) expiry: Expiry,
-    /// The Python type of a token google-auth took from a reply that did not hold a string.
-    pub(crate) non_string: Option<&'static str>,
 }
 
 /// google-auth's `TokenState`.
@@ -52,43 +53,83 @@ pub(crate) enum TokenState {
     Invalid,
 }
 
+/// A token endpoint's `expires_in`: seconds, or the seconds as text.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub(crate) enum Lifetime {
+    Seconds(f64),
+    Text(String),
+}
+
+/// A token endpoint's JSON reply to a grant.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct TokenReply {
+    /// `None` when the reply has no `access_token`, `Some(None)` when it is null.
+    #[serde(default, deserialize_with = "present")]
+    pub(crate) access_token: Option<Option<String>>,
+    pub(crate) expires_in: Option<Lifetime>,
+    pub(crate) refresh_token: Option<String>,
+}
+
+impl TokenReply {
+    /// The reply a token endpoint answered a grant with, which must be a JSON object.
+    pub(crate) fn parse(body: &str) -> Result<Self, GoogleLoginFailure> {
+        serde_json::from_str(body).map_err(|_| not_a_token_reply())
+    }
+}
+
+/// A token endpoint's JSON reply to a refused grant.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct TokenRefusal {
+    pub(crate) error: Option<String>,
+    pub(crate) error_description: Option<String>,
+    pub(crate) error_subtype: Option<String>,
+    pub(crate) error_uri: Option<String>,
+}
+
+impl TokenRefusal {
+    /// The refusal a body holds, when it is a JSON object of text fields.
+    pub(crate) fn parse(body: &str) -> Option<Self> {
+        serde_json::from_str(body).ok()
+    }
+}
+
+/// A token reply that is not a JSON object of the fields a grant answers with.
+pub(crate) fn not_a_token_reply() -> GoogleLoginFailure {
+    GoogleLoginFailure::new(
+        PythonException::Refresh,
+        "The token endpoint's reply is not a JSON object.",
+    )
+}
+
 impl Minted {
     pub(crate) fn new(value: SecretValue, expiry: Expiry) -> Self {
         Self {
-            value,
+            token: Some(value),
             expiry,
-            non_string: None,
         }
     }
 
-    /// The token google-auth sets from a reply's `access_token`, whatever JSON it holds.
-    pub(crate) fn from_reply(token: Option<&Value>, expiry: Expiry) -> Self {
+    /// The token google-auth sets from a reply's `access_token`.
+    pub(crate) fn from_reply(token: Option<String>, expiry: Expiry) -> Self {
         Self {
-            value: SecretValue::new(python_str(token)),
+            token: token.map(SecretValue::new),
             expiry,
-            non_string: match token {
-                Some(Value::String(_)) => None,
-                Some(other) => Some(json_kind(other)),
-                None => Some("NoneType"),
-            },
         }
     }
 
     /// The final validation of `get_access_token_async`.
     pub(crate) fn usable(self) -> Result<SecretValue, GoogleLoginFailure> {
-        match self.non_string {
-            None => Ok(self.value),
-            Some(kind) => Err(GoogleLoginFailure::new(
+        self.token.ok_or_else(|| {
+            GoogleLoginFailure::new(
                 PythonException::Value,
-                format!(
-                    "Could not resolve credentials token. Got None or non-string token (type={kind})"
-                ),
-            )),
-        }
+                "Could not resolve credentials token. Got None or non-string token (type=NoneType)",
+            )
+        })
     }
 
     pub(crate) fn state(&self, now: OffsetDateTime) -> TokenState {
-        if self.non_string == Some("NoneType") {
+        if self.token.is_none() {
             return TokenState::Invalid;
         }
         match self.expiry {
@@ -157,30 +198,46 @@ mod tests {
     }
 
     #[rstest]
-    #[case::none(None, Some("NoneType"))]
-    #[case::null(Some(serde_json::json!(null)), Some("NoneType"))]
-    #[case::number(Some(serde_json::json!(7)), Some("int"))]
-    #[case::text(Some(serde_json::json!("t")), None)]
-    fn a_reply_s_token_keeps_its_python_type(
-        #[case] token: Option<Value>,
-        #[case] expected: Option<&str>,
-    ) {
-        let minted = Minted::from_reply(token.as_ref(), Expiry::Never);
-        assert_eq!(minted.non_string, expected);
-        assert_eq!(
-            minted.state(NOW) == TokenState::Invalid,
-            expected == Some("NoneType")
-        );
+    #[case::null(None, true)]
+    #[case::text(Some("t"), false)]
+    fn a_null_token_is_never_usable(#[case] token: Option<&str>, #[case] invalid: bool) {
+        let minted = Minted::from_reply(token.map(str::to_owned), Expiry::Never);
+        assert_eq!(minted.state(NOW) == TokenState::Invalid, invalid);
         let usable = minted.usable().map(|token| token.expose().to_owned());
-        match expected {
-            None => assert_eq!(usable, Ok("t".to_owned())),
-            Some(kind) => assert_eq!(
-                usable.unwrap_err().message,
-                format!(
-                    "Could not resolve credentials token. Got None or non-string token (type={kind})"
-                )
-            ),
+        match token {
+            Some(token) => assert_eq!(usable, Ok(token.to_owned())),
+            None => assert_eq!(usable.unwrap_err().exception, PythonException::Value),
         }
+    }
+
+    #[rstest]
+    #[case::granted(
+        r#"{"access_token": "t", "expires_in": 60}"#,
+        Some(Some("t")),
+        Some(Lifetime::Seconds(60.0))
+    )]
+    #[case::null_token(r#"{"access_token": null, "expires_in": "60"}"#, Some(None), Some(Lifetime::Text("60".into())))]
+    #[case::no_token(r#"{"token_type": "Bearer", "scope": ["a", 1]}"#, None, None)]
+    fn a_token_reply_tells_a_null_token_from_a_missing_one(
+        #[case] body: &str,
+        #[case] token: Option<Option<&str>>,
+        #[case] lifetime: Option<Lifetime>,
+    ) {
+        let reply = TokenReply::parse(body).unwrap();
+        assert_eq!(
+            reply.access_token,
+            token.map(|token| token.map(str::to_owned))
+        );
+        assert_eq!(reply.expires_in, lifetime);
+    }
+
+    #[rstest]
+    #[case::not_json("nope")]
+    #[case::list("[1]")]
+    #[case::numeric_token(r#"{"access_token": 7}"#)]
+    #[case::boolean_lifetime(r#"{"access_token": "t", "expires_in": true}"#)]
+    fn a_reply_that_is_not_a_token_reply_is_refused(#[case] body: &str) {
+        assert_eq!(TokenReply::parse(body).unwrap_err(), not_a_token_reply());
     }
 
     #[rstest]

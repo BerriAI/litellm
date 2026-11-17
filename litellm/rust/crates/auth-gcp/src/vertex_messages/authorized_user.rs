@@ -7,24 +7,42 @@ use std::{
     time::Duration,
 };
 
-use serde_json::{Map, Value};
+use serde::Deserialize;
 use time::OffsetDateTime;
 
 use super::{
-    credentials::{Credentials, Loaded, Minted, RefreshFuture},
-    failure::{GoogleLoginFailure, PythonException, python_str},
+    credentials::{Credentials, Loaded, Minted, RefreshFuture, TokenRefusal},
+    failure::{GoogleLoginFailure, PythonException},
     service_account::{expiry, granted, refused, token_endpoint_request},
+    source::present,
     transport::Requests,
 };
 use crate::constants::CLOUD_PLATFORM_SCOPE;
 
-const REQUIRED_FIELDS: [&str; 3] = ["refresh_token", "client_id", "client_secret"];
 const DEFAULT_UNIVERSE_DOMAIN: &str = "googleapis.com";
 /// `_exponential_backoff`'s first wait.
 const FIRST_RETRY_WAIT: Duration = Duration::from_secs(1);
 const CANNOT_REFRESH: &str = "The credentials do not contain the necessary fields need to refresh the access token. You must specify refresh_token, token_uri, client_id, and client_secret.";
 const REAUTH_NEEDED: &str = "Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.";
 
+/// Authorized user info, as `Credentials.from_authorized_user_info` reads it. The fields it
+/// requires are `Some(None)` when null, which it accepts and only fails to refresh with.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct AuthorizedUserInfo {
+    #[serde(default, deserialize_with = "present")]
+    pub(crate) refresh_token: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    pub(crate) client_id: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    pub(crate) client_secret: Option<Option<String>>,
+    pub(crate) rapt_token: Option<String>,
+    pub(crate) universe_domain: Option<String>,
+    pub(crate) expiry: Option<String>,
+    pub(crate) quota_project_id: Option<String>,
+}
+
+/// An authorized user's credentials: a refresh token google-auth exchanges at Google's token
+/// endpoint, rotated when the endpoint answers with a new one.
 pub(crate) struct AuthorizedUser {
     refresh_token: Option<String>,
     client_id: Option<String>,
@@ -41,7 +59,7 @@ pub(crate) struct AuthorizedUser {
 /// `Credentials.from_authorized_user_info(info, scopes=[cloud-platform])`, which always refreshes
 /// at `token_endpoint` whatever `token_uri` the info names.
 pub(crate) fn authorized_user(
-    info: &Map<String, Value>,
+    info: &AuthorizedUserInfo,
     token_endpoint: &str,
 ) -> Result<Loaded, GoogleLoginFailure> {
     Ok(Arc::new(load(
@@ -52,13 +70,6 @@ pub(crate) fn authorized_user(
     )?))
 }
 
-/// A field Python keeps as given: `None` for null, its `str()` otherwise.
-fn field(info: &Map<String, Value>, name: &str) -> Option<String> {
-    info.get(name)
-        .filter(|value| !value.is_null())
-        .map(|value| python_str(Some(value)))
-}
-
 fn invalid_expiry() -> GoogleLoginFailure {
     GoogleLoginFailure::new(
         PythonException::Value,
@@ -66,14 +77,11 @@ fn invalid_expiry() -> GoogleLoginFailure {
     )
 }
 
-/// `datetime.strptime(expiry.rstrip("Z").split(".")[0], "%Y-%m-%dT%H:%M:%S")` for a truthy expiry.
-fn check_expiry(info: &Map<String, Value>) -> Result<(), GoogleLoginFailure> {
-    let text = match info.get("expiry") {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => return Ok(()),
-        Some(Value::String(text)) if text.is_empty() => return Ok(()),
-        Some(Value::Number(number)) if number.as_f64() == Some(0.0) => return Ok(()),
-        Some(Value::String(text)) => text,
-        Some(_) => return Err(invalid_expiry()),
+/// `datetime.strptime(expiry.rstrip("Z").split(".")[0], "%Y-%m-%dT%H:%M:%S")` for a non-empty
+/// expiry.
+fn check_expiry(expiry: Option<&str>) -> Result<(), GoogleLoginFailure> {
+    let Some(text) = expiry.filter(|text| !text.is_empty()) else {
+        return Ok(());
     };
     let seconds = text
         .trim_end_matches('Z')
@@ -89,16 +97,20 @@ fn check_expiry(info: &Map<String, Value>) -> Result<(), GoogleLoginFailure> {
 }
 
 fn load(
-    info: &Map<String, Value>,
+    info: &AuthorizedUserInfo,
     token_endpoint: &str,
     first_retry_wait: Duration,
     requests: Requests,
 ) -> Result<AuthorizedUser, GoogleLoginFailure> {
-    let missing: Vec<&str> = REQUIRED_FIELDS
-        .iter()
-        .copied()
-        .filter(|name| !info.contains_key(*name))
-        .collect();
+    let missing: Vec<&str> = [
+        ("refresh_token", &info.refresh_token),
+        ("client_id", &info.client_id),
+        ("client_secret", &info.client_secret),
+    ]
+    .into_iter()
+    .filter(|(_, field)| field.is_none())
+    .map(|(name, _)| name)
+    .collect();
     if !missing.is_empty() {
         return Err(GoogleLoginFailure::new(
             PythonException::Value,
@@ -108,16 +120,17 @@ fn load(
             ),
         ));
     }
-    check_expiry(info)?;
+    check_expiry(info.expiry.as_deref())?;
     Ok(AuthorizedUser {
-        refresh_token: field(info, "refresh_token"),
-        client_id: field(info, "client_id"),
-        client_secret: field(info, "client_secret"),
-        rapt_token: field(info, "rapt_token").filter(|token| !token.is_empty()),
-        universe_domain: match info.get("universe_domain") {
-            None => Some(DEFAULT_UNIVERSE_DOMAIN.to_owned()),
-            Some(_) => field(info, "universe_domain"),
-        },
+        refresh_token: info.refresh_token.clone().flatten(),
+        client_id: info.client_id.clone().flatten(),
+        client_secret: info.client_secret.clone().flatten(),
+        rapt_token: info.rapt_token.clone().filter(|token| !token.is_empty()),
+        universe_domain: Some(
+            info.universe_domain
+                .clone()
+                .unwrap_or_else(|| DEFAULT_UNIVERSE_DOMAIN.to_owned()),
+        ),
         token_uri: token_endpoint.to_owned(),
         rotated: Mutex::new(None),
         first_retry_wait,
@@ -173,13 +186,13 @@ impl AuthorizedUser {
         if status != 200 {
             return Err(refusal(&body));
         }
-        let granted = granted(&body)?;
-        if let Some(rotated) = granted.get("refresh_token") {
-            *self.rotated() = Some(python_str(Some(rotated)));
+        let (token, reply) = granted(&body)?;
+        if let Some(rotated) = &reply.refresh_token {
+            *self.rotated() = Some(rotated.clone());
         }
         Ok(Minted::from_reply(
-            granted.get("access_token"),
-            expiry(&granted, OffsetDateTime::now_utc())?,
+            token,
+            expiry(&reply, OffsetDateTime::now_utc())?,
         ))
     }
 }
@@ -187,12 +200,14 @@ impl AuthorizedUser {
 /// `reauth.refresh_grant` on a refused answer: an `invalid_grant` with a rapt subtype asks to
 /// log in again, and anything else is the endpoint's refusal.
 fn refusal(body: &str) -> GoogleLoginFailure {
-    let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(body) else {
+    let Some(refusal) = TokenRefusal::parse(body) else {
         return refused(body);
     };
-    let subtype = fields.get("error_subtype").and_then(Value::as_str);
-    if fields.get("error").and_then(Value::as_str) == Some("invalid_grant")
-        && matches!(subtype, Some("invalid_rapt" | "rapt_required"))
+    if refusal.error.as_deref() == Some("invalid_grant")
+        && matches!(
+            refusal.error_subtype.as_deref(),
+            Some("invalid_rapt" | "rapt_required")
+        )
     {
         return GoogleLoginFailure::new(PythonException::Refresh, REAUTH_NEEDED);
     }
@@ -208,22 +223,22 @@ impl Credentials for AuthorizedUser {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::vertex_messages::service_account::tests::endpoint;
 
-    fn info(extra: Value) -> Map<String, Value> {
-        json!({
-            "type": "authorized_user", "client_id": "fz-client", "client_secret": "fz-secret",
-            "refresh_token": "fz-refresh",
+    fn info(extra: Value) -> AuthorizedUserInfo {
+        let info: serde_json::Map<String, Value> = json!({
+            "client_id": "fz-client", "client_secret": "fz-secret", "refresh_token": "fz-refresh",
         })
         .as_object()
         .unwrap()
         .clone()
         .into_iter()
         .chain(extra.as_object().unwrap().clone())
-        .collect()
+        .collect();
+        serde_json::from_value(Value::Object(info)).unwrap()
     }
 
     fn user(url: &str, extra: Value) -> AuthorizedUser {
@@ -245,7 +260,10 @@ mod tests {
         .await;
         let user = user(&endpoint.url, json!({"rapt_token": "rapt-1"}));
 
-        assert_eq!(user.mint().await.unwrap().value.expose(), "au-token");
+        assert_eq!(
+            user.mint().await.unwrap().token.unwrap().expose(),
+            "au-token"
+        );
         user.mint().await.unwrap();
 
         let scope = "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform";
@@ -295,6 +313,31 @@ mod tests {
     }
 
     #[rstest]
+    #[case::missing(json!({"client_id": "c"}), "refresh_token, client_secret")]
+    #[case::null_is_not_missing(
+        json!({"client_id": "c", "refresh_token": null, "client_secret": null}),
+        ""
+    )]
+    fn missing_fields_are_refused_at_load(#[case] fields: Value, #[case] missing: &str) {
+        let info: AuthorizedUserInfo = serde_json::from_value(fields).unwrap();
+        let loaded = load(
+            &info,
+            "http://127.0.0.1:9/token",
+            Duration::from_millis(1),
+            Requests::with_environment(&[]),
+        );
+        assert_eq!(
+            loaded.err(),
+            (!missing.is_empty()).then(|| GoogleLoginFailure::new(
+                PythonException::Value,
+                format!(
+                    "Authorized user info was not in the expected format, missing fields {missing}."
+                )
+            ))
+        );
+    }
+
+    #[rstest]
     #[case::null_refresh_token(json!({"refresh_token": null}), CANNOT_REFRESH)]
     #[case::other_universe(
         json!({"universe_domain": "example.com"}),
@@ -319,7 +362,7 @@ mod tests {
         json!("soon"),
         Some((PythonException::Value, "Authorized user info has an expiry that is not a YYYY-MM-DDTHH:MM:SS time."))
     )]
-    #[case::number(json!(5), Some((PythonException::Value, "Authorized user info has an expiry that is not a YYYY-MM-DDTHH:MM:SS time.")))]
+    #[case::empty(json!(""), None)]
     fn a_saved_expiry_is_parsed_at_load(
         #[case] expiry: Value,
         #[case] expected: Option<(PythonException, &str)>,

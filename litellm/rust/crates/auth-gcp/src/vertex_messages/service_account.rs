@@ -5,13 +5,15 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey};
-use serde_json::{Map, Value};
+use serde::Deserialize;
 use time::OffsetDateTime;
 
 use super::{
     builders::token_failure,
-    credentials::{Credentials, Expiry, Loaded, Minted, RefreshFuture},
-    failure::{GoogleLoginFailure, PythonException, python_str},
+    credentials::{
+        Credentials, Expiry, Lifetime, Loaded, Minted, RefreshFuture, TokenRefusal, TokenReply,
+    },
+    failure::{GoogleLoginFailure, PythonException},
     transport::Requests,
 };
 use crate::constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT};
@@ -31,10 +33,21 @@ const RETRYABLE_ERRORS: [&str; 3] = [
     "temporarily_unavailable",
 ];
 
+/// A service account key, as `from_service_account_info` reads it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ServiceAccountInfo {
+    pub(crate) client_email: Option<String>,
+    pub(crate) token_uri: Option<String>,
+    pub(crate) private_key: Option<String>,
+    pub(crate) private_key_id: Option<String>,
+    pub(crate) project_id: Option<String>,
+}
+
+/// A service account's token grant: the key it signs its assertion with and the endpoint it
+/// exchanges the assertion at.
 pub(crate) struct ServiceAccountGrant {
     key: EncodingKey,
-    /// `private_key_id` as the signer holds it, any JSON value but null.
-    key_id: Option<Value>,
+    key_id: Option<String>,
     email: String,
     token_uri: String,
     first_retry_wait: Duration,
@@ -44,7 +57,7 @@ pub(crate) struct ServiceAccountGrant {
 /// `service_account.Credentials.from_service_account_info` with the key already checked for the
 /// fields google-auth requires.
 pub(crate) fn service_account_grant(
-    info: &Map<String, Value>,
+    info: &ServiceAccountInfo,
 ) -> Result<Loaded, GoogleLoginFailure> {
     Ok(Arc::new(grant(
         info,
@@ -53,28 +66,18 @@ pub(crate) fn service_account_grant(
     )?))
 }
 
-fn text(info: &Map<String, Value>, field: &str) -> String {
-    info.get(field)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
-}
-
 fn grant(
-    info: &Map<String, Value>,
+    info: &ServiceAccountInfo,
     first_retry_wait: Duration,
     requests: Requests,
 ) -> Result<ServiceAccountGrant, GoogleLoginFailure> {
-    let key = EncodingKey::from_rsa_pem(text(info, "private_key").as_bytes())
+    let key = EncodingKey::from_rsa_pem(info.private_key.as_deref().unwrap_or_default().as_bytes())
         .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))?;
     Ok(ServiceAccountGrant {
         key,
-        key_id: info
-            .get("private_key_id")
-            .filter(|key_id| !key_id.is_null())
-            .cloned(),
-        email: text(info, "client_email"),
-        token_uri: text(info, "token_uri"),
+        key_id: info.private_key_id.clone(),
+        email: info.client_email.clone().unwrap_or_default(),
+        token_uri: info.token_uri.clone().unwrap_or_default(),
         first_retry_wait,
         requests,
     })
@@ -82,15 +85,25 @@ fn grant(
 
 /// A refused token request: the endpoint's `error` and `error_description`, or its text.
 pub(crate) fn refused(body: &str) -> GoogleLoginFailure {
-    let message = match serde_json::from_str::<Value>(body) {
-        Ok(Value::String(text)) => text,
-        Ok(Value::Object(fields)) if fields.contains_key("error") => {
-            let text = |name: &str| fields.get(name).map(|value| python_str(Some(value)));
-            match text("error_description") {
-                Some(description) => format!("{}: {description}", python_str(fields.get("error"))),
-                None => python_str(fields.get("error")),
-            }
-        }
+    let message = match (
+        serde_json::from_str::<String>(body),
+        TokenRefusal::parse(body),
+    ) {
+        (Ok(text), _) => text,
+        (
+            _,
+            Some(TokenRefusal {
+                error: Some(error),
+                error_description: Some(description),
+                ..
+            }),
+        ) => format!("{error}: {description}"),
+        (
+            _,
+            Some(TokenRefusal {
+                error: Some(error), ..
+            }),
+        ) => error,
         _ => body.to_owned(),
     };
     GoogleLoginFailure::new(PythonException::Refresh, message)
@@ -101,36 +114,29 @@ fn retryable(status: u16, body: &str) -> bool {
     if RETRYABLE_STATUSES.contains(&status) {
         return true;
     }
-    let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(body) else {
+    let Some(refusal) = TokenRefusal::parse(body) else {
         return false;
     };
-    let field = |name: &str| match fields.get(name) {
-        None | Some(Value::Null) => Some(""),
-        Some(Value::String(text)) => Some(text.as_str()),
-        Some(_) => None,
-    };
-    match (field("error"), field("error_description")) {
-        (Some(code), Some(description)) => RETRYABLE_ERRORS
-            .iter()
-            .any(|retryable| *retryable == code || *retryable == description),
-        _ => false,
-    }
+    let code = refusal.error.unwrap_or_default();
+    let description = refusal.error_description.unwrap_or_default();
+    RETRYABLE_ERRORS
+        .iter()
+        .any(|retryable| *retryable == code || *retryable == description)
 }
 
 /// `_client._parse_expiry`.
 pub(crate) fn expiry(
-    granted: &Map<String, Value>,
+    reply: &TokenReply,
     now: OffsetDateTime,
 ) -> Result<Expiry, GoogleLoginFailure> {
-    let seconds = match granted.get("expires_in") {
-        None | Some(Value::Null) => return Ok(Expiry::Never),
-        Some(Value::Number(number)) => number.as_f64(),
-        Some(Value::String(text)) => text
+    let seconds = match &reply.expires_in {
+        None => return Ok(Expiry::Never),
+        Some(Lifetime::Seconds(seconds)) => Some(*seconds),
+        Some(Lifetime::Text(text)) => text
             .trim()
             .parse::<i64>()
             .ok()
             .map(|seconds| seconds as f64),
-        Some(_) => None,
     };
     let seconds = seconds.ok_or_else(invalid_lifetime)?;
     Ok(Expiry::At(now + time::Duration::seconds_f64(seconds)))
@@ -141,7 +147,7 @@ struct AssertionHeader<'a> {
     typ: &'static str,
     alg: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    kid: Option<&'a Value>,
+    kid: Option<&'a str>,
 }
 
 #[derive(serde::Serialize)]
@@ -161,7 +167,7 @@ impl ServiceAccountGrant {
         let header = AssertionHeader {
             typ: "JWT",
             alg: "RS256",
-            kid: self.key_id.as_ref(),
+            kid: self.key_id.as_deref(),
         };
         let claims = AssertionClaims {
             iat: issued,
@@ -203,10 +209,10 @@ impl ServiceAccountGrant {
         if status != 200 {
             return Err(refused(&body));
         }
-        let granted = granted(&body)?;
+        let (token, reply) = granted(&body)?;
         Ok(Minted::from_reply(
-            granted.get("access_token"),
-            expiry(&granted, OffsetDateTime::now_utc())?,
+            token,
+            expiry(&reply, OffsetDateTime::now_utc())?,
         ))
     }
 }
@@ -256,26 +262,16 @@ pub(crate) fn invalid_lifetime() -> GoogleLoginFailure {
     )
 }
 
-/// A token reply that is not a JSON object.
-pub(crate) fn not_an_object() -> GoogleLoginFailure {
-    GoogleLoginFailure::new(
-        PythonException::Refresh,
-        "The token endpoint's reply is not a JSON object.",
-    )
-}
-
-/// The granted token reply, which must be a JSON object holding `access_token`.
-pub(crate) fn granted(body: &str) -> Result<Map<String, Value>, GoogleLoginFailure> {
-    let Ok(Value::Object(granted)) = serde_json::from_str::<Value>(body) else {
-        return Err(not_an_object());
-    };
-    if !granted.contains_key("access_token") {
+/// The granted token reply, which must hold `access_token`, and the token it holds.
+pub(crate) fn granted(body: &str) -> Result<(Option<String>, TokenReply), GoogleLoginFailure> {
+    let reply = TokenReply::parse(body)?;
+    let Some(token) = reply.access_token.clone() else {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
             "No access token in response.",
         ));
-    }
-    Ok(granted)
+    };
+    Ok((token, reply))
 }
 
 impl Credentials for ServiceAccountGrant {
@@ -297,7 +293,7 @@ pub(crate) mod tests {
         pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
     };
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -309,8 +305,9 @@ pub(crate) mod tests {
             .to_string()
     });
 
-    pub(crate) fn key(token_uri: &str, extra: Value) -> Map<String, Value> {
-        json!({
+    /// A service account key file's JSON, with `extra` fields added or replaced.
+    pub(crate) fn key_json(token_uri: &str, extra: Value) -> Value {
+        let info: serde_json::Map<String, Value> = json!({
             "type": "service_account", "client_email": "sa@p.iam.gserviceaccount.com",
             "private_key_id": "key-1", "private_key": *PRIVATE_KEY, "token_uri": token_uri,
         })
@@ -319,7 +316,12 @@ pub(crate) mod tests {
         .clone()
         .into_iter()
         .chain(extra.as_object().unwrap().clone())
-        .collect()
+        .collect();
+        Value::Object(info)
+    }
+
+    pub(crate) fn key(token_uri: &str, extra: Value) -> ServiceAccountInfo {
+        serde_json::from_value(key_json(token_uri, extra)).unwrap()
     }
 
     pub(crate) struct Endpoint {
@@ -406,7 +408,7 @@ pub(crate) mod tests {
 
         let minted = quick(&endpoint.url).mint().await.unwrap();
 
-        assert_eq!(minted.value.expose(), "sa-token");
+        assert_eq!(minted.token.unwrap().expose(), "sa-token");
         let Expiry::At(expiry) = minted.expiry else {
             panic!("a granted token expires");
         };
@@ -512,7 +514,8 @@ pub(crate) mod tests {
         #[case] granted: Value,
         #[case] expected: Expiry,
     ) {
-        assert_eq!(expiry(granted.as_object().unwrap(), NOW).unwrap(), expected);
+        let reply = TokenReply::parse(&granted.to_string()).unwrap();
+        assert_eq!(expiry(&reply, NOW).unwrap(), expected);
     }
 
     const NOW: OffsetDateTime = time::macros::datetime!(2026-11-16 12:00 UTC);
@@ -559,7 +562,6 @@ pub(crate) mod tests {
     #[rstest]
     #[case::named(json!({}), json!({"typ": "JWT", "alg": "RS256", "kid": "key-1"}))]
     #[case::null(json!({"private_key_id": null}), json!({"typ": "JWT", "alg": "RS256"}))]
-    #[case::numeric(json!({"private_key_id": 7}), json!({"typ": "JWT", "alg": "RS256", "kid": 7}))]
     fn the_assertion_header_names_the_signing_key(#[case] extra: Value, #[case] expected: Value) {
         let assertion = grant(
             &key("http://127.0.0.1:9/token", extra),

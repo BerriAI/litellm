@@ -1,8 +1,18 @@
+//! The credentials a `vertex_credentials` value names, read as Python's
+//! `load_vertex_credentials_source` reads them and parsed once into typed credentials.
+
 use std::path::Path;
 
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
-use super::failure::{CredentialsFile, GoogleLoginFailure, PythonException};
+use super::{
+    authorized_user::AuthorizedUserInfo,
+    external_account::ExternalAccountInfo,
+    external_authorized_user::ExternalAuthorizedUserInfo,
+    failure::{GoogleLoginFailure, PythonException, UnusableFile},
+    service_account::ServiceAccountInfo,
+};
 use crate::config::is_base64_encoded_json;
 
 const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}', '"', '\''];
@@ -11,14 +21,127 @@ const NOT_A_JSON_OBJECT: &str = "is JSON but not a JSON object, it may be quoted
 const PRIVATE_KEY_HINT: &str = "Check for unescaped newlines in private_key.";
 const LEADING_NOISE_HINT: &str = "Remove the quotes or byte-order mark before the opening `{`.";
 
-/// The credentials JSON a `vertex_credentials` value names, and the file it came from, as
-/// Python's `load_vertex_credentials_source` reads it.
+/// A credentials file's own JSON object, kept only to hand to the builders of Google's Rust SDK.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SdkJson(pub(crate) Map<String, Value>);
+
+/// The impersonated service account credentials an application default credentials file holds:
+/// the fields the login checks, and the file itself for Google's Rust SDK to build them from.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ImpersonatedInfo {
+    pub(crate) source_credentials: Option<SourceCredentials>,
+    pub(crate) service_account_impersonation_url: Option<String>,
+    #[serde(skip)]
+    pub(crate) sdk: SdkJson,
+}
+
+/// The type of the credentials an impersonated service account is minted from.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct SourceCredentials {
+    #[serde(rename = "type")]
+    pub(crate) kind: Option<String>,
+}
+
+/// A credentials file, by the `type` it declares.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub(crate) enum CredentialsFile {
+    #[serde(rename = "service_account")]
+    ServiceAccount(ServiceAccountInfo),
+    #[serde(rename = "authorized_user")]
+    AuthorizedUser(AuthorizedUserInfo),
+    #[serde(rename = "external_account")]
+    ExternalAccount(Box<ExternalAccountInfo>),
+    #[serde(rename = "external_account_authorized_user")]
+    ExternalAccountAuthorizedUser(ExternalAuthorizedUserInfo),
+    #[serde(rename = "impersonated_service_account")]
+    ImpersonatedServiceAccount(ImpersonatedInfo),
+    #[serde(rename = "gdch_service_account")]
+    GdchServiceAccount,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Why a credentials JSON object could not be read as the credentials its type names.
+#[derive(Debug)]
+pub(crate) enum Unparsed {
+    /// The object declares no `type`, or one that is not text.
+    Untyped,
+    /// A field holds a value of a type the credentials cannot hold.
+    Field(serde_json::Error),
+}
+
+impl CredentialsFile {
+    /// The credentials an object holds, by the `type` it declares.
+    pub(crate) fn parse(info: Map<String, Value>) -> Result<Self, Unparsed> {
+        if !info.get("type").is_some_and(Value::is_string) {
+            return Err(Unparsed::Untyped);
+        }
+        let parsed =
+            serde_json::from_value::<Self>(Value::Object(info.clone())).map_err(Unparsed::Field)?;
+        Ok(match parsed {
+            Self::ExternalAccount(account) => {
+                Self::ExternalAccount(Box::new(ExternalAccountInfo {
+                    sdk: SdkJson(info),
+                    ..*account
+                }))
+            }
+            Self::ImpersonatedServiceAccount(account) => {
+                Self::ImpersonatedServiceAccount(ImpersonatedInfo {
+                    sdk: SdkJson(info),
+                    ..account
+                })
+            }
+            other => other,
+        })
+    }
+}
+
+/// The credentials `_credentials_from_json` builds for a `vertex_credentials` value: an
+/// authorized user or an external account by type, and a service account for any other type.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ExplicitCredentials {
+    AuthorizedUser(AuthorizedUserInfo),
+    ExternalAccount(Box<ExternalAccountInfo>),
+    ServiceAccount(ServiceAccountInfo),
+}
+
+impl ExplicitCredentials {
+    fn parse(info: Map<String, Value>) -> Result<Self, serde_json::Error> {
+        match CredentialsFile::parse(info.clone()) {
+            Ok(CredentialsFile::AuthorizedUser(user)) => Ok(Self::AuthorizedUser(user)),
+            Ok(CredentialsFile::ExternalAccount(account)) => Ok(Self::ExternalAccount(account)),
+            Err(Unparsed::Field(error))
+                if matches!(
+                    info.get("type").and_then(Value::as_str),
+                    Some("authorized_user" | "external_account")
+                ) =>
+            {
+                Err(error)
+            }
+            _ => serde_json::from_value(Value::Object(info)).map(Self::ServiceAccount),
+        }
+    }
+
+    /// The project `load_auth` reads off the credentials: an authorized user's quota project, a
+    /// service account's `project_id`, nothing for an external account.
+    pub(crate) fn project(&self) -> Option<String> {
+        match self {
+            Self::AuthorizedUser(user) => user.quota_project_id.clone(),
+            Self::ExternalAccount(_) => None,
+            Self::ServiceAccount(account) => account.project_id.clone(),
+        }
+    }
+}
+
+/// The credentials a `vertex_credentials` value names, and the file it came from.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CredentialsJson {
-    pub(crate) info: Map<String, Value>,
+    pub(crate) credentials: ExplicitCredentials,
     pub(crate) path: Option<String>,
 }
 
+/// The outcome of reading text as a credentials JSON object.
 enum Parsed {
     Object(Map<String, Value>),
     Invalid(String),
@@ -33,8 +156,18 @@ fn parse_json_object(raw: &str) -> Parsed {
     }
 }
 
+/// `#[serde(deserialize_with)]` for a field that may be absent, null or a value: `None` when it
+/// is absent and `Some(None)` when it is null.
+pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 fn invalid_file(path: &str, problem: String) -> GoogleLoginFailure {
-    GoogleLoginFailure::credentials_file(CredentialsFile::Invalid {
+    GoogleLoginFailure::credentials_file(UnusableFile::Invalid {
         path: path.into(),
         problem,
     })
@@ -77,7 +210,7 @@ fn inline_not_json(detail: &str, hint: &str) -> GoogleLoginFailure {
 
 fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
     let bytes = std::fs::read(path).map_err(|error| {
-        GoogleLoginFailure::credentials_file(CredentialsFile::Unreadable {
+        GoogleLoginFailure::credentials_file(UnusableFile::Unreadable {
             path: path.into(),
             reason: unreadable_reason(path, &error),
         })
@@ -94,7 +227,9 @@ fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
     }
     match parse_json_object(&contents) {
         Parsed::Object(info) => Ok(CredentialsJson {
-            info,
+            credentials: ExplicitCredentials::parse(info).map_err(|error| {
+                invalid_file(path, format!("holds a field of the wrong type: {error}"))
+            })?,
             path: Some(path.into()),
         }),
         Parsed::Invalid(detail) => Err(invalid_file(
@@ -107,7 +242,11 @@ fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
 
 fn load_inline_credentials(credentials: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
     match parse_json_object(credentials) {
-        Parsed::Object(info) => Ok(CredentialsJson { info, path: None }),
+        Parsed::Object(info) => Ok(CredentialsJson {
+            credentials: ExplicitCredentials::parse(info)
+                .map_err(|error| unusable(&format!("holds a field of the wrong type: {error}")))?,
+            path: None,
+        }),
         _ if Path::new(credentials).is_file() => read_json_file(credentials),
         Parsed::NotAnObject => Err(unusable(NOT_A_JSON_OBJECT)),
         Parsed::Invalid(detail) if credentials.trim_start().starts_with('{') => {
@@ -181,28 +320,28 @@ mod tests {
     #[rstest]
     #[case::missing(
         "/nonexistent/vertex.json",
-        CredentialsFile::Unreadable {
+        UnusableFile::Unreadable {
             path: "/nonexistent/vertex.json".into(),
             reason: "No such file or directory (FileNotFoundError)".into(),
         }
     )]
     #[case::directory(
         "/",
-        CredentialsFile::Unreadable {
+        UnusableFile::Unreadable {
             path: "/".into(),
             reason: "Is a directory (IsADirectoryError)".into(),
         }
     )]
     #[case::null_byte(
         "/tmp/a\0b",
-        CredentialsFile::Unreadable {
+        UnusableFile::Unreadable {
             path: "/tmp/a\0b".into(),
             reason: "embedded null byte (ValueError)".into(),
         }
     )]
     fn an_unreadable_file_names_its_path_and_python_s_os_error(
         #[case] path: &str,
-        #[case] expected: CredentialsFile,
+        #[case] expected: UnusableFile,
     ) {
         assert_eq!(
             load_vertex_credentials_source(path).unwrap_err(),
@@ -220,7 +359,7 @@ mod tests {
         let path = file.path().to_str().unwrap();
         assert_eq!(
             load_vertex_credentials_source(path).unwrap_err(),
-            GoogleLoginFailure::credentials_file(CredentialsFile::Invalid {
+            GoogleLoginFailure::credentials_file(UnusableFile::Invalid {
                 path: path.into(),
                 problem: problem.into(),
             })
@@ -234,33 +373,107 @@ mod tests {
         let failure = load_vertex_credentials_source(file.path().to_str().unwrap()).unwrap_err();
         assert!(matches!(
             failure.file,
-            Some(CredentialsFile::Invalid { problem, .. }) if problem == "is over 1048576 characters, larger than any credentials file"
+            Some(UnusableFile::Invalid { problem, .. }) if problem == "is over 1048576 characters, larger than any credentials file"
         ));
     }
 
     #[rstest]
-    fn inline_json_and_a_file_are_read_as_objects() {
+    fn inline_json_and_a_file_are_read_as_the_credentials_their_type_names() {
         let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), r#"{"type":"service_account"}"#).unwrap();
+        std::fs::write(
+            file.path(),
+            r#"{"type":"service_account","project_id":"p","private_key_id":"k"}"#,
+        )
+        .unwrap();
         assert_eq!(
             load_vertex_credentials_source(file.path().to_str().unwrap()).unwrap(),
             CredentialsJson {
-                info: json!({"type": "service_account"})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
+                credentials: ExplicitCredentials::ServiceAccount(ServiceAccountInfo {
+                    project_id: Some("p".into()),
+                    private_key_id: Some("k".into()),
+                    ..ServiceAccountInfo::default()
+                }),
                 path: Some(file.path().to_str().unwrap().into())
             }
         );
         assert_eq!(
-            load_vertex_credentials_source(r#" {"type":"authorized_user"}"#).unwrap(),
+            load_vertex_credentials_source(r#" {"type":"authorized_user","quota_project_id":"q"}"#)
+                .unwrap(),
             CredentialsJson {
-                info: json!({"type": "authorized_user"})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
+                credentials: ExplicitCredentials::AuthorizedUser(AuthorizedUserInfo {
+                    quota_project_id: Some("q".into()),
+                    ..AuthorizedUserInfo::default()
+                }),
                 path: None
             }
         );
+    }
+
+    #[rstest]
+    #[case::untyped(json!({"project_id": "p"}))]
+    #[case::unknown_type(json!({"type": "gdch_service_account", "project_id": "p"}))]
+    #[case::impersonated(json!({"type": "impersonated_service_account", "project_id": "p"}))]
+    fn any_other_type_is_read_as_a_service_account(#[case] info: Value) {
+        let credentials = ExplicitCredentials::parse(info.as_object().unwrap().clone()).unwrap();
+        assert_eq!(credentials.project().as_deref(), Some("p"));
+        assert!(matches!(
+            credentials,
+            ExplicitCredentials::ServiceAccount(_)
+        ));
+    }
+
+    #[rstest]
+    #[case::numeric_project(json!({"type": "service_account", "project_id": 7}))]
+    #[case::numeric_quota_project(json!({"type": "authorized_user", "quota_project_id": 7}))]
+    #[case::listed_audience(json!({"type": "external_account", "audience": ["a"]}))]
+    fn a_field_of_the_wrong_type_is_refused_by_name(#[case] info: Value) {
+        let failure = load_vertex_credentials_source(&info.to_string()).unwrap_err();
+        assert_eq!(failure.exception, PythonException::Value);
+        assert!(
+            failure.message.starts_with(
+                "The `vertex_credentials` value holds a field of the wrong type: invalid type"
+            ),
+            "{}",
+            failure.message
+        );
+    }
+
+    #[rstest]
+    fn a_file_with_a_field_of_the_wrong_type_names_its_path() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            r#"{"type":"service_account","private_key_id":1}"#,
+        )
+        .unwrap();
+        let failure = load_vertex_credentials_source(file.path().to_str().unwrap()).unwrap_err();
+        assert!(matches!(
+            failure.file,
+            Some(UnusableFile::Invalid { problem, .. }) if problem.starts_with("holds a field of the wrong type: invalid type: integer `1`")
+        ));
+    }
+
+    #[rstest]
+    #[case::service_account(json!({"type": "service_account"}), true)]
+    #[case::external_account(json!({"type": "external_account", "audience": "a"}), true)]
+    #[case::gdch(json!({"type": "gdch_service_account", "anything": 1}), true)]
+    #[case::unknown(json!({"type": "something_else"}), true)]
+    #[case::untyped(json!({"project_id": "p"}), false)]
+    #[case::numeric_type(json!({"type": 5}), false)]
+    fn a_file_is_read_by_the_type_it_declares(#[case] info: Value, #[case] typed: bool) {
+        let parsed = CredentialsFile::parse(info.as_object().unwrap().clone());
+        assert_eq!(parsed.is_ok(), typed, "{parsed:?}");
+    }
+
+    #[rstest]
+    fn an_external_account_keeps_its_file_for_google_s_sdk() {
+        let info = json!({"type": "external_account", "audience": "a", "credential_source": {"certificate": {}}});
+        let Ok(CredentialsFile::ExternalAccount(account)) =
+            CredentialsFile::parse(info.as_object().unwrap().clone())
+        else {
+            panic!("not an external account");
+        };
+        assert_eq!(account.audience.as_deref(), Some("a"));
+        assert_eq!(account.sdk, SdkJson(info.as_object().unwrap().clone()));
     }
 }

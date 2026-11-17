@@ -253,9 +253,9 @@ impl Logins {
         }
         match token.state(OffsetDateTime::now_utc()) {
             TokenState::Fresh => return token.usable(),
-            TokenState::Stale if token.non_string.is_none() => {
+            TokenState::Stale if token.token.is_some() => {
                 login.refresh_in_background();
-                return Ok(token.value);
+                return token.usable();
             }
             TokenState::Stale | TokenState::Invalid => {}
         }
@@ -263,7 +263,7 @@ impl Logins {
         let token = login.current();
         match token.state(OffsetDateTime::now_utc()) {
             TokenState::Fresh => return token.usable(),
-            TokenState::Stale if token.non_string.is_none() => return Ok(token.value),
+            TokenState::Stale if token.token.is_some() => return token.usable(),
             TokenState::Stale | TokenState::Invalid => {}
         }
         let refreshed = login.credentials.refresh().await?;

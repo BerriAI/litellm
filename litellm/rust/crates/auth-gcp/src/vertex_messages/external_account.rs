@@ -5,17 +5,23 @@
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
+use std::collections::BTreeMap;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_python_compat::truthy::json_truthy;
-use serde_json::{Map, Value};
+use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
 use super::{
+    aws_wif::ExplicitAwsKeys,
     builders::token_failure,
-    credentials::{Credentials, Expiry, Loaded, Minted, RefreshFuture, TokenState},
+    credentials::{
+        Credentials, Expiry, Lifetime, Loaded, Minted, RefreshFuture, TokenReply, TokenState,
+        not_a_token_reply,
+    },
     external_authorized_user::oauth_error,
-    failure::{GoogleLoginFailure, PythonException, python_str},
-    service_account::{invalid_lifetime, not_an_object},
+    failure::{GoogleLoginFailure, PythonException},
+    service_account::invalid_lifetime,
+    source::{SdkJson, present},
     transport::Requests,
 };
 use crate::constants::CLOUD_PLATFORM_SCOPE;
@@ -42,7 +48,66 @@ pub(crate) trait SubjectToken: Send + Sync {
     fn subject_token<'a>(&'a self, requests: &'a Requests) -> SubjectFuture<'a>;
 }
 
-/// The fields `external_account.Credentials.from_info` reads, as Python holds them.
+/// An external account's file, as `external_account.Credentials.from_info` and LiteLLM's
+/// explicit AWS login read it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ExternalAccountInfo {
+    pub(crate) audience: Option<String>,
+    pub(crate) subject_token_type: Option<String>,
+    pub(crate) token_url: Option<String>,
+    pub(crate) service_account_impersonation_url: Option<String>,
+    pub(crate) service_account_impersonation: Option<ImpersonationOptions>,
+    pub(crate) client_id: Option<String>,
+    pub(crate) client_secret: Option<String>,
+    pub(crate) workforce_pool_user_project: Option<String>,
+    pub(crate) universe_domain: Option<String>,
+    pub(crate) credential_source: Option<CredentialSource>,
+    #[serde(flatten)]
+    pub(crate) aws: ExplicitAwsKeys,
+    #[serde(skip)]
+    pub(crate) sdk: SdkJson,
+}
+
+/// `service_account_impersonation`'s options.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ImpersonationOptions {
+    pub(crate) token_lifetime_seconds: Option<u64>,
+}
+
+/// Where an external account reads its subject token: a file, a URL, a certificate, an
+/// executable, or AWS.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct CredentialSource {
+    pub(crate) environment_id: Option<String>,
+    pub(crate) executable: Option<ExecutableSource>,
+    pub(crate) file: Option<String>,
+    pub(crate) url: Option<String>,
+    pub(crate) certificate: Option<serde::de::IgnoredAny>,
+    pub(crate) headers: Option<BTreeMap<String, String>>,
+    pub(crate) format: Option<SourceFormat>,
+    pub(crate) region_url: Option<String>,
+    pub(crate) regional_cred_verification_url: Option<String>,
+    pub(crate) imdsv2_session_token_url: Option<String>,
+}
+
+/// The `format` a file or URL source declares for its content.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct SourceFormat {
+    #[serde(rename = "type")]
+    pub(crate) kind: Option<String>,
+    pub(crate) subject_token_field_name: Option<String>,
+}
+
+/// An executable source's command and its limits.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ExecutableSource {
+    pub(crate) command: Option<String>,
+    pub(crate) timeout_millis: Option<f64>,
+    pub(crate) interactive_timeout_millis: Option<f64>,
+    pub(crate) output_file: Option<String>,
+}
+
+/// The fields `external_account.Credentials.from_info` reads, as the token exchange uses them.
 pub(crate) struct Settings {
     pub(crate) audience: Option<String>,
     pub(crate) subject_token_type: Option<String>,
@@ -54,13 +119,6 @@ pub(crate) struct Settings {
     pub(crate) workforce_pool_user_project: Option<String>,
 }
 
-/// Python's `str()` of a field that is not null, which is what `urlencode` sends for it.
-pub(crate) fn text(info: &Map<String, Value>, field: &str) -> Option<String> {
-    info.get(field)
-        .filter(|value| !value.is_null())
-        .map(|value| python_str(Some(value)))
-}
-
 /// `is_workforce_pool`: an audience naming a workforce pool.
 fn is_workforce_pool(audience: Option<&str>) -> bool {
     audience
@@ -69,33 +127,43 @@ fn is_workforce_pool(audience: Option<&str>) -> bool {
         .is_some_and(|(location, rest)| !location.is_empty() && rest.starts_with("workforcePools/"))
 }
 
+/// `token_url` with the default STS endpoint's universe domain filled in.
+fn token_url(info: &ExternalAccountInfo) -> Option<String> {
+    let universe_domain = info
+        .universe_domain
+        .as_deref()
+        .unwrap_or(DEFAULT_UNIVERSE_DOMAIN);
+    info.token_url
+        .clone()
+        .map(|url| match url == DEFAULT_TOKEN_URL {
+            true => url.replace("{universe_domain}", universe_domain),
+            false => url,
+        })
+}
+
 impl Settings {
     /// `external_account.Credentials.from_info` and the base `__init__`'s own check.
-    pub(crate) fn from_info(info: &Map<String, Value>) -> Result<Self, GoogleLoginFailure> {
-        let universe_domain = match info.get("universe_domain") {
-            None => DEFAULT_UNIVERSE_DOMAIN.to_owned(),
-            Some(domain) => python_str(Some(domain)),
-        };
+    pub(crate) fn from_info(info: &ExternalAccountInfo) -> Result<Self, GoogleLoginFailure> {
         let settings = Self {
-            audience: text(info, "audience"),
-            subject_token_type: text(info, "subject_token_type"),
-            token_url: text(info, "token_url").map(|url| match url == DEFAULT_TOKEN_URL {
-                true => url.replace("{universe_domain}", &universe_domain),
-                false => url,
-            }),
-            impersonation_url: text(info, "service_account_impersonation_url"),
+            audience: info.audience.clone(),
+            subject_token_type: info.subject_token_type.clone(),
+            token_url: token_url(info),
+            impersonation_url: info.service_account_impersonation_url.clone(),
             impersonation_lifetime: info
-                .get("service_account_impersonation")
-                .filter(|options| json_truthy(Some(options)))
-                .and_then(|options| options.get("token_lifetime_seconds"))
-                .filter(|lifetime| json_truthy(Some(lifetime)))
-                .map(|lifetime| python_str(Some(lifetime))),
-            client_id: text(info, "client_id"),
-            client_secret: text(info, "client_secret"),
-            workforce_pool_user_project: text(info, "workforce_pool_user_project"),
+                .service_account_impersonation
+                .as_ref()
+                .and_then(|options| options.token_lifetime_seconds)
+                .filter(|lifetime| *lifetime != 0)
+                .map(|lifetime| lifetime.to_string()),
+            client_id: info.client_id.clone(),
+            client_secret: info.client_secret.clone(),
+            workforce_pool_user_project: info.workforce_pool_user_project.clone(),
         };
         if !is_workforce_pool(settings.audience.as_deref())
-            && json_truthy(info.get("workforce_pool_user_project"))
+            && info
+                .workforce_pool_user_project
+                .as_ref()
+                .is_some_and(|project| !project.is_empty())
         {
             return Err(GoogleLoginFailure::new(
                 PythonException::InvalidValue,
@@ -107,17 +175,12 @@ impl Settings {
 
     /// `aws.Credentials(...)` as LiteLLM's explicit AWS login builds it: no client
     /// authentication, workforce project or impersonation options.
-    pub(crate) fn for_explicit_aws(info: &Map<String, Value>) -> Self {
-        let universe_domain =
-            text(info, "universe_domain").unwrap_or_else(|| DEFAULT_UNIVERSE_DOMAIN.to_owned());
+    pub(crate) fn for_explicit_aws(info: &ExternalAccountInfo) -> Self {
         Self {
-            audience: text(info, "audience"),
-            subject_token_type: text(info, "subject_token_type"),
-            token_url: text(info, "token_url").map(|url| match url == DEFAULT_TOKEN_URL {
-                true => url.replace("{universe_domain}", &universe_domain),
-                false => url,
-            }),
-            impersonation_url: text(info, "service_account_impersonation_url"),
+            audience: info.audience.clone(),
+            subject_token_type: info.subject_token_type.clone(),
+            token_url: token_url(info),
+            impersonation_url: info.service_account_impersonation_url.clone(),
             impersonation_lifetime: None,
             client_id: None,
             client_secret: None,
@@ -126,6 +189,8 @@ impl Settings {
     }
 }
 
+/// google-auth's external account credentials: a subject token from its source, exchanged at
+/// STS, and optionally exchanged again for a service account's token.
 pub(crate) struct ExternalAccount {
     settings: Settings,
     subject: Box<dyn SubjectToken>,
@@ -238,7 +303,7 @@ impl ExternalAccount {
                 "Unable to determine target principal from service account impersonation URL.",
             ));
         }
-        let source = self.source_token().await?;
+        let source = self.source_token().await?.usable()?;
         let lifetime = self
             .settings
             .impersonation_lifetime
@@ -256,7 +321,7 @@ impl ExternalAccount {
             .header(http::header::CONTENT_TYPE, "application/json")
             .header(
                 http::header::AUTHORIZATION,
-                format!("Bearer {}", source.value.expose()),
+                format!("Bearer {}", source.expose()),
             )
             .body(body)
             .send()
@@ -278,13 +343,12 @@ impl ExternalAccount {
                 "{IMPERSONATION_REFUSED}: No access token or invalid expiration in response."
             ))
         };
-        let data = serde_json::from_str::<Value>(&body).map_err(|_| malformed())?;
-        let (Some(token), Some(expire_time)) = (data.get("accessToken"), data.get("expireTime"))
-        else {
+        let reply = serde_json::from_str::<ImpersonationReply>(&body).map_err(|_| malformed())?;
+        let (Some(token), Some(expire_time)) = (reply.access_token, reply.expire_time) else {
             return Err(malformed());
         };
         let expiry = expire_time
-            .as_str()
+            .as_deref()
             .and_then(|text| {
                 PrimitiveDateTime::parse(
                     text,
@@ -294,7 +358,7 @@ impl ExternalAccount {
             })
             .map(PrimitiveDateTime::assume_utc)
             .ok_or_else(malformed)?;
-        Ok(Minted::from_reply(Some(token), Expiry::At(expiry)))
+        Ok(Minted::from_reply(token, Expiry::At(expiry)))
     }
 
     async fn mint(&self) -> Result<Minted, GoogleLoginFailure> {
@@ -309,6 +373,15 @@ impl Credentials for ExternalAccount {
     fn refresh(&self) -> RefreshFuture<'_> {
         Box::pin(self.mint())
     }
+}
+
+/// IAM's `generateAccessToken` reply. Each field is `Some(None)` when null.
+#[derive(Deserialize)]
+struct ImpersonationReply {
+    #[serde(rename = "accessToken", default, deserialize_with = "present")]
+    access_token: Option<Option<String>>,
+    #[serde(rename = "expireTime", default, deserialize_with = "present")]
+    expire_time: Option<Option<String>>,
 }
 
 /// `urllib.parse.quote`'s safe characters.
@@ -329,24 +402,21 @@ fn target_principal(url: &str) -> Option<&str> {
 /// `_make_request`'s JSON body and `_perform_refresh_token`'s reading of it: only
 /// `access_token` and `expires_in` matter, and either may be missing or of any type.
 fn sts_reply(body: &str, now: OffsetDateTime) -> Result<Minted, GoogleLoginFailure> {
-    let data = match body {
-        "" => Map::new(),
-        body => match serde_json::from_str::<Value>(body) {
-            Ok(Value::Object(data)) => data,
-            _ => return Err(not_an_object()),
-        },
+    let reply = match body {
+        "" => TokenReply::default(),
+        body => TokenReply::parse(body).map_err(|_| not_a_token_reply())?,
     };
-    let seconds = match data.get("expires_in") {
-        Some(Value::String(text)) => text
+    let seconds = match &reply.expires_in {
+        Some(Lifetime::Text(text)) => text
             .trim()
             .parse::<i64>()
             .map(|seconds| seconds as f64)
             .map_err(|_| invalid_lifetime())?,
-        Some(Value::Number(number)) => number.as_f64().unwrap_or_default(),
-        _ => return Err(invalid_lifetime()),
+        Some(Lifetime::Seconds(seconds)) => *seconds,
+        None => return Err(invalid_lifetime()),
     };
     Ok(Minted::from_reply(
-        data.get("access_token"),
+        reply.access_token.flatten(),
         Expiry::At(now + time::Duration::seconds_f64(seconds)),
     ))
 }
@@ -365,7 +435,7 @@ fn parse_token_data(
     format: &Format,
 ) -> Result<String, GoogleLoginFailure> {
     let token = match format {
-        Format::Text => Value::String(content.to_owned()),
+        Format::Text => content.to_owned(),
         Format::Json(field) => {
             let unparseable = || {
                 GoogleLoginFailure::new(
@@ -375,21 +445,22 @@ fn parse_token_data(
                     ),
                 )
             };
-            let Ok(Value::Object(data)) = serde_json::from_str::<Value>(content) else {
-                return Err(unparseable());
-            };
-            data.get(field).cloned().ok_or_else(unparseable)?
+            let data = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(content)
+                .map_err(|_| unparseable())?;
+            let token = data.get(field).ok_or_else(unparseable)?;
+            token.as_str().unwrap_or_default().to_owned()
         }
     };
-    if !json_truthy(Some(&token)) {
+    if token.is_empty() {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
             "Missing subject_token in the credential_source file",
         ));
     }
-    Ok(python_str(Some(&token)))
+    Ok(token)
 }
 
+/// A subject token read from a file, as `identity_pool` reads one.
 struct FileSource {
     path: String,
     format: Format,
@@ -411,6 +482,7 @@ impl SubjectToken for FileSource {
     }
 }
 
+/// A subject token fetched from a URL, as `identity_pool` fetches one.
 struct UrlSource {
     url: String,
     headers: Vec<(String, String)>,
@@ -452,25 +524,18 @@ fn malformed(message: impl Into<String>) -> GoogleLoginFailure {
 }
 
 /// `identity_pool._validate_file_or_url_config`.
-fn source_format(source: &Map<String, Value>) -> Result<Format, GoogleLoginFailure> {
-    let empty = Value::Object(Map::new());
-    let format = source.get("format").unwrap_or(&empty);
-    let Value::Object(format) = format else {
-        return Err(malformed(
-            "Invalid credential_source format. The format is not a dict.",
-        ));
-    };
+fn source_format(format: Option<&SourceFormat>) -> Result<Format, GoogleLoginFailure> {
     let kind = format
-        .get("type")
-        .filter(|kind| json_truthy(Some(kind)))
-        .map_or_else(|| "text".to_owned(), |kind| python_str(Some(kind)));
+        .and_then(|format| format.kind.clone())
+        .filter(|kind| !kind.is_empty())
+        .unwrap_or_else(|| "text".to_owned());
     match kind.as_str() {
         "text" => Ok(Format::Text),
-        "json" => match format.get("subject_token_field_name") {
-            None | Some(Value::Null) => Err(malformed(
+        "json" => match format.and_then(|format| format.subject_token_field_name.clone()) {
+            None => Err(malformed(
                 "Missing subject_token_field_name for JSON credential_source format",
             )),
-            Some(field) => Ok(Format::Json(python_str(Some(field)))),
+            Some(field) => Ok(Format::Json(field)),
         },
         other => Err(malformed(format!(
             "Invalid credential_source format '{other}'"
@@ -481,31 +546,26 @@ fn source_format(source: &Map<String, Value>) -> Result<Format, GoogleLoginFailu
 /// `identity_pool.Credentials.from_info`. A certificate source, which mints through mutual TLS,
 /// is left to Google's Rust SDK, so `Ok(None)` names it.
 pub(crate) fn identity_pool(
-    info: &Map<String, Value>,
+    info: &ExternalAccountInfo,
 ) -> Result<Option<Loaded>, GoogleLoginFailure> {
     let settings = Settings::from_info(info)?;
-    let source = match info.get("credential_source") {
-        None | Some(Value::Null) => {
-            return Err(GoogleLoginFailure::new(
-                PythonException::InvalidValue,
-                NO_CREDENTIAL_SOURCE,
-            ));
-        }
-        Some(Value::Object(source)) => source,
-        Some(_) => {
-            return Err(malformed(
-                "Invalid credential_source. The credential_source is not a dict.",
-            ));
-        }
+    let Some(source) = &info.credential_source else {
+        return Err(GoogleLoginFailure::new(
+            PythonException::InvalidValue,
+            NO_CREDENTIAL_SOURCE,
+        ));
     };
-    if source.contains_key("environment_id") {
+    if source.environment_id.is_some() {
         return Err(malformed(
             "Invalid Identity Pool credential_source field 'environment_id'",
         ));
     }
-    let present = |name: &str| source.get(name).filter(|value| !value.is_null());
-    let (file, url, certificate) = (present("file"), present("url"), present("certificate"));
-    match [file, url, certificate].iter().flatten().count() {
+    let given = [
+        source.file.is_some(),
+        source.url.is_some(),
+        source.certificate.is_some(),
+    ];
+    match given.iter().filter(|given| **given).count() {
         0 => {
             return Err(malformed(
                 "Missing credential_source. A 'file', 'url', or 'certificate' must be provided.",
@@ -518,24 +578,21 @@ pub(crate) fn identity_pool(
             ));
         }
     }
-    if certificate.is_some() {
+    if source.certificate.is_some() {
         return Ok(None);
     }
-    let format = source_format(source)?;
-    let subject: Box<dyn SubjectToken> = match (file, url) {
-        (Some(path), _) if json_truthy(Some(path)) => Box::new(FileSource {
-            path: python_str(Some(path)),
-            format,
-        }),
-        (_, Some(url)) if json_truthy(Some(url)) => Box::new(UrlSource {
-            url: python_str(Some(url)),
-            headers: match source.get("headers") {
-                Some(Value::Object(headers)) => headers
-                    .iter()
-                    .map(|(name, value)| (name.clone(), python_str(Some(value))))
-                    .collect(),
-                _ => Vec::new(),
-            },
+    let format = source_format(source.format.as_ref())?;
+    let nonempty = |field: &Option<String>| field.clone().filter(|text| !text.is_empty());
+    let subject: Box<dyn SubjectToken> = match (nonempty(&source.file), nonempty(&source.url)) {
+        (Some(path), _) => Box::new(FileSource { path, format }),
+        (_, Some(url)) => Box::new(UrlSource {
+            url,
+            headers: source
+                .headers
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
             format,
         }),
         _ => return Ok(None),
@@ -543,48 +600,68 @@ pub(crate) fn identity_pool(
     Ok(Some(ExternalAccount::loaded(settings, subject)))
 }
 
+/// An executable's JSON answer, as `pluggable._parse_subject_token` reads it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+struct ExecutableResponse {
+    version: Option<f64>,
+    success: Option<bool>,
+    code: Option<String>,
+    message: Option<String>,
+    expiration_time: Option<f64>,
+    token_type: Option<String>,
+    id_token: Option<String>,
+    saml_response: Option<String>,
+}
+
+impl ExecutableResponse {
+    /// The answer an executable printed or wrote: text that is not JSON is a `ValueError`, and
+    /// JSON that is not an executable response a `MalformedError`.
+    fn parse(text: &[u8]) -> Result<Self, GoogleLoginFailure> {
+        serde_json::from_slice(text).map_err(|error| match error.classify() {
+            serde_json::error::Category::Data => malformed_response(),
+            _ => GoogleLoginFailure::new(PythonException::Value, error.to_string()),
+        })
+    }
+}
+
+fn malformed_response() -> GoogleLoginFailure {
+    malformed("The executable response is not a JSON object.")
+}
+
 /// `pluggable._parse_subject_token` over the executable's JSON answer.
-fn executable_subject_token(response: &Value, now: f64) -> Result<String, GoogleLoginFailure> {
-    let Value::Object(response) = response else {
-        return Err(malformed("The executable response is not a JSON object."));
-    };
-    let Some(version) = response.get("version") else {
+fn executable_subject_token(
+    response: &ExecutableResponse,
+    now: f64,
+) -> Result<String, GoogleLoginFailure> {
+    let Some(version) = response.version else {
         return Err(malformed(
             "The executable response is missing the version field.",
         ));
     };
-    if version.as_f64().is_some_and(|version| version > 1.0) {
+    if version > 1.0 {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            format!(
-                "Executable returned unsupported version {}.",
-                python_str(Some(version))
-            ),
+            format!("Executable returned unsupported version {version}."),
         ));
     }
-    let Some(success) = response.get("success") else {
+    let Some(success) = response.success else {
         return Err(malformed(
             "The executable response is missing the success field.",
         ));
     };
-    if !json_truthy(Some(success)) {
-        let (Some(code), Some(message)) = (response.get("code"), response.get("message")) else {
+    if !success {
+        let (Some(code), Some(message)) = (&response.code, &response.message) else {
             return Err(malformed(
                 "Error code and message fields are required in the response.",
             ));
         };
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            format!(
-                "Executable returned unsuccessful response: code: {}, message: {}.",
-                python_str(Some(code)),
-                python_str(Some(message))
-            ),
+            format!("Executable returned unsuccessful response: code: {code}, message: {message}."),
         ));
     }
     if response
-        .get("expiration_time")
-        .and_then(Value::as_f64)
+        .expiration_time
         .is_some_and(|expiration| expiration < now)
     {
         return Err(GoogleLoginFailure::new(
@@ -592,16 +669,16 @@ fn executable_subject_token(response: &Value, now: f64) -> Result<String, Google
             "The token returned by the executable is expired.",
         ));
     }
-    let Some(token_type) = response.get("token_type") else {
+    let Some(token_type) = &response.token_type else {
         return Err(malformed(
             "The executable response is missing the token_type field.",
         ));
     };
-    let field = match token_type.as_str() {
-        Some(
-            "urn:ietf:params:oauth:token-type:jwt" | "urn:ietf:params:oauth:token-type:id_token",
-        ) => "id_token",
-        Some("urn:ietf:params:oauth:token-type:saml2") => "saml_response",
+    let (field, token) = match token_type.as_str() {
+        "urn:ietf:params:oauth:token-type:jwt" | "urn:ietf:params:oauth:token-type:id_token" => {
+            ("id_token", &response.id_token)
+        }
+        "urn:ietf:params:oauth:token-type:saml2" => ("saml_response", &response.saml_response),
         _ => {
             return Err(GoogleLoginFailure::new(
                 PythonException::Refresh,
@@ -609,12 +686,12 @@ fn executable_subject_token(response: &Value, now: f64) -> Result<String, Google
             ));
         }
     };
-    response
-        .get(field)
-        .map(|token| python_str(Some(token)))
+    token
+        .clone()
         .ok_or_else(|| GoogleLoginFailure::new(PythonException::Refresh, format!("'{field}'")))
 }
 
+/// A subject token an executable prints, as `pluggable` runs it.
 struct Executable {
     command: String,
     timeout: Duration,
@@ -630,14 +707,16 @@ impl Executable {
         let Some(path) = &self.output_file else {
             return Ok(None);
         };
-        let Some(response) = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        else {
+        let Some(content) = std::fs::read(path).ok() else {
             return Ok(None);
         };
+        let response = match ExecutableResponse::parse(&content) {
+            Ok(response) => response,
+            Err(failure) if failure.exception == PythonException::Malformed => return Err(failure),
+            Err(_) => return Ok(None),
+        };
         match executable_subject_token(&response, unix_now()) {
-            Ok(token) if response.get("expiration_time").is_some() => Ok(Some(token)),
+            Ok(token) if response.expiration_time.is_some() => Ok(Some(token)),
             Ok(_) => Ok(None),
             Err(failure)
                 if matches!(
@@ -716,19 +795,14 @@ impl Executable {
             ));
         }
         let response = match printed.is_empty() {
-            false => serde_json::from_slice::<Value>(&printed).map_err(|error| {
-                GoogleLoginFailure::new(PythonException::Value, error.to_string())
-            })?,
+            false => ExecutableResponse::parse(&printed)?,
             true => match &self.output_file {
                 Some(path) => {
-                    serde_json::from_str::<Value>(&std::fs::read_to_string(path).map_err(
-                        |error| GoogleLoginFailure::new(PythonException::OS, error.to_string()),
-                    )?)
-                    .map_err(|error| {
-                        GoogleLoginFailure::new(PythonException::Value, error.to_string())
-                    })?
+                    ExecutableResponse::parse(&std::fs::read(path).map_err(|error| {
+                        GoogleLoginFailure::new(PythonException::OS, error.to_string())
+                    })?)?
                 }
-                None => Value::Null,
+                None => return Err(malformed_response()),
             },
         };
         executable_subject_token(&response, unix_now())
@@ -748,56 +822,42 @@ impl SubjectToken for Executable {
 /// `pluggable.Credentials.from_info`. Whether executables may run is only checked when a token
 /// is asked for.
 pub(crate) fn pluggable(
-    info: &Map<String, Value>,
+    info: &ExternalAccountInfo,
     os_env: OsEnvironment,
 ) -> Result<Loaded, GoogleLoginFailure> {
     let settings = Settings::from_info(info)?;
-    let source = match info.get("credential_source") {
-        Some(Value::Object(source)) => source,
-        _ => {
-            return Err(malformed(
-                "Missing credential_source. The credential_source is not a dict.",
-            ));
-        }
+    let Some(source) = &info.credential_source else {
+        return Err(malformed(
+            "Missing credential_source. The credential_source is not a dict.",
+        ));
     };
-    let executable = source
-        .get("executable")
-        .filter(|executable| json_truthy(Some(executable)));
-    let Some(executable) = executable else {
+    let Some(executable) = &source.executable else {
         return Err(malformed(
             "Missing credential_source. An 'executable' must be provided.",
         ));
     };
-    let Value::Object(executable) = executable else {
-        return Err(malformed(
-            "Missing credential_source. The executable is not a dict.",
-        ));
-    };
     let Some(command) = executable
-        .get("command")
-        .filter(|command| json_truthy(Some(command)))
+        .command
+        .clone()
+        .filter(|command| !command.is_empty())
     else {
         return Err(malformed(
             "Missing command field. Executable command must be provided.",
         ));
     };
-    let timeout_millis = match executable.get("timeout_millis") {
-        timeout if !json_truthy(timeout) => 30_000.0,
-        Some(timeout) => timeout.as_f64().unwrap_or(f64::NAN),
-        None => 30_000.0,
-    };
+    let timeout_millis = executable
+        .timeout_millis
+        .filter(|timeout| *timeout != 0.0)
+        .unwrap_or(30_000.0);
     if !(5_000.0..=120_000.0).contains(&timeout_millis) {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
             "Timeout must be between 5 and 120 seconds.",
         ));
     }
-    if let Some(interactive) = executable
-        .get("interactive_timeout_millis")
-        .filter(|timeout| json_truthy(Some(timeout)))
-        && !interactive
-            .as_f64()
-            .is_some_and(|millis| (30_000.0..=1_800_000.0).contains(&millis))
+    if executable
+        .interactive_timeout_millis
+        .is_some_and(|millis| millis != 0.0 && !(30_000.0..=1_800_000.0).contains(&millis))
     {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
@@ -810,12 +870,9 @@ pub(crate) fn pluggable(
         .and_then(target_principal)
         .map(str::to_owned);
     let subject = Executable {
-        command: python_str(Some(command)),
+        command,
         timeout: Duration::from_secs_f64(timeout_millis / 1000.0),
-        output_file: executable
-            .get("output_file")
-            .filter(|path| !path.is_null())
-            .map(|path| python_str(Some(path))),
+        output_file: executable.output_file.clone(),
         audience: settings.audience.clone().unwrap_or_default(),
         subject_token_type: settings.subject_token_type.clone().unwrap_or_default(),
         impersonated_email,
@@ -830,9 +887,13 @@ mod tests {
 
     use axum::{Router, routing::post};
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
+
+    fn parsed(value: Value) -> ExternalAccountInfo {
+        serde_json::from_value(value).unwrap()
+    }
 
     const NOW: OffsetDateTime = time::macros::datetime!(2026-11-16 12:00 UTC);
 
@@ -898,7 +959,7 @@ mod tests {
 
     fn account(info: Value, subject: &'static str) -> ExternalAccount {
         ExternalAccount::new(
-            Settings::from_info(info.as_object().unwrap()).unwrap(),
+            Settings::from_info(&parsed(info)).unwrap(),
             Box::new(Fixed(subject)),
             Requests::with_environment(&[]),
         )
@@ -923,7 +984,10 @@ mod tests {
             "subject",
         );
 
-        assert_eq!(account.mint().await.unwrap().value.expose(), "sts-token");
+        assert_eq!(
+            account.mint().await.unwrap().token.unwrap().expose(),
+            "sts-token"
+        );
 
         let (path, authorization, body) = sts.requests.lock().unwrap()[0].clone();
         assert_eq!(path, "/token");
@@ -940,21 +1004,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::only_a_token(r#"{"access_token": "t", "expires_in": 60}"#, Some("t"), None)]
-    #[case::string_lifetime(r#"{"access_token": "t", "expires_in": "60"}"#, Some("t"), None)]
-    #[case::no_token(
-        r#"{"token_type": "Bearer", "expires_in": 60}"#,
-        Some("None"),
-        Some("NoneType")
-    )]
+    #[case::only_a_token(r#"{"access_token": "t", "expires_in": 60}"#, Some("t"))]
+    #[case::string_lifetime(r#"{"access_token": "t", "expires_in": "60"}"#, Some("t"))]
+    #[case::no_token(r#"{"token_type": "Bearer", "expires_in": 60}"#, None)]
     fn an_sts_reply_needs_only_what_google_auth_reads(
         #[case] body: &str,
         #[case] token: Option<&str>,
-        #[case] non_string: Option<&str>,
     ) {
         let minted = sts_reply(body, NOW).unwrap();
-        assert_eq!(Some(minted.value.expose()), token);
-        assert_eq!(minted.non_string, non_string);
+        assert_eq!(minted.token.as_ref().map(|token| token.expose()), token);
         assert_eq!(minted.expiry, Expiry::At(NOW + time::Duration::seconds(60)));
     }
 
@@ -1001,7 +1059,10 @@ mod tests {
             "subject",
         );
 
-        assert_eq!(account.mint().await.unwrap().value.expose(), "sa-token");
+        assert_eq!(
+            account.mint().await.unwrap().token.unwrap().expose(),
+            "sa-token"
+        );
         account.mint().await.unwrap();
 
         let requests = sts.requests.lock().unwrap().clone();
@@ -1040,7 +1101,7 @@ mod tests {
         #[case] message: &str,
     ) {
         let info = json!({"type": "external_account", "audience": AUDIENCE, "credential_source": source, "token_url": "http://127.0.0.1:9/token"});
-        let loaded = identity_pool(info.as_object().unwrap()).unwrap().unwrap();
+        let loaded = identity_pool(&parsed(info)).unwrap().unwrap();
         assert_eq!(
             loaded.refresh().await.unwrap_err(),
             GoogleLoginFailure::new(exception, message)
@@ -1048,7 +1109,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::not_a_dict(json!("file"), PythonException::Malformed, "Invalid credential_source. The credential_source is not a dict.")]
     #[case::aws(json!({"environment_id": "aws1"}), PythonException::Malformed, "Invalid Identity Pool credential_source field 'environment_id'")]
     #[case::none(json!({}), PythonException::Malformed, "Missing credential_source. A 'file', 'url', or 'certificate' must be provided.")]
     #[case::two(json!({"file": "/a", "url": "http://b"}), PythonException::Malformed, "Ambiguous credential_source. 'file', 'url', and 'certificate' are mutually exclusive..")]
@@ -1062,7 +1122,7 @@ mod tests {
         let info =
             json!({"type": "external_account", "audience": AUDIENCE, "credential_source": source});
         assert_eq!(
-            identity_pool(info.as_object().unwrap()).err(),
+            identity_pool(&parsed(info)).err(),
             Some(GoogleLoginFailure::new(exception, message))
         );
     }
@@ -1074,7 +1134,7 @@ mod tests {
             "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
             "credential_source": {"executable": {"command": "/nonexistent/fz-exe"}},
         });
-        let loaded = pluggable(info.as_object().unwrap(), Arc::new(|_| None)).unwrap();
+        let loaded = pluggable(&parsed(info), Arc::new(|_| None)).unwrap();
         assert_eq!(
             loaded.refresh().await.unwrap_err(),
             GoogleLoginFailure::new(
@@ -1099,7 +1159,7 @@ mod tests {
             "credential_source": {"executable": {"command": command}},
         });
         let account = ExternalAccount::new(
-            Settings::from_info(info.as_object().unwrap()).unwrap(),
+            Settings::from_info(&parsed(info)).unwrap(),
             Box::new(Executable {
                 command: command.to_owned(),
                 timeout: Duration::from_secs(30),
@@ -1114,7 +1174,10 @@ mod tests {
             Requests::with_environment(&[]),
         );
 
-        assert_eq!(account.mint().await.unwrap().value.expose(), "exe-token");
+        assert_eq!(
+            account.mint().await.unwrap().token.unwrap().expose(),
+            "exe-token"
+        );
         assert!(
             sts.requests.lock().unwrap()[0]
                 .2
@@ -1128,7 +1191,7 @@ mod tests {
     fn executable_timeouts_are_bounded(#[case] executable: Value, #[case] message: &str) {
         let info = json!({"type": "external_account", "audience": AUDIENCE, "credential_source": {"executable": executable}});
         assert_eq!(
-            pluggable(info.as_object().unwrap(), Arc::new(|_| None)).err(),
+            pluggable(&parsed(info), Arc::new(|_| None)).err(),
             Some(GoogleLoginFailure::new(
                 PythonException::InvalidValue,
                 message
@@ -1147,10 +1210,7 @@ mod tests {
         #[case] accepted: bool,
     ) {
         let info = json!({"audience": audience, "workforce_pool_user_project": "123"});
-        assert_eq!(
-            Settings::from_info(info.as_object().unwrap()).is_ok(),
-            accepted
-        );
+        assert_eq!(Settings::from_info(&parsed(info)).is_ok(), accepted);
     }
 
     #[rstest]

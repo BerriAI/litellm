@@ -1,12 +1,17 @@
+//! The credentials Google's Rust SDK builds from a credentials file, google-auth's checks of a
+//! service account key, and the failure google-auth raises when minting a token fails.
+
 use std::{error::Error as StdError, sync::Arc};
 
 use google_cloud_auth::credentials::{AccessTokenCredentials, external_account, impersonated};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::{
     credentials::Loaded,
+    external_account::ExternalAccountInfo,
     failure::{GoogleLoginFailure, PythonException},
-    service_account::service_account_grant,
+    service_account::{ServiceAccountInfo, service_account_grant},
+    source::{ImpersonatedInfo, SdkJson},
 };
 use crate::{
     constants::CLOUD_PLATFORM_SCOPE,
@@ -15,27 +20,18 @@ use crate::{
 
 pub(crate) type TokenSource = Arc<dyn GcpTokenSource>;
 
-const SERVICE_ACCOUNT_FIELDS: [&str; 2] = ["client_email", "token_uri"];
 const NO_CREDENTIAL_SOURCE: &str =
     "A valid credential source or a subject token supplier must be provided.";
-
-fn missing_fields(info: &Map<String, Value>, required: &[&str]) -> Option<String> {
-    let missing: Vec<&str> = required
-        .iter()
-        .copied()
-        .filter(|field| !info.contains_key(*field))
-        .collect();
-    (!missing.is_empty()).then(|| missing.join(", "))
-}
 
 fn value_failure(error: impl std::fmt::Display) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Value, error.to_string())
 }
 
 /// google-auth keeps a quota project of any JSON type, and the Vertex login only takes the token.
-fn without_quota_project(info: &Map<String, Value>) -> Value {
+fn without_quota_project(info: &SdkJson) -> Value {
     Value::Object(
-        info.iter()
+        info.0
+            .iter()
             .filter(|(field, _)| field.as_str() != "quota_project_id")
             .map(|(field, value)| (field.clone(), value.clone()))
             .collect(),
@@ -50,8 +46,17 @@ fn sdk_source(credentials: AccessTokenCredentials) -> TokenSource {
 }
 
 /// google-auth's `service_account.Credentials.from_service_account_info`.
-pub(crate) fn service_account(info: &Map<String, Value>) -> Result<Loaded, GoogleLoginFailure> {
-    if let Some(missing) = missing_fields(info, &SERVICE_ACCOUNT_FIELDS) {
+pub(crate) fn service_account(info: &ServiceAccountInfo) -> Result<Loaded, GoogleLoginFailure> {
+    let missing: Vec<&str> = [
+        ("client_email", &info.client_email),
+        ("token_uri", &info.token_uri),
+    ]
+    .into_iter()
+    .filter(|(_, field)| field.is_none())
+    .map(|(name, _)| name)
+    .collect();
+    if !missing.is_empty() {
+        let missing = missing.join(", ");
         return Err(GoogleLoginFailure::new(
             PythonException::Malformed,
             format!(
@@ -59,7 +64,7 @@ pub(crate) fn service_account(info: &Map<String, Value>) -> Result<Loaded, Googl
             ),
         ));
     }
-    if !info.contains_key("private_key") {
+    if info.private_key.is_none() {
         return Err(GoogleLoginFailure::new(
             PythonException::Malformed,
             "The private_key field was not found in the service account info.",
@@ -71,15 +76,15 @@ pub(crate) fn service_account(info: &Map<String, Value>) -> Result<Loaded, Googl
 /// google-auth's identity pool credentials with a certificate source, which mint through mutual
 /// TLS in Google's Rust SDK.
 pub(crate) fn external_account(
-    info: &Map<String, Value>,
+    info: &ExternalAccountInfo,
 ) -> Result<TokenSource, GoogleLoginFailure> {
-    if !info.contains_key("credential_source") {
+    if info.credential_source.is_none() {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
             NO_CREDENTIAL_SOURCE,
         ));
     }
-    external_account::Builder::new(without_quota_project(info))
+    external_account::Builder::new(without_quota_project(&info.sdk))
         .with_scopes([CLOUD_PLATFORM_SCOPE])
         .build_access_token_credentials()
         .map(sdk_source)
@@ -88,9 +93,9 @@ pub(crate) fn external_account(
 
 /// google-auth's `impersonated_credentials.Credentials.from_impersonated_service_account_info`.
 pub(crate) fn impersonated_service_account(
-    info: &Map<String, Value>,
+    info: &ImpersonatedInfo,
 ) -> Result<TokenSource, GoogleLoginFailure> {
-    impersonated::Builder::new(without_quota_project(info))
+    impersonated::Builder::new(without_quota_project(&info.sdk))
         .with_scopes([CLOUD_PLATFORM_SCOPE])
         .build_access_token_credentials()
         .map(sdk_source)
@@ -126,12 +131,12 @@ pub(crate) fn token_failure(error: &(dyn StdError + 'static)) -> GoogleLoginFail
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
-    fn info(value: Value) -> Map<String, Value> {
-        value.as_object().unwrap().clone()
+    fn info(value: Value) -> ServiceAccountInfo {
+        serde_json::from_value(value).unwrap()
     }
 
     fn failure<T>(result: Result<T, GoogleLoginFailure>) -> GoogleLoginFailure {
@@ -173,7 +178,7 @@ mod tests {
 
     #[rstest]
     fn an_external_account_without_a_source_is_an_invalid_value() {
-        let failure = failure(external_account(&info(json!({"type": "external_account"}))));
+        let failure = failure(external_account(&ExternalAccountInfo::default()));
         assert_eq!(failure.exception, PythonException::InvalidValue);
         assert_eq!(failure.message, NO_CREDENTIAL_SOURCE);
     }

@@ -19,20 +19,18 @@ mod transport;
 use std::sync::Arc;
 
 use litellm_auth_types::{Error, VertexParams};
-use litellm_python_compat::truthy::json_truthy;
 use litellm_secret_value::SecretValue;
-use serde_json::{Map, Value};
 
 #[cfg(any(test, feature = "test-support"))]
 pub use environment::OnGce;
 pub use environment::{EnvironmentFuture, GoogleEnvironment, SystemGoogleEnvironment};
-pub use failure::{CredentialsFile, GoogleLoginFailure, PythonException};
+pub use failure::{GoogleLoginFailure, PythonException, UnusableFile};
 pub use transport::set_certifi_bundle;
 
 use credentials::{Loaded, managed};
-use failure::json_kind;
+use external_account::ExternalAccountInfo;
 use logins::{Login, LoginKey, Logins};
-use source::{CredentialsJson, load_vertex_credentials_source};
+use source::{CredentialsJson, ExplicitCredentials, load_vertex_credentials_source};
 
 /// Python's `a or b or ...`: the first non-empty value, else the last one, which may be empty.
 pub fn python_or(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
@@ -132,16 +130,6 @@ fn value_failure(message: impl Into<String>) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Value, message)
 }
 
-/// The project `load_auth` reads off credentials it built: an authorized user's quota project,
-/// a service account's `project_id`, nothing for an external account.
-fn credentials_project(info: &Map<String, Value>) -> Option<Value> {
-    match info.get("type").and_then(Value::as_str) {
-        Some("authorized_user") => info.get("quota_project_id").cloned(),
-        Some("external_account") => None,
-        _ => info.get("project_id").cloned(),
-    }
-}
-
 impl VertexMessagesAuth {
     pub fn new(environment: Arc<dyn GoogleEnvironment>) -> Self {
         Self {
@@ -181,19 +169,18 @@ impl VertexMessagesAuth {
     /// `_credentials_from_json`'s external account routes: an AWS environment to LiteLLM's
     /// explicit AWS login or google-auth's metadata one, an executable to `pluggable`, the rest
     /// to `identity_pool`.
-    fn external_account(&self, info: &Map<String, Value>) -> Result<Loaded, GoogleLoginFailure> {
-        let source = info.get("credential_source").and_then(Value::as_object);
-        let names_aws = source
-            .and_then(|source| source.get("environment_id"))
-            .and_then(Value::as_str)
-            .is_some_and(|environment_id| environment_id.contains("aws"));
-        if names_aws && aws_wif::uses_explicit_aws(info) {
+    fn external_account(&self, info: &ExternalAccountInfo) -> Result<Loaded, GoogleLoginFailure> {
+        if aws_wif::uses_explicit_aws(info) {
             return aws_wif::explicit_aws_credentials(info, self.os_env());
         }
-        if names_aws {
+        if aws_wif::names_aws(info) {
             return aws_wif::metadata_aws_credentials(info, self.os_env());
         }
-        if source.is_some_and(|source| source.contains_key("executable")) {
+        if info
+            .credential_source
+            .as_ref()
+            .is_some_and(|source| source.executable.is_some())
+        {
             return external_account::pluggable(info, self.os_env());
         }
         match external_account::identity_pool(info)? {
@@ -203,16 +190,15 @@ impl VertexMessagesAuth {
     }
 
     fn explicit_source(&self, credentials: &CredentialsJson) -> Result<Loaded, GoogleLoginFailure> {
-        let info = &credentials.info;
-        let built = match info.get("type").and_then(Value::as_str) {
-            Some("external_account") => self.external_account(info),
-            Some("authorized_user") => {
+        let built = match &credentials.credentials {
+            ExplicitCredentials::ExternalAccount(info) => self.external_account(info),
+            ExplicitCredentials::AuthorizedUser(info) => {
                 authorized_user::authorized_user(info, &self.environment.google_token_endpoint())
             }
-            _ => builders::service_account(info),
+            ExplicitCredentials::ServiceAccount(info) => builders::service_account(info),
         };
         built.map_err(|failure| match &credentials.path {
-            Some(path) => GoogleLoginFailure::credentials_file(CredentialsFile::Invalid {
+            Some(path) => GoogleLoginFailure::credentials_file(UnusableFile::Invalid {
                 path: path.clone(),
                 problem: format!("holds credentials that cannot be used: {}", failure.message),
             }),
@@ -228,32 +214,18 @@ impl VertexMessagesAuth {
         let (source, credential_project) = match credentials {
             Some(text) => {
                 let json = load_vertex_credentials_source(&text)?;
-                (
-                    self.explicit_source(&json)?,
-                    credentials_project(&json.info),
-                )
+                (self.explicit_source(&json)?, json.credentials.project())
             }
             None => {
                 let found = adc::default_credentials(&*self.environment).await?;
                 (found.source, found.project)
             }
         };
-        let project = project.map(Value::String).or(credential_project);
+        let project = project.or(credential_project);
         let token = source.refresh().await?;
-        let project_id = match project {
-            project if !json_truthy(project.as_ref()) => {
-                Err(value_failure("Could not resolve project_id"))
-            }
-            Some(Value::String(project)) => Ok(project),
-            Some(other) => Err(GoogleLoginFailure::new(
-                PythonException::Type,
-                format!(
-                    "Expected project_id to be a str but got <class '{}'>",
-                    json_kind(&other)
-                ),
-            )),
-            None => Err(value_failure("Could not resolve project_id")),
-        }?;
+        let project_id = project
+            .filter(|project| !project.is_empty())
+            .ok_or_else(|| value_failure("Could not resolve project_id"))?;
         Ok(Login::new(source, project_id, token))
     }
 }
@@ -269,7 +241,7 @@ mod tests {
 
     use axum::{Json, Router, routing::post};
     use rstest::{fixture, rstest};
-    use serde_json::json;
+    use serde_json::{Map, Value, json};
 
     use super::*;
     use crate::vertex_messages::builders::TokenSource;
@@ -441,11 +413,6 @@ mod tests {
     #[rstest]
     #[case::no_quota_project(json!({}), PythonException::Value, "Could not resolve project_id")]
     #[case::null_quota_project(json!({"quota_project_id": null}), PythonException::Value, "Could not resolve project_id")]
-    #[case::numeric_quota_project(
-        json!({"quota_project_id": 7}),
-        PythonException::Type,
-        "Expected project_id to be a str but got <class 'int'>"
-    )]
     #[tokio::test]
     async fn an_unresolvable_project_fails_after_the_token_is_minted(
         #[future] token_server: TokenServer,
@@ -542,7 +509,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             failure(error).file,
-            Some(CredentialsFile::Invalid {
+            Some(UnusableFile::Invalid {
                 path: file.path().to_str().unwrap().into(),
                 problem: "holds credentials that cannot be used: Service account info was not in the expected format, missing fields client_email, token_uri.".into(),
             })
@@ -721,9 +688,39 @@ mod tests {
     }
 
     #[rstest]
+    #[case::numeric_project(json!({"type": "service_account", "project_id": 7}))]
+    #[case::listed_credential_source(json!({"type": "external_account", "credential_source": ["file"]}))]
     #[tokio::test]
-    async fn an_application_default_file_of_an_unknown_type_names_the_valid_types() {
-        let file = key_file(&json!({"type": "weird"}));
+    async fn an_application_default_file_with_a_field_of_the_wrong_type_is_refused(
+        #[case] contents: Value,
+    ) {
+        let file = key_file(&contents);
+        let path = file.path().to_str().unwrap().to_string();
+        let failure = failure(
+            auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", &path)]))
+                .login(MODEL, None, Some("p".into()))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(failure.exception, PythonException::DefaultCredentials);
+        assert!(
+            failure
+                .message
+                .starts_with(&format!("File {path} holds a field of the wrong type: ")),
+            "{}",
+            failure.message
+        );
+    }
+
+    #[rstest]
+    #[case::unknown_type(json!({"type": "weird"}))]
+    #[case::no_type(json!({"project_id": "p"}))]
+    #[case::numeric_type(json!({"type": 7}))]
+    #[tokio::test]
+    async fn an_application_default_file_of_an_unknown_type_names_the_valid_types(
+        #[case] contents: Value,
+    ) {
+        let file = key_file(&contents);
         let path = file.path().to_str().unwrap().to_string();
         let error = auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", &path)]))
             .login(MODEL, None, Some("p".into()))
@@ -732,7 +729,7 @@ mod tests {
         assert_eq!(
             failure(error).message,
             format!(
-                "The file {path} does not have a valid type. Type is weird, expected one of ('authorized_user', 'service_account', 'external_account', 'external_account_authorized_user', 'impersonated_service_account', 'gdch_service_account')."
+                "The file {path} does not have a valid type, expected one of ('authorized_user', 'service_account', 'external_account', 'external_account_authorized_user', 'impersonated_service_account', 'gdch_service_account')."
             )
         );
     }
@@ -899,7 +896,7 @@ mod tests {
     }
 
     fn service_account_file(endpoint: &service_account::tests::Endpoint, extra: Value) -> Value {
-        Value::Object(service_account::tests::key(
+        service_account::tests::key_json(
             &endpoint.url,
             json!({"project_id": "key-project"})
                 .as_object()
@@ -909,7 +906,7 @@ mod tests {
                 .chain(extra.as_object().unwrap().clone())
                 .collect::<Map<String, Value>>()
                 .into(),
-        ))
+        )
     }
 
     fn granted(token: &str, expires_in: i64) -> (u16, Value) {
