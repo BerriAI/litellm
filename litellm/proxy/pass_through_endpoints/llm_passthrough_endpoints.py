@@ -3532,6 +3532,7 @@ async def _base_vertex_proxy_route(
         upstream_request_filter=partial(
             _with_vertex_request_labels, _vertex_label_placement(request.method, updated_url.path)
         ),
+        drop_query_params=("key",),  # the LiteLLM virtual key a caller may send as ?key= is never a Google credential
     )  # dynamically construct pass-through endpoint based on incoming path
 
     try:

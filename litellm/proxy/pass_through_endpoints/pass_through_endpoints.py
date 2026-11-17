@@ -1362,11 +1362,17 @@ def _check_opaque_content(raw_response: bool) -> None:
 
 
 def _caller_query_source(
-    keep_target_query: bool, query_params: Mapping[str, object] | None, request: Request
+    keep_target_query: bool,
+    query_params: Mapping[str, object] | None,
+    request: Request,
+    drop_query_params: frozenset[str] = frozenset(),
 ) -> Mapping[str, object]:
     if keep_target_query:
         return MappingProxyType({})
-    return query_params or request.query_params
+    source: Final = query_params or request.query_params
+    if not drop_query_params:
+        return source
+    return MappingProxyType({name: value for name, value in source.items() if name not in drop_query_params})
 
 
 def _json_object(value: object) -> Mapping[str, object]:
@@ -1582,6 +1588,7 @@ async def pass_through_request(
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
+    drop_query_params: tuple[str, ...] = (),
     raw_response: bool = False,
     response_owner: AsyncExitStack | None = None,
 ):
@@ -1609,6 +1616,7 @@ async def pass_through_request(
             litellm_params the request is logged with
         operation: Optional GenAI operation the route reports, unless the upstream names its own
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
+        drop_query_params: Caller query param names never sent upstream (e.g. the LiteLLM key passed as ``key``)
         raw_response: Relay opaque response bytes without parsing, buffering or following redirects
         response_owner: Request-scoped owner that closes the upstream even if streaming never starts
     """
@@ -1650,7 +1658,9 @@ async def pass_through_request(
         )
 
         requested_query_params: dict | None = (
-            dict(_caller_query_source(keep_target_query, query_params, request))  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
+            dict(  # pyright: ignore[reportUnknownArgumentType]  # query_params stays untyped
+                _caller_query_source(keep_target_query, query_params, request, frozenset(drop_query_params))
+            )
             or None
         )
 
@@ -2682,6 +2692,7 @@ def create_pass_through_route(
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
+    drop_query_params: tuple[str, ...] = (),
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2833,6 +2844,7 @@ def create_pass_through_route(
                         upstream_request_filter=upstream_request_filter,
                         operation=operation,
                         keep_target_query=keep_target_query,
+                        drop_query_params=drop_query_params,
                     )
                 finally:
                     _clear_pass_through_request_state(request.state)

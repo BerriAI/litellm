@@ -3608,6 +3608,7 @@ async def _run_pass_through_and_capture_wire_url(
     incoming_query: str,
     merge_query_params: bool = False,
     default_query_params: dict | None = None,
+    drop_query_params: tuple[str, ...] = (),
     custom_llm_provider: str | None = None,
     managed_files_hook: _FakeManagedFilesHook | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
@@ -3666,6 +3667,7 @@ async def _run_pass_through_and_capture_wire_url(
                 user_api_key_dict=user_api_key_dict if user_api_key_dict is not None else MagicMock(),
                 merge_query_params=merge_query_params,
                 default_query_params=default_query_params,
+                drop_query_params=drop_query_params,
                 custom_llm_provider=custom_llm_provider,
             )
     finally:
@@ -3722,6 +3724,22 @@ async def test_pass_through_request_without_merge_replaces_target_query():
         incoming_query="q=litellm",
     )
     assert dict(wire_url.params) == {"q": "litellm"}
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_drop_query_params_never_reach_the_wire():
+    """
+    Regression test for LIT-9998: a LiteLLM virtual key sent as ``?key=`` on
+    Vertex pass-through routes (where generateContent accepts it as the
+    caller's LiteLLM credential) must not be forwarded to Google. Other
+    caller params still go through.
+    """
+    wire_url = await _run_pass_through_and_capture_wire_url(
+        target="https://us-central1-aiplatform.googleapis.com/v1/m",
+        incoming_query="key=sk-litellm-virtual-key&alt=json",
+        drop_query_params=("key",),
+    )
+    assert dict(wire_url.params) == {"alt": "json"}
 
 
 @pytest.mark.asyncio
