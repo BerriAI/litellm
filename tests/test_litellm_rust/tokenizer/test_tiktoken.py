@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -38,19 +39,25 @@ def test_tiktoken_codec_exposes_its_vocabulary() -> None:
         tokenizer.encode_single_token(b"<|not-a-token|>")
 
 
+def _raised(call: Callable[[], object]) -> type[BaseException] | None:
+    try:
+        call()
+    except Exception as error:
+        return type(error)
+    return None
+
+
 @pytest.mark.parametrize("text", ("\ud800", "x\udc80", "\ud83d\ude42"))
-def test_tiktoken_strict_encoders_reject_lone_surrogates(text: str) -> None:
+def test_tiktoken_strict_encoders_raise_like_tiktoken_on_lone_surrogates(text: str) -> None:
     reference: Final = tiktoken.get_encoding("cl100k_base")
     tokenizer: Final = _native.Tokenizer.from_tiktoken("cl100k_base")
 
-    with pytest.raises(UnicodeEncodeError):
-        reference.encode_with_unstable(text)
-    with pytest.raises(UnicodeEncodeError):
-        tokenizer.encode_with_unstable(text, [])
-    with pytest.raises(UnicodeEncodeError):
-        reference.encode_to_numpy(text)
-    with pytest.raises(UnicodeEncodeError):
-        tokenizer.encode_special_strict(text, [])
+    assert _raised(lambda: tokenizer.encode_with_unstable(text, [])) is _raised(
+        lambda: reference.encode_with_unstable(text)
+    )
+    assert _raised(lambda: tokenizer.encode_special_strict(text, [])) is _raised(
+        lambda: reference.encode_to_numpy(text)
+    )
 
 
 @pytest.mark.parametrize("token", (-(2**100), -1, 0, 2**32 - 1, 2**32, 2**100, True, False))

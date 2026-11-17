@@ -22,7 +22,8 @@ use pyo3::{
 };
 #[cfg(feature = "tiktoken")]
 use pyo3::{
-    exceptions::{PyKeyError, PyOverflowError, PyRuntimeError},
+    exceptions::{PyKeyError, PyRuntimeError},
+    sync::PyOnceLock,
     types::PyBytes,
 };
 
@@ -308,12 +309,14 @@ impl Tokenizer {
 
     #[cfg(feature = "tiktoken")]
     fn is_special_token(&self, token: &Bound<'_, PyAny>) -> PyResult<bool> {
+        static OPERATOR_INDEX: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
         let vocabulary = self.vocabulary()?;
-        match token.extract::<u32>() {
-            Ok(rank) => Ok(vocabulary.is_special_token(rank)),
-            Err(error) if error.is_instance_of::<PyOverflowError>(token.py()) => Ok(false),
-            Err(error) => Err(error),
-        }
+        let index = OPERATOR_INDEX
+            .import(token.py(), "operator", "index")?
+            .call1((token,))?;
+        Ok(index
+            .extract::<u32>()
+            .is_ok_and(|rank| vocabulary.is_special_token(rank)))
     }
 
     /// Every mergeable token's bytes, sorted bytewise like tiktoken's `token_byte_values`.
@@ -795,10 +798,11 @@ impl HuggingFaceEncoding {
 mod tests {
     use std::{ffi::CString, path::Path};
 
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::*;
 
+    #[fixture]
     fn cl100k_tokenizer() -> Tokenizer {
         let dir =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../litellm_core_utils/tokenizers");
@@ -824,13 +828,41 @@ mod tests {
         "type('Index', (), {'__index__': lambda self: 1 << 32})()",
         false
     )]
-    fn is_special_token_handles_arbitrary_python_ints(#[case] expr: &str, #[case] expected: bool) {
+    fn is_special_token_handles_arbitrary_python_ints(
+        cl100k_tokenizer: Tokenizer,
+        #[case] expr: &str,
+        #[case] expected: bool,
+    ) {
         Python::initialize();
         Python::attach(|py| {
-            let tokenizer = cl100k_tokenizer();
+            let tokenizer = cl100k_tokenizer;
             let code = CString::new(expr).unwrap();
             let token = py.eval(&code, None, None).unwrap();
             assert_eq!(tokenizer.is_special_token(&token).unwrap(), expected);
+        });
+    }
+
+    #[rstest]
+    #[case::string("'1'", "TypeError")]
+    #[case::float("1.5", "TypeError")]
+    #[case::none("None", "TypeError")]
+    #[case::index_raising_overflow(
+        "type('Index', (), {'__index__': lambda self: int(float('inf'))})()",
+        "OverflowError"
+    )]
+    fn is_special_token_propagates_errors_other_than_range_overflow(
+        cl100k_tokenizer: Tokenizer,
+        #[case] expr: &str,
+        #[case] raised: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let code = CString::new(expr).unwrap();
+            let token = py.eval(&code, None, None).unwrap();
+            let error = cl100k_tokenizer
+                .is_special_token(&token)
+                .expect_err("only an id outside u32 maps to False");
+            assert_eq!(error.get_type(py).name().unwrap().to_cow().unwrap(), raised);
         });
     }
 
@@ -839,10 +871,14 @@ mod tests {
     #[case::trailing_low_surrogate("'x\\udc80'", vec![])]
     #[case::surrogate_pair_halves("'\\ud83d\\ude42'", vec![])]
     #[case::with_allowed_special("'a\\ud800<|endoftext|>'", vec!["<|endoftext|>".to_owned()])]
-    fn strict_encoders_reject_lone_surrogates(#[case] expr: &str, #[case] allowed: Vec<String>) {
+    fn strict_encoders_reject_lone_surrogates(
+        cl100k_tokenizer: Tokenizer,
+        #[case] expr: &str,
+        #[case] allowed: Vec<String>,
+    ) {
         Python::initialize();
         Python::attach(|py| {
-            let tokenizer = cl100k_tokenizer();
+            let tokenizer = cl100k_tokenizer;
             let code = CString::new(expr).unwrap();
             let value = py.eval(&code, None, None).unwrap();
             let text = value.cast::<PyString>().unwrap();
@@ -858,12 +894,17 @@ mod tests {
         });
     }
 
-    #[test]
-    fn strict_encoders_agree_with_encode_for_valid_utf8() {
+    #[rstest]
+    #[case::ascii("hello world")]
+    #[case::astral_emoji("smile \u{1F642} and \u{6F22}\u{5B57}")]
+    fn strict_encoders_agree_with_encode_for_valid_utf8(
+        cl100k_tokenizer: Tokenizer,
+        #[case] valid: &str,
+    ) {
         Python::initialize();
         Python::attach(|py| {
-            let tokenizer = cl100k_tokenizer();
-            let text = PyString::new(py, "hello world");
+            let tokenizer = cl100k_tokenizer;
+            let text = PyString::new(py, valid);
             let encoded = tokenizer.encode(py, &text).unwrap();
 
             assert_eq!(

@@ -2,6 +2,7 @@ import copy
 import pickle
 import sys
 from pathlib import Path
+from collections.abc import Callable
 from typing import Final, Literal
 
 import numpy
@@ -14,6 +15,14 @@ from litellm.caching._embedding_router import truncate_embedding_input
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 from litellm.utils import claude_json_str
 from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
+
+
+def _raised(call: Callable[[], object]) -> type[BaseException] | None:
+    try:
+        call()
+    except Exception as error:
+        return type(error)
+    return None
 
 
 ENCODINGS: Final = ("cl100k_base", "o200k_base", "p50k_base", "p50k_edit", "o200k_harmony")
@@ -223,7 +232,7 @@ def test_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name: str) -> N
         ("a\ud800<|endoftext|>", frozenset(), ()),
     ),
 )
-def test_openai_encoding_strict_encoders_reject_lone_surrogates_like_tiktoken(
+def test_openai_encoding_strict_encoders_raise_like_tiktoken_on_lone_surrogates(
     name: str,
     text: str,
     allowed_special: frozenset[str] | Literal["all"],
@@ -232,31 +241,35 @@ def test_openai_encoding_strict_encoders_reject_lone_surrogates_like_tiktoken(
     reference: Final = tiktoken.get_encoding(name)
     encoding: Final = OpenAIEncoding.from_tiktoken(name)
 
-    with pytest.raises(UnicodeEncodeError):
-        reference.encode_with_unstable(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
-    with pytest.raises(UnicodeEncodeError):
-        encoding.encode_with_unstable(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
-    with pytest.raises(UnicodeEncodeError):
-        reference.encode_to_numpy(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
-    with pytest.raises(UnicodeEncodeError):
-        encoding.encode_to_numpy(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    assert _raised(
+        lambda: encoding.encode_with_unstable(
+            text, allowed_special=allowed_special, disallowed_special=disallowed_special
+        )
+    ) is _raised(
+        lambda: reference.encode_with_unstable(
+            text, allowed_special=allowed_special, disallowed_special=disallowed_special
+        )
+    )
+    assert _raised(
+        lambda: encoding.encode_to_numpy(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    ) is _raised(
+        lambda: reference.encode_to_numpy(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    )
     assert encoding.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special) == (
         reference.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
     )
 
 
-def test_openai_encoding_strict_encoders_check_disallowed_special_before_surrogates() -> None:
+def test_openai_encoding_strict_encoders_check_disallowed_special_before_surrogates_like_tiktoken() -> None:
     reference: Final = tiktoken.get_encoding("cl100k_base")
     encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
 
-    with pytest.raises(ValueError, match="disallowed special token"):
-        reference.encode_with_unstable("<|endoftext|>\ud800")
-    with pytest.raises(ValueError, match="disallowed special token"):
-        encoding.encode_with_unstable("<|endoftext|>\ud800")
-    with pytest.raises(ValueError, match="disallowed special token"):
-        reference.encode_to_numpy("<|endoftext|>\ud800")
-    with pytest.raises(ValueError, match="disallowed special token"):
-        encoding.encode_to_numpy("<|endoftext|>\ud800")
+    assert _raised(lambda: encoding.encode_with_unstable("<|endoftext|>\ud800")) is _raised(
+        lambda: reference.encode_with_unstable("<|endoftext|>\ud800")
+    )
+    assert _raised(lambda: encoding.encode_to_numpy("<|endoftext|>\ud800")) is _raised(
+        lambda: reference.encode_to_numpy("<|endoftext|>\ud800")
+    )
 
 
 @pytest.mark.parametrize(
@@ -269,6 +282,24 @@ def test_openai_encoding_is_special_token_handles_ints_outside_u32_like_tiktoken
 
     assert encoding.is_special_token(token) is reference.is_special_token(token)
     assert encoding.is_special_token(reference.eot_token) is True
+
+
+class _IndexRaisingOverflow:
+    def __index__(self) -> int:
+        raise OverflowError("from the caller's own __index__")
+
+
+@pytest.mark.parametrize(
+    ("token", "raised"),
+    (("1", TypeError), (1.5, TypeError), (None, TypeError), (_IndexRaisingOverflow(), OverflowError)),
+)
+def test_openai_encoding_is_special_token_raises_for_ids_that_are_not_integers(
+    token: object, raised: type[Exception]
+) -> None:
+    encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
+
+    with pytest.raises(raised):
+        encoding.is_special_token(token)  # pyright: ignore[reportArgumentType]  # the test passes non-integer ids on purpose
 
 
 def test_huggingface_tokenizer_exposes_the_tokenizers_vocabulary_surface() -> None:
@@ -443,9 +474,7 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
         assert result["type"] == "openai_tokenizer"
         assert result["tokenizer"].encode("hello")
         message = next(
-            record.getMessage()
-            for record in caplog.records
-            if "token counts may be approximate" in record.getMessage()
+            record.getMessage() for record in caplog.records if "token counts may be approximate" in record.getMessage()
         )
         assert "llama-2" in message
         assert "download failed" in message
@@ -468,9 +497,7 @@ def test_native_added_token_decoder_preserves_fields_without_python_dependency(m
         monkeypatch.setitem(sys.modules, "tokenizers", None)
     actual = native.get_added_tokens_decoder()
     attributes = ("content", "single_word", "lstrip", "rstrip", "normalized", "special")
-    assert {
-        token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in actual.items()
-    } == {
+    assert {token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in actual.items()} == {
         token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in expected.items()
     }
     assert {token_id: str(token) for token_id, token in actual.items()} == {
@@ -506,7 +533,9 @@ def test_openai_encoding_is_special_token_accepts_numpy_ids_from_encode_to_numpy
 
     assert ids.tolist() == reference.encode_to_numpy("hello<|endoftext|>", allowed_special="all").tolist()
     assert ids.tolist()[-1] == encoding.eot_token
-    assert [encoding.is_special_token(token) for token in ids] == [token == encoding.eot_token for token in ids.tolist()]
+    assert [encoding.is_special_token(token) for token in ids] == [
+        token == encoding.eot_token for token in ids.tolist()
+    ]
     assert encoding.is_special_token(numpy.int64(encoding.eot_token)) is True
     assert encoding.is_special_token(numpy.int64(-1)) is False
     assert encoding.is_special_token(numpy.uint64(2**32)) is False
