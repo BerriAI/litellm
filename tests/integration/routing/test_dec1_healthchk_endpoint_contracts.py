@@ -116,7 +116,9 @@ def test_an_unhealthy_entry_carries_the_provider_error_text(rig: Rig) -> None:
 
 
 @pytest.mark.parametrize(
-    ("group", "deployment_id", "status"), [(MIXED_GROUP, f"hc-{MIXED_BAD}", 500), (AUTH_GROUP, f"hc-{AUTH_BAD}", 401)]
+    ("group", "deployment_id", "status"),
+    [(MIXED_GROUP, f"hc-{MIXED_BAD}", 500), (AUTH_GROUP, f"hc-{AUTH_BAD}", 401)],
+    ids=["mixed-500", "auth-401"],
 )
 def test_an_unhealthy_entry_carries_the_provider_status_as_exception_status(
     rig: Rig, group: str, deployment_id: str, status: int

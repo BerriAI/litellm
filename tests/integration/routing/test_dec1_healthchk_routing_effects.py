@@ -178,7 +178,7 @@ def test_with_ignore_transient_errors_a_probe_timeout_keeps_the_deployment_in_ro
     ) == {f"served {T408}"}
 
 
-@pytest.mark.parametrize(("label", "failing"), [("t401", T401), ("t500", T500)])
+@pytest.mark.parametrize(("label", "failing"), [("t401", T401), ("t500", T500)], ids=["t401", "t500"])
 def test_with_ignore_transient_errors_a_probe_401_or_500_still_removes_the_deployment(
     transient: Rig, label: str, failing: str
 ) -> None:

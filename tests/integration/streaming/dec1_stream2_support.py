@@ -247,8 +247,8 @@ NATIVE_MESSAGES_PROVIDERS: Final = (ANTHROPIC, AZURE_FOUNDRY_CLAUDE, BEDROCK_INV
 """Providers whose `/v1/messages` stream is served on Rust only since #51119, #51721 and #51330."""
 
 
-def provider_ids(providers: Sequence[Provider]) -> list[str]:
-    return [provider.name for provider in providers]
+def provider_ids(provider: Provider) -> str:
+    return provider.name
 
 
 @contextmanager
