@@ -5059,15 +5059,20 @@ class TestMCPRegistryEndpoint:
         assert custom_entry["remotes"][0]["url"].endswith("/zapier/mcp")
 
     @pytest.mark.parametrize(
-        ("mcp_info", "expected_description"),
+        ("server_name", "mcp_info", "expected_title", "expected_description"),
         [
-            ({"server_name": "figma_mcp", "description": "Figma MCP server"}, "Figma MCP server"),
-            ({"server_name": "figma_mcp", "description": ""}, "fim"),
-            (None, "fim"),
+            ("figma_mcp", {"description": "Figma MCP server"}, "figma_mcp", "Figma MCP server"),
+            ("figma_mcp", {"description": ""}, "figma_mcp", "fim"),
+            ("figma_mcp", None, "figma_mcp", "fim"),
+            (None, {"description": "Figma MCP server"}, "fim", "Figma MCP server"),
         ],
     )
     def test_registry_entry_uses_saved_description_and_server_name(
-        self, mcp_info: dict[str, str] | None, expected_description: str
+        self,
+        server_name: str | None,
+        mcp_info: dict[str, str] | None,
+        expected_title: str,
+        expected_description: str,
     ) -> None:
         from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
@@ -5076,7 +5081,7 @@ class TestMCPRegistryEndpoint:
             server_id="server-fim",
             name="fim",
             alias="fim",
-            server_name="figma_mcp",
+            server_name=server_name,
             url="https://figma.example.com/mcp",
             transport=MCPTransport.http,
             available_on_public_internet=True,
@@ -5094,7 +5099,7 @@ class TestMCPRegistryEndpoint:
         assert response.status_code == 200, response.text
         entry: Final = response.json()["servers"][1]["server"]
         assert entry["description"] == expected_description
-        assert entry["title"] == "figma_mcp"
+        assert entry["title"] == expected_title
         assert entry["name"] == "fim"
         assert entry["remotes"][0]["url"].endswith("/fim/mcp")
 
