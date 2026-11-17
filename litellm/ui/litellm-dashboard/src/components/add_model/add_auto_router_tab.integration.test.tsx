@@ -4,6 +4,7 @@ import {
   openAutoRouterAdvanced,
   selectAutoRouterOption,
   selectAutoRouterApproach,
+  withSettledRouterAvailability,
 } from "../../../tests/autoRouterSetup";
 import {
   renderWithProviders,
@@ -1393,17 +1394,21 @@ describe("AddAutoRouterTab", () => {
     });
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Edit tiers" }));
-    fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
+    await withSettledRouterAvailability(() => {
+      fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
+    });
     expect(screen.queryByRole("textbox", { name: "Max conversation tokens before judge" })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
     expect(screen.getByRole("textbox", { name: "Max conversation tokens before judge" })).toHaveAttribute(
       "aria-invalid",
       "true",
     );
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    await withSettledRouterAvailability(() => {
+      fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
+    });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
     const config = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
