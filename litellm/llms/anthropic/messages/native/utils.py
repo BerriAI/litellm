@@ -258,6 +258,14 @@ def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, obje
     )
 
 
+def cleaned_native_messages(
+    messages: Sequence[object], drop_params: object, *, model: str, custom_llm_provider: str | None
+) -> list[dict[str, object]]:  # mutable-ok: maybe_inject_cache_control takes these messages as list[dict]
+    cleaned: Final = list(drop_non_string_texts(normalize_native_messages(messages), drop_params))
+    reject_emptied_messages(messages, cleaned, model, custom_llm_provider)
+    return cleaned
+
+
 def prepare_native_messages(
     messages: list[dict[str, JsonValue]],
     system: str | list[dict[str, JsonValue]] | None,
@@ -272,9 +280,10 @@ def prepare_native_messages(
     normalized: Final = (
         messages
         if presanitized
-        else list(drop_non_string_texts(normalize_native_messages(messages), kwargs.get("drop_params")))
+        else cleaned_native_messages(
+            messages, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
+        )
     )
-    reject_emptied_messages(messages, normalized, model, custom_llm_provider)
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(

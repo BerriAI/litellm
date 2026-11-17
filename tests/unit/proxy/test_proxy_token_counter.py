@@ -1727,7 +1727,7 @@ async def _messages_sent_to_anthropic_count(
             return_value=httpx.Response(200, json={"input_tokens": 7})
         )
         response: Final = await anthropic_count_tokens(
-            _json_request({"model": "claude-count", **body}, "python-httpx/0.28.1"), UserAPIKeyAuth()
+            _json_request({"model": "claude-count", **body}, "python-httpx/0.28.1"), Response(), UserAPIKeyAuth()
         )
 
     assert response["input_tokens"] == 7
@@ -1860,6 +1860,7 @@ async def test_anthropic_count_tokens_answers_the_inference_400_when_text_cleanu
         )
         response: Final = await anthropic_count_tokens(
             _json_request({"model": "emptied-count", "messages": messages, **request_params}, "python-httpx/0.28.1"),
+            Response(),
             UserAPIKeyAuth(),
         )
 
@@ -4820,15 +4821,19 @@ async def test_messages_count_tokens_sends_the_edited_messages_to_a_bridged_prov
 
 
 @pytest.mark.asyncio
-async def test_messages_count_tokens_sends_a_body_with_only_empty_text_to_the_bridged_provider_count_api(
+async def test_messages_count_tokens_answers_the_inference_400_for_only_empty_text_on_a_bridged_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     empty_turn: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"type": "text", "text": ""}]}
 
     response, sent_bodies = await _count_on_a_bridged_provider_count_api({"messages": [empty_turn]}, monkeypatch)
 
-    assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
-    assert len(sent_bodies) == 1
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"]["message"] == (
+        "messages: no message has content left after dropping empty or non-string text blocks"
+    )
+    assert sent_bodies == ()
 
 
 _BEDROCK_CLAUDE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-5-5"

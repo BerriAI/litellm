@@ -44,6 +44,9 @@ const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
 /// Python's provider config raises the refusal as litellm's `BadRequestError`.
 const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
+/// Python refuses the request before it resolves the provider, so its error names the model and
+/// provider the caller sent.
+const MESSAGES_UNRESOLVED_REJECTION: &str = "messages_unresolved_rejection";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
 /// when only running Python's signing again gives its exception.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
@@ -234,6 +237,12 @@ pub(crate) fn route_failure(
                 Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::EmptiedMessages)
+            ) {
+                value.setattr(MESSAGES_UNRESOLVED_REJECTION, true)?;
             }
             if let Some(provider) = provider_rejection(rejection) {
                 value.setattr(MESSAGES_PROVIDER_REJECTION, provider.text)?;
@@ -496,6 +505,37 @@ mod tests {
                 .is_some_and(|value| value.extract::<bool>().unwrap());
             assert_eq!(text.as_deref().map(|text| (text, bad_request)), expected);
             assert!(text.is_some() || !bad_request);
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::emptied_messages(litellm_llms::ErrorDetail::EmptiedMessages, true)]
+    #[case::other_request_error(
+        litellm_llms::ErrorDetail::Expected {
+            subject: "messages",
+            expected: "non-empty",
+        },
+        false
+    )]
+    fn only_a_rejection_python_raises_before_resolving_the_provider_is_unresolved(
+        #[case] detail: litellm_llms::ErrorDetail,
+        #[case] unresolved: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(
+                py,
+                Error::invalid_request(detail),
+                RequestMarker::Messages,
+                Ok,
+            )
+            .unwrap();
+            let marked = native
+                .value(py)
+                .getattr_opt(MESSAGES_UNRESOLVED_REJECTION)
+                .unwrap()
+                .is_some_and(|value| value.extract::<bool>().unwrap());
+            assert_eq!(marked, unresolved);
         });
     }
 

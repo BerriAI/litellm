@@ -146,6 +146,8 @@ pub enum ErrorDetail {
     },
     #[error("{route} requires at least one message")]
     NoMessages { route: &'static str },
+    #[error("messages: no message has content left after dropping empty or non-string text blocks")]
+    EmptiedMessages,
     #[error("{subject} must be {expected}")]
     Expected {
         subject: &'static str,

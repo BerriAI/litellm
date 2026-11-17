@@ -233,6 +233,29 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "llm_provider"),
+    ((None, ""), ("anthropic", "anthropic")),
+    ids=("provider-in-the-model", "provider-passed"),
+)
+def test_a_rejection_python_raises_before_resolving_the_provider_names_the_call_as_sent(
+    custom_llm_provider: str | None, llm_provider: str
+) -> None:
+    rejected: Final = ValueError("messages: no message has content left after dropping empty or non-string text blocks")
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_unresolved_rejection = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected,
+        {"model": "anthropic/claude-sonnet-5", "custom_llm_provider": custom_llm_provider, "messages": []},
+        "anthropic",
+    )
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert mapped.status_code == 400
+    assert (mapped.model, mapped.llm_provider) == ("anthropic/claude-sonnet-5", llm_provider)
+
+
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:
     hidden: Final = messages_host.stream_hidden_params(
         (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41"))

@@ -11,9 +11,9 @@ use crate::{
     Error,
     anthropic::common_utils::{
         flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
-        map_messages, sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_empty_raw_content_blocks, strip_provider_specific_fields,
-        strip_raw_provider_specific_fields,
+        map_messages, map_messages_rejecting_emptied, sanitize_raw_tool_use_ids,
+        sanitize_tool_use_ids, strip_empty_content_blocks, strip_empty_raw_content_blocks,
+        strip_provider_specific_fields, strip_raw_provider_specific_fields,
     },
     base_llm::messages::context::MessagesShapeOptions,
 };
@@ -29,11 +29,11 @@ pub fn shape_anthropic_messages_request(
             strip_raw_provider_specific_fields,
         )
     } else {
-        map_messages(
+        map_messages_rejecting_emptied(
             request.messages,
             sanitize_anthropic_messages,
             sanitize_raw_anthropic_message,
-        )
+        )?
     };
     Ok(MessagesRequest {
         messages,
@@ -351,6 +351,7 @@ mod tests {
         false,
         json!([
             {"role": "user", "content": "hi"},
+            {"role": "user", "content": [{"type": "text", "text": 5}]},
             {"role": "assistant", "content": [
                 {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}
             ]}
@@ -387,6 +388,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(serde_json::to_value(shaped).unwrap()["messages"], expected);
+    }
+
+    #[rstest]
+    #[case::blank_text(json!([{"type": "text", "text": "  "}]))]
+    #[case::missing_text(json!([{"type": "text"}]))]
+    fn shaping_that_leaves_no_message_is_a_request_error(#[case] blocks: Value) {
+        let shaped = shape_anthropic_messages_request(
+            request(json!({"model": "m", "messages": [
+                {"role": "user", "content": blocks},
+                {"role": "assistant", "content": [{"type": "text", "text": null}]}
+            ]})),
+            MessagesShapeOptions {
+                reasoning_auto_summary: false,
+                presanitized: false,
+            },
+        );
+        assert!(matches!(
+            shaped,
+            Err(Error::InvalidRequest(crate::ErrorDetail::EmptiedMessages))
+        ));
     }
 
     #[test]
