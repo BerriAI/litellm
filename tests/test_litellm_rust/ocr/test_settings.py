@@ -72,7 +72,8 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
     assert response.pages[0].markdown == "native OCR response"
     assert server.requests[0].headers["authorization"] == f"Bearer {expected_key}"
-    assert server.requests[0].body["pages"] == [0, 2]
+    assert pages == [0, 2]
+    assert server.requests[0].body["pages"] == [0]
 
 
 @pytest.mark.asyncio
