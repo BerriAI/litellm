@@ -629,3 +629,15 @@ async def test_without_router_debug_a_fallback_stream_failing_before_output_rais
     with pytest.raises(litellm.InternalServerError) as raised:
         await collect_event_types(await open_stream(core))
     assert raised.value.message == FALLBACK_BOOM
+
+
+@pytest.mark.parametrize("output", [TEXT_DELTA, "response.function_call_arguments.delta"])
+async def test_a_fallback_stream_cut_after_output_without_generated_text_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost, output: str
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", responses_stream(Event(CREATED), Event(output), error=cut(original=server_error())))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_event_types(await open_stream(core))
+    assert raised.value.message == FALLBACK_BOOM

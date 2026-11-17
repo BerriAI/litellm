@@ -5624,8 +5624,9 @@ class _Driver:
 
     def _hop_failure_explainer(self, step: Mapping[str, object]) -> "Callable[[BaseException], str | None] | None":
         level: Final = step.get("fallback_level")
+        on_fallback_hop: Final = self._base_level == 0 and isinstance(level, int) and level > 0
         primary: Final = self._level_errors.get(self._base_level)
-        if self._base_level != 0 or not isinstance(level, int) or level == 0 or primary is None:
+        if not on_fallback_hop or primary is None:
             return None
         model: Final = str(self._request.get("model"))
         primary_message: Final[object] = getattr(provider_error(primary), "message", None)

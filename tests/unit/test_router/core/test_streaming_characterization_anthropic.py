@@ -38,6 +38,7 @@ from tests.unit.test_router.core.streaming_helpers import (
     install_orjson_stub_if_missing,
     refusal_delta,
     request_logging,
+    sse,
     text_delta,
 )
 
@@ -628,3 +629,54 @@ async def test_without_router_debug_a_fallback_streams_error_frame_is_forwarded_
     core = make_core(model_list=GROUPS_AB, fallbacks=[{"a": ["b"]}], num_retries=0)
     frames = await collect_bytes(await open_stream(core))
     assert frames == [MESSAGE_START, FALLBACK_FRAME_DOWN]
+
+
+TOOL_USE_START: Final = sse(
+    "content_block_start",
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
+    },
+)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        (text_delta("B")[:3], text_delta("B")[3:]),
+        (text_delta("B")[:10], text_delta("B")[10:]),
+        (text_delta("B")[:20], text_delta("B")[20:]),
+        (TOOL_USE_START,),
+        (BLOCK_START,),
+    ],
+    ids=["text_delta_split_at_3", "text_delta_split_at_10", "text_delta_split_at_20", "tool_use_start", "text_start"],
+)
+async def test_a_fallback_stream_raising_after_any_frame_past_message_start_raises_its_own_error(
+    make_core: MakeCore, host: ScriptedHost, content: tuple[bytes, ...]
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, *content, error=server_error()))
+    core = with_router_debug(make_core, host)
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_bytes(await open_stream(core))
+    assert raised.value.message == "litellm.InternalServerError: boom"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        (text_delta("B")[:3], text_delta("B")[3:]),
+        (text_delta("B")[:20], text_delta("B")[20:]),
+        (TOOL_USE_START,),
+    ],
+    ids=["text_delta_split_at_3", "text_delta_split_at_20", "tool_use_start"],
+)
+async def test_a_fallback_streams_error_frame_after_any_frame_past_message_start_is_forwarded_verbatim(
+    make_core: MakeCore, host: ScriptedHost, content: tuple[bytes, ...]
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, *content, FALLBACK_FRAME_DOWN))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames == [MESSAGE_START, *content, FALLBACK_FRAME_DOWN]

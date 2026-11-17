@@ -1215,6 +1215,23 @@ def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: b
     return not has_generated_content and is_anthropic_ping_chunk(chunk)
 
 
+_ANTHROPIC_PREAMBLE_EVENT_LINES: Final = frozenset((b"event: message_start", b"event: ping"))
+
+
+def _is_anthropic_preamble_chunk(chunk: object) -> bool:
+    if isinstance(chunk, dict):
+        return chunk.get("type") in ("message_start", "ping")
+    if not isinstance(chunk, (bytes, bytearray)):
+        return False
+    event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
+    return (
+        bool(event_lines)
+        and all(line in _ANTHROPIC_PREAMBLE_EVENT_LINES for line in event_lines)
+        and chunk.startswith(b"event:")
+        and chunk.endswith((b"\n\n", b"\r\n\r\n"))
+    )
+
+
 def _is_retriable_anthropic_status(status_code: int) -> bool:
     return status_code == 429 or status_code >= 500
 
@@ -1337,7 +1354,6 @@ def wrap_anthropic_stream(
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         aclose_if_supported,
         aclose_superseded_attempt,
-        is_anthropic_content_delta_chunk,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
     )
@@ -1363,13 +1379,14 @@ def wrap_anthropic_stream(
             policy.get("can_retry") is True or policy.get("can_fall_back") is True
         )
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
-        content_seen = False  # rebind-ok: set at the first content delta
+        content_seen = False  # rebind-ok: set at the first chunk past message_start and pings
         try:
             async for chunk in _areported(attempt, source_iterator, usage.total_tokens, usage.observe):
                 if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                     yield chunk
                     continue
-                content_seen = content_seen or is_anthropic_content_delta_chunk(chunk)
+                before_content = not content_seen
+                content_seen = content_seen or not _is_anthropic_preamble_chunk(chunk)
                 if _stream_commits_now(chunk, has_generated_content, len(buffered)):
                     has_generated_content = True
                 # A transport can split one SSE data line across byte chunks, so pre-content detection
@@ -1420,7 +1437,7 @@ def wrap_anthropic_stream(
                 buffered = ()
                 yield (
                     _hop_error_frame(attempt, chunk, error_event, model, bridged_failure)
-                    if error_event is not None and not content_seen
+                    if error_event is not None and before_content
                     else chunk
                 )
             for buffered_chunk in buffered:
@@ -1530,16 +1547,14 @@ async def _anthropic_fallback_attempt(
     attempt: StreamAttempt, e: MidStreamFallbackError, wrapper: FallbackAwareAnthropicMessagesStream
 ) -> AsyncGenerator[bytes, None]:
     """Re-enters the fallback walk for a ``/v1/messages`` stream error and yields what the fallback produces."""
-    from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_content_delta_chunk
-
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )
-    content_seen = False  # rebind-ok: set at the fallback's first content delta
+    content_seen = False  # rebind-ok: set at the fallback's first chunk past message_start and pings
     try:
         fallback_response: Final = await attempt.fallback(trigger)
         async for fallback_item in _anthropic_yield_recovered(fallback_response, wrapper):
-            content_seen = content_seen or is_anthropic_content_delta_chunk(fallback_item)
+            content_seen = content_seen or not _is_anthropic_preamble_chunk(fallback_item)
             yield fallback_item
     except Exception as fallback_error:  # noqa: BLE001  # as the Python wrapper: logged, then the stream's error raises
         verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
@@ -1780,7 +1795,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 _raise_released_stream_error(attempt, e)
             async with contextlib.aclosing(
                 _responses_recover_stream_error(
-                    attempt, e, source_iterator, wrapper, wrapper.adopt_fallback_headers, held
+                    attempt, e, source_iterator, wrapper, wrapper.adopt_fallback_headers, held, output_started
                 )
             ) as recovered_stream:
                 async for recovered_item in recovered_stream:
@@ -1892,6 +1907,7 @@ async def _responses_recover_stream_error(
     wrapper: object,
     adopt_headers: Callable[[object], _Prepared],
     held: tuple[object, ...],
+    output_started: bool,
 ) -> AsyncGenerator[object, None]:
     """A Responses stream that broke before any output is retried in its own group, then falls back
     with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
@@ -1913,7 +1929,7 @@ async def _responses_recover_stream_error(
                 retried if isinstance(retried, Exception) else e, e.model or "", e.llm_provider
             )
     async with contextlib.aclosing(
-        _responses_fallback_attempt(attempt, last_error, source_iterator, adopt_headers, held)
+        _responses_fallback_attempt(attempt, last_error, source_iterator, adopt_headers, held, output_started)
     ) as fallback_stream:
         async for fallback_item in fallback_stream:
             yield fallback_item
@@ -1972,6 +1988,7 @@ async def _responses_fallback_attempt(
     source_iterator: "BaseResponsesAPIStreamingIterator",
     adopt_headers: Callable[[object], _Prepared],
     held: tuple[object, ...],
+    output_started: bool,
 ) -> AsyncGenerator[object, None]:
     """Re-enters the fallback walk for a mid-stream Responses error. The primary's held lifecycle events
     reach the client only when no fallback lands."""
@@ -2007,7 +2024,9 @@ async def _responses_fallback_attempt(
         if not fallback_yielded:
             for held_event in held:
                 yield held_event
-        _raise_stream_failure(attempt, fallback_error, before_content=continued is None and not fallback_yielded)
+        _raise_stream_failure(
+            attempt, fallback_error, before_content=not output_started and continued is None and not fallback_yielded
+        )
     finally:
         if fallback_response is not None and hasattr(fallback_response, "aclose"):
             with anyio.CancelScope(shield=True):

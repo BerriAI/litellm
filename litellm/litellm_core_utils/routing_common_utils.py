@@ -231,10 +231,12 @@ def truncate_fallback_error_detail(detail: str) -> str:
 
 
 ROUTER_OUTCOME_LEAD: Final = "\n\nLiteLLM: model group '"
+FALLBACK_ALSO_FAILED: Final = " also failed: "
 
 
-def carries_router_outcome(message: str) -> bool:
-    return ROUTER_OUTCOME_LEAD in message
+def carries_fallback_failure(message: str) -> bool:
+    _, lead, outcome = message.partition(ROUTER_OUTCOME_LEAD)
+    return bool(lead) and FALLBACK_ALSO_FAILED in outcome
 
 
 def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Sequence[Mapping[str, object]]) -> str:
@@ -289,7 +291,7 @@ def format_fallback_outcome_message(
     over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
     rate_limited_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in rate_limited_targets)
     attempted_failure: Final = (
-        (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
+        (f"Fallback to {attempted_text}{FALLBACK_ALSO_FAILED}{fallback_failure_detail}",)
         if fallback_failure_detail and attempted_targets
         else ()
     )

@@ -16,7 +16,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # the guards narrow hook v
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
-from litellm.litellm_core_utils.routing_common_utils import carries_router_outcome
+from litellm.litellm_core_utils.routing_common_utils import carries_fallback_failure
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse, ResponsesAPIStreamEvents
 
@@ -180,7 +180,7 @@ def _failure_details(original: Exception) -> _FailureDetails:
     if not isinstance(body, Mapping):
         return mapped
     upstream: Final = _FailureDetails.model_validate(body)
-    router_message: Final = mapped.message if mapped.message and carries_router_outcome(mapped.message) else None
+    router_message: Final = mapped.message if mapped.message and carries_fallback_failure(mapped.message) else None
     return _FailureDetails(
         message=router_message or upstream.message or mapped.message,
         code=upstream.code if upstream.code is not None else mapped.code,
