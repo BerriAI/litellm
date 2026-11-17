@@ -80,6 +80,19 @@ impl Error {
         }
     }
 
+    /// Why the transformation refused the provider's reply.
+    pub fn invalid_response(&self) -> Option<&ErrorDetail> {
+        match self {
+            Self::InvalidResponse(detail) => Some(detail),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::Declined(_)
+            | Self::Auth(_)
+            | Self::Http(_) => None,
+        }
+    }
+
     pub fn declined(&self) -> Option<&Decline> {
         match self {
             Self::Declined(decline) => Some(decline),
@@ -214,6 +227,9 @@ pub enum ErrorDetail {
         region: String,
         check: MantleRegionCheck,
     },
+    /// A Mantle reply whose `usage` is present but is not an object, which litellm cannot bill.
+    #[error("Bedrock Mantle returned a `usage` that is not a JSON object (got {actual})")]
+    NonObjectUsage { actual: &'static str },
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]
