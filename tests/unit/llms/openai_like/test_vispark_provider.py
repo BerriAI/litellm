@@ -203,3 +203,18 @@ def test_vispark_text_completion_uses_authenticated_client(monkeypatch: pytest.M
             response: Final = litellm.text_completion(model="vispark/vision-small", prompt="Hello", client=client)
     assert route.calls.last.request.headers["authorization"] == "Bearer vispark-client-key"
     assert response.choices[0].text == "Hello from Vispark"
+
+
+def test_vispark_chat_completion_uses_authenticated_client(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("VISPARK_LAB_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="vispark-client-key", base_url="https://api.lab.vispark.in/v1") as client:
+        with respx.mock() as upstream:
+            route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+            response: Final = litellm.completion(
+                model="vispark/vision-medium", messages=[{"role": "user", "content": "Hello"}], client=client
+            )
+    assert route.calls.last.request.headers["authorization"] == "Bearer vispark-client-key"
+    assert response.choices[0].message.content == "Hello from Vispark"

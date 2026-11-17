@@ -2825,7 +2825,9 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    _validate_vispark_api_key(custom_llm_provider, api_key, model)
+    _validate_vispark_api_key(
+        custom_llm_provider, api_key, model, has_client=isinstance(client, (openai.OpenAI, openai.AsyncOpenAI))
+    )
 
     if custom_llm_provider == "bigmodel" and not api_key:
         raise litellm.AuthenticationError(
