@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -42,6 +43,10 @@ from litellm.types.utils import (
         ),
         (([{"thinking": "", "content": "unused"}, {"content": "", "text": "unused"}],), ""),
         (
+            ([SimpleNamespace(thinking="object "), SimpleNamespace(signature="sig", text="blocks")],),
+            "object blocks",
+        ),
+        (
             ("before ", [{"thinking": "a"}, {"content": "b"}], None, [{"text": "c"}], " after"),
             "before abc after",
         ),
@@ -67,6 +72,7 @@ from litellm.types.utils import (
         "text-fields",
         "field-priority",
         "empty-string-priority",
+        "object-blocks",
         "mixed-chunks",
         "non-text-blocks",
     ],
