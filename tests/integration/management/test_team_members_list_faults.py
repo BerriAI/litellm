@@ -31,6 +31,7 @@ BURST: Final = 24
 SEEDED_MEMBERS: Final = 250
 PAGE_SIZE: Final = 100
 OUTAGE_READS: Final = 24
+AFTER_KILL_WAIT_SECONDS: Final = 30
 REMOVE_FROM_ENVIRONMENT: Final = ("DATABASE_URL_READ_REPLICA",)
 
 SEED_ROSTER_SQL: Final = """
@@ -189,6 +190,7 @@ def test_pages_stay_correct_while_one_of_two_workers_is_killed_mid_burst(
     write_rows(SEED_ROSTER_SQL, (prefix, str(SEEDED_MEMBERS), team_id))
     stop: Final = threading.Event()
     killed: Final = threading.Event()
+    served_after_kill: Final = threading.Semaphore(0)
 
     with (
         owned_proxy_process(
@@ -205,9 +207,7 @@ def test_pages_stay_correct_while_one_of_two_workers_is_killed_mid_burst(
         def read_pages(reader: int) -> tuple[tuple[bool, int, str], ...]:
             page: Final = reader % 3 + 1
             outcomes: list[tuple[bool, int, str]] = []  # mutable-ok: appended by one reader thread until told to stop
-            while not stop.is_set() or (
-                killed.is_set() and not any(after and status == 200 for after, status, _ in outcomes)
-            ):
+            while not stop.is_set():
                 after_kill = killed.is_set()
                 try:
                     with httpx.Client(base_url=base_url, timeout=15, trust_env=False) as fresh:
@@ -221,6 +221,8 @@ def test_pages_stay_correct_while_one_of_two_workers_is_killed_mid_burst(
                     continue
                 correct = response.status_code == 200 and _user_ids(response) == _seeded_page(prefix, page)
                 outcomes.append((after_kill, response.status_code, "" if correct else response.text[:300]))
+                if after_kill and response.status_code == 200:
+                    served_after_kill.release()
             return tuple(outcomes)
 
         before: Final = owned.worker_pids()
@@ -231,6 +233,7 @@ def test_pages_stay_correct_while_one_of_two_workers_is_killed_mid_burst(
                 kill()
                 killed.set()
             survivors: Final = owned.worker_pids()
+            all(served_after_kill.acquire(timeout=AFTER_KILL_WAIT_SECONDS) for _ in range(BURST))
         finally:
             stop.set()
         outcomes: Final = tuple(outcome for reader in readers for outcome in reader.result(timeout=60))
