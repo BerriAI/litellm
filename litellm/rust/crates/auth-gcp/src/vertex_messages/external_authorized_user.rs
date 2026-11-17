@@ -7,19 +7,32 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_python_compat::{json::from_json, repr::to_str, truthy::json_truthy};
-use serde_json::{Map, Value};
+use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
 use super::{
     builders::token_failure,
-    credentials::{Credentials, Expiry, Loaded, Minted, REFRESH_THRESHOLD, RefreshFuture},
-    failure::{GoogleLoginFailure, PythonException, python_str},
-    service_account::{invalid_lifetime, not_an_object},
+    credentials::{
+        Credentials, Expiry, Lifetime, Loaded, Minted, REFRESH_THRESHOLD, RefreshFuture,
+        TokenRefusal, TokenReply,
+    },
+    failure::{GoogleLoginFailure, PythonException},
+    service_account::invalid_lifetime,
     transport::Requests,
 };
 
 const CANNOT_REFRESH: &str = "The credentials do not contain the necessary fields need to refresh the access token. You must specify refresh_token, token_url, client_id, and client_secret.";
+
+/// A workforce identity user's file, as `Credentials.from_info` reads it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ExternalAuthorizedUserInfo {
+    pub(crate) token: Option<String>,
+    pub(crate) expiry: Option<String>,
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) token_url: Option<String>,
+    pub(crate) client_id: Option<String>,
+    pub(crate) client_secret: Option<String>,
+}
 
 /// The token a file holds, known only by when it stops being valid.
 struct Token {
@@ -34,6 +47,7 @@ impl Token {
     }
 }
 
+/// What a refresh needs: the refresh token, the STS endpoint and the client it authenticates as.
 struct Refresh {
     refresh_token: String,
     token_url: String,
@@ -50,12 +64,6 @@ struct ExternalAuthorizedUser {
     requests: Requests,
 }
 
-/// A field google-auth only uses when it is truthy, as the text it sends for it.
-fn truthy_text(info: &Map<String, Value>, field: &str) -> Option<String> {
-    let value = info.get(field);
-    json_truthy(value).then(|| to_str(&from_json(value.cloned().unwrap_or_default())))
-}
-
 /// `datetime.strptime(expiry.rstrip("Z").split(".")[0], "%Y-%m-%dT%H:%M:%S")`, a naive UTC time.
 fn expiry(text: &str) -> Option<OffsetDateTime> {
     let seconds = text.trim_end_matches('Z').split('.').next()?;
@@ -70,7 +78,7 @@ fn expiry(text: &str) -> Option<OffsetDateTime> {
 /// `Credentials.from_info`, refused as `_get_external_account_authorized_user_credentials`
 /// refuses any `ValueError` it raises.
 pub(crate) fn external_account_authorized_user(
-    info: &Map<String, Value>,
+    info: &ExternalAuthorizedUserInfo,
     file: &str,
 ) -> Result<Loaded, GoogleLoginFailure> {
     let unloadable = || {
@@ -79,19 +87,17 @@ pub(crate) fn external_account_authorized_user(
             format!("Failed to load external account authorized user credentials from {file}"),
         )
     };
-    let expiry = match info.get("expiry") {
-        Some(Value::String(text)) if !text.is_empty() => Some(expiry(text).ok_or_else(unloadable)?),
+    let expiry = match info.expiry.as_deref() {
+        Some(text) if !text.is_empty() => Some(expiry(text).ok_or_else(unloadable)?),
         _ => None,
     };
-    let file_token = info
-        .get("token")
-        .filter(|token| !token.is_null())
-        .map(|_| Token { expiry });
+    let file_token = info.token.as_ref().map(|_| Token { expiry });
+    let given = |field: &Option<String>| field.clone().filter(|text| !text.is_empty());
     let refresh = match (
-        truthy_text(info, "refresh_token"),
-        truthy_text(info, "token_url"),
-        truthy_text(info, "client_id"),
-        truthy_text(info, "client_secret"),
+        given(&info.refresh_token),
+        given(&info.token_url),
+        given(&info.client_id),
+        given(&info.client_secret),
     ) {
         (Some(refresh_token), Some(token_url), Some(client_id), Some(client_secret)) => {
             Some(Refresh {
@@ -115,22 +121,19 @@ pub(crate) fn external_account_authorized_user(
 
 /// `utils.handle_error_response`'s `OAuthError(details, body)`.
 pub(crate) fn oauth_error(body: &str) -> GoogleLoginFailure {
-    let details = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|error| {
-            let code = error.get("error")?;
-            Some(format!(
-                "Error code {}{}{}",
-                python_str(Some(code)),
-                error
-                    .get("error_description")
-                    .map_or_else(String::new, |text| format!(": {}", python_str(Some(text)))),
-                error
-                    .get("error_uri")
-                    .map_or_else(String::new, |text| format!(" - {}", python_str(Some(text)))),
-            ))
-        })
-        .unwrap_or_else(|| body.to_owned());
+    let details = match TokenRefusal::parse(body) {
+        Some(TokenRefusal {
+            error: Some(code),
+            error_description,
+            error_uri,
+            ..
+        }) => format!(
+            "Error code {code}{}{}",
+            error_description.map_or_else(String::new, |text| format!(": {text}")),
+            error_uri.map_or_else(String::new, |text| format!(" - {text}")),
+        ),
+        _ => body.to_owned(),
+    };
     GoogleLoginFailure::new(PythonException::OAuth, details)
 }
 
@@ -162,18 +165,15 @@ impl ExternalAuthorizedUser {
         if status != reqwest::StatusCode::OK {
             return Err(oauth_error(&body));
         }
-        let Ok(granted) = serde_json::from_str::<Map<String, Value>>(&body) else {
-            return Err(not_an_object());
+        let reply = TokenReply::parse(&body)?;
+        let Some(Lifetime::Seconds(lifetime)) = reply.expires_in else {
+            return Err(invalid_lifetime());
         };
-        let lifetime = granted
-            .get("expires_in")
-            .and_then(Value::as_f64)
-            .ok_or_else(invalid_lifetime)?;
-        if let Some(rotated) = granted.get("refresh_token") {
-            *self.lock() = Some(python_str(Some(rotated)));
+        if let Some(rotated) = &reply.refresh_token {
+            *self.lock() = Some(rotated.clone());
         }
         Ok(Minted::from_reply(
-            granted.get("access_token"),
+            reply.access_token.flatten(),
             Expiry::At(OffsetDateTime::now_utc() + Duration::from_secs_f64(lifetime.max(0.0))),
         ))
     }
@@ -203,7 +203,7 @@ mod tests {
 
     use axum::{Router, http::HeaderMap, routing::post};
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -239,17 +239,11 @@ mod tests {
         (url, seen, server)
     }
 
-    fn user(fields: Value) -> Map<String, Value> {
-        json!({"type": "external_account_authorized_user", "audience": "//iam.googleapis.com/locations/global/workforcePools/p/providers/q"})
-            .as_object()
-            .unwrap()
-            .clone()
-            .into_iter()
-            .chain(fields.as_object().unwrap().clone())
-            .collect()
+    fn user(fields: Value) -> ExternalAuthorizedUserInfo {
+        serde_json::from_value(fields).unwrap()
     }
 
-    fn refreshable(url: &str) -> Map<String, Value> {
+    fn refreshable(url: &str) -> ExternalAuthorizedUserInfo {
         user(json!({
             "refresh_token": "refresh-1", "token_url": url,
             "client_id": "client", "client_secret": "secret", "token": "file-token",
@@ -276,7 +270,10 @@ mod tests {
         let second = source.refresh().await.unwrap();
 
         assert_eq!(
-            (first.value.expose(), second.value.expose()),
+            (
+                first.token.unwrap().expose(),
+                second.token.unwrap().expose()
+            ),
             ("sts-1", "sts-2")
         );
         let Expiry::At(expiry) = second.expiry else {

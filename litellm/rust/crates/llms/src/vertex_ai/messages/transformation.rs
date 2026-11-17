@@ -175,7 +175,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         let output_config = fold_output_format(
             &request.model,
             request.params.output_config,
-            request.params.output_format,
+            request.params.output_format.map(OutputFormat::from),
         )?;
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
@@ -349,27 +349,47 @@ fn with_exact_header(headers: Headers, name: &str, value: &str) -> Headers {
 fn fold_output_format(
     model: &str,
     output_config: Option<Recognized<OutputConfig>>,
-    output_format: Option<Value>,
+    output_format: Option<OutputFormat>,
 ) -> Result<Option<Recognized<OutputConfig>>, Error> {
-    let Some(output_format) = output_format else {
-        return Ok(output_config);
+    let output_format = match output_format {
+        None => return Ok(output_config),
+        Some(OutputFormat::Object(format)) => format,
+        Some(OutputFormat::Other { python_type }) => {
+            return Err(Error::InvalidRequest(
+                crate::ErrorDetail::NonObjectVertexOutputFormat {
+                    model: model.into(),
+                    actual: python_type,
+                },
+            ));
+        }
     };
-    if !output_format.is_object() {
-        return Err(Error::InvalidRequest(
-            crate::ErrorDetail::NonObjectVertexOutputFormat {
-                model: model.into(),
-                actual: python_type_name(&output_format),
-            },
-        ));
-    }
     let config = match output_config {
         Some(Recognized::Known(config)) => config,
         Some(Recognized::Unrecognized(_)) | None => OutputConfig::default(),
     };
     Ok(Some(Recognized::Known(OutputConfig {
-        format: Some(output_format),
+        format: Some(Value::Object(output_format)),
         ..config
     })))
+}
+
+/// A caller's `output_format`: an object Vertex folds into `output_config.format`, or a value of
+/// another type, which Vertex refuses by its Python type name.
+#[derive(Clone, Debug, PartialEq)]
+enum OutputFormat {
+    Object(serde_json::Map<String, Value>),
+    Other { python_type: &'static str },
+}
+
+impl From<Value> for OutputFormat {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Object(format) => Self::Object(format),
+            other => Self::Other {
+                python_type: python_type_name(&other),
+            },
+        }
+    }
 }
 
 fn has_web_search_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {

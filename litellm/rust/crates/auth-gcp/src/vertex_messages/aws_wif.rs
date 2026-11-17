@@ -1,32 +1,76 @@
+//! LiteLLM's explicit AWS login and google-auth's metadata AWS login for an external account:
+//! a GetCallerIdentity request signed with AWS credentials, serialized as the subject token STS
+//! exchanges for a Google token.
+
 use std::time::SystemTime;
 
 use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 use litellm_auth_aws::{AwsAuthConfig, AwsAuthService, SigningScope, sign_headers};
-use litellm_python_compat::truthy::json_truthy;
 use litellm_secret_value::SecretValue;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
-use serde_json::{Map, Value, json};
+use serde::Deserialize;
+use serde_json::json;
 
 use super::{
     builders::token_failure,
     credentials::Loaded,
-    external_account::{ExternalAccount, OsEnvironment, Settings, SubjectFuture, SubjectToken},
-    failure::{GoogleLoginFailure, PythonException, python_str},
+    external_account::{
+        ExternalAccount, ExternalAccountInfo, OsEnvironment, Settings, SubjectFuture, SubjectToken,
+    },
+    failure::{GoogleLoginFailure, PythonException},
+    source::present,
     transport::Requests,
 };
 
-const AWS_CREDENTIAL_KEYS: [&str; 10] = [
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-];
+/// LiteLLM's own `aws_*` keys in an external account file. Each is `Some(None)` when null, which
+/// still chooses the explicit AWS login.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub(crate) struct ExplicitAwsKeys {
+    #[serde(default, deserialize_with = "present")]
+    aws_access_key_id: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_secret_access_key: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_session_token: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_region_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_session_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_profile_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_role_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_web_identity_token: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_sts_endpoint: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    aws_external_id: Option<Option<String>>,
+}
+
+impl ExplicitAwsKeys {
+    fn any_given(&self) -> bool {
+        [
+            &self.aws_access_key_id,
+            &self.aws_secret_access_key,
+            &self.aws_session_token,
+            &self.aws_region_name,
+            &self.aws_session_name,
+            &self.aws_profile_name,
+            &self.aws_role_name,
+            &self.aws_web_identity_token,
+            &self.aws_sts_endpoint,
+            &self.aws_external_id,
+        ]
+        .into_iter()
+        .any(Option::is_some)
+    }
+}
+
+/// A key's text when it is set and not empty.
+fn text(field: &Option<Option<String>>) -> Option<String> {
+    field.clone().flatten().filter(|value| !value.is_empty())
+}
 const MISSING_REGION: &str = "aws_region_name is required in the WIF credential JSON when using explicit AWS authentication. Add \"aws_region_name\": \"<your-region>\" to your credential file.";
 /// `aws._DEFAULT_AWS_REGIONAL_CREDENTIAL_VERIFICATION_URL`.
 const CALLER_IDENTITY_URL: &str =
@@ -44,49 +88,47 @@ const PYTHON_QUOTE_SAFE: &AsciiSet = &NON_ALPHANUMERIC
 /// Python's `_credentials_from_json` routes an `external_account` whose `environment_id` names
 /// AWS and that carries any of LiteLLM's `aws_*` keys, even a null one, to
 /// `VertexAIAwsWifAuth.credentials_from_explicit_aws`.
-pub(crate) fn uses_explicit_aws(info: &Map<String, Value>) -> bool {
-    let names_aws = info
-        .get("credential_source")
-        .and_then(|source| source.get("environment_id"))
-        .and_then(Value::as_str)
-        .is_some_and(|environment_id| environment_id.contains("aws"));
-    names_aws
-        && AWS_CREDENTIAL_KEYS
-            .iter()
-            .any(|key| info.contains_key(*key))
+pub(crate) fn uses_explicit_aws(info: &ExternalAccountInfo) -> bool {
+    names_aws(info) && info.aws.any_given()
 }
 
-fn text(info: &Map<String, Value>, field: &str) -> Option<String> {
-    info.get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+/// An external account whose `credential_source.environment_id` names AWS.
+pub(crate) fn names_aws(info: &ExternalAccountInfo) -> bool {
+    info.credential_source
+        .as_ref()
+        .and_then(|source| source.environment_id.as_deref())
+        .is_some_and(|environment_id| environment_id.contains("aws"))
 }
 
 /// Python's `VertexAIAwsWifAuth.credentials_from_explicit_aws`: the subject token is a
 /// GetCallerIdentity request signed with the AWS credentials LiteLLM's own `aws_*` keys
 /// resolve, never the EC2 metadata service.
 pub(crate) fn explicit_aws_credentials(
-    info: &Map<String, Value>,
+    info: &ExternalAccountInfo,
     os_env: OsEnvironment,
 ) -> Result<Loaded, GoogleLoginFailure> {
-    let region = text(info, "aws_region_name")
+    let keys = &info.aws;
+    let region = text(&keys.aws_region_name)
         .ok_or_else(|| GoogleLoginFailure::new(PythonException::Value, MISSING_REGION))?;
-    let secret = |field: &str| text(info, field).map(SecretValue::new);
+    let secret = |field: &Option<Option<String>>| text(field).map(SecretValue::new);
     let config = AwsAuthConfig {
-        access_key_id: secret("aws_access_key_id"),
-        secret_access_key: secret("aws_secret_access_key"),
-        session_token: secret("aws_session_token"),
+        access_key_id: secret(&keys.aws_access_key_id),
+        secret_access_key: secret(&keys.aws_secret_access_key),
+        session_token: secret(&keys.aws_session_token),
         region_name: Some(region.clone()),
-        session_name: text(info, "aws_session_name"),
-        profile_name: text(info, "aws_profile_name"),
-        role_name: text(info, "aws_role_name"),
-        web_identity_token: secret("aws_web_identity_token"),
-        sts_endpoint: text(info, "aws_sts_endpoint"),
-        external_id: secret("aws_external_id"),
+        session_name: text(&keys.aws_session_name),
+        profile_name: text(&keys.aws_profile_name),
+        role_name: text(&keys.aws_role_name),
+        web_identity_token: secret(&keys.aws_web_identity_token),
+        sts_endpoint: text(&keys.aws_sts_endpoint),
+        external_id: secret(&keys.aws_external_id),
         ..AwsAuthConfig::default()
     };
-    let audience = text(info, "audience").unwrap_or_default();
+    let audience = info
+        .audience
+        .clone()
+        .filter(|audience| !audience.is_empty())
+        .unwrap_or_default();
     let subject = SignedCallerIdentity {
         aws: AwsAuthService::default(),
         config,
@@ -100,6 +142,8 @@ pub(crate) fn explicit_aws_credentials(
     ))
 }
 
+/// The subject token of LiteLLM's explicit AWS login: a GetCallerIdentity request signed with
+/// the credentials LiteLLM's AWS login resolves from the file's `aws_*` keys.
 struct SignedCallerIdentity {
     aws: AwsAuthService,
     config: AwsAuthConfig,
@@ -263,25 +307,30 @@ impl MetadataCallerIdentity {
                 "Unable to retrieve AWS security credentials: {body}"
             )));
         }
-        let Ok(Value::Object(granted)) = serde_json::from_str::<Value>(&body) else {
+        let Ok(granted) = serde_json::from_str::<MetadataCredentials>(&body) else {
             return Err(refresh_error(
                 "Unable to retrieve AWS security credentials: the metadata service's reply is not a JSON object",
             ));
         };
-        let field = |name: &str| {
-            granted
-                .get(name)
-                .filter(|value| !value.is_null())
-                .map(|value| python_str(Some(value)))
-        };
         Ok(litellm_auth_aws::Credentials::new(
-            field("AccessKeyId").unwrap_or_default(),
-            field("SecretAccessKey").unwrap_or_default(),
-            field("Token"),
+            granted.access_key_id.unwrap_or_default(),
+            granted.secret_access_key.unwrap_or_default(),
+            granted.token,
             None,
             "google-auth",
         ))
     }
+}
+
+/// The keys the EC2 metadata service answers a role's security credentials with.
+#[derive(Deserialize)]
+struct MetadataCredentials {
+    #[serde(rename = "AccessKeyId")]
+    access_key_id: Option<String>,
+    #[serde(rename = "SecretAccessKey")]
+    secret_access_key: Option<String>,
+    #[serde(rename = "Token")]
+    token: Option<String>,
 }
 
 impl SubjectToken for MetadataCallerIdentity {
@@ -307,40 +356,21 @@ impl SubjectToken for MetadataCallerIdentity {
 
 /// google-auth's `aws.Credentials.from_info` for a metadata-sourced AWS account.
 pub(crate) fn metadata_aws_credentials(
-    info: &Map<String, Value>,
+    info: &ExternalAccountInfo,
     os_env: OsEnvironment,
 ) -> Result<Loaded, GoogleLoginFailure> {
     let settings = Settings::from_info(info)?;
-    let source = match info.get("credential_source") {
-        None | Some(Value::Null) => {
-            return Err(GoogleLoginFailure::new(
-                PythonException::InvalidValue,
-                "A valid credential source or AWS security credentials supplier must be provided.",
-            ));
-        }
-        Some(Value::Object(source)) => source,
-        Some(_) => {
-            return Err(GoogleLoginFailure::new(
-                PythonException::InvalidResource,
-                "No valid AWS 'credential_source' provided",
-            ));
-        }
+    let Some(source) = &info.credential_source else {
+        return Err(GoogleLoginFailure::new(
+            PythonException::InvalidValue,
+            "A valid credential source or AWS security credentials supplier must be provided.",
+        ));
     };
-    let field = |name: &str| {
-        source
-            .get(name)
-            .filter(|value| !value.is_null())
-            .map(|value| python_str(Some(value)))
-    };
-    let environment_id = source
-        .get("environment_id")
-        .filter(|value| json_truthy(Some(value)))
-        .map(|value| python_str(Some(value)))
-        .unwrap_or_default();
+    let environment_id = source.environment_id.clone().unwrap_or_default();
     let version = environment_id
         .strip_prefix("aws")
         .filter(|version| !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit()));
-    let verification_url = field("regional_cred_verification_url");
+    let verification_url = source.regional_cred_verification_url.clone();
     let (Some(version), Some(verification_url)) = (version, verification_url) else {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidResource,
@@ -354,9 +384,9 @@ pub(crate) fn metadata_aws_credentials(
         ));
     }
     let subject = MetadataCallerIdentity {
-        region_url: field("region_url"),
-        security_credentials_url: field("url"),
-        imdsv2_session_token_url: field("imdsv2_session_token_url"),
+        region_url: source.region_url.clone(),
+        security_credentials_url: source.url.clone(),
+        imdsv2_session_token_url: source.imdsv2_session_token_url.clone(),
         verification_url,
         audience: settings.audience.clone().unwrap_or_else(|| "None".into()),
         os_env,
@@ -403,7 +433,7 @@ fn caller_identity_subject_token(
             .and_then(|value| value.to_str().ok())
             .map(|value| json!({"key": if name == AUTHORIZATION { "Authorization" } else { name }, "value": value}))
     };
-    let headers: Vec<Value> = [
+    let headers: Vec<serde_json::Value> = [
         header(AUTHORIZATION.as_str()),
         Some(json!({"key": "host", "value": host})),
         header("x-amz-date"),
@@ -422,23 +452,26 @@ mod tests {
     use std::sync::Arc;
 
     use rstest::rstest;
+    use serde_json::Value;
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
 
-    fn aws_info(extra: Value) -> Map<String, Value> {
+    fn aws_info(extra: Value) -> ExternalAccountInfo {
         let base = json!({
             "type": "external_account",
             "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/aws",
             "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
             "credential_source": {"environment_id": "aws1"}
         });
-        base.as_object()
+        let info: serde_json::Map<String, Value> = base
+            .as_object()
             .unwrap()
             .clone()
             .into_iter()
             .chain(extra.as_object().unwrap().clone())
-            .collect()
+            .collect();
+        serde_json::from_value(Value::Object(info)).unwrap()
     }
 
     #[rstest]
@@ -446,12 +479,11 @@ mod tests {
     #[case::null_key(aws_info(json!({"aws_role_name": null})), true)]
     #[case::metadata_only(aws_info(json!({})), false)]
     #[case::not_aws(
-        json!({"type": "external_account", "aws_access_key_id": "key", "credential_source": {"file": "/t"}})
-            .as_object().unwrap().clone(),
+        serde_json::from_value(json!({"aws_access_key_id": "key", "credential_source": {"file": "/t"}})).unwrap(),
         false
     )]
     fn explicit_aws_is_chosen_as_python_chooses_it(
-        #[case] info: Map<String, Value>,
+        #[case] info: ExternalAccountInfo,
         #[case] expected: bool,
     ) {
         assert_eq!(uses_explicit_aws(&info), expected);
@@ -609,7 +641,8 @@ mod tests {
             crate::vertex_messages::credentials::Credentials::refresh(&account)
                 .await
                 .unwrap()
-                .value
+                .token
+                .unwrap()
                 .expose(),
             "aws-token"
         );
