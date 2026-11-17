@@ -124,13 +124,20 @@ def test_jwt_upserted_team_starts_with_default_team_models_and_other_teams_keep_
             assert (existing_status, [row["models"] for row in _team_rows(existing_team)]) == (200, [[unapproved]])
 
 
-def test_jwt_team_upsert_is_denied_when_the_default_organization_does_not_allow_the_default_models(
-    gateway: Gateway, tmp_path: Path
+@pytest.mark.parametrize(
+    ("organization_allows_default", "expected_status"),
+    [(False, 404), (True, 200)],
+    ids=["organization-excludes-default-model", "organization-allows-default-model"],
+)
+def test_jwt_team_upsert_creates_the_team_only_when_the_default_organization_allows_the_default_models(
+    gateway: Gateway, tmp_path: Path, organization_allows_default: bool, expected_status: int
 ) -> None:
     with gateway.scenario() as scenario:
         approved: Final = scenario.model()
         org_allowed: Final = scenario.model()
-        organization: Final = scenario.organization(models=[org_allowed])
+        organization: Final = scenario.organization(
+            models=[org_allowed, approved] if organization_allows_default else [org_allowed]
+        )
         upserted_team: Final = f"integration-dept-{uuid.uuid4().hex}"
         subject: Final = scenario.user(user_role="internal_user")
         defaults: Final = {"models": [approved], "organization_id": organization}
@@ -142,4 +149,10 @@ def test_jwt_team_upsert_is_denied_when_the_default_organization_does_not_allow_
                 candidate, sign({"sub": subject, "dept": upserted_team}), approved, False, upserted_team
             )
 
-            assert (status, _team_rows(upserted_team)) == (404, [])
+            teams: Final = read_rows(
+                'SELECT models, organization_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (upserted_team,)
+            )
+            expected_teams: Final = (
+                [{"models": [approved], "organization_id": organization}] if organization_allows_default else []
+            )
+            assert (status, teams) == (expected_status, expected_teams)
