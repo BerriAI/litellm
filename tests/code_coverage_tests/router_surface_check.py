@@ -64,10 +64,9 @@ SKIP_DIRS = {
     "node_modules",
     ".venv",
     "__pycache__",
-    "litellm-rust",
+    "rust",
     "ui",
     "docs",
-    "cookbook",
     "tests",
     "test",
 }

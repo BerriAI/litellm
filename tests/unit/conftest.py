@@ -134,7 +134,7 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
-from litellm.rust_bridge.host.model_cost import publish  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.model_cost_table import publish  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
 from litellm.anthropic_beta_headers_manager import (
     reload_beta_headers_config,  # noqa: E402  # same import-time dependency
