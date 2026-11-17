@@ -2616,16 +2616,27 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
-def _missing_provider_key_error(ctx: CompletionDispatchContext) -> AuthenticationError | None:
-    json_provider: Final = JSONProviderRegistry.get(ctx.custom_llm_provider)
-    if json_provider is None or ctx.api_key or litellm.api_key:
+def missing_json_provider_key_error(
+    custom_llm_provider: str | None, model: str, api_key: str | None, uses_openai_client: bool
+) -> AuthenticationError | None:
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    if json_provider is None or uses_openai_client:
         return None
-    if isinstance(_dispatch_client_openai(ctx), openai.OpenAI | openai.AsyncOpenAI):
+    if api_key or litellm.api_key:
         return None
     return AuthenticationError(
         message=f"Set {json_provider.api_key_env} or pass api_key",
-        llm_provider=ctx.custom_llm_provider,
-        model=ctx.model,
+        llm_provider=json_provider.slug,
+        model=model,
+    )
+
+
+def _missing_provider_key_error(ctx: CompletionDispatchContext) -> AuthenticationError | None:
+    return missing_json_provider_key_error(
+        ctx.custom_llm_provider,
+        ctx.model,
+        ctx.api_key,
+        isinstance(_dispatch_client_openai(ctx), openai.OpenAI | openai.AsyncOpenAI),
     )
 
 
@@ -8401,6 +8412,12 @@ def transcription(
             custom_llm_provider=custom_llm_provider,
         )
     elif uses_openai_transport:
+        if (
+            missing_key_error := missing_json_provider_key_error(
+                custom_llm_provider, model, api_key, isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            )
+        ) is not None:
+            raise missing_key_error
         api_base = (
             api_base
             or litellm.api_base
@@ -8708,9 +8725,18 @@ def speech(
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
+        provider_api_key: Final = (
+            (api_key or dynamic_api_key) if JSONProviderRegistry.exists(custom_llm_provider) else api_key
+        )
+        if (
+            missing_key_error := missing_json_provider_key_error(
+                custom_llm_provider, model, provider_api_key, isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            )
+        ) is not None:
+            raise missing_key_error
         # set API KEY
         api_key = (
-            api_key
+            provider_api_key
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")

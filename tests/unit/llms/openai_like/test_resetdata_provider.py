@@ -97,6 +97,21 @@ def test_resetdata_chat_completion_request():
     assert response.choices[0].message.reasoning_content == "Say hi"
 
 
+def test_resetdata_sends_max_completion_tokens_as_max_tokens():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(
+            model="resetdata/google/gemma-4-26b-a4b-it",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_completion_tokens=12,
+            api_key="sk-rd-test",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["max_tokens"] == 12
+    assert "max_completion_tokens" not in body
+
+
 def test_resetdata_chat_never_borrows_the_openai_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("RESETDATA_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-env")

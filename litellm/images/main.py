@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
+import openai
 
 import litellm
 
@@ -45,6 +46,7 @@ from litellm.main import (
     base_llm_http_handler,
     bedrock_image_edit,
     bedrock_image_generation,
+    missing_json_provider_key_error,
     openai_chat_completions,
     openai_image_variations,
 )
@@ -491,6 +493,15 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if (
+                missing_key_error := missing_json_provider_key_error(
+                    custom_llm_provider,
+                    model,
+                    api_key or dynamic_api_key,
+                    isinstance(client, openai.OpenAI | openai.AsyncOpenAI),
+                )
+            ) is not None:
+                raise missing_key_error
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)

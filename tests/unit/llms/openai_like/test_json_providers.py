@@ -309,3 +309,50 @@ class TestDarkbloom:
 
         assert config is not None
         assert config.custom_llm_provider == "darkbloom"
+
+
+def _complete(model: str) -> object:
+    import litellm
+
+    return litellm.completion(model=model, messages=[{"role": "user", "content": "hi"}])
+
+
+def _transcribe(model: str) -> object:
+    import litellm
+
+    return litellm.transcription(model=model, file=("clip.wav", b"RIFF0000WAVE"))
+
+
+def _speak(model: str) -> object:
+    import litellm
+
+    return litellm.speech(model=model, input="hi", voice="alloy")
+
+
+def _generate_image(model: str) -> object:
+    import litellm
+
+    return litellm.image_generation(model=model, prompt="a red square")
+
+
+@pytest.mark.parametrize("provider", ("resetdata", "parasail"))
+@pytest.mark.parametrize(
+    "call", (_complete, _transcribe, _speak, _generate_image), ids=("chat", "transcription", "speech", "image")
+)
+def test_json_provider_without_its_key_fails_before_sending_the_openai_key(monkeypatch, provider, call):
+    import respx
+
+    import litellm
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_config = JSONProviderRegistry.get(provider)
+    assert provider_config is not None
+    monkeypatch.delenv(provider_config.api_key_env, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route = upstream.route().respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match=provider_config.api_key_env):
+            call(f"{provider}/some-model")
+
+    assert route.call_count == 0
