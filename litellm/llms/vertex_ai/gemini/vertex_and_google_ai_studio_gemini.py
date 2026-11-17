@@ -265,6 +265,10 @@ def _prompt_block_fields(feedback: PromptFeedback) -> Mapping[str, str]:
     return MappingProxyType({"block_reason": feedback["blockReason"], **message})
 
 
+def _names_its_finish(candidate: Candidates) -> bool:
+    return (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+
+
 def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
     reason: Final = candidate.get("finishReason")
     if reason is None:
@@ -2883,7 +2887,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         annotations: Final = chat_completion_message.get("annotations")
         provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
-        finish_fields: Final = _candidate_finish_fields(candidate)
+        finish_fields: Final = _candidate_finish_fields(candidate) if _names_its_finish(candidate) else None
         # create a streaming choice object
         choice: Final = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -4212,7 +4216,7 @@ def _provider_finish_reasons(
     finished: Final = frozenset(
         candidate.get("index", position)
         for position, candidate in enumerate(candidates)
-        if (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+        if _names_its_finish(candidate)
     )
     finished_or_blocked: Final = finished | blocked_indices
     return tuple(

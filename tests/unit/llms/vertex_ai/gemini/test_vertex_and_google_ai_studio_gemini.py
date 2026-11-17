@@ -8484,6 +8484,36 @@ async def test_streamed_last_event_with_a_delta_keeps_googles_reason_off_the_chu
     assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
 
 
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_streamed_unspecified_finish_code_never_reaches_a_chunk_or_the_rebuilt_choice(is_async: bool) -> None:
+    unspecified: Final = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "silver "}]},
+                "finishReason": "FINISH_REASON_UNSPECIFIED",
+                "index": 0,
+            }
+        ]
+    }
+    stopped: Final = {"content": {"role": "model", "parts": [{"text": "light."}]}, "finishReason": "STOP"}
+    outcome: Final = _GoogleReasonOutcome(
+        document=_google_finished(stopped),
+        frames=(_google_text_frame("Waves fold "), unspecified, _google_finished(stopped)),
+        text="Waves fold silver light.",
+        finish_reason="stop",
+        reason_fields={"native_finish_reason": "STOP"},
+    )
+
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    assert [
+        fields for choice in _stream_choices(chunks) if (fields := getattr(choice, "provider_specific_fields", None))
+    ] == [outcome.reason_fields]
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
+
+
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
     from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
