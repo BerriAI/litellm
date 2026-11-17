@@ -218,6 +218,20 @@ const eslintConfig = [
   },
   {
     files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/components/CreateUserButton.tsx"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "crypto",
+          property: "randomUUID",
+          message: "Use v4 from uuid (uuidv4) instead so IDs work on plain HTTP.",
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
     ignores: ["src/**/*.test.{ts,tsx}", "src/**/*.spec.{ts,tsx}", "src/data/**"],
     rules: {
       "max-lines": ["error", { max: 800, skipBlankLines: true, skipComments: true }],

@@ -38,6 +38,7 @@ struct PassThroughStream {
 
 /// What the Messages stream iterator keeps for its end-of-stream billing.
 struct DeliveredStream {
+    head: Py<PyAny>,
     chunks: Py<PyList>,
     first_chunk: Option<Py<PyAny>>,
 }
@@ -65,21 +66,13 @@ pub struct LegacyLogging {
     /// When the provider request went out, until its window is recorded (Messages only).
     api_started: Option<f64>,
     host_answered: bool,
-    /// Whether the call's Messages stream starts only on its first read, as Python's iterator
-    /// does. Only `azure_ai`: by the owner's ruling `anthropic` keeps main's billing of an
-    /// unread stream.
+    /// Whether the call's stream starts only on its first read, as Python's Messages iterator
+    /// does.
     stream_starts_on_first_read: bool,
     /// Set once the route sends through the host's own client, whose timed `post` already
     /// reports the exchange.
     host_client: Arc<AtomicBool>,
 }
-
-/// The one provider whose unread Messages stream bills nothing, as Python's does.
-const STREAM_STARTS_ON_FIRST_READ_PROVIDER: &str = "azure_ai";
-
-/// The one provider whose exchange through the host's client is timed only by that client, as
-/// Python's is. By the owner's ruling `anthropic` keeps main's second report.
-const HOST_CLIENT_TIMED_PROVIDER: &str = "azure_ai";
 
 fn retry_reason(reason: &RetryReason) -> Value {
     match reason {
@@ -504,6 +497,7 @@ impl LegacyLogging {
                 ),
                 &stream.chunks,
                 error,
+                &stream.head,
             ),
         );
         match scheduled {
@@ -675,8 +669,7 @@ impl LegacyLogging {
         )?;
         if self.operation == LoggingOperation::Messages
             && self.asynchronous
-            && !(context.custom_llm_provider == HOST_CLIENT_TIMED_PROVIDER
-                && self.host_client.load(Ordering::Acquire))
+            && !self.host_client.load(Ordering::Acquire)
             && self.times_provider_exchange(py)?
         {
             self.api_started = Some(epoch_seconds());
@@ -729,8 +722,7 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         use litellm_host::interceptors::{Cost, ResultSource};
 
-        self.stream_starts_on_first_read =
-            facts.provider.provider == STREAM_STARTS_ON_FIRST_READ_PROVIDER;
+        self.stream_starts_on_first_read = self.operation == LoggingOperation::Messages;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
@@ -940,6 +932,7 @@ impl LegacyLogging {
             ),
         )?;
         self.stream = Some(DeliveredStream {
+            head: head.clone_ref(py),
             chunks: PyList::empty(py).unbind(),
             first_chunk: None,
         });
@@ -995,6 +988,7 @@ impl PythonOwned for LegacyLogging {
         visit.call(&self.response)?;
         visit.call(&self.error)?;
         if let Some(stream) = &self.stream {
+            visit.call(&stream.head)?;
             visit.call(&stream.chunks)?;
             visit.call(&stream.first_chunk)?;
         }

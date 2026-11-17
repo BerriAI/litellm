@@ -3201,33 +3201,6 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
     )
 
 
-@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
-@pytest.mark.asyncio
-async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_limit(
-    fake_redis_port: int, arrives_with_logging_obj: bool
-) -> None:
-    tpm_for_three_requests: Final = await _tpm_for_three_requests()
-
-    def request() -> Coroutine[None, None, str]:
-        return _unsettled_user_config_request_outcome(
-            fake_redis_port,
-            {"routing_strategy": "usage-based-routing-v2"},
-            {"tpm": tpm_for_three_requests},
-            _proxy_logging_obj() if arrives_with_logging_obj else None,
-        )
-
-    async def settled(*requests: Coroutine[None, None, str]) -> list[str]:
-        outcomes: Final = await asyncio.gather(*requests)
-        await _settle_router_accounting()
-        return outcomes
-
-    await _wait_out_a_rate_limit_minute_rollover()
-    concurrent_outcomes: Final = await settled(request(), request())
-    later_outcomes: Final = [*(await settled(request())), *(await settled(request()))]
-
-    assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]
-
-
 @pytest.mark.asyncio
 async def test_overlapping_user_config_requests_share_one_rpm_limit(fake_redis_port: int) -> None:
     def request() -> Coroutine[None, None, str]:

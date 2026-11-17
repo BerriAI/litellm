@@ -5868,6 +5868,23 @@
       },
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
+      "promptCache": {
+        "title": "Prompt cache usage advisory for {{name}}",
+        "description": "{{misses}} observed requests to {{model}} reported no cache usage for a prefix the provider had cached before. Delayed, missing or unlogged observations mean these requests are not necessarily consecutive and do not prove a caching outage.",
+        "evidenceHeading": "What was observed",
+        "deployment": "Deployment",
+        "model": "Model",
+        "misses": "Observed requests with no cache usage",
+        "provenWrite": "Earlier cache write that proved the prefix",
+        "provenWriteTokens_one": "{{count}} token",
+        "provenWriteTokens_other": "{{count}} tokens",
+        "ttl": "Cache lifetime",
+        "ttlMinutes_one": "{{count}} minute",
+        "ttlMinutes_other": "{{count}} minutes",
+        "window": "Misses observed",
+        "windowValue": "{{start}} to {{end}} UTC",
+        "scope": "Only non-streaming Anthropic Chat Completions requests with one five-minute cache breakpoint are checked, after the provider confirmed a cache write for that prefix. Prefixes never confirmed as cached are not assessed."
+      },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
       "retires": "Retires",
@@ -5913,7 +5930,8 @@
           "milliseconds": "Mean response time per day",
           "ratio": "Daily error rate"
         }
-      }
+      },
+      "promptCacheError": "Could not load prompt cache alerts."
     },
     "page": {
       "tabs": {
@@ -6078,6 +6096,45 @@
       "upgrade": "Upgrade to Enterprise",
       "loadError": "Could not load monitoring settings.",
       "saveError": "Could not save monitoring settings. Try again."
+    },
+    "bulk": {
+      "resolve": "Resolve all",
+      "dismiss": "Dismiss all",
+      "cancel": "Cancel",
+      "saving": "Updating alerts…",
+      "description": "This updates all open alerts matching “{{type}}”, including results you have not loaded. You can reopen individual alerts later.",
+      "error": "Some alerts could not be updated. Saved changes were kept. Try again to update the remaining open alerts."
+    },
+    "thresholds": {
+      "title": "Performance alert thresholds",
+      "description": "Usual values come from the previous seven days. Both conditions must be met.",
+      "enterpriseOnly": "Editing thresholds requires Enterprise.",
+      "edit": "Edit thresholds",
+      "cancel": "Cancel",
+      "multiplier": "Times the usual value",
+      "multiplierInvalid": "Use a multiplier greater than 1.",
+      "rules": {
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Latency",
+        "reliability": "Error rate"
+      },
+      "minimum": {
+        "spend": "Minimum increase ($)",
+        "traffic": "Minimum increase (requests)",
+        "latency": "Minimum increase (ms)",
+        "reliability": "Minimum increase (percentage points)"
+      },
+      "summary": {
+        "spend": "At least {{multiplier}}× the usual spend and ${{minimum}} higher.",
+        "traffic": "At least {{multiplier}}× the usual requests and {{minimum}} more requests.",
+        "latency": "At least {{multiplier}}× the usual latency and {{minimum}} ms higher.",
+        "reliability": "At least {{multiplier}}× the usual error rate and {{minimum}} percentage points higher."
+      },
+      "safeguards": "Requires four active baseline days. Latency also needs 100 timed requests; error rate needs 500 requests. Changes apply to future checks.",
+      "save": "Save thresholds",
+      "saving": "Saving…",
+      "saved": "Thresholds saved."
     }
   },
   "caching": {
@@ -8164,7 +8221,7 @@
         "accessControl": "ACCESS CONTROL",
         "developerTools": "DEVELOPER TOOLS",
         "settings": "SETTINGS",
-        "customerPortal": "CUSTOMER PORTAL"
+        "customerPortal": "CUSTOMER MANAGEMENT"
       },
       "sections": {
         "aiGateway": "AI Gateway",
@@ -8172,7 +8229,7 @@
         "accessControl": "Access Control",
         "developerTools": "Developer Tools",
         "settings": "Settings",
-        "customerPortal": "Customer Portal"
+        "customerPortal": "Customer Management"
       },
       "items": {
         "home": "Home",
@@ -15466,7 +15523,13 @@
       },
       "avgCostPerRequest": "Avg cost / request",
       "avgLatency": "Avg latency",
-      "successRateHint": "{{rate}}% success rate"
+      "successRateHint": "{{rate}}% success rate",
+      "spendDisplay": {
+        "label": "Spend display",
+        "option": "{{code}} · {{name}}",
+        "estimate": "≈ {{amount}} estimated at the ECB reference rate of {{date}}",
+        "unavailable": "Reference rates are unavailable, spend is shown in USD"
+      }
     },
     "overview": {
       "topVirtualKeys": "Top Virtual Keys",
@@ -17344,6 +17407,7 @@
         "number": "Number"
       },
       "numberHint": "Value must be between 0 and 1",
+      "langfuseSpanScopeHint": "Leave empty to use the proxy default (LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE, full if unset).",
       "disabledCallbacks": {
         "title": "Disabled Callbacks",
         "tooltip": "Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.",
@@ -20676,15 +20740,15 @@
     },
     "limits": {
       "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
-      "reachedTitle": "Free customer portal limit reached",
-      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "reachedTitle": "Customer Management free tier limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in Customer Management.",
       "upgrade": "Upgrade to Enterprise"
     },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",
       "manage": "Manage",
-      "title": "Customer management",
+      "title": "Customer Management",
       "subtitle": "Manage customer teams, customer members, and settings for this customer organization.",
       "teamSubtitle": "Manage customer members and settings for this customer team.",
       "memberSubtitle": "Manage settings and budget for this customer member.",
@@ -20707,6 +20771,8 @@
       "membersHint": "Choose a customer member to manage their settings and budget.",
       "emptyTeams": "No customer teams in this customer organization.",
       "emptyMembers": "No customer members in this customer team.",
+      "searchMembers": "Search customer members by name or ID",
+      "noMemberMatches": "No customer members match your search.",
       "error": "Unable to load customer",
       "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "missingOrganization": "Choose a customer organization to manage.",
@@ -20779,10 +20845,20 @@
       "deleteOrganizationMessage": "This deletes this customer organization and its customer teams and customer members.",
       "deleteTeamMessage": "This deletes this customer team and its customer members.",
       "deleteMemberMessage": "This deletes this customer member.",
-      "deleteInformationTitle": "{{kind}} details"
+      "deleteInformationTitle": "{{kind}} details",
+      "teamsRequired": "Select at least one team.",
+      "memberTeamsHint": "Changing teams keeps this member’s ID, budgets and spend history. Past usage stays with the original team.",
+      "defaultTeam": "Default team",
+      "defaultTeamHint": "Requests without a team use this team.",
+      "retryTeams": "Retry",
+      "chooseTeams": "Choose teams",
+      "moveTeams": "Move teams",
+      "moving": "Moving…",
+      "memberMoved": "Member teams updated.",
+      "memberActions": "Actions for {{name}}"
     },
     "switcher": {
-      "label": "Customer Portal",
+      "label": "Customer Management",
       "description": "Customer organizations and usage"
     },
     "status": {

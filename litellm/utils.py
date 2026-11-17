@@ -4319,13 +4319,24 @@ def native_structured_output_support(model_info: Mapping[str, object]) -> bool |
     return declared if isinstance(declared, bool) else None
 
 
-def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
-    return (
+def _sets_video_price_per_second(value: Mapping[str, object]) -> bool:
+    return any(value.get(name) is not None for name in ("output_cost_per_second", "output_cost_per_video_per_second"))
+
+
+def base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
+    """Base-row fields a registration supersedes without naming them."""
+    explicit_cache_read: Final[frozenset[str]] = (
         frozenset({"explicit_cache_read_input_token_cost"})
         if value.get("cache_read_input_token_cost") is not None
         and value.get("explicit_cache_read_input_token_cost") is None
         else frozenset()
     )
+    flat_video_price: Final[frozenset[str]] = (
+        frozenset({"output_cost_per_video"})
+        if value.get("output_cost_per_video") is None and _sets_video_price_per_second(value)
+        else frozenset()
+    )
+    return explicit_cache_read | flat_video_price
 
 
 def model_cost_registration_write(
@@ -4342,7 +4353,7 @@ def model_cost_registration_write(
     }
     entry: Final = {
         **update_dictionary(existing_model, registration),
-        **dict.fromkeys(_base_fields_replaced_by(registration)),
+        **dict.fromkeys(base_fields_replaced_by(registration)),
     }
     names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
     previous_fields: Final[frozenset[str]] = (
@@ -4715,6 +4726,14 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: str | None) -> str:
     return size_to_aspect_ratio.get(size, "1:1")  # Default to square if size not recognized
 
 
+def _takes_openai_image_params_unmapped(custom_llm_provider: str | None) -> bool:
+    if custom_llm_provider in ("openai", "azure") or custom_llm_provider in litellm.openai_compatible_providers:
+        return True
+    return custom_llm_provider not in ("bedrock", "vertex_ai") and any(
+        item["provider"] == custom_llm_provider for item in litellm.custom_provider_map
+    )
+
+
 def get_optional_params_image_gen(
     model: str | None = None,
     n: int | None = None,
@@ -4803,11 +4822,7 @@ def get_optional_params_image_gen(
             model=model or "",
             drop_params=litellm.drop_params is True or drop_params is True,
         )
-    elif (
-        custom_llm_provider == "openai"
-        or custom_llm_provider == "azure"
-        or custom_llm_provider in litellm.openai_compatible_providers
-    ):
+    elif _takes_openai_image_params_unmapped(custom_llm_provider):
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
         config_class: Final = litellm.BedrockImageGeneration.get_config_class(model=model)
@@ -4863,7 +4878,16 @@ def get_optional_params_embeddings(
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
     passed_params.pop("custom_llm_provider", None)
-    special_params: Final = as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}
+    special_params: Final = {
+        k: v
+        for k, v in (as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}).items()
+        if _should_drop_param(k=k, additional_drop_params=additional_drop_params) is False
+    }
+    provider_kwargs: Final = {
+        k: v
+        for k, v in kwargs.items()
+        if _should_drop_param(k=k, additional_drop_params=additional_drop_params) is False
+    }
 
     passed_params.pop("drop_params", None)
     drop_params = normalize_drop_params(drop_params)
@@ -4977,7 +5001,7 @@ def get_optional_params_embeddings(
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.nvidiaNimEmbeddingConfig.map_openai_params(
-            non_default_params=non_default_params, optional_params={}, kwargs=kwargs
+            non_default_params=non_default_params, optional_params={}, kwargs=provider_kwargs
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
         # OpenAI SDKs send encoding_format="float" by default; float lists are
@@ -4994,9 +5018,9 @@ def get_optional_params_embeddings(
         _check_valid_arg(supported_params=supported_params)
         (
             optional_params,
-            kwargs,
+            _,
         ) = litellm.VertexAITextEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params={}, kwargs=kwargs
+            non_default_params=non_default_params, optional_params={}, kwargs=provider_kwargs
         )
     elif custom_llm_provider == "lm_studio":
         supported_params = litellm.LmStudioEmbeddingConfig().get_supported_openai_params()
@@ -5028,8 +5052,7 @@ def get_optional_params_embeddings(
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)
-            final_params = {**kwargs}
-            return final_params
+            return {**provider_kwargs}
 
         supported_params = object.get_supported_openai_params()
         _check_valid_arg(supported_params=supported_params)
@@ -5085,8 +5108,7 @@ def get_optional_params_embeddings(
                 model=model,
                 drop_params=drop_params if drop_params is not None else False,
             )
-        final_params = {**optional_params, **kwargs}
-        return final_params
+        return {**optional_params, **provider_kwargs}
     elif custom_llm_provider == "sap":
         supported_params = get_supported_openai_params(
             model=model,
@@ -5114,8 +5136,7 @@ def get_optional_params_embeddings(
             drop_params=drop_params if drop_params is not None else False,
         )
 
-        final_params = {**optional_params, **kwargs}
-        return final_params
+        return {**optional_params, **provider_kwargs}
 
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
@@ -5188,7 +5209,7 @@ def get_optional_params_embeddings(
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
         openai_params=list(DEFAULT_EMBEDDING_PARAM_VALUES.keys()),
-        additional_drop_params=kwargs.get("additional_drop_params", None),
+        additional_drop_params=additional_drop_params,
     )
 
     if "extra_body" in final_params and not final_params["extra_body"]:

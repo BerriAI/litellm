@@ -3,7 +3,7 @@ use litellm_auth::CredentialPlacement;
 use litellm_host::interceptors::RetriedRequest;
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_env::resolve_non_empty;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
