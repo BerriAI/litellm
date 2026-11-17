@@ -6792,10 +6792,14 @@ async def test_vector_store_search_sends_once_when_the_connection_drops_without_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", (False, True))
-@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize(
+    ("provider", "upstream_model"),
+    (("openai", "gpt-6-luna"), ("azure", "gpt-6-luna"), ("bigmodel", "glm-5.3-flash")),
+)
 async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
     is_async: bool,
     provider: str,
+    upstream_model: str,
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
@@ -6804,7 +6808,7 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
             "id": "resp_headers",
             "object": "response",
             "created_at": 1,
-            "model": "gpt-6-luna",
+            "model": upstream_model,
             "status": "completed",
             "output": [],
             "parallel_tool_calls": False,
@@ -6816,21 +6820,21 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
         AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
     )
     kwargs: Final = {
-        "model": f"{provider}/gpt-6-luna",
+        "model": f"{provider}/{upstream_model}",
         "input": "hello",
         "api_key": "fake-configured-key",
         "api_base": "https://responses.example.com/v1",
         "api_version": "2025-04-01-preview",
-        "extra_headers": {"Authorization": "Bearer fake-caller-key", "content-type": "application/vnd.example+json"},
+        "extra_headers": {"authorization": "Bearer fake-caller-key", "content-type": "application/vnd.example+json"},
         "client": client,
     }
     try:
         response: Final = await litellm.aresponses(**kwargs) if is_async else litellm.responses(**kwargs)
         assert response.status == "completed"
-        assert route.calls[0].request.headers["authorization"] == "Bearer fake-caller-key"
+        assert route.calls[0].request.headers.get_list("authorization") == ["Bearer fake-caller-key"]
         expected_content_types: Final = (
             ["application/json", "application/vnd.example+json"]
-            if provider == "openai"
+            if provider in ("openai", "bigmodel")
             else ["application/vnd.example+json"]
         )
         assert route.calls[0].request.headers.get_list("content-type") == expected_content_types
