@@ -6,7 +6,6 @@ import stat
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from itertools import chain
 from pathlib import Path
 from typing import Final
 from unittest.mock import patch
@@ -200,10 +199,11 @@ class _FakeRun:
         return subprocess.CompletedProcess(args, self.returncode, "", self.stderr)
 
 
-def _routed_get(captured, listing, groups, model_info=None, key_info=None):
+def _routed_get(captured, listing, groups, model_info=None, served=None):
     """A proxy answering /model_group/info with `groups` (or `groups` as the status it fails with),
-    /v1/model/info with `model_info` and /key/info with `key_info` (each raised when it is an
-    exception, /key/info a 404 by default) and any other URL with `listing`."""
+    /v1/model/info with `model_info` and its Codex catalog at /v1/models?client_version=... with `served`
+    (each raised when it is an exception, the catalog an older proxy's plain listing by default) and any
+    other URL with `listing`."""
 
     def fake_get(url, headers, timeout):
         captured.setdefault("urls", []).append(url)
@@ -212,10 +212,10 @@ def _routed_get(captured, listing, groups, model_info=None, key_info=None):
             if isinstance(model_info, Exception):
                 raise model_info
             return model_info if model_info is not None else _FakeResponse(200, {"data": []})
-        if url.endswith("/key/info"):
-            if isinstance(key_info, Exception):
-                raise key_info
-            return key_info if key_info is not None else _FakeResponse(404, {"error": "key not found"})
+        if "client_version=" in url and served is not None:
+            if isinstance(served, Exception):
+                raise served
+            return served
         if not url.endswith("/model_group/info"):
             return _FakeResponse(200, listing)
         return _FakeResponse(groups) if isinstance(groups, int) else _FakeResponse(200, {"data": list(groups)})
@@ -766,14 +766,14 @@ class TestCodexModelSync:
         return {"id": model_id, "object": "model", "created": 1, "owned_by": "openai", **extra}
 
     def _sync(
-        self, listing, codex_home, base_url="http://localhost:4000/", run=None, groups=(), model_info=None, key_info=None
+        self, listing, codex_home, base_url="http://localhost:4000/", run=None, groups=(), model_info=None, served=None
     ):
         captured = {}
         result = codex_model_sync_args(
             {"CODEX_HOME": str(codex_home)},
             base_url,
             "sk-key",
-            get=_routed_get(captured, listing, groups, model_info, key_info),
+            get=_routed_get(captured, listing, groups, model_info, served),
             run=_FakeRun() if run is None else run,
         )
         return captured, result
@@ -795,6 +795,7 @@ class TestCodexModelSync:
             "http://localhost:4000/v1/models",
             "http://localhost:4000/v1/model/info",
             "http://localhost:4000/model_group/info",
+            "http://localhost:4000/v1/models?client_version=0.165.0",
         ]
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
         path = self._catalog_path(result)
@@ -1029,204 +1030,170 @@ class TestCodexModelSync:
         assert entry["slug"] == "api-terra"
         assert entry["supports_search_tool"] is False
 
+    @staticmethod
+    def _served(*entries):
+        return _FakeResponse(
+            200,
+            {
+                "models": [
+                    {"slug": slug, "display_name": name, "priority": 0, "visibility": "list", "service_tiers": tiers}
+                    for slug, name, tiers in entries
+                ]
+            },
+        )
+
+    @staticmethod
+    def _deployments(*deployments):
+        return _FakeResponse(200, {"data": list(deployments)})
+
+    @staticmethod
+    def _deployment(model_name, model="openai/gpt-4o-mini", **model_info):
+        return {"model_name": model_name, "litellm_params": {"model": model}, "model_info": model_info}
+
     @pytest.mark.parametrize(
-        ("listed", "deployment", "expected"),
+        ("listed", "deployment", "expected_hash"),
         [
-            (
-                "gpt-5.5",
-                {
-                    "model_name": "gpt-5.5",
-                    "litellm_params": {"model": "openai/gpt-5.5"},
-                    "model_info": {"service_tiers": ["priority", "flex"], "display_name": "GPT-5.5 via LiteLLM"},
-                },
-                ("gpt-5.5-hash", "GPT-5.5 via LiteLLM", [_STOCK_FAST_TIER, _generic_tier("flex")]),
-            ),
-            (
-                "team-fast-terra",
-                {
-                    "model_name": "team-fast-terra",
-                    "litellm_params": {"model": "openai/gpt-5.6-terra"},
-                    "model_info": {"service_tiers": ["priority"], "display_name": "Team Fast Terra"},
-                },
-                ("terra-hash", "Team Fast Terra", [_STOCK_FAST_TIER]),
-            ),
-            (
-                "mystery",
-                {
-                    "model_name": "mystery",
-                    "litellm_params": {"model": "anthropic/claude-opus-4-7"},
-                    "model_info": {"service_tiers": ["priority"], "display_name": "Mystery"},
-                },
-                (None, "Mystery", [_generic_tier("priority")]),
-            ),
+            ("gpt-5.5", {"model_name": "gpt-5.5", "model": "openai/gpt-5.5"}, "gpt-5.5-hash"),
+            ("team-fast-terra", {"model_name": "team-fast-terra", "model": "openai/gpt-5.6-terra"}, "terra-hash"),
+            ("mystery", {"model_name": "mystery", "model": "anthropic/claude-opus-4-7"}, None),
             (
                 "api-terra",
                 {
                     "model_name": "model_name_team-1_d1",
-                    "litellm_params": {"model": "openai/gpt-5.6-terra"},
-                    "model_info": {
-                        "id": "d1",
-                        "team_public_model_name": "api-terra",
-                        "service_tiers": ["flex"],
-                        "display_name": "Team Terra",
-                    },
+                    "model": "openai/gpt-5.6-terra",
+                    "team_public_model_name": "api-terra",
                 },
-                ("terra-hash", "Team Terra", [_generic_tier("flex")]),
+                "terra-hash",
             ),
         ],
         ids=["stock_slug", "alias_of_a_stock_model", "model_codex_does_not_know", "team_public_model_name"],
     )
-    def test_configured_display_name_and_service_tiers_reach_the_catalog(self, tmp_path, listed, deployment, expected):
-        listing = self._listing(self._row(listed), self._row("plain"))
-        self._sync(listing, tmp_path, model_info=_FakeResponse(200, {"data": [deployment]}))
+    def test_a_name_the_operator_configured_takes_the_name_and_tiers_the_proxy_serves_this_key(
+        self, tmp_path, listed, deployment, expected_hash
+    ):
+        served_tiers = [_STOCK_FAST_TIER, {"id": "flex", "name": "Cheap", "description": "Half price"}]
+        self._sync(
+            self._listing(self._row(listed), self._row("plain")),
+            tmp_path,
+            model_info=self._deployments(
+                self._deployment(**deployment, service_tiers=["flex"], display_name="Configured"),
+                self._deployment("plain"),
+            ),
+            served=self._served(
+                (listed, "Served", served_tiers), ("plain", "Served Plain", [_generic_tier("flex")])
+            ),
+        )
 
         entries = self._entries(tmp_path)
         entry = entries[listed]
-        assert (entry.get("comp_hash"), entry["display_name"], entry["service_tiers"]) == expected
+        assert (entry.get("comp_hash"), entry["display_name"], entry["service_tiers"]) == (
+            expected_hash,
+            "Served",
+            served_tiers,
+        )
         assert (entries["plain"]["display_name"], entries["plain"]["service_tiers"]) == ("plain", [])
 
     @pytest.mark.parametrize(
-        ("owners", "key_info", "expected"),
+        ("model_info", "expected"),
         [
-            (
-                (None, "team-1"),
-                _FakeResponse(200, {"key": "hashed", "info": {"team_id": "team-1"}}),
-                ("terra-hash", "Team One Terra", [_STOCK_FAST_TIER]),
-            ),
-            (
-                (None, "team-1"),
-                _FakeResponse(200, {"key": "hashed", "info": {"team_id": "team-2"}}),
-                ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")]),
-            ),
-            (
-                (None, "team-1"),
-                _FakeResponse(200, {"key": "hashed", "info": {"team_id": None}}),
-                ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")]),
-            ),
-            ((None, "team-1"), None, ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")])),
-            (
-                (None, "team-1"),
-                requests.ConnectionError("refused"),
-                ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")]),
-            ),
-            (("team-1",), None, ("terra-hash", "Team One Terra", [_STOCK_FAST_TIER])),
-            (
-                ("team-1", "team-2"),
-                _FakeResponse(200, {"key": "hashed", "info": {"team_id": "team-1"}}),
-                ("terra-hash", "Team One Terra", [_STOCK_FAST_TIER]),
-            ),
+            ({"display_name": "Configured"}, ("Served", [_STOCK_FAST_TIER])),
+            ({"service_tiers": ["flex"]}, ("GPT-5.5", [_generic_tier("flex")])),
         ],
-        ids=[
-            "own_team",
-            "other_team",
-            "key_without_a_team",
-            "key_unknown_to_the_proxy",
-            "key_info_unreachable",
-            "only_a_team_deploys_the_name",
-            "two_teams_deploy_the_name",
-        ],
+        ids=["only_the_display_name_is_configured", "only_the_tiers_are_configured"],
     )
-    def test_a_name_a_team_also_deploys_reads_the_deployments_the_key_routes_to(
-        self, tmp_path, owners, key_info, expected
-    ):
-        deployments = {
-            None: {
-                "model_name": "api-terra",
-                "litellm_params": {"model": "openai/gpt-5.5"},
-                "model_info": {"service_tiers": ["flex"], "display_name": "Shared Terra"},
-            },
-            "team-1": {
-                "model_name": "model_name_team-1_d1",
-                "litellm_params": {"model": "openai/gpt-5.6-terra"},
-                "model_info": {
-                    "id": "d1",
-                    "team_id": "team-1",
-                    "team_public_model_name": "api-terra",
-                    "service_tiers": ["priority"],
-                    "display_name": "Team One Terra",
-                },
-            },
-            "team-2": {
-                "model_name": "model_name_team-2_d2",
-                "litellm_params": {"model": "openai/gpt-5.5"},
-                "model_info": {
-                    "id": "d2",
-                    "team_id": "team-2",
-                    "team_public_model_name": "api-terra",
-                    "service_tiers": ["flex"],
-                    "display_name": "Team Two Terra",
-                },
-            },
-        }
+    def test_a_field_no_deployment_configures_keeps_the_installed_codex_value(self, tmp_path, model_info, expected):
         self._sync(
-            self._listing(self._row("api-terra")),
+            self._listing(self._row("gpt-5.5")),
             tmp_path,
-            model_info=_FakeResponse(200, {"data": [deployments[owner] for owner in owners]}),
-            key_info=key_info,
+            model_info=self._deployments(self._deployment("gpt-5.5", **model_info), self._deployment("gpt-5.5")),
+            served=self._served(("gpt-5.5", "Served", [_generic_tier("flex")])),
         )
 
-        entry = self._entries(tmp_path)["api-terra"]
-        assert (entry.get("comp_hash"), entry["display_name"], entry["service_tiers"]) == expected
+        entry = self._entries(tmp_path)["gpt-5.5"]
+        assert (entry["display_name"], entry["service_tiers"]) == expected
 
-    @pytest.mark.parametrize(
-        ("model_infos", "expected"),
-        [
-            (
-                ({"service_tiers": ["priority", "flex"]}, {"service_tiers": ["flex", "priority"]}),
-                [_STOCK_FAST_TIER, _generic_tier("flex")],
+    def test_a_name_with_no_deployment_row_takes_what_the_proxy_serves(self, tmp_path):
+        self._sync(
+            self._listing(self._row("gpt-5.5"), self._row("my-fast")),
+            tmp_path,
+            model_info=self._deployments(self._deployment("gpt-5.5", "openai/gpt-5.5")),
+            served=self._served(
+                ("gpt-5.5", "Served", [_generic_tier("flex")]), ("my-fast", "My Fast", [_STOCK_FAST_TIER])
             ),
-            (({"service_tiers": ["flex"]}, None), []),
-            (({"service_tiers": ["flex"], "blocked": True}, {"service_tiers": ["priority"]}), [_STOCK_FAST_TIER]),
-            (({}, None), [_STOCK_FAST_TIER]),
-        ],
-        ids=["every_live_deployment_lists_them", "set_on_one_of_two", "paused_deployment_ignored", "set_on_none"],
-    )
-    def test_a_configured_tier_is_offered_only_when_every_live_deployment_lists_it(
-        self, tmp_path, model_infos, expected
-    ):
-        other_model = {
-            "model_name": "other",
-            "litellm_params": {"model": "openai/gpt-4o-mini"},
-            "model_info": {"service_tiers": ["flex"]},
-        }
-        deployments = [
-            {"model_name": "gpt-5.5", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": info}
-            for info in model_infos
-        ]
-        interleaved = list(chain.from_iterable((deployment, other_model) for deployment in deployments))
-        self._sync(self._listing(self._row("gpt-5.5")), tmp_path, model_info=_FakeResponse(200, {"data": interleaved}))
+        )
 
-        assert self._entries(tmp_path)["gpt-5.5"]["service_tiers"] == expected
+        entries = self._entries(tmp_path)
+        assert (entries["my-fast"]["display_name"], entries["my-fast"]["service_tiers"]) == (
+            "My Fast",
+            [_STOCK_FAST_TIER],
+        )
+        assert (entries["gpt-5.5"]["display_name"], entries["gpt-5.5"]["service_tiers"]) == (
+            "GPT-5.5",
+            [_STOCK_FAST_TIER],
+        )
+
+    def test_the_served_catalog_is_asked_for_with_the_installed_codex_version_and_the_key(self, tmp_path):
+        captured, _ = self._sync(
+            self._listing(self._row("gpt-5.5")),
+            tmp_path,
+            model_info=self._deployments(self._deployment("gpt-5.5", display_name="Configured")),
+            served=self._served(("gpt-5.5", "Served", [])),
+        )
+
+        assert "http://localhost:4000/v1/models?client_version=0.165.0" in captured["urls"]
+        assert captured["headers"] == {"Authorization": "Bearer sk-key"}
 
     @pytest.mark.parametrize(
-        ("listed", "model_infos", "expected"),
+        ("model_info", "served", "run"),
         [
-            ("gpt-5.5", ({"display_name": "  "},), "GPT-5.5"),
-            ("gpt-5.5", ({"display_name": 42},), "GPT-5.5"),
-            ("mystery", ({"display_name": ""},), "mystery"),
-            ("gpt-5.5", ({"display_name": "First"}, {"display_name": "Second"}), "First"),
-            ("gpt-5.5", (None, {"display_name": "Second"}), "GPT-5.5"),
-            ("gpt-5.5", ({"display_name": "Paused", "blocked": True}, {"display_name": "Live"}), "Paused"),
+            (_FakeResponse(500), None, None),
+            (requests.ConnectionError("refused"), None, None),
+            (None, _FakeResponse(500), None),
+            (None, requests.ConnectionError("refused"), None),
+            (None, None, None),
+            (None, _FakeResponse(200, {"models": [{"slug": "gpt-5.5"}]}), None),
+            (None, None, _FakeRun(version=None)),
         ],
         ids=[
-            "blank",
-            "not_a_string",
-            "blank_on_a_model_codex_does_not_know",
-            "first_deployment_names_it",
-            "only_the_first_deployment_counts",
-            "paused_first_deployment_still_names_it",
+            "model_info_fails",
+            "model_info_unreachable",
+            "served_catalog_fails",
+            "served_catalog_unreachable",
+            "proxy_serves_no_codex_catalog",
+            "served_catalog_malformed",
+            "codex_version_unreadable",
         ],
     )
-    def test_display_name_comes_from_the_first_deployment_when_it_is_a_non_blank_string(
-        self, tmp_path, listed, model_infos, expected
+    def test_without_a_served_catalog_every_model_keeps_the_installed_codex_name_and_tiers(
+        self, tmp_path, model_info, served, run
     ):
-        deployments = [
-            {"model_name": listed, "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": info}
-            for info in model_infos
-        ]
-        self._sync(self._listing(self._row(listed)), tmp_path, model_info=_FakeResponse(200, {"data": deployments}))
+        self._sync(
+            self._listing(self._row("gpt-5.5")),
+            tmp_path,
+            model_info=model_info
+            if model_info is not None
+            else self._deployments(self._deployment("gpt-5.5", service_tiers=["flex"], display_name="Configured")),
+            served=served,
+            run=run,
+        )
 
-        assert self._entries(tmp_path)[listed]["display_name"] == expected
+        entry = self._entries(tmp_path)["gpt-5.5"]
+        assert (entry["display_name"], entry["service_tiers"]) == ("GPT-5.5", [_STOCK_FAST_TIER])
+
+    @pytest.mark.parametrize(
+        ("model_info", "run"),
+        [({}, None), ({"display_name": "Configured"}, _FakeRun(version=None))],
+        ids=["nothing_configured", "codex_version_unreadable"],
+    )
+    def test_the_proxy_is_not_asked_for_its_catalog(self, tmp_path, model_info, run):
+        captured, _ = self._sync(
+            self._listing(self._row("gpt-5.5")),
+            tmp_path,
+            model_info=self._deployments(self._deployment("gpt-5.5", **model_info)),
+            run=run,
+        )
+
+        assert not any("client_version=" in url for url in captured["urls"]), captured["urls"]
 
     def test_stock_catalog_is_decoded_as_utf8_regardless_of_locale(self, tmp_path):
         description = "Modelo equilibrado para el trabajo diario, con acentos y ñ."

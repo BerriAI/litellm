@@ -32,6 +32,9 @@ import os
 import sys
 
 argv = sys.argv[1:]
+if argv == ["--version"]:
+    sys.stdout.write("codex-cli %(version)s\\n")
+    sys.exit(0)
 if argv[-2:] == ["debug", "models"]:
     override = next((arg for arg in argv if arg.startswith("model_catalog_json=")), None)
     if override is None:
@@ -46,7 +49,7 @@ if argv[-2:] == ["debug", "models"]:
 recorded = {name: os.environ.get(name) for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "LITELLM_PROXY_API_KEY")}
 with open(os.environ[%(launch)r], "w", encoding="utf-8") as handle:
     json.dump({"argv": argv, "env": recorded}, handle)
-""" % {"stock": SHIM_STOCK_ENV, "launch": SHIM_LAUNCH_ENV}
+""" % {"stock": SHIM_STOCK_ENV, "launch": SHIM_LAUNCH_ENV, "version": CLIENT_VERSION}
 
 
 def _generic_tier(identity: str) -> dict[str, JsonValue]:
@@ -455,6 +458,42 @@ def test_lite_codex_writes_the_tiers_each_key_routes_to_on_a_name_a_team_also_de
             assert eventually(file_tiers, lambda value, tiers=tiers: value == tiers, seconds=CONVERGENCE_SECONDS) == (
                 served["service_tiers"]
             )
+
+
+def test_lite_codex_writes_what_the_proxy_serves_for_a_key_alias(gateway: Gateway, tmp_path: Path) -> None:
+    """A key's alias has no deployment row of its own: `lite codex` writes the display name and service tiers the
+    proxy serves the key under that alias."""
+    stock: Final = {
+        "models": [
+            {
+                "slug": f"codex-unrelated-{uuid.uuid4().hex}",
+                "display_name": "Unrelated",
+                "priority": 0,
+                "visibility": "list",
+                "supported_in_api": True,
+                "service_tiers": [],
+                "default_service_tier": None,
+                "supported_reasoning_levels": [],
+            }
+        ]
+    }
+    alias: Final = f"codex-alias-{uuid.uuid4().hex}"
+    _, environment = _install_shim(tmp_path, stock)
+    with gateway.scenario() as scenario:
+        target: Final = scenario.model(model_info={"service_tiers": ["priority"]})
+        key: Final = scenario.key(aliases={alias: target})
+        served: Final = eventually(
+            lambda: _by_slug(_entries(_catalog_response(gateway, key=key))).get(alias, {}),
+            lambda entry: entry.get("service_tiers") == [_generic_tier("priority")],
+            seconds=CONVERGENCE_SECONDS,
+        )
+        completed: Final = _run_lite_codex(gateway, key, environment)
+        assert completed.returncode == 0, (completed.stdout, completed.stderr)
+        written: Final = JSON_OBJECT.validate_json((Path(environment["CODEX_HOME"]) / CATALOG_FILENAME).read_bytes())
+        models: Final = written["models"]
+        assert isinstance(models, list), written
+        entry: Final = _by_slug([object_value(model) for model in models])[alias]
+        assert (entry["display_name"], entry["service_tiers"]) == (served["display_name"], served["service_tiers"])
 
 
 def test_lite_codex_skips_a_stock_dump_without_display_name(gateway: Gateway, tmp_path: Path) -> None:

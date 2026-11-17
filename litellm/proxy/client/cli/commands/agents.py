@@ -7,13 +7,13 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain, groupby
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import click
 import requests
@@ -585,7 +585,6 @@ class _DeploymentParams(LiteLLMBaseModel):
 class _DeploymentInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    team_id: str | None = None
     team_public_model_name: str | None = None
     blocked: bool | None = None
     service_tiers: JsonValue = None
@@ -606,18 +605,6 @@ class _DeploymentListing(LiteLLMBaseModel):
     data: tuple[_Deployment, ...]
 
 
-class _KeyTeam(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    team_id: str | None = None
-
-
-class _KeyInfo(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    info: _KeyTeam
-
-
 @dataclass(frozen=True, slots=True)
 class ModelUpstream:
     """The OpenAI model every deployment behind a public name routes to, and the reasoning effort they all pin."""
@@ -628,15 +615,16 @@ class ModelUpstream:
 
 @dataclass(frozen=True, slots=True)
 class ConfiguredModelInfo:
-    """The `model_info` the operator set on the deployments the caller's requests to a public name route to:
-    each unpaused one's raw `service_tiers` (None where unset), and the first one's `display_name` when it is a
-    non-blank string."""
+    """The service tiers and display name the proxy's own Codex catalog serves the caller for a public name, each
+    kept only where the operator configured it: `service_tiers` holds that catalog's tiers as the one configured
+    value, and is empty to keep Codex's own."""
 
     service_tiers: tuple[JsonValue, ...] = ()
     display_name: str | None = None
 
 
 _UNCONFIGURED: Final = ConfiguredModelInfo()
+_NO_CONFIGURED: Final[Mapping[str, ConfiguredModelInfo]] = MappingProxyType({})
 _Pinned: Final = TypeVar("_Pinned", bound=Hashable)
 _Fetched: Final = TypeVar("_Fetched", bound=LiteLLMBaseModel)
 
@@ -648,28 +636,6 @@ def _public_name(deployment: _Deployment) -> str:
 
 def _is_paused(deployment: _Deployment) -> bool:
     return deployment.model_info is not None and deployment.model_info.blocked is True
-
-
-def _owner_team(deployment: _Deployment) -> str | None:
-    return deployment.model_info.team_id if deployment.model_info is not None else None
-
-
-def _routable(named: Sequence[_Deployment], team_id: str | None) -> tuple[_Deployment, ...]:
-    own: Final = tuple(d for d in named if team_id is not None and _owner_team(d) == team_id)
-    shared: Final = tuple(d for d in named if _owner_team(d) is None)
-    return own or shared or tuple(named)
-
-
-def _routable_by_public_name(
-    deployments: Sequence[_Deployment], team_id: str | None
-) -> Mapping[str, tuple[_Deployment, ...]]:
-    by_name: Final = groupby(sorted(deployments, key=_public_name), key=_public_name)
-    return MappingProxyType({name: _routable(tuple(named), team_id) for name, named in by_name})
-
-
-def _live_by_public_name(routable: Mapping[str, Sequence[_Deployment]]) -> Iterator[tuple[str, _Deployment]]:
-    for name, named in routable.items():
-        yield from ((name, d) for d in named if not _is_paused(d))
 
 
 def _is_openai_host(params: _DeploymentParams) -> bool:
@@ -698,33 +664,13 @@ def _shared_by_every_deployment(values: Iterable[tuple[str, _Pinned]]) -> Mappin
     return MappingProxyType({name: value for name, value in distinct if values_per_name[name] == 1})
 
 
-def _upstreams_by_public_name(routable: Mapping[str, Sequence[_Deployment]]) -> Mapping[str, ModelUpstream]:
-    live: Final = tuple(_live_by_public_name(routable))
-    models: Final = _shared_by_every_deployment((name, _openai_model(d.litellm_params)) for name, d in live)
-    efforts: Final = _shared_by_every_deployment((name, _pinned_effort(d.litellm_params)) for name, d in live)
+def _upstreams_by_public_name(deployments: Sequence[_Deployment]) -> Mapping[str, ModelUpstream]:
+    live: Final = tuple(d for d in deployments if not _is_paused(d))
+    models: Final = _shared_by_every_deployment((_public_name(d), _openai_model(d.litellm_params)) for d in live)
+    efforts: Final = _shared_by_every_deployment((_public_name(d), _pinned_effort(d.litellm_params)) for d in live)
     return MappingProxyType(
         {name: ModelUpstream(model, efforts.get(name)) for name, model in models.items() if model is not None}
     )
-
-
-def _configured_service_tiers(deployment: _Deployment) -> JsonValue:
-    return deployment.model_info.service_tiers if deployment.model_info is not None else None
-
-
-def _configured_display_name(deployment: _Deployment) -> str | None:
-    name: Final = deployment.model_info.display_name if deployment.model_info is not None else None
-    return name if isinstance(name, str) and name.strip() else None
-
-
-def _configured_info(named: Sequence[_Deployment]) -> ConfiguredModelInfo:
-    return ConfiguredModelInfo(
-        service_tiers=tuple(_configured_service_tiers(d) for d in named if not _is_paused(d)),
-        display_name=_configured_display_name(named[0]),
-    )
-
-
-def _configured_by_public_name(routable: Mapping[str, Sequence[_Deployment]]) -> Mapping[str, ConfiguredModelInfo]:
-    return MappingProxyType({name: _configured_info(named) for name, named in routable.items()})
 
 
 def _fetch_validated(
@@ -746,19 +692,48 @@ def _fetch_validated(
         return None
 
 
-def _fetch_routable_deployments(
+def _left_to_the_proxy(
+    listed: frozenset[str], deployments: Sequence[_Deployment], field: Callable[[_DeploymentInfo], JsonValue]
+) -> frozenset[str]:
+    deployed: Final = frozenset(_public_name(d) for d in deployments)
+    configured: Final = frozenset(
+        _public_name(d) for d in deployments if d.model_info is not None and field(d.model_info) is not None
+    )
+    return configured | (listed - deployed)
+
+
+def _served_tiers(model: CodexStockModel) -> JsonValue:
+    return [{"id": tier.id, "name": tier.name, "description": tier.description} for tier in model.service_tiers]
+
+
+def _served_info(model: CodexStockModel, named: frozenset[str], tiered: frozenset[str]) -> ConfiguredModelInfo:
+    return ConfiguredModelInfo(
+        service_tiers=(_served_tiers(model),) if model.slug in tiered else (),
+        display_name=model.display_name if model.slug in named else None,
+    )
+
+
+def _fetch_configured(
     base_url: str,
     api_key: str,
+    models: Sequence[ListedModel],
+    deployments: Sequence[_Deployment] | None,
+    client_version: str | None,
     *,
     get: Callable[..., requests.Response],
-) -> Mapping[str, tuple[_Deployment, ...]]:
-    root: Final = base_url.rstrip("/")
-    listing: Final = _fetch_validated(root + "/v1/model/info", api_key, _DeploymentListing, get=get)
-    deployments: Final = listing.data if listing is not None else ()
-    if all(_owner_team(d) is None for d in deployments):
-        return _routable_by_public_name(deployments, None)
-    key: Final = _fetch_validated(root + "/key/info", api_key, _KeyInfo, get=get)
-    return _routable_by_public_name(deployments, key.info.team_id if key is not None else None)
+) -> Mapping[str, ConfiguredModelInfo]:
+    if deployments is None or client_version is None:
+        return _NO_CONFIGURED
+    listed: Final = frozenset(m.id for m in models)
+    named: Final = _left_to_the_proxy(listed, deployments, lambda info: info.display_name)
+    tiered: Final = _left_to_the_proxy(listed, deployments, lambda info: info.service_tiers)
+    if not named | tiered:
+        return _NO_CONFIGURED
+    url: Final = f"{base_url.rstrip('/')}/v1/models?{urlencode({'client_version': client_version})}"
+    served: Final = _fetch_validated(url, api_key, CodexStockCatalog, get=get)
+    if served is None:
+        return _NO_CONFIGURED
+    return MappingProxyType({m.slug: _served_info(m, named, tiered) for m in served.models})
 
 
 class _OpenCodeLimit(LiteLLMBaseModel):
@@ -1048,19 +1023,20 @@ def codex_model_sync_args(
     must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
     atomically replaced on every launch. The Codex at `binary` first lists its
     own models, so the ones the proxy serves keep that Codex's entries, an alias
-    included when every unpaused deployment /v1/model/info lists for it that
-    the key's requests route to (its team's own deployments of the name, else
-    the ones no team owns) routes to the same OpenAI model and Codex knows that
-    model, each under the display name and service tiers those deployments'
-    model_info sets, and its version, so a model it does not know offers only
-    reasoning efforts it can parse, and then
+    included when every unpaused deployment /v1/model/info lists for it routes
+    to the same OpenAI model and Codex knows that model, and its version, so a
+    model it does not know offers only reasoning efforts it can parse. A name
+    /v1/model/info shows a deployment setting `display_name` or `service_tiers`
+    on, or lists no deployment for (a key's or team's alias), takes that field
+    from the catalog the proxy serves this key at `/v1/models?client_version=...`,
+    so the proxy's own team, alias and tier rules decide it. It then
     reads the file back once before it is handed over. The key never lands in
     the file. A failed fetch, read, listing, write or read-back is reported
     rather than raised: Codex still launches with its built-in catalog and takes
     a proxy model by name via -m, and a rejected file stays on disk to be looked
     at. An unavailable /v1/model/info only leaves every alias on the fallback entry
-    and every model without its configured display name and service tiers, and an
-    unavailable /key/info reads a team-owned name as a key with no team would.
+    and every model on Codex's own display name and service tiers, and so does an
+    unavailable served catalog or an unreadable Codex version.
     """
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
@@ -1077,15 +1053,16 @@ def codex_model_sync_args(
     stock: Final = _stock_codex_models(binary, base_env, run=run)
     if isinstance(stock, ModelSyncSkipped):
         return stock
-    routable: Final = _fetch_routable_deployments(base_url, api_key, get=get)
+    model_info: Final = _fetch_validated(base_url.rstrip("/") + "/v1/model/info", api_key, _DeploymentListing, get=get)
+    deployments: Final = model_info.data if model_info is not None else None
     groups: Final = fetch_model_limits(base_url, api_key, get=get)
     version: Final = _codex_version(binary, base_env, run=run)
     catalog: Final = codex_model_catalog(
         listing,
         stock,
         instructions,
-        _upstreams_by_public_name(routable),
-        _configured_by_public_name(routable),
+        _upstreams_by_public_name(deployments or ()),
+        _fetch_configured(base_url, api_key, listing, deployments, version, get=get),
         groups,
         version,
     )
