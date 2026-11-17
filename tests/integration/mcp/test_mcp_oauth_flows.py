@@ -699,6 +699,52 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
         )
 
 
+def _scopes_requested_upstream(auth: AuthorizationServer) -> tuple[str, ...]:
+    return tuple(
+        parse_qs(urlsplit(item.target).query)["scope"][0]
+        for item in auth.drain()
+        if item.target.startswith("/authorize")
+    )
+
+
+def test_reauthorization_requests_the_configured_scope_when_the_token_response_reported_another_form(
+    gateway: Gateway,
+) -> None:
+    with (
+        mcp_peer() as peer,
+        oauth_server(scopes=("read",), granted_scope=lambda requested: f"api://x/{requested}") as auth,
+        gateway.scenario() as scenario,
+    ):
+        alias: Final = "rs" + uuid.uuid4().hex[:8]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "rs-client", "client_secret": "rs-secret", "scopes": ["read"]},
+        )
+        user: Final = scenario.user()
+        owner: Final = scenario.key(user_id=user, object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code, _ = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce, scope="read")
+        redeemed: Final = _redeem(gateway, alias, owner, client_id, code, pkce)
+        assert redeemed.status_code == 200, redeemed.text
+        stored: Final = read_rows(
+            'SELECT 1 FROM "LiteLLM_MCPUserCredentials" WHERE user_id = %s AND server_id = %s', (user, identity)
+        )
+        assert len(stored) == 1, stored
+        assert _scopes_requested_upstream(auth) == ("read",)
+        _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce, scope="read")
+        assert _scopes_requested_upstream(auth) == ("read",)
+
+
 @pytest.mark.timeout(600)
 def test_per_user_authorization_code_token_is_read_back_from_the_database_by_a_fresh_proxy_without_redis(
     gateway: Gateway, tmp_path: Path

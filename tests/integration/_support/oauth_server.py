@@ -28,6 +28,7 @@ class AuthorizationServer:
     revoked: set[str] = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
     mint: Callable[[str], str] | None = None
+    granted_scope: Callable[[str], str] | None = None
 
     @property
     def issuer(self) -> str:
@@ -58,7 +59,7 @@ class AuthorizationServer:
             "token_type": "Bearer",
             "expires_in": 3600,
             "refresh_token": refresh,
-            "scope": scope,
+            "scope": self.granted_scope(scope) if self.granted_scope is not None else scope,
         }
 
 
@@ -82,9 +83,13 @@ def _client_credentials(request: Request, form: dict[str, str]) -> tuple[str, st
 
 @contextmanager
 def oauth_server(
-    *, scopes: tuple[str, ...] = ("tools.read", "tools.call"), mint: Callable[[str], str] | None = None
+    *,
+    scopes: tuple[str, ...] = ("tools.read", "tools.call"),
+    mint: Callable[[str], str] | None = None,
+    granted_scope: Callable[[str], str] | None = None,
 ) -> Iterator[AuthorizationServer]:
-    """``mint(grant)``, when given, chooses each issued access token instead of a random one."""
+    """``mint(grant)``, when given, chooses each issued access token instead of a random one.
+    ``granted_scope(requested)``, when given, is the ``scope`` the token response reports."""
     holder: list[AuthorizationServer] = []
 
     def respond(request: Request) -> Reply:
@@ -198,5 +203,5 @@ def oauth_server(
         return _json(404, {"error": "not_found", "path": path, "method": request.method})
 
     with wire_server(respond) as wire:
-        holder.append(AuthorizationServer(wire, mint=mint))
+        holder.append(AuthorizationServer(wire, mint=mint, granted_scope=granted_scope))
         yield holder[0]

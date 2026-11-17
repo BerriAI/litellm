@@ -15072,6 +15072,8 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
         (["logs_read_data", "dashboards_read"], "mcp_all", "mcp_all"),
         (["logs_read_data", "dashboards_read"], "openid mcp_all", "openid mcp_all"),
         (["tools.read"], "mcp_allowed", "tools.read mcp_allowed"),
+        (["api://app/tools.read"], "tools.read", "tools.read"),
+        (["api://app/tools.read", "tools.read"], "tools.write", "tools.read tools.write"),
     ],
 )
 async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(

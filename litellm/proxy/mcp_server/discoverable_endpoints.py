@@ -1068,8 +1068,11 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
+    requestable: Final = server_scope_names(server)
     kept_scope: Final = (
-        None if prior_grant is None or asks_for_wildcard(scope) else " ".join(prior_grant.get("scopes") or ())
+        None
+        if prior_grant is None or asks_for_wildcard(scope)
+        else " ".join(name for name in prior_grant.get("scopes") or () if not requestable or name in requestable)
     )
     merged_scope: Final = union_scopes(kept_scope, scope)
     selected_scope: Final = (
