@@ -495,6 +495,20 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
     return message.get("role") != "assistant"
 
 
+def _offers_a_cache_slot(message: Mapping[str, object], openai_dialect: bool) -> bool:
+    if openai_dialect and not _may_carry_prompt_cache_breakpoint(message):
+        return False
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return True
+    parts: Final = _as_object_list(content)
+    if parts is None:
+        return False
+    if openai_dialect:
+        return any(map(_accepts_prompt_cache_breakpoint, parts))
+    return bool(parts) and isinstance(parts[-1], dict)
+
+
 def _points_with_their_target_roles(
     points: Sequence[CacheControlMessageInjectionPoint], covers_developer: bool
 ) -> tuple[tuple[CacheControlMessageInjectionPoint, str | None], ...]:
@@ -831,6 +845,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
                 if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
                     # Client already marked this message; don't overwrite it.
+                    continue
+
+                if targeted_role == "developer" and not _offers_a_cache_slot(messages[target_index], openai_dialect):
                     continue
 
                 if targeted_role == "developer" and not keeps_one_ttl_within_the_cap(
