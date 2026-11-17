@@ -2789,6 +2789,11 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _client_carries_own_api_key(client: object) -> bool:
+    """An OpenAI SDK client sends its own key; a bare transport client (HTTPHandler, httpx) does not."""
+    return isinstance(client, (openai.OpenAI, openai.AsyncOpenAI))
+
+
 def _json_provider_scoped_api_key(custom_llm_provider: str | None, model: str, api_key: str | None) -> str | None:
     """Return the key for a JSON provider flagged `require_api_key`, never the shared OpenAI key.
 
@@ -2840,7 +2845,7 @@ def _complete_custom_openai(
     json_provider: Final = JSONProviderRegistry.get(custom_llm_provider)
     if (
         not api_key
-        and client is None
+        and not _client_carries_own_api_key(client)
         and json_provider is not None
         and json_provider.special_handling.get("require_api_key")
     ):
@@ -8904,7 +8909,11 @@ def transcription(
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
         static_api_key: Final = (
-            (_json_provider_scoped_api_key(custom_llm_provider, model, api_key) if client is None else None)
+            (
+                _json_provider_scoped_api_key(custom_llm_provider, model, api_key)
+                if not _client_carries_own_api_key(client)
+                else None
+            )
             or api_key
             or litellm.api_key
             or litellm.openai_key
@@ -9209,7 +9218,7 @@ def speech(
         api_key = (
             (
                 _json_provider_scoped_api_key(custom_llm_provider, model, api_key or dynamic_api_key)
-                if client is None
+                if not _client_carries_own_api_key(client)
                 else None
             )
             or api_key
