@@ -44,9 +44,8 @@ impl PythonBinding for ChatCompletionsPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
         let call = project(&mut self.0, py, arguments).map_err(InvokeError::Python)?;
-        let (OptionalParams::OpenAi(params)
-        | OptionalParams::OpenAiWithClientSideCredentials(params)
-        | OptionalParams::ProviderMapped(params)) = &call.optional_params;
+        let (OptionalParams::OpenAi(params, _) | OptionalParams::ProviderMapped(params)) =
+            &call.optional_params;
         if params
             .get("stream")
             .is_some_and(|value| value == &serde_json::Value::Bool(true))

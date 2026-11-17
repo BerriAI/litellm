@@ -1,8 +1,9 @@
 use std::time::Duration;
 
+use litellm_core_utils::decline::Decline;
 use litellm_inference_chat::{
     Error,
-    types::{ChatCompletionsRequest, OptionalParams},
+    types::{ChatCompletionsRequest, ClientSideCredentials, OptionalParams},
 };
 use rstest::rstest;
 use serde_json::{Map, Value, json};
@@ -45,6 +46,10 @@ fn object(value: Value) -> Map<String, Value> {
         panic!("expected an object");
     };
     map
+}
+
+fn openai(params: Value) -> OptionalParams {
+    OptionalParams::OpenAi(object(params), ClientSideCredentials::Only(Box::default()))
 }
 
 fn anthropic_response() -> ResponseTemplate {
@@ -475,7 +480,7 @@ async fn an_openai_shaped_bedrock_call_sends_converse_inference_config(#[case] p
     let base = upstream.uri();
     complete(ChatCompletionsRequest {
         api_base: Some(&base),
-        optional_params: OptionalParams::OpenAi(object(params)),
+        optional_params: openai(params),
         ..request(
             "bedrock/us-east-1/anthropic.claude-v2",
             None,
@@ -493,7 +498,7 @@ async fn an_openai_shaped_bedrock_call_sends_converse_inference_config(#[case] p
 }
 
 #[rstest]
-#[case::unknown_openai_param(OptionalParams::OpenAi(object(json!({"top_k": 40}))))]
+#[case::unknown_openai_param(openai(json!({"top_k": 40})))]
 #[case::openai_name_in_the_provider_shape(OptionalParams::ProviderMapped(object(
     json!({"max_tokens": 16})
 )))]
@@ -516,8 +521,37 @@ async fn a_param_named_outside_its_shape_declines_before_the_call(
 
     assert_eq!(
         error.declined(),
-        Some(&litellm_core_utils::decline::Decline::new(
-            "unrecognized request parameter"
+        Some(&Decline::new("unrecognized request parameter"))
+    );
+}
+
+#[rstest]
+#[case::without_an_opt_in(&[])]
+#[case::with_an_opt_in_for_another_param(&["aws_bedrock_runtime_endpoint"])]
+#[tokio::test]
+async fn a_client_side_credential_outside_the_opt_in_declines_before_the_call(
+    #[case] allowed: &[&str],
+) {
+    let error = complete(ChatCompletionsRequest {
+        api_base: Some(UNREACHABLE_BASE),
+        optional_params: OptionalParams::OpenAi(
+            object(json!({"aws_role_name": "arn:aws:iam::123456789012:role/caller"})),
+            ClientSideCredentials::Only(allowed.iter().map(|name| name.to_string()).collect()),
+        ),
+        ..request(
+            "bedrock/us-east-1/anthropic.claude-v2",
+            None,
+            json!([{"role": "user", "content": "hi"}]),
+            json!({}),
+        )
+    })
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        error.declined(),
+        Some(&Decline::new(
+            "client-side credential needs general_settings.allow_client_side_credentials or the deployment's configurable_clientside_auth_params"
         ))
     );
 }
@@ -529,7 +563,7 @@ async fn an_openai_shaped_anthropic_call_sends_stop_sequences() {
     let base = upstream.uri();
     complete(ChatCompletionsRequest {
         api_base: Some(&base),
-        optional_params: OptionalParams::OpenAi(object(json!({"max_tokens": 16, "stop": "5"}))),
+        optional_params: openai(json!({"max_tokens": 16, "stop": "5"})),
         ..request(
             "anthropic/claude-sonnet-4-5",
             None,

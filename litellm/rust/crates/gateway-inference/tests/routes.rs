@@ -12,7 +12,7 @@ use litellm_http::{
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::{
     ChatCompletionsRoute,
-    types::{ChatCompletionsRequest, OptionalParams},
+    types::{ChatCompletionsRequest, ClientSideCredentials, OptionalParams},
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -263,6 +263,7 @@ async fn chat_errors_come_from_core(
                     .filter(|(name, _)| name.as_str() != "messages")
                     .map(|(name, value)| (name.clone(), value.clone()))
                     .collect(),
+                ClientSideCredentials::Only(Box::default()),
             ),
             api_key: Some("test-key"),
             api_base: Some(&base),

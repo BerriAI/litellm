@@ -3,9 +3,22 @@ use std::time::Duration;
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
+pub enum ClientSideCredentials {
+    Any,
+    Only(Box<[String]>),
+}
+
+impl ClientSideCredentials {
+    pub fn admits(&self, name: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Only(names) => names.iter().any(|allowed| allowed == name),
+        }
+    }
+}
+
 pub enum OptionalParams {
-    OpenAi(Map<String, Value>),
-    OpenAiWithClientSideCredentials(Map<String, Value>),
+    OpenAi(Map<String, Value>, ClientSideCredentials),
     ProviderMapped(Map<String, Value>),
 }
 

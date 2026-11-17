@@ -1,4 +1,4 @@
-use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_core_utils::{decline::Decline, get_llm_provider_logic::LlmProviders};
 use litellm_http::request::string_headers as shared_string_headers;
 use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
@@ -13,6 +13,8 @@ use super::Error;
 use crate::types::{ChatCompletionsCall, OptionalParams, ResolvedChatCompletionsRequest};
 
 const HEADER_CONTEXT: &str = "chat completions";
+
+const CLIENT_SIDE_CREDENTIAL: &str = "client-side credential needs general_settings.allow_client_side_credentials or the deployment's configurable_clientside_auth_params";
 
 pub(super) enum ChatProvider {
     Anthropic,
@@ -64,13 +66,18 @@ pub(super) fn resolve_request(
         ));
     }
     let optional_params = match call.optional_params {
-        OptionalParams::OpenAi(params) => config
-            .map_openai_params(model, params)
-            .map_err(Error::Declined)?,
-        OptionalParams::OpenAiWithClientSideCredentials(params) => {
-            let (call_config, openai): (Map<String, Value>, Map<String, Value>) = params
-                .into_iter()
-                .partition(|(name, _)| config.config_params().contains(&name.as_str()));
+        OptionalParams::OpenAi(params, client_side) => {
+            let (call_config, openai): (Map<String, Value>, Map<String, Value>) =
+                params.into_iter().partition(|(name, _)| {
+                    config.config_params().contains(&name.as_str()) && client_side.admits(name)
+                });
+            if openai.iter().any(|(name, value)| {
+                !value.is_null()
+                    && config.config_params().contains(&name.as_str())
+                    && !config.caller_config_params().contains(&name.as_str())
+            }) {
+                return Err(Error::Declined(Decline::new(CLIENT_SIDE_CREDENTIAL)));
+            }
             config
                 .map_openai_params(model, openai)
                 .map_err(Error::Declined)?

@@ -473,14 +473,28 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
 }
 
 #[rstest]
-#[case::refused_by_default("", 501, 0)]
+#[case::refused_by_default("", "", 501, 0)]
 #[case::sent_when_client_side_credentials_are_allowed(
+    "",
     "  allow_client_side_credentials: true\n",
     200,
     1
 )]
+#[case::sent_when_the_deployment_opts_into_the_endpoint(
+    "      configurable_clientside_auth_params: [aws_bedrock_runtime_endpoint]\n",
+    "",
+    200,
+    1
+)]
+#[case::refused_when_the_deployment_opts_into_another_param(
+    "      configurable_clientside_auth_params: [aws_role_name]\n",
+    "",
+    501,
+    0
+)]
 #[tokio::test]
 async fn chat_sends_a_caller_supplied_bedrock_endpoint_only_under_client_side_credentials(
+    #[case] deployment_settings: &str,
     #[case] general_settings: &str,
     #[case] status: u16,
     #[case] caller_host_requests: u64,
@@ -505,7 +519,7 @@ async fn chat_sends_a_caller_supplied_bedrock_endpoint_only_under_client_side_cr
         .mount(&caller_host)
         .await;
     let config = Config::from_yaml(&format!(
-        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: bedrock/us-east-1/anthropic.claude-v2\n      api_base: {}\n      api_key: test-key\ngeneral_settings:\n  master_key: gateway-key\n{general_settings}",
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: bedrock/us-east-1/anthropic.claude-v2\n      api_base: {}\n      api_key: test-key\n{deployment_settings}general_settings:\n  master_key: gateway-key\n{general_settings}",
         upstream.uri()
     ))
     .unwrap();
