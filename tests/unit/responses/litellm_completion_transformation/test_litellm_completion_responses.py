@@ -5724,6 +5724,185 @@ def test_transform_chat_completion_response_null_finish_reason_is_incomplete():
     assert result_empty.status == "incomplete"
 
 
+def _web_search_turn(
+    content: str | None,
+    client_calls: tuple[ChatCompletionMessageToolCall, ...],
+    search_status: Literal["in_progress", "completed"],
+) -> Message:
+    search_id: Final = "srvtoolu_weather"
+    search_input: Final = {"query": "weather sf"}
+    search_result: Final = {"type": "web_search_tool_result", "tool_use_id": search_id, "content": []}
+    finished_search_fields: Final = {"web_search_results": [search_result]} if search_status == "completed" else {}
+    return Message(
+        content=content,
+        role="assistant",
+        tool_calls=[
+            *client_calls,
+            ChatCompletionMessageToolCall(
+                id=search_id,
+                type="function",
+                function=Function(name="web_search", arguments=json.dumps(search_input)),
+            ),
+        ],
+        provider_specific_fields={
+            "web_search_calls": [
+                build_web_search_call(
+                    tool_id=search_id, tool_input=search_input, result=search_result, status=search_status
+                )
+            ],
+            **finished_search_fields,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "finish_reason", "expected_statuses"),
+    [
+        pytest.param(
+            Message(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionMessageToolCall(
+                        id="call_patch",
+                        type="function",
+                        function=Function(name="apply_patch", arguments='{"input": "*** Begin Pa'),
+                    )
+                ],
+            ),
+            "length",
+            (("custom_tool_call", "incomplete"),),
+            id="cut_custom_tool_call",
+        ),
+        pytest.param(
+            Message(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionMessageToolCall(
+                        id="call_write",
+                        type="function",
+                        function=Function(name="write_file", arguments='{"path": "numbers.txt"}'),
+                    )
+                ],
+            ),
+            "length",
+            (("function_call", "incomplete"),),
+            id="cut_tool_call_with_parsed_partial_input",
+        ),
+        pytest.param(
+            Message(
+                content="",
+                role="assistant",
+                reasoning_content="The user wants the system prompt.",
+                refusal="I can't help with that.",
+            ),
+            "content_filter",
+            (("reasoning", "completed"), ("message", "incomplete")),
+            id="refusal_after_reasoning",
+        ),
+        pytest.param(
+            Message(
+                content=None,
+                role="assistant",
+                thinking_blocks=[{"type": "redacted_thinking", "data": "redacted-payload"}],
+            ),
+            "length",
+            (("reasoning", "incomplete"),),
+            id="cut_redacted_reasoning",
+        ),
+        pytest.param(
+            _web_search_turn("The weather in San Francisco today is sunny with a high of", (), "completed"),
+            "length",
+            (("message", "incomplete"), ("web_search_call", "completed")),
+            id="answer_cut_after_web_search",
+        ),
+        pytest.param(
+            _web_search_turn(
+                None,
+                (
+                    ChatCompletionMessageToolCall(
+                        id="toolu_lookup",
+                        type="function",
+                        function=Function(name="lookup", arguments='{"q": "par'),
+                    ),
+                ),
+                "completed",
+            ),
+            "length",
+            (("function_call", "incomplete"), ("web_search_call", "completed")),
+            id="client_call_cut_before_web_search",
+        ),
+        pytest.param(
+            _web_search_turn("Let me look that up.", (), "in_progress"),
+            "length",
+            (("message", "completed"), ("web_search_call", "in_progress")),
+            id="cut_on_pending_web_search",
+        ),
+        pytest.param(
+            Message(
+                content="Fetching the page.",
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionMessageToolCall(
+                        id="srvtoolu_fetch",
+                        type="function",
+                        function=Function(name="web_fetch", arguments='{"url": "https://exa'),
+                    )
+                ],
+            ),
+            "length",
+            (("message", "completed"), ("function_call", "incomplete")),
+            id="cut_on_server_tool_call_before_its_result",
+        ),
+        pytest.param(
+            Message(
+                content="The script printed 1, so the next step is",
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionMessageToolCall(
+                        id="srvtoolu_exec",
+                        type="function",
+                        function=Function(name="bash_code_execution", arguments='{"command": "echo 1"}'),
+                    )
+                ],
+                provider_specific_fields={
+                    "tool_results": [
+                        {
+                            "type": "bash_code_execution_tool_result",
+                            "tool_use_id": "srvtoolu_exec",
+                            "content": {
+                                "type": "bash_code_execution_result",
+                                "stdout": "1\n",
+                                "stderr": "",
+                                "return_code": 0,
+                            },
+                        }
+                    ]
+                },
+            ),
+            "length",
+            (("message", "incomplete"), ("function_call", "completed")),
+            id="answer_cut_after_code_execution",
+        ),
+    ],
+)
+def test_only_the_item_a_response_was_cut_on_says_incomplete(
+    message: Message, finish_reason: str, expected_statuses: tuple[tuple[str, str], ...]
+) -> None:
+    response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={"tools": [{"type": "custom", "name": "apply_patch"}]},
+        chat_completion_response=ModelResponse(
+            id="resp-cut",
+            choices=[Choices(index=0, finish_reason=finish_reason, message=message)],
+            model="claude-sonnet-5-5",
+        ),
+    )
+
+    assert tuple((item.type, item.status) for item in response.output) == expected_statuses
+
+
 def test_transform_chat_completion_response_echoes_request_params():
     """
     A chat completion response never carries the caller's request fields, so

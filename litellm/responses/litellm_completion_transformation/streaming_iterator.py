@@ -19,9 +19,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     has_server_tool_search,
     is_anthropic_tool_search_use,
 )
-from litellm.responses.litellm_completion_transformation.transformation import (
-    LiteLLMCompletionResponsesConfig,
-)
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.streaming_iterator import (
     SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
     ResponsesAPIStreamingIterator,
@@ -469,7 +467,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             self._pending_tool_events.append(done_event)
 
-            item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, final_args, "completed")
+            item_kwargs = self._tool_call_item_kwargs(
+                call_id,
+                fn_name,
+                final_args,
+                LiteLLMCompletionResponsesConfig.tool_call_status(
+                    litellm_complete_object.choices[0], call_id, final_args, streamed=True
+                ),
+            )
             item_kwargs["id"] = self._tool_item_id_by_call_id.setdefault(call_id, item_kwargs["id"])
             item_done_event = OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
@@ -866,7 +871,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": self._cached_item_id,
-                    "status": "completed",
+                    "status": LiteLLMCompletionResponsesConfig.responses_item_status(
+                        litellm_complete_object.choices[0], "message"
+                    ),
                     "type": "message",
                     "role": "assistant",
                     "content": [
@@ -1364,6 +1371,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 request_input=self.request_input,
                 chat_completion_response=built,
                 responses_api_request=self.responses_api_request,
+                streamed=True,
             )
         )
         partial: Final = self._with_encoded_response_id(
@@ -1388,6 +1396,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     request_input=self.request_input,
                     chat_completion_response=litellm_model_response,
                     responses_api_request=self.responses_api_request,
+                    streamed=True,
                 )
             )
 

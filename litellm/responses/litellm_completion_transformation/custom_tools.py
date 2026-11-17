@@ -146,10 +146,10 @@ def build_tool_call_item_kwargs(
         "status": status,
     }
     if custom:
-        if status == "completed":
-            kwargs["input"] = unwrap_custom_tool_arguments(arguments_or_input)
-        else:
+        if status == "in_progress":
             kwargs["input"] = ""
+        else:
+            kwargs["input"] = unwrap_custom_tool_arguments(arguments_or_input)
     else:
         kwargs["arguments"] = arguments_or_input
     return kwargs

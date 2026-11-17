@@ -1497,6 +1497,198 @@ async def test_caller_function_named_like_the_search_tool_streams_as_function_ca
     assert "response.function_call_arguments.done" in [event["type"] for event in events]
 
 
+StreamChunks = Callable[[], tuple[ModelResponseStream, ...]]
+
+
+def _text_opening_a_tool_call_chunk(content: str, arguments: str = "") -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=content,
+                    tool_calls=[
+                        {
+                            "id": "call_weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": arguments},
+                            "index": 0,
+                        }
+                    ],
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _tool_arguments_chunk(arguments: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[{"type": "function", "function": {"arguments": arguments}, "index": 0}],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def _second_tool_call_chunk(arguments: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_ls",
+                            "type": "function",
+                            "function": {"name": "run_command", "arguments": arguments},
+                            "index": 1,
+                        }
+                    ],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("stream", "expected_statuses"),
+    [
+        (lambda: (_chunk("Hello"), _chunk(" wor", finish_reason="length")), (("message", "incomplete"),)),
+        (lambda: (_chunk("Hello"), _chunk(" wor", finish_reason="content_filter")), (("message", "incomplete"),)),
+        (lambda: (_chunk("Hello"), _chunk(" world", finish_reason="stop")), (("message", "completed"),)),
+        (
+            lambda: (
+                _text_opening_a_tool_call_chunk("Writing the file. "),
+                _tool_arguments_chunk('{"city": "Par', finish_reason="length"),
+            ),
+            (("message", "completed"), ("function_call", "incomplete")),
+        ),
+        (
+            lambda: (_tool_call_chunk(), _second_tool_call_chunk('{"command": "ls"}', finish_reason="length")),
+            (("function_call", "completed"), ("function_call", "completed")),
+        ),
+        (
+            lambda: (_tool_call_chunk(), _second_tool_call_chunk("{}", finish_reason="length")),
+            (("function_call", "completed"), ("function_call", "incomplete")),
+        ),
+        (
+            lambda: (_tool_call_chunk(), _second_tool_call_chunk('{"command": "l', finish_reason="length")),
+            (("function_call", "completed"), ("function_call", "incomplete")),
+        ),
+        (
+            lambda: (_reasoning_chunk("let me think"), _chunk("Hel", finish_reason="length")),
+            (("reasoning", "completed"), ("message", "incomplete")),
+        ),
+        (lambda: (_reasoning_chunk("let me th", finish_reason="length"),), (("reasoning", "incomplete"),)),
+    ],
+    ids=[
+        "text_cut",
+        "text_filtered",
+        "text_finished",
+        "text_then_cut_tool_call",
+        "cut_after_whole_tool_calls",
+        "cut_before_any_argument",
+        "second_tool_call_cut",
+        "reasoning_then_cut_text",
+        "cut_reasoning",
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_only_the_item_a_streamed_response_was_cut_on_says_incomplete_in_both_events(
+    stream: StreamChunks, expected_statuses: tuple[tuple[str, str], ...], sync_mode: bool
+) -> None:
+    events: Final = await _collect_events(_build_iterator(stream()), sync_mode)
+
+    terminal_statuses: Final = tuple((item.type, item.status) for item in events[-1].response.output)
+    done_statuses: Final = sorted(
+        (event.item.type, event.item.status)
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "status", None) is not None
+    )
+    assert terminal_statuses == expected_statuses
+    assert done_statuses == sorted(pair for pair in expected_statuses if pair[0] != "reasoning")
+
+
+def _apply_patch_call_chunk(arguments: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_patch",
+                            "type": "function",
+                            "function": {"name": "apply_patch", "arguments": arguments},
+                            "index": 0,
+                        }
+                    ],
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_cut_custom_tool_call_keeps_its_partial_input_in_the_done_event(sync_mode: bool) -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [
+                _apply_patch_call_chunk('{"content": "*** Begin Patch\\n'),
+                _tool_arguments_chunk("*** Add File: a.py", finish_reason="length"),
+            ]
+        ),
+        request_input="Add a.py",
+        responses_api_request={"tools": [{"type": "custom", "name": "apply_patch"}]},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    done_items: Final = tuple(
+        (event.item.type, event.item.status, event.item.input)
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    )
+    final_items: Final = tuple((item.type, item.status, item.input) for item in events[-1].response.output)
+    assert done_items == final_items
+    assert [(item_type, status) for item_type, status, _ in done_items] == [("custom_tool_call", "incomplete")]
+    assert done_items[0][2] == '{"content": "*** Begin Patch\\n*** Add File: a.py'
+
+
 def _serialized_sequence_numbers(events: Iterable[BaseLiteLLMOpenAIResponseObject]) -> list[int]:
     payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
     assert all("sequence_number" in payload for payload in payloads), [
