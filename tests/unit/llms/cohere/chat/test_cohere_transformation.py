@@ -183,6 +183,112 @@ class TestCohereV2Transform:
         assert result == {"stop_sequences": ["END", "STOP"]}
 
 
+_WEATHER_CALL: Final = {
+    "id": "call_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+}
+_DICT_ARGUMENTS_TURN: Final = {
+    "role": "assistant",
+    "tool_calls": [{**_WEATHER_CALL, "function": {"name": "get_weather", "arguments": {}}}],
+}
+_THINKING_PART: Final = {"type": "thinking", "thinking": "I should look it up.", "signature": "c2ln"}
+
+
+def _history(*assistant_turns: object) -> list[object]:
+    return [
+        {"role": "system", "content": "Be brief."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the weather here?"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/tokyo.png"}},
+            ],
+        },
+        *assistant_turns,
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"weather": "sunny"}'},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("assistant_turns", "expected_assistant_turns"),
+    [
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            **_WEATHER_CALL,
+                            "index": 0,
+                            "provider_specific_fields": {"thought_signature": "c2ln"},
+                            "extra_content": {"google": {"thought_signature": "c2ln"}},
+                        }
+                    ],
+                    "reasoning_content": "I should look it up.",
+                    "provider_specific_fields": {"refusal": None},
+                }
+            ],
+            [{"role": "assistant", "tool_calls": [_WEATHER_CALL]}],
+            id="gemini_tool_call_fields_dropped",
+        ),
+        pytest.param(
+            [litellm.Message(content=None, tool_calls=[{**_WEATHER_CALL, "index": 0}])],
+            [{"role": "assistant", "tool_calls": [_WEATHER_CALL]}],
+            id="litellm_message_from_an_earlier_response_rebuilt",
+        ),
+        pytest.param(
+            [{"role": "assistant", "content": "Let me check.", "tool_calls": [_WEATHER_CALL]}],
+            [{"role": "assistant", "tool_calls": [_WEATHER_CALL], "tool_plan": "Let me check."}],
+            id="text_next_to_tool_calls_becomes_tool_plan",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [_THINKING_PART, {"type": "text", "text": "Let me check."}],
+                    "tool_calls": [_WEATHER_CALL],
+                }
+            ],
+            [{"role": "assistant", "tool_calls": [_WEATHER_CALL], "tool_plan": "Let me check."}],
+            id="text_parts_next_to_tool_calls_become_tool_plan",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": [_THINKING_PART]},
+                {"role": "assistant", "content": [_THINKING_PART, {"type": "text", "text": "It is sunny."}]},
+            ],
+            [{"role": "assistant", "content": [{"type": "text", "text": "It is sunny."}]}],
+            id="thinking_parts_and_thought_only_turns_dropped",
+        ),
+        pytest.param(
+            [{"role": "assistant", "content": "It is sunny.", "tool_calls": []}],
+            [{"role": "assistant", "content": "It is sunny."}],
+            id="empty_tool_calls_dropped_and_text_kept_as_content",
+        ),
+        pytest.param(
+            [_DICT_ARGUMENTS_TURN],
+            [_DICT_ARGUMENTS_TURN],
+            id="message_outside_the_cohere_schema_forwarded_unchanged",
+        ),
+    ],
+)
+def test_v2_request_rebuilds_history_from_other_providers_into_cohere_messages(
+    assistant_turns: list[object],
+    expected_assistant_turns: list[dict[str, object]],
+):
+    data: Final = CohereV2ChatConfig().transform_request(
+        model="command-a-03-2025",
+        messages=_history(*assistant_turns),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["messages"] == _history(*expected_assistant_turns)
+
+
 @pytest.mark.asyncio
 async def test_cohere_request_body_with_allowed_params():
     """
