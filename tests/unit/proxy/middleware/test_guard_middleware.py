@@ -831,3 +831,129 @@ async def test_probe_bypass_follows_the_route_path_under_a_root_path(monkeypatch
     monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
     reached, guarded = await _run_probe(_probe_scope(path, root_path=root_path))
     assert (reached, guarded) == (bypasses_guard, not bypasses_guard)
+
+
+_TRUSTED_PEER: Final = "10.1.1.1"
+_REAL_CLIENT: Final = "198.51.100.9"
+
+
+def _forwarded_headers(forwarded_for, forwarded_proto):
+    return [
+        (name, value.encode())
+        for name, value in ((b"x-forwarded-for", forwarded_for), (b"x-forwarded-proto", forwarded_proto))
+        if value
+    ]
+
+
+_DOWNSTREAM_IDENTITY_CASES: Final = [
+    pytest.param(_TRUSTED_PEER, _REAL_CLIENT, "https", (_REAL_CLIENT, 0), "https", id="trusted-peer-with-headers"),
+    pytest.param(_TRUSTED_PEER, _REAL_CLIENT, None, (_REAL_CLIENT, 0), "http", id="trusted-peer-forwarded-for-only"),
+    pytest.param(_TRUSTED_PEER, None, "https", (_TRUSTED_PEER, 50000), "https", id="trusted-peer-proto-only"),
+    pytest.param(_TRUSTED_PEER, None, None, (_TRUSTED_PEER, 50000), "http", id="trusted-peer-without-headers"),
+    pytest.param(
+        "203.0.113.7", _REAL_CLIENT, "https", ("203.0.113.7", 50000), "http", id="untrusted-peer-with-headers"
+    ),
+]
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+@pytest.mark.parametrize(("peer", "forwarded_for", "forwarded_proto", "client", "scheme"), _DOWNSTREAM_IDENTITY_CASES)
+def test_http_downstream_gets_the_client_and_scheme_guard_resolved(
+    monkeypatch, peer, forwarded_for, forwarded_proto, client, scheme
+):
+    from starlette.responses import JSONResponse
+
+    seen: Final = []
+
+    async def downstream(scope, receive, send):
+        seen.append((scope["client"], scope["scheme"]))
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "10.0.0.0/8")
+    headers: Final = {"x-forwarded-for": forwarded_for or "", "x-forwarded-proto": forwarded_proto or ""}
+    response: Final = TestClient(_ClientIPInjector(GuardMiddleware(downstream), peer)).get(
+        "/ping", headers={name: value for name, value in headers.items() if value}
+    )
+    assert response.status_code == 200
+    assert seen == [(client, scheme)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("peer", "forwarded_for", "forwarded_proto", "client", "scheme"), _DOWNSTREAM_IDENTITY_CASES)
+async def test_websocket_downstream_gets_the_client_and_scheme_guard_resolved(
+    monkeypatch, peer, forwarded_for, forwarded_proto, client, scheme
+):
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "10.0.0.0/8")
+    scope: Final = {
+        **_ws_scope(peer),
+        "scheme": "ws",
+        "headers": _forwarded_headers(forwarded_for, forwarded_proto),
+    }
+    seen: Final = await _downstream_identity(scope)
+    assert seen == [(client, scheme.replace("http", "ws"))]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("peer", "forwarded_for", "forwarded_proto", "client", "scheme"), _DOWNSTREAM_IDENTITY_CASES)
+async def test_probe_downstream_gets_the_client_and_scheme_guard_resolved(
+    monkeypatch, peer, forwarded_for, forwarded_proto, client, scheme
+):
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "10.0.0.0/8")
+    scope: Final = {
+        **_probe_scope("/health/liveliness", peer=peer),
+        "scheme": "http",
+        "headers": _forwarded_headers(forwarded_for, forwarded_proto),
+    }
+    seen: Final = await _downstream_identity(scope)
+    assert seen == [(client, scheme)]
+
+
+async def _downstream_identity(scope):
+    seen: Final = []
+
+    async def app(scope, receive, send):
+        seen.append((scope["client"], scope["scheme"]))
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        return None
+
+    await GuardMiddleware(app)(scope, receive, send)
+    return seen
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+@pytest.mark.parametrize(
+    ("blocked", "peer", "forwarded_for", "status"),
+    [
+        pytest.param(_TRUSTED_PEER, _TRUSTED_PEER, None, 403, id="blocklisted-ingress-address"),
+        pytest.param(_REAL_CLIENT, _TRUSTED_PEER, _REAL_CLIENT, 403, id="blocklisted-client-behind-trusted-proxy"),
+        pytest.param(_TRUSTED_PEER, "203.0.113.7", _TRUSTED_PEER, 200, id="forged-entry-from-untrusted-peer"),
+    ],
+)
+def test_guard_still_decides_on_the_raw_peer_and_its_own_resolution(monkeypatch, blocked, peer, forwarded_for, status):
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", blocked)
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "10.0.0.0/8")
+    headers: Final = {"x-forwarded-for": forwarded_for} if forwarded_for else {}
+    assert TestClient(_ClientIPInjector(_build_app(), peer)).get("/ping", headers=headers).status_code == status
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_prompt_text_never_reaches_guard_logs(monkeypatch, caplog):
+    import logging
+
+    marker: Final = "CONFIDENTIAL-PROMPT-MARKER-7f3a"
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    caplog.set_level(logging.DEBUG)
+    response: Final = TestClient(_ClientIPInjector(_build_app(), _unique_ip())).post(
+        "/ping", json={"messages": [{"role": "user", "content": f"<script>alert(1)</script> {marker}"}]}
+    )
+    assert response.status_code == 400
+    assert any("Potential attack detected" in record.getMessage() for record in caplog.records)
+    assert not [record for record in caplog.records if marker in record.getMessage()]

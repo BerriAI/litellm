@@ -39,6 +39,22 @@ Design constraints honored here:
   rewrite the client address), and the Rust forward mode, whose
   ``RustPeerMiddleware`` runs uvicorn's ``ProxyHeadersMiddleware`` with the
   ``FORWARDED_ALLOW_IPS`` trust (set that so it trusts no peer).
+- Guard keeps the raw socket peer, and litellm's own code gets the identity
+  guard resolved. Everything the wrapper passes on (requests guard admits,
+  admitted WebSocket handshakes and the probes) carries a copy of the scope
+  whose ``client`` is the client resolved above and whose ``scheme`` follows
+  ``X-Forwarded-Proto`` (``http``, ``https``, ``ws`` or ``wss``, the way
+  uvicorn's ``ProxyHeadersMiddleware`` reads it), but only when the socket peer
+  is listed in ``LITELLM_GUARD_TRUSTED_PROXIES``. Otherwise the scope is
+  untouched. Without this, turning off uvicorn's ``proxy_headers`` would leave
+  the proxy's IP-based authorization (``IPAddressUtils.get_mcp_client_ip``)
+  seeing the ingress address and its HTTPS checks (``is_request_https``,
+  which decides the ``Secure`` cookie flag) seeing ``http`` behind TLS
+  termination.
+- Request bodies are never previewed in guard's logs. Guard logs up to 100
+  characters of a field that trips penetration detection, and its default list
+  of redacted body fields does not name any of the places a prompt travels in,
+  so the wrapper redacts them all (``_PROMPT_BODY_FIELDS``).
 - WebSocket scopes are not screened by guard's HTTP pipeline. The wrapper
   enforces ``LITELLM_GUARD_BLOCKED_IPS`` and ``LITELLM_GUARD_ALLOWED_IPS``
   (IPs or CIDRs) on the handshake, resolving the client the way guard does
@@ -268,6 +284,49 @@ def _ip_lists_permit(scope: Scope) -> bool:
     return permitted
 
 
+_FORWARDED_SCHEMES: Final = frozenset({"http", "https", "ws", "wss"})
+
+
+def _forwarded_scheme(scope: Scope) -> str | None:
+    """uvicorn's ``ProxyHeadersMiddleware`` rule: the last ``X-Forwarded-Proto``
+    line when it is one of http, https, ws or wss (http and https read as ws and
+    wss on a WebSocket scope)."""
+    view: Final = _CLIENT_SCOPE_VIEW.validate_python(scope)
+    lines: Final = [value for name, value in view["headers"] if name == b"x-forwarded-proto"]
+    if not lines:
+        return None
+    proto: Final = lines[-1].decode("latin1").strip()
+    if proto not in _FORWARDED_SCHEMES:
+        return None
+    return proto.replace("http", "ws") if scope["type"] == "websocket" else proto
+
+
+def _scope_with_guard_resolved_identity(scope: Scope) -> Scope:
+    """A copy of the scope carrying the client and scheme guard resolved, when
+    the socket peer is a trusted proxy; the scope itself otherwise."""
+    trusted: Final = _networks(_validated_entries("LITELLM_GUARD_TRUSTED_PROXIES", allow_unix=True))
+    peer_text: Final = _peer_and_forwarded_for(scope)[0]
+    peer: Final = _parse_ip(peer_text) if peer_text is not None else None
+    if peer is None or not _in_any(peer, trusted):
+        return scope
+    client: Final = _resolve_client(scope, trusted, _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1))
+    scheme: Final = _forwarded_scheme(scope)
+    client_update: Final = {"client": (str(client), 0)} if client not in (None, _canonical(peer)) else {}
+    scheme_update: Final = {"scheme": scheme} if scheme else {}
+    return {**scope, **client_update, **scheme_update}
+
+
+class _ResolvedIdentityApp:
+    """The app guard (and the wrapper, for what bypasses guard) passes requests
+    to: the downstream app, called with the identity guard resolved."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.app(_scope_with_guard_resolved_identity(scope), receive, send)
+
+
 def _is_default_probe(scope: Scope) -> bool:
     """Exact probe path under the root path (the route path guard matches on),
     and only while the operator has not replaced the exclusions with
@@ -293,6 +352,22 @@ def server_proxy_header_overrides() -> Mapping[str, bool]:
     so guard alone decides who the client is. Nothing changes when it is off.
     """
     return {"proxy_headers": False} if guard_enabled() else {}
+
+
+_PROMPT_BODY_FIELDS: Final = frozenset(
+    {
+        "messages",
+        "content",
+        "prompt",
+        "input",
+        "system",
+        "instructions",
+        "contents",
+        "text",
+        "query",
+        "documents",
+    }
+)
 
 
 def _credential_header_names() -> frozenset[str]:
@@ -362,6 +437,7 @@ def _build_guard_config() -> object:
         "exclude_paths": list(_csv(_env_str(GUARD_EXCLUDED_PATHS_ENV))),
         "ipinfo_token": ipinfo_token_env or None,
         "log_sensitive_headers": _credential_header_names(),
+        "log_sensitive_body_fields": _PROMPT_BODY_FIELDS,
     }
     return security_config_cls(**kwargs)
 
@@ -410,6 +486,7 @@ class GuardMiddleware:
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
+        self._downstream: Final = _ResolvedIdentityApp(app)
         self._guard_asgi: ASGIApp | None = None
         self._guard_failed = False
 
@@ -436,7 +513,7 @@ class GuardMiddleware:
             )
             return None
 
-        self._guard_asgi = middleware_cls(self.app, config=_build_guard_config())
+        self._guard_asgi = middleware_cls(self._downstream, config=_build_guard_config())
         return self._guard_asgi
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -448,7 +525,7 @@ class GuardMiddleware:
             # Same scope guard gives its own exclusions: the IP lists still
             # apply, rate limits, bans and payload inspection do not.
             if _ip_lists_permit(scope):
-                await self.app(scope, receive, send)
+                await self._downstream(scope, receive, send)
             else:
                 await _ip_rejected_response()(scope, receive, send)
             return
@@ -461,7 +538,7 @@ class GuardMiddleware:
             if guard_asgi is None or not _ip_lists_permit(scope):
                 await send({"type": "websocket.close", "code": WS_POLICY_VIOLATION})
                 return
-            await self.app(scope, receive, send)
+            await self._downstream(scope, receive, send)
             return
         if guard_asgi is None:
             # Flag on, package missing: fail closed with 503 rather than
