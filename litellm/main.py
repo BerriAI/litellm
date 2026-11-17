@@ -1974,11 +1974,20 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     return response
 
 
-def _validate_vispark_api_key(provider: str | None, api_key: str | None, model: str, has_client: bool = False) -> None:
-    if provider == "vispark" and not api_key and not has_client:
-        raise litellm.AuthenticationError(
-            message="Set VISPARK_LAB_API_KEY or pass api_key", llm_provider="vispark", model=model
-        )
+# OpenAI-compatible providers that must never fall back to litellm.openai_key / OPENAI_API_KEY:
+# sending an OpenAI key to a third-party base URL would leak it.
+_PROVIDERS_REQUIRING_OWN_API_KEY: Final = {
+    "vispark": "VISPARK_LAB_API_KEY",
+    "ezkielyna": "EZKIELYNA_API_KEY",
+}
+
+
+def _validate_provider_api_key(provider: str | None, api_key: str | None, model: str, has_client: bool = False) -> None:
+    if provider is None:
+        return
+    env_var = _PROVIDERS_REQUIRING_OWN_API_KEY.get(provider)
+    if env_var is not None and not api_key and not has_client:
+        raise litellm.AuthenticationError(message=f"Set {env_var} or pass api_key", llm_provider=provider, model=model)
 
 
 def _complete_text_completion_openai(
@@ -2013,7 +2022,7 @@ def _complete_text_completion_openai(
     openai.api_version = None
     # set API KEY
 
-    _validate_vispark_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
+    _validate_provider_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
 
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
 
@@ -2883,7 +2892,7 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    _validate_vispark_api_key(
+    _validate_provider_api_key(
         custom_llm_provider,
         api_key,
         model,

@@ -200,3 +200,41 @@ async def test_ezkielyna_anthropic_messages_request_is_bridged_to_chat_completio
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert body["max_tokens"] == 32
     assert response["content"][0]["text"] == "Hello from Ezkielyna"
+
+
+@pytest.mark.parametrize("text_completion", (False, True))
+def test_ezkielyna_missing_key_rejects_before_openai_fallback(monkeypatch: pytest.MonkeyPatch, text_completion: bool):
+    monkeypatch.delenv("EZKIELYNA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__regex=r"https://api\.ezkielyna\.store/v1/.*").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.AuthenticationError, match="EZKIELYNA_API_KEY"):
+            if text_completion:
+                litellm.text_completion(model="ezkielyna/deepseek-v4.1-flash", prompt="Hello")
+            else:
+                litellm.completion(
+                    model="ezkielyna/deepseek-v4.1-flash", messages=[{"role": "user", "content": "Hello"}]
+                )
+    assert route.call_count == 0
+
+
+def test_ezkielyna_http_transport_rejects_unused_sdk_credentials(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("EZKIELYNA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    with OpenAI(api_key="ezkielyna-client-key", base_url="https://api.ezkielyna.store/v1") as client:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://api.ezkielyna.store/v1/chat/completions").respond(
+                200, json=_CHAT_COMPLETION
+            )
+            with pytest.raises(litellm.AuthenticationError, match="EZKIELYNA_API_KEY"):
+                litellm.completion(
+                    model="ezkielyna/deepseek-v4.1-flash",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    client=client,
+                )
+    assert route.call_count == 0
