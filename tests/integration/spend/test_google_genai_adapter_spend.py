@@ -47,7 +47,6 @@ _CHAT_FRAMES: Final = tuple(
     )
 ) + (b"data: [DONE]\n\n",)
 
-_CALL_TYPE: Final = {False: "agenerate_content", True: "agenerate_content_stream"}
 _SPEND_ROWS: Final = 'SELECT litellm_call_id, call_type, model_group, spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s'
 
 
@@ -84,7 +83,7 @@ def test_generate_content_adapter_writes_one_row_under_the_served_call_id(gatewa
             seconds=70,
         )
         assert [(row["litellm_call_id"], row["call_type"], row["model_group"]) for row in rows] == [
-            (response.headers["x-litellm-call-id"], _CALL_TYPE[stream], model)
+            (response.headers["x-litellm-call-id"], "acompletion", model)
         ], rows
         assert float(rows[0]["spend"]) == pytest.approx(11 * 0.001 + 7 * 0.002), rows
         info: Final = eventually(

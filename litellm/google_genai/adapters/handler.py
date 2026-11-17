@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.rules import Rules
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CustomPricingLiteLLMParams, ModelResponse
+from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams, ModelResponse
 
 from .transformation import GoogleGenAIAdapter
 
@@ -83,6 +83,7 @@ class GenerateContentToCompletionHandler:
         litellm_params: GenericLiteLLMParams | None = None,
         extra_kwargs: Mapping[str, object] | None = None,
         custom_logging_obj: LiteLLMLoggingObj | None = None,
+        completion_call_type: CallTypes = CallTypes.acompletion,
     ) -> GenerateContentCompletionKwargs:
         """Prepare kwargs for litellm.completion/acompletion"""
 
@@ -97,6 +98,8 @@ class GenerateContentToCompletionHandler:
         stream_options: Final = _adapter_stream_options(request_kwargs.get("stream_options")) if stream else None
         forwarded_kwargs: Final = _forwarded_request_kwargs(request_kwargs, custom_logging_obj)
         logging_obj: Final = forwarded_kwargs.get("litellm_logging_obj")
+        if isinstance(logging_obj, LiteLLMLoggingObj) and custom_logging_obj is None:
+            logging_obj.call_type = completion_call_type.value
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.update_messages(completion_request["messages"])
         if stream and isinstance(logging_obj, LiteLLMLoggingObj):
@@ -197,6 +200,7 @@ class GenerateContentToCompletionHandler:
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
             custom_logging_obj=custom_logging_obj,
+            completion_call_type=CallTypes.completion,
         )
 
         completion_response: Final = litellm.completion(**completion_kwargs)

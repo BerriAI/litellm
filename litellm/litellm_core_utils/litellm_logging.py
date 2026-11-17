@@ -6197,8 +6197,6 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
-        if isinstance(result, ModelResponse):
-            return result
         httpx_response: Final[Response | None] = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
