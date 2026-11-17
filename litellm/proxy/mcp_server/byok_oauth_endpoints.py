@@ -187,7 +187,9 @@ async def _reserve_auth_code_slot(user_id: str) -> Literal["ok", "user_limit", "
 
 async def _claim_auth_code(code: str) -> "ClaimOutcome":
     """Atomic one-time use across workers (RFC 6749 section 4.1.2)."""
-    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+    from litellm.proxy.mcp_server.gateway_dcr_flow import (
+        _SingleUseGuard,  # pyright: ignore[reportPrivateUsage]  # the gateway's cross-worker one-time claim, shared with BYOK codes
+    )
     from litellm.proxy.proxy_server import user_api_key_cache
 
     return await _SingleUseGuard(user_api_key_cache).claim(_AUTH_CODE_CLAIM_PREFIX + code, _AUTH_CODE_TTL_SECONDS)
@@ -963,15 +965,16 @@ async def byok_authorize_post(
     if not user_id:
         raise HTTPException(status_code=401, detail="login_required")
 
-    match await _reserve_auth_code_slot(user_id):
+    reservation: Final = await _reserve_auth_code_slot(user_id)
+    match reservation:
         case "ok":
             pass
         case "user_limit":
             raise HTTPException(status_code=429, detail="Too many pending authorization flows for this user")
         case "unavailable":
             raise HTTPException(status_code=503, detail="Too many pending authorization flows")
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(reservation)
 
     auth_code: Final = str(uuid.uuid4())
     stored: Final = await _store_auth_code(
@@ -1075,15 +1078,16 @@ async def byok_token(
         return _oauth_token_error("server_error", status=500)
 
     # Consume the code (one-time use, atomic across workers)
-    match await _claim_auth_code(code):
+    claim: Final = await _claim_auth_code(code)
+    match claim:
         case "first":
             pass
         case "replayed":
             return _oauth_token_error("invalid_grant")
         case "unavailable":
             return _oauth_token_error("temporarily_unavailable", status=503)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(claim)
     await _discard_auth_code(code)
 
     # Persist the BYOK credential
