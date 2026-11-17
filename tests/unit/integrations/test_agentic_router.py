@@ -123,3 +123,58 @@ def test_hook_shadow_mode_keeps_model(tmp_path):
     data = {"model": "m", "messages": [{"role": "user", "content": "请帮我重构这个模块并做性能优化"}]}
     out = asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
     assert out["model"] == "m"  # shadow never rewrites
+
+
+class _Key:
+    def __init__(self, models):
+        self.models = models
+
+
+def test_hook_respects_key_model_restrictions(tmp_path):
+    hook = AgenticRouterHook(mode="active", home=str(tmp_path), exploration=0,
+                             tier_models={"fast": "flash-model", "mid": "base-model",
+                                          "strong": "pro-model"})
+    data = {"model": "base-model", "litellm_call_id": "call-r",
+            "messages": [{"role": "user", "content": "帮我总结这篇文章的要点"}]}
+    # key restricted to base-model; the router wants flash-model (complexity 0.05)
+    out = asyncio.run(hook.async_pre_call_hook(
+        _Key(models=["base-model"]), None, data, "acompletion"))
+    assert out["model"] == "base-model"  # rewrite blocked
+    assert out["metadata"]["agentic_router"]["blocked"] == "key-model-restriction"
+    assert hook.stats()["pending"] == 1  # decision still settles (shadow-tracked outcome)
+    asyncio.run(hook.async_post_call_success_hook(
+        None, {"litellm_call_id": "call-r"}, None, start_time=None, end_time=None))
+    assert hook.stats()["pending"] == 0
+
+    # unrestricted key: rewrite goes through
+    data2 = {"model": "base-model", "litellm_call_id": "call-r2",
+             "messages": [{"role": "user", "content": "帮我总结这篇文章的要点"}]}
+    out2 = asyncio.run(hook.async_pre_call_hook(_Key(models=None), None, data2, "acompletion"))
+    assert out2["model"] in ("flash-model", "base-model", "pro-model")
+
+
+def test_hook_finds_call_id_nested(tmp_path):
+    """The proxy passes the request dict under data/request_obj, not flat kwargs."""
+    hook = AgenticRouterHook(mode="shadow", home=str(tmp_path),
+                             tier_models={"fast": "f", "mid": "m", "strong": "s"})
+    data = {"model": "m", "litellm_call_id": "call-n",
+            "messages": [{"role": "user", "content": "你好"}]}
+    asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
+    assert hook.stats()["pending"] == 1
+    # success arrives with the request nested under "data"
+    asyncio.run(hook.async_post_call_success_hook(
+        None, {"data": {"litellm_call_id": "call-n"}, "response_cost": 0.001},
+        None, start_time=None, end_time=None))
+    assert hook.stats()["pending"] == 0
+    assert hook.stats()["linSamples"] == 1
+
+
+def test_hook_pending_is_bounded(tmp_path):
+    hook = AgenticRouterHook(mode="shadow", home=str(tmp_path),
+                             tier_models={"fast": "f", "mid": "m", "strong": "s"})
+    hook.MAX_PENDING = 10
+    for i in range(30):
+        data = {"model": "m", "litellm_call_id": "call-%d" % i,
+                "messages": [{"role": "user", "content": "你好"}]}
+        asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
+    assert len(hook._pending) <= 10  # never unbounded, even if settles never match

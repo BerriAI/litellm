@@ -579,13 +579,59 @@ def _last_user_text(messages):
     return ""
 
 
+def _key_allowed_models(user_api_key_dict):
+    """Collect the model allowlist the proxy attached to this key (key models,
+    team models, team aliases). Empty set = unrestricted (or unknowable here)."""
+    allowed = set()
+    for attr in ("models", "allowed_team_models"):
+        v = getattr(user_api_key_dict, attr, None)
+        if isinstance(v, (list, tuple)):
+            allowed.update(m for m in v if isinstance(m, str) and m)
+    aliases = getattr(user_api_key_dict, "team_model_aliases", None)
+    if isinstance(aliases, dict):
+        allowed.update(m for m in aliases.values() if isinstance(m, str) and m)
+    return allowed
+
+
+_ID_KEYS = ("litellm_call_id", "request_id")
+_NESTED_SOURCES = ("data", "request_data", "request_obj", "original_request",
+                   "kwargs", "body", "litellm_params")
+
+
+def _find_call_id(*sources):
+    """Locate the call id across hook argument shapes: directly on the kwargs
+    dict, or nested one level under data / request_data / request_obj / ..."""
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        for k in _ID_KEYS:
+            v = src.get(k)
+            if v:
+                return v
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        for k in _NESTED_SOURCES:
+            nested = src.get(k)
+            if isinstance(nested, dict):
+                for kk in _ID_KEYS:
+                    v = nested.get(kk)
+                    if v:
+                        return v
+    return None
+
+
 class AgenticRouterHook(CustomLogger):
     """Learning model-tier router as a LiteLLM callback.
 
     - async_pre_call_hook: classify + decide; in active mode rewrites data["model"]
+      (never to a model the key/team is not allowed to use)
     - async_post_call_success_hook: latency/cost → reward → flywheel
     - async_post_call_failure_hook: reward 0
     """
+
+    MAX_PENDING = 500    # completed-but-untracked requests can't grow unbounded
+    PENDING_TTL = 900.0  # seconds; stale entries are evicted on insert
 
     def __init__(self, router=None, mode="shadow", tier_models=None,
                  cross_provider=True, home=None, cost_multiplier=1.0, **router_kwargs):
@@ -597,7 +643,26 @@ class AgenticRouterHook(CustomLogger):
                                  cross_provider=cross_provider, **router_kwargs)
         self.cost_multiplier = cost_multiplier
         self._lock = threading.RLock()
-        self._pending = {}  # litellm_call_id → decision_id
+        self._pending = {}  # call id → (decision_id, insert ts)
+
+    def _track(self, request_id, decision_id):
+        with self._lock:
+            now = time.time()
+            if len(self._pending) > self.MAX_PENDING // 2:
+                for k in [k for k, (_, ts) in self._pending.items()
+                          if now - ts > self.PENDING_TTL]:
+                    del self._pending[k]
+            self._pending[request_id] = (decision_id, now)
+            while len(self._pending) > self.MAX_PENDING:
+                self._pending.pop(next(iter(self._pending)))  # drop oldest
+
+    def _take(self, *sources):
+        request_id = _find_call_id(*sources)
+        if not request_id:
+            return None
+        with self._lock:
+            entry = self._pending.pop(request_id, None)
+        return entry[0] if entry else None
 
     async def async_pre_call_hook(self, user_api_key_dict=None, cache=None,
                                   data=None, call_type=None, **kwargs):
@@ -606,30 +671,36 @@ class AgenticRouterHook(CustomLogger):
         text = _last_user_text(data.get("messages") or [])
         if not text:
             return data
-        request_id = data.get("litellm_call_id") or data.get("request_id") or id(data)
+        request_id = _find_call_id(data, kwargs) or id(data)
         with self._lock:
             decision = self.router.decide(text, "default")
-            self._pending[request_id] = decision["id"]
+        self._track(request_id, decision["id"])
         if self.router.mode == "active" and decision.get("model"):
-            data["model"] = decision["model"]
-            data.setdefault("metadata", {})["agentic_router"] = {
-                "decision_id": decision["id"], "tier": decision["tier"],
-                "expert": decision["chosen"], "reason": decision["reason"]}
+            allowed = _key_allowed_models(user_api_key_dict)
+            if not allowed or decision["model"] in allowed:
+                data["model"] = decision["model"]
+                data.setdefault("metadata", {})["agentic_router"] = {
+                    "decision_id": decision["id"], "tier": decision["tier"],
+                    "expert": decision["chosen"], "reason": decision["reason"]}
+            else:
+                # Key/team is restricted to models that exclude the routed tier:
+                # keep the caller's requested model, record the block for audits.
+                data.setdefault("metadata", {})["agentic_router"] = {
+                    "decision_id": decision["id"], "tier": decision["tier"],
+                    "model": decision["model"], "blocked": "key-model-restriction",
+                    "reason": decision["reason"]}
         return data
 
     async def async_post_call_success_hook(self, user_api_key_dict=None, kwargs=None,
                                            response_obj=None, start_time=None,
                                            end_time=None, **kw):
-        kwargs = kwargs or {}
-        request_id = kwargs.get("litellm_call_id") or kwargs.get("request_id")
-        with self._lock:
-            decision_id = self._pending.pop(request_id, None)
+        decision_id = self._take(kwargs, kw)
         if decision_id is None:
             return
         dt_ms = None
         if start_time is not None and end_time is not None:
             dt_ms = (end_time - start_time).total_seconds() * 1000
-        cost = kwargs.get("response_cost")
+        cost = (kwargs or {}).get("response_cost")
         with self._lock:
             self.router.settle(decision_id, success=True, dt_ms=dt_ms,
                                cost_yuan=(float(cost) if isinstance(cost, (int, float)) else 0.0)
@@ -638,10 +709,7 @@ class AgenticRouterHook(CustomLogger):
     async def async_post_call_failure_hook(self, user_api_key_dict=None, request_obj=None,
                                            original_exception=None, user_model=None,
                                            start_time=None, end_time=None, **kwargs):
-        kwargs = kwargs or {}
-        request_id = kwargs.get("litellm_call_id") or kwargs.get("request_id")
-        with self._lock:
-            decision_id = self._pending.pop(request_id, None)
+        decision_id = self._take(request_obj, kwargs)
         if decision_id is None:
             return
         with self._lock:
