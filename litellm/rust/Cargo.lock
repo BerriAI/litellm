@@ -3808,6 +3808,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-model-capacity"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-callbacks",
+ "litellm-callbacks-parallel-request-limiter",
+ "litellm-error",
+ "litellm-python-compat",
+ "litellm-redis-client",
+ "litellm-redis-store",
+ "parking_lot",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-callbacks-parallel-request-limiter"
 version = "0.1.0"
 dependencies = [
@@ -4668,6 +4687,7 @@ dependencies = [
  "litellm-callbacks",
  "litellm-callbacks-budgets",
  "litellm-callbacks-legacy-python",
+ "litellm-callbacks-model-capacity",
  "litellm-callbacks-parallel-request-limiter",
  "litellm-callbacks-python",
  "litellm-callbacks-s3-log",
