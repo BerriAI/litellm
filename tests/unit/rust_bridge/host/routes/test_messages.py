@@ -2996,6 +2996,42 @@ def test_a_connect_failure_with_no_known_base_keeps_rust_s_text(monkeypatch: pyt
     assert mapped.message.endswith(f"Vertex_aiException InternalServerError - {rust_error}")
 
 
+@pytest.mark.parametrize(
+    ("provider", "api_base", "origin"),
+    [
+        (
+            "bedrock_mantle",
+            "http://bedrock-mantle.us-west-2.api.aws/v1",
+            "https://bedrock-mantle.us-east-1.api.aws:443",
+        ),
+        ("bedrock_mantle", "", "https://bedrock-mantle.us-east-1.api.aws:443"),
+        ("bedrock", "", "https://bedrock-runtime.us-east-1.amazonaws.com:443"),
+    ],
+    ids=("mantle-host-rebuilt-in-region", "mantle-blank-base", "invoke-blank-base"),
+)
+def test_a_bedrock_connect_failure_names_rusts_origin_over_the_callers_base(
+    monkeypatch: pytest.MonkeyPatch, provider: str, api_base: str, origin: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+    unreachable: Final = RuntimeError(
+        f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+        "failed to lookup address information: Name or service not known"
+    )
+    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    model: Final = _BEDROCK_INVOKE if provider == "bedrock" else _BEDROCK_MANTLE
+
+    mapped: Final = messages_host.map_failure(
+        unreachable, {"model": model, "messages": [], "api_base": api_base, **_AWS}, provider
+    )
+
+    host: Final = origin.removeprefix("https://")
+    assert type(mapped) is litellm.ServiceUnavailableError
+    assert f"Cannot connect to host {host} ssl:<ssl> [Name or service not known]" in str(mapped)
+
+
 @pytest.fixture
 def no_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (

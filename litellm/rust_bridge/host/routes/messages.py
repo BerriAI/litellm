@@ -928,7 +928,11 @@ def _sent_base(
     error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
 ) -> str | None:
     """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
-    to send it, anthropic's to its default and bedrock's to the origin Rust could not connect to."""
+    to send it and anthropic's to its default. Bedrock's is the origin Rust could not connect to,
+    which can differ from the caller's `api_base` (Mantle rebuilds a public host in its region)."""
+    origin: Final = optional_str(getattr(error, "messages_connect_origin", None))
+    if origin is not None and request_provider in ("bedrock", "bedrock_mantle"):
+        return origin
     api_base: Final = request.get("api_base")
     if isinstance(api_base, str) and (api_base or request_provider != "azure_ai"):
         return api_base
@@ -936,8 +940,6 @@ def _sent_base(
         return anthropic_pass_through_api_base()
     if request_provider == "azure_ai":
         return dict(secrets_read).get("AZURE_API_BASE")
-    if request_provider in ("bedrock", "bedrock_mantle"):
-        return optional_str(getattr(error, "messages_connect_origin", None))
     return None
 
 
