@@ -28,7 +28,7 @@ from litellm.proxy import proxy_server
 
 module_name: Final = {
     "unified": "litellm.proxy.proxy_server",
-    "backend": "backend.main",
+    "backend": "litellm.runtime.backend.main",
     "gateway": "gateway.main",
 }[sys.argv[2]]
 app: Final = importlib.import_module(module_name).app
@@ -186,7 +186,7 @@ def test_image_admin_mcp_personal_admin_manages_team(offline_postgres: tuple[str
             "--env", "HOME=/opt/prisma", "--env", "XDG_CACHE_HOME=/opt/prisma/.cache",
             "--env", "PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries",
             "--entrypoint", "prisma", SCHEMA_IMAGE,
-            "db", "push", "--schema", "/app/schema.prisma", "--skip-generate", "--accept-data-loss",
+            "db", "push", "--schema", "/app/litellm/schema.prisma", "--skip-generate", "--accept-data-loss",
         ],
         capture_output=True, text=True, timeout=180, check=False,
     )

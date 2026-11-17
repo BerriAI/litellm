@@ -1554,6 +1554,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "EMPIRIOLABS",
+    "provider_display_name": "EmpirioLabs AI",
+    "litellm_provider": "empiriolabs",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.empiriolabs.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "empiriolabs/aplomb-1"
+  },
+  {
     "provider": "EMPOWER",
     "provider_display_name": "Empower",
     "litellm_provider": "empower",
@@ -1849,6 +1877,46 @@
         "label": "GitHub host",
         "placeholder": "github.com",
         "tooltip": "Leave empty for github.com. For GHE.com data residency enter your SUBDOMAIN.ghe.com host",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_id",
+        "label": "App client ID",
+        "placeholder": "Iv23...",
+        "tooltip": "The public client ID shown in GitHub Settings > Developer settings > GitHub Apps > your App. It usually starts with Iv. A numeric App ID also works as text. This is not the client secret.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_installation_id",
+        "label": "Installation ID",
+        "placeholder": "12345678",
+        "tooltip": "The numeric ID in the URL when you open organization Settings > GitHub Apps > Installed GitHub Apps > Configure. It identifies this App installation, not the organization or App itself. The App needs Copilot Requests read permission.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_private_key",
+        "label": "Private key (PEM)",
+        "placeholder": null,
+        "tooltip": "Upload the PEM downloaded from your GitHub App Credentials > Key pairs. LiteLLM encrypts it in its credential database. The saved key is never returned to this form. Upload a replacement here to rotate it. Use HTTPS for your dashboard.",
+        "required": false,
+        "field_type": "upload",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_private_key_ref",
+        "label": "Private key secret reference",
+        "placeholder": "oidc/file//run/secrets/copilot-app.pem",
+        "tooltip": "Generate a PEM in your GitHub App Credentials > Key pairs. Store it securely on the server, then enter a reference such as oidc/file//run/secrets/copilot-app.pem or a secret name in your configured LiteLLM secret manager. os.environ/VARIABLE_NAME is also supported. Never paste PEM contents or a path on your laptop.",
         "required": false,
         "field_type": "text",
         "options": null,
@@ -2239,7 +2307,7 @@
   },
   {
     "provider": "LITELLM_PROXY",
-    "provider_display_name": "Litellm Proxy",
+    "provider_display_name": "LiteLLM Gateway",
     "litellm_provider": "litellm_proxy",
     "credential_fields": [
       {
@@ -2376,6 +2444,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "META",
+    "provider_display_name": "Meta Model API",
+    "litellm_provider": "meta",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "meta/muse-spark-1.1"
   },
   {
     "provider": "MILVUS",
@@ -2612,6 +2708,34 @@
       }
     ],
     "default_model_placeholder": "nace/drex-latest"
+  },
+  {
+    "provider": "PARALLEL_AI",
+    "provider_display_name": "Parallel AI",
+    "litellm_provider": "parallel_ai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.parallel.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "parallel_ai/decision"
   },
   {
     "provider": "NEBIUS",
@@ -3316,6 +3440,34 @@
     "default_model_placeholder": "prism/deepseek-v4.1-flash"
   },
   {
+    "provider": "HOSTINGER_ROUTER",
+    "provider_display_name": "Hostinger Router",
+    "litellm_provider": "hostinger_router",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://router.hostinger.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "hostinger_router/claude-sonnet-5"
+  },
+  {
     "provider": "RECRAFT",
     "provider_display_name": "Recraft",
     "litellm_provider": "recraft",
@@ -3482,6 +3634,34 @@
       }
     ],
     "default_model_placeholder": "reka/reka-flash"
+  },
+  {
+    "provider": "WALLY",
+    "provider_display_name": "Wally",
+    "litellm_provider": "wally",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://inference.runanywhere.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "wally/glm-5.3-flash"
   },
   {
     "provider": "Sail",
@@ -3675,7 +3855,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "soniox/stt-async-v5"
+    "default_model_placeholder": "soniox/stt-async-v6"
   },
   {
     "provider": "StrandsDecider",
@@ -4256,6 +4436,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "ZAI",
+    "provider_display_name": "Z.AI (Zhipu AI)",
+    "litellm_provider": "zai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.z.ai/api/paas/v4",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "zai/glm-4.5"
   },
   {
     "provider": "ZeroGPU",

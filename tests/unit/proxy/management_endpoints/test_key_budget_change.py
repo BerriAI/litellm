@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     Member,
@@ -242,6 +243,9 @@ async def _update(
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     prisma.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    prisma.writer_db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=LiteLLM_BudgetTable(budget_id=data.budget_id)
+    )
     await _validate_update_key_data(
         data=data,
         existing_key_row=existing,

@@ -15,11 +15,12 @@ import base64
 import json
 from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Any, Final, Protocol, TypedDict
+from typing import Final, Protocol, TypedDict
 
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 
 class _ToolParameterSchema(TypedDict, total=False):
@@ -237,17 +238,21 @@ class CodeExecutionHandler:
         execution_results: Final[list[_ExecutionResult]] = []
 
         executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
-        response: Any = None  # Initialize to avoid possibly unbound error
+        response: _CompletionResponse | None = None  # Initialize to avoid possibly unbound error
 
         for iteration in range(self.max_iterations):
             verbose_logger.debug("CodeExecutionHandler: Iteration %s/%s", iteration + 1, self.max_iterations)
 
             # Make LLM call
-            response = await litellm.acompletion(
-                model=model,
-                messages=current_messages,
-                tools=tools,
-                **kwargs,
+            response = require_attributes(
+                await litellm.acompletion(
+                    model=model,
+                    messages=current_messages,
+                    tools=tools,
+                    **kwargs,
+                ),
+                _CompletionResponse,
+                "choices",
             )
 
             choice: _ResponseChoice = response.choices[0]

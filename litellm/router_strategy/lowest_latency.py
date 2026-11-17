@@ -3,18 +3,22 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from functools import partial
 from math import ceil, isfinite
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import Field
 
 import litellm
-from litellm import ModelResponse, token_counter, verbose_logger
+from litellm import ModelResponse, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
+from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import LiteLLMPydanticObjectBase
@@ -71,7 +75,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -202,7 +206,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         Check if Timeout Error, if timeout set deployment latency -> 100
@@ -267,7 +271,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -439,7 +443,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 }
 
         try:
-            input_tokens = token_counter(messages=messages, text=input)
+            input_tokens = embedding_aware_token_count(
+                messages, input, partial(deployment_backend_models, healthy_deployments)
+            )
         except Exception:
             input_tokens = 0
 
@@ -532,7 +538,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             request_kwargs[metadata_field]["_latency_per_deployment"] = _latency_per_deployment
         return deployment
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_get_available_deployments(
         self,
         model_group: str,
@@ -558,7 +564,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             request_count_dict,
         )
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def get_available_deployments(
         self,
         model_group: str,

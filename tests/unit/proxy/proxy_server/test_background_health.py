@@ -432,18 +432,6 @@ def test_write_health_state_to_router_cache_sets_states(monkeypatch):
 
     monkeypatch.setattr(hc, "build_deployment_health_states", lambda **_kw: fake_states)
 
-    import litellm.router_utils.cooldown_handlers as cd
-
-    monkeypatch.setattr(cd, "set_cooldown_deployments", lambda **_kw: None)
-
-    import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
-
-    monkeypatch.setattr(
-        tdm,
-        "increment_deployment_failures_for_current_minute",
-        lambda **_kw: None,
-    )
-
     healthy = [{"model_id": "m1"}]
     unhealthy = [{"model_id": "m2"}]
     exceptions = {"m2": SimpleNamespace(status_code=500)}
@@ -451,6 +439,7 @@ def test_write_health_state_to_router_cache_sets_states(monkeypatch):
     _write_health_state_to_router_cache(healthy, unhealthy, exceptions)
 
     health_checks.set_deployment_health_states.assert_called_once_with(fake_states)
+    fake_router.health.return_value.record_failure.assert_called_once_with("m2", exceptions["m2"], 500)
 
     call_args = health_checks.set_deployment_health_states.call_args[0][0]
     assert normalize(
@@ -503,26 +492,6 @@ def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeyp
 
     monkeypatch.setattr(hc, "build_deployment_health_states", lambda **_kw: fake_states)
 
-    cooldowns: list[str] = []
-
-    import litellm.router_utils.cooldown_handlers as cd
-
-    monkeypatch.setattr(
-        cd,
-        "set_cooldown_deployments",
-        lambda **kw: cooldowns.append(kw.get("deployment")),
-    )
-
-    failures: list[str] = []
-
-    import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
-
-    monkeypatch.setattr(
-        tdm,
-        "increment_deployment_failures_for_current_minute",
-        lambda **kw: failures.append(kw.get("deployment_id")),
-    )
-
     _write_health_state_to_router_cache(
         [{"model_id": "m1"}],
         [{"model_id": "m2"}],
@@ -530,8 +499,7 @@ def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeyp
     )
 
     fake_router.health.return_value.health_checks.set_deployment_health_states.assert_called_once_with(fake_states)
-    assert cooldowns == []
-    assert failures == []
+    fake_router.health.return_value.record_failure.assert_not_called()
 
 
 def test_write_health_state_to_router_cache_swallows_internal_failures(monkeypatch):
