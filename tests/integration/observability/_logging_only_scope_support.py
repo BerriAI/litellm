@@ -22,7 +22,7 @@ import yaml
 from anthropic import Anthropic, AsyncAnthropic
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from integration._support.client import Gateway, Scenario, eventually, object_value
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows, write_rows
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire
@@ -798,6 +798,7 @@ def _insert_database_guardrail(
 
 @contextmanager
 def _database_guardrail(
+    gateway: Gateway,
     identity: str,
     policy_url: str,
     scope: str | None,
@@ -809,11 +810,15 @@ def _database_guardrail(
     try:
         yield
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
 
 
-def _delete_database_guardrail(identity: str) -> None:
-    write_rows('DELETE FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s', (identity,))
+def _delete_database_guardrail(gateway: Gateway, identity: str) -> None:
+    rows: Final = read_rows('SELECT guardrail_id FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s', (identity,))
+    responses: Final = tuple(
+        gateway.request("DELETE", f"/guardrails/{string_value(row['guardrail_id'])}") for row in rows
+    )
+    assert all(response.status_code == 200 for response in responses), [response.text for response in responses]
 
 
 def _post_guardrail_body(

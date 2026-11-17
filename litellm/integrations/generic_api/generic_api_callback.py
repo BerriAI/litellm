@@ -13,7 +13,7 @@ import re
 import time
 import traceback
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, get_args
 
 import httpx
 
@@ -100,7 +100,7 @@ class GenericAPILogger(CustomBatchLogger):
     def __init__(
         self,
         endpoint: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, str] | None = None,
         event_types: list[API_EVENT_TYPES] | None = None,
         callback_name: str | None = None,
         log_format: LOG_FORMAT_TYPES | None = None,
@@ -160,13 +160,13 @@ class GenericAPILogger(CustomBatchLogger):
             if async_httpx_client is not None
             else get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         )
-        endpoint = endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
+        endpoint = self.resolve_endpoint(endpoint)
         if endpoint is None:
             raise ValueError(
                 "endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
             )
 
-        self.headers: dict[str, str] = self._get_headers(headers)
+        self.headers: dict[str, str] = self.resolve_headers(headers)
         self.endpoint: str = endpoint
         self.event_types: list[API_EVENT_TYPES] | None = event_types
         self.callback_name: str | None = callback_name
@@ -198,10 +198,52 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
-        asyncio.create_task(self.periodic_flush())
         self.log_queue: list[Mapping[str, object] | StandardLoggingPayload] = []
+        self._stop_flush = asyncio.Event()
+        self._replacement: GenericAPILogger | None = None
+        self._flush_task = asyncio.create_task(self._run_periodic_flush())
 
-    def _get_headers(self, headers: dict | None = None):
+    async def _run_periodic_flush(self) -> None:
+        while not self._stop_flush.is_set():
+            try:
+                await asyncio.wait_for(self._stop_flush.wait(), timeout=self.flush_interval)
+            except asyncio.TimeoutError:
+                verbose_logger.debug("CustomLogger periodic flush after %s seconds", self.flush_interval)
+                await self.flush_queue()
+        await self.flush_queue()
+
+    def _accepted_event_types(self) -> frozenset[API_EVENT_TYPES]:
+        return frozenset(get_args(API_EVENT_TYPES) if self.event_types is None else self.event_types)
+
+    def _hand_off_unsent_logs(self) -> None:
+        if self._replacement is None:
+            return
+        target: Final = self.active_logger()
+        if not self._accepted_event_types() <= target._accepted_event_types():
+            return
+        unsent: Final = tuple(self.log_queue)
+        del self.log_queue[: len(unsent)]
+        target.log_queue.extend(unsent)
+
+    def shutdown(self, replacement: "GenericAPILogger | None" = None) -> None:
+        if self._stop_flush.is_set():
+            return
+        self._replacement = replacement
+        self._stop_flush.set()
+
+    def active_logger(self) -> "GenericAPILogger":
+        if self._replacement is None:
+            return self
+        return self._replacement.active_logger()
+
+    @staticmethod
+    def resolve_endpoint(endpoint: str | None) -> str | None:
+        return endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
+
+    @staticmethod
+    def resolve_headers(
+        headers: Mapping[str, str] | None = None,
+    ) -> dict[str, str]:  # mutable-ok: caller owns the returned headers
         """
         Get headers for the Generic API Logger
 
@@ -294,7 +336,9 @@ class GenericAPILogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
 
-        if self.event_types is not None and "llm_api_success" not in self.event_types:
+        logger: Final = self.active_logger()
+
+        if logger.event_types is not None and "llm_api_success" not in logger.event_types:
             return
 
         try:
@@ -303,19 +347,19 @@ class GenericAPILogger(CustomBatchLogger):
 
             # Backwards compatibility with old logging payload
             if litellm.generic_api_use_v1 is True:
-                payload: Final = self._get_v1_logging_payload(
+                payload: Final = logger._get_v1_logging_payload(
                     kwargs=kwargs,
                     response_obj=response_obj,
                     start_time=start_time,
                     end_time=end_time,
                 )
-                self.log_queue.append(payload)
+                logger.log_queue.append(payload)
             else:
                 # New logging payload, StandardLoggingPayload
-                self.log_queue.append(standard_logging_payload)
+                logger.log_queue.append(standard_logging_payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            if logger._stop_flush.is_set() or len(logger.log_queue) >= logger.batch_size:
+                await logger.async_send_batch()
 
         except Exception as e:
             verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
@@ -327,7 +371,9 @@ class GenericAPILogger(CustomBatchLogger):
         - Creates a StandardLoggingPayload
         - Adds to batch queue
         """
-        if self.event_types is not None and "llm_api_failure" not in self.event_types:
+        logger: Final = self.active_logger()
+
+        if logger.event_types is not None and "llm_api_failure" not in logger.event_types:
             return
 
         try:
@@ -335,18 +381,18 @@ class GenericAPILogger(CustomBatchLogger):
             standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             if litellm.generic_api_use_v1 is True:
-                payload: Final = self._get_v1_logging_payload(
+                payload: Final = logger._get_v1_logging_payload(
                     kwargs=kwargs,
                     response_obj=response_obj,
                     start_time=start_time,
                     end_time=end_time,
                 )
-                self.log_queue.append(payload)
+                logger.log_queue.append(payload)
             else:
-                self.log_queue.append(standard_logging_payload)
+                logger.log_queue.append(standard_logging_payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            if logger._stop_flush.is_set() or len(logger.log_queue) >= logger.batch_size:
+                await logger.async_send_batch()
 
         except Exception as e:
             verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
@@ -356,6 +402,7 @@ class GenericAPILogger(CustomBatchLogger):
 
     async def async_send_batch(self) -> None:
         async with self.flush_lock:
+            self._hand_off_unsent_logs()
             await self._send_batch()
 
     async def _send_batch(self) -> None:

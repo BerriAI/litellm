@@ -38,7 +38,7 @@ from litellm.utils import cached_get_model_info_helper
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -236,7 +236,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "dict[str, str]", {**copilot_headers, **headers}
             )
             if user_session is not None:
-                pin_session_authorization(merged_headers, user_session.token)
+                pin_session_authorization(merged_headers, user_session.token, user_session.integration_id)
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)
@@ -256,7 +256,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
