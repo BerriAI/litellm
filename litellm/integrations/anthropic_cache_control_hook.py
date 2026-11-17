@@ -1020,6 +1020,17 @@ def _last_index_accepting_cache_control(parts: Sequence[object]) -> int | None:
     return next((index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index])), None)
 
 
+def _offers_a_cache_slot(message: Mapping[str, object], openai_dialect: bool) -> bool:
+    if openai_dialect and not _may_carry_prompt_cache_breakpoint(message):
+        return False
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return True
+    parts: Final = _as_object_list(content)
+    accepts_part: Final = _accepts_prompt_cache_breakpoint if openai_dialect else _accepts_cache_control
+    return parts is not None and any(map(accepts_part, parts))
+
+
 class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _request_value(request_kwargs: object, key: str) -> object:
@@ -1362,6 +1373,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
                 if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
                     # Client already marked this message; don't overwrite it.
+                    continue
+
+                if targeted_role == "developer" and not _offers_a_cache_slot(messages[target_index], openai_dialect):
                     continue
 
                 if targeted_role == "developer" and not keeps_one_ttl_within_the_cap(

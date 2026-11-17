@@ -6232,6 +6232,29 @@ def test_system_injection_point_stays_fast_when_a_one_hour_question_refuses_ever
     assert _count_cache_control(processed) == 1
     assert processed[-1]["content"][-1]["cache_control"] == dict(_ONE_HOUR)
 
+
+def test_system_injection_point_stays_fast_past_developer_messages_with_nothing_to_mark() -> None:
+    empty_developer_turns: Final = 3000
+    messages: Final[list[AllMessageValues]] = [
+        *({"role": "developer", "content": []} for _ in range(empty_developer_turns)),
+        {"role": "developer", "content": "Answer briefly."},
+        {"role": "user", "content": "Which rule?"},
+    ]
+    started: Final = time.perf_counter()
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-haiku-5-5",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert time.perf_counter() - started < 3
+    assert _count_cache_control(processed) == 1
+    assert processed[empty_developer_turns]["cache_control"] == {"type": "ephemeral"}
+
 _TOOL_WITH_A_CACHE_CONTROL_ARGUMENT: Final = MappingProxyType(
     {
         "type": "function",
