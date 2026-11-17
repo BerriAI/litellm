@@ -5725,6 +5725,32 @@ async def test_apply_guardrail_masks_every_copy_of_a_text_that_appears_twice_in_
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_leaves_whitespace_only_texts_out_of_the_scan_and_masks_the_rest():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("mail [EMAIL]"), _deidentified_armor_response("mail [EMAIL]")]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": [" ", "mail a@b.co", "\n"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert _scanned_texts(guardrail) == ["mail a@b.co", "mail a@b.co"]
+    assert result["texts"] == [" ", "mail [EMAIL]", "\n"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passes_a_whitespace_only_tool_result_without_calling_model_armor():
+    guardrail = _post_mcp_call_guardrail([])
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": [" ", "\n\t"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert _scanned_texts(guardrail) == []
+    assert result["texts"] == [" ", "\n\t"]
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_does_not_release_masked_text_when_another_filter_was_skipped():
     skipped_with_mask: Final = _skipped_armor_response(
         cast(dict[str, object], _deidentified_armor_response("ssn [REDACTED]")["sanitizationResult"])["filterResults"]

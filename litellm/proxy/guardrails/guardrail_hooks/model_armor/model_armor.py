@@ -1323,7 +1323,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        unique_texts: Final = tuple(dict.fromkeys(text for text in inputs.get("texts") or () if text))
+        unique_texts: Final = tuple(dict.fromkeys(text for text in inputs.get("texts") or () if text.strip()))
         content: Final = "\n".join(unique_texts)
         if not content:
             return inputs
