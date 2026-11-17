@@ -1663,6 +1663,21 @@ class TestGetBedrockBaseModel:
         assert get_bedrock_base_model(input_model) == expected
 
 
+def test_region_only_deployment_takes_no_traffic_from_a_valid_model_group() -> None:
+    valid_model: Final = "bedrock/us.anthropic.claude-opus-4-6-v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "group", "litellm_params": {"model": "bedrock/us", "aws_region_name": "us-east-1"}},
+            {"model_name": "group", "litellm_params": {"model": valid_model, "aws_region_name": "us-east-1"}},
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+    assert [deployment["litellm_params"]["model"] for deployment in router.get_model_list(model_name="group")] == [
+        valid_model
+    ]
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockModelInfoWrappers:
     """Tests that BedrockModelInfo methods correctly wrap standalone functions."""

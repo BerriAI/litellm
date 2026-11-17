@@ -19,6 +19,7 @@ from litellm.constants import (
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+    OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX,
 )
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
@@ -36,6 +37,12 @@ _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobu
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_PATH_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def read_request_path_params(request: Request | None) -> Mapping[str, object] | None:
+    path_params: Final = _DECODED_JSON.validate_python(getattr(request, "path_params", None))
+    return _REQUEST_PATH_PARAMS.validate_python(path_params) if isinstance(path_params, Mapping) else None
 
 
 class _ReadableUpload(Protocol):
@@ -404,8 +411,10 @@ async def read_request_body(request: Request | None) -> dict:
 _read_request_body: Final = read_request_body
 
 
-def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
-    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+def is_opaque_pass_through_request(route: str, content_type: str) -> bool:
+    """Azure Speech audio and every OpenSearch body are forwarded byte for byte, so auth must not parse them."""
+    if route.startswith(f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/"):
+        return True
     media_type: Final = _normalize_media_type(content_type)
     return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
         media_type.startswith("audio/") or media_type == "multipart/form-data"
