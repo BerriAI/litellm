@@ -104337,5 +104337,46 @@
         "supports_reasoning": true,
         "supports_video_input": false,
         "supports_vision": false
+    },
+    "fal_ai/kling/v4/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image is 1.0 unit at the default 2K resolution, 1.4921 units at 4K and 2.4921 units at 8K ($0.157), measured 2026-11-17. The per-image prices are used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.063,
+        "output_cost_per_image": 0.063,
+        "output_cost_per_image_2K": 0.063,
+        "output_cost_per_image_4K": 0.094,
+        "source": "https://fal.ai/models/kling/v4/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/kling/v4/image-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image with one input image is 1.0476 units at the default 2K resolution, 1.5397 units at 4K and 2.5397 units at 8K ($0.16), and each further input image adds 0.0476 units ($0.003), measured 2026-11-17. The per-image prices assume one input image and are used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.063,
+        "output_cost_per_image": 0.066,
+        "output_cost_per_image_2K": 0.066,
+        "output_cost_per_image_4K": 0.097,
+        "source": "https://fal.ai/models/kling/v4/image-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/kling/v4/long-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One long image is 2.3362 units at the default 1K resolution and 2.5362 units at 2K, whatever its height, measured 2026-11-17. The per-image prices are used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.235,
+        "output_cost_per_image": 0.549,
+        "output_cost_per_image_1K": 0.549,
+        "output_cost_per_image_2K": 0.596,
+        "source": "https://fal.ai/models/kling/v4/long-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
     }
 }
