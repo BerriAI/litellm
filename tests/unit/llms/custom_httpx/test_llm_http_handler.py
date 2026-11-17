@@ -6844,12 +6844,7 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
         response: Final = await litellm.aresponses(**kwargs) if is_async else litellm.responses(**kwargs)
         assert response.status == "completed"
         assert route.calls[0].request.headers.get_list("authorization") == ["Bearer fake-caller-key"]
-        expected_content_types: Final = (
-            ["application/json", "application/vnd.example+json"]
-            if provider in ("openai", "bigmodel")
-            else ["application/vnd.example+json"]
-        )
-        assert route.calls[0].request.headers.get_list("content-type") == expected_content_types
+        assert route.calls[0].request.headers.get_list("content-type") == ["application/vnd.example+json"]
     finally:
         if isinstance(client, AsyncHTTPHandler):
             await client.close()

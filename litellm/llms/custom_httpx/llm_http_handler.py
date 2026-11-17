@@ -240,10 +240,12 @@ from litellm.utils import (
 def _merge_headers_case_insensitive(
     headers: Mapping[str, object], extra_headers: Mapping[str, object] | None
 ) -> dict[str, str]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
-    overridden: Final = frozenset(name.lower() for name in extra_headers or {})
+    overrides: Final = MappingProxyType(
+        {name.lower(): (name, str(value)) for name, value in (extra_headers or {}).items()}
+    )
     return {
-        **{name: str(value) for name, value in headers.items() if name.lower() not in overridden},
-        **{name: str(value) for name, value in (extra_headers or {}).items()},
+        **{name: str(value) for name, value in headers.items() if name.lower() not in overrides},
+        **dict(overrides.values()),
     }
 
 
@@ -255,25 +257,6 @@ def _client_request_headers(
 
     optional_headers: Final = as_str_mapping(response_api_optional_request_params.get("extra_headers"))
     return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
-
-
-def _merge_response_api_headers(
-    headers: Mapping[str, object], extra_headers: Mapping[str, object] | None
-) -> dict[str, str]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
-    extra_header_items: Final = tuple((name, str(value)) for name, value in (extra_headers or {}).items())
-    caller_authorization: Final = next(
-        ((name, value) for name, value in reversed(extra_header_items) if name.lower() == "authorization"),
-        None,
-    )
-    return {
-        **{
-            name: str(value)
-            for name, value in headers.items()
-            if not (caller_authorization is not None and name.lower() == "authorization")
-        },
-        **{name: value for name, value in extra_header_items if name.lower() != "authorization"},
-        **({caller_authorization[0]: caller_authorization[1]} if caller_authorization is not None else {}),
-    }
 
 
 def _requested_stream(response_api_optional_request_params: Mapping[str, object]) -> object:
@@ -3104,7 +3087,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = _merge_response_api_headers(
+        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
             responses_api_provider_config.validate_environment(
                 headers=(
                     _client_request_headers(response_api_optional_request_params, extra_headers)
@@ -3113,8 +3096,10 @@ class BaseLLMHTTPHandler:
                 ),
                 model=model,
                 litellm_params=litellm_params,
-            ),
-            extra_headers if custom_llm_provider != "chatgpt" else None,
+            )
+        )
+        headers = _merge_headers_case_insensitive(  # rebind-ok: validation replaces the method's incoming headers
+            provider_headers, extra_headers if custom_llm_provider != "chatgpt" else None
         )
 
         # Check if streaming is requested
@@ -3312,7 +3297,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        validated_headers: Final = _merge_response_api_headers(
+        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
             await asyncio.to_thread(
                 responses_api_provider_config.validate_environment,
                 headers=(
@@ -3322,8 +3307,10 @@ class BaseLLMHTTPHandler:
                 ),
                 model=model,
                 litellm_params=litellm_params,
-            ),
-            extra_headers if custom_llm_provider != "chatgpt" else None,
+            )
+        )
+        validated_headers: Final = _merge_headers_case_insensitive(
+            provider_headers, extra_headers if custom_llm_provider != "chatgpt" else None
         )
 
         # Check if streaming is requested
