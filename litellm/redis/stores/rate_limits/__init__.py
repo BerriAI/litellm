@@ -72,6 +72,10 @@ class RateLimitStore:
         self._handle: Final = handle
 
     @property
+    def handle(self) -> object:
+        return self._handle
+
+    @property
     def has_redis(self) -> bool:
         return self._handle.has_redis
 

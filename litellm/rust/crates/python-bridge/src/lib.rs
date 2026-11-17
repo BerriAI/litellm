@@ -1,5 +1,8 @@
+mod auth;
+mod budgets;
 mod cache;
 mod callable;
+mod callbacks_model_capacity;
 mod coercion;
 mod credentials;
 mod db;
@@ -11,11 +14,13 @@ mod logger;
 mod marshal;
 mod model_cost;
 mod model_registry;
+mod parallel_request_limiter;
 mod preflight;
 mod python_settings;
 mod redis;
 mod router;
 mod routes;
+mod s3_log;
 mod secrets;
 mod tokenizer;
 
@@ -26,7 +31,26 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
-    use crate::db::NativeDatabase;
+    use crate::auth::{
+        AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
+        KeyContextView, MappedClaimsView, MappingView, PlanView, TeamGrantView, jwt_claims,
+        jwt_is_allowed_domain, jwt_is_jwt, jwt_key_mapping_cache_key, jwt_presents_claims,
+        jwt_unverified_claims,
+    };
+    #[pymodule_export]
+    use crate::auth::{
+        auth_allowed_routes_grant, auth_first_denied_route, auth_jwt_team_routes_grant,
+        auth_managed_agent_route_allowed, auth_managed_route, auth_route_matches_denied,
+        auth_route_matches_prefix, auth_route_matches_wildcard,
+    };
+    #[pymodule_export]
+    use crate::budgets::NativeBudgets;
+    #[pymodule_export]
+    use crate::budgets::budget_check_decision;
+    #[pymodule_export]
+    use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
+    #[pymodule_export]
+    use crate::db::{NativeDatabase, NativeDatabaseFailure};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -37,7 +61,7 @@ mod _native {
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
-    use crate::logger::NativeDiagnosticProcessor;
+    use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
     #[pymodule_export]
     use crate::model_cost::{
         NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
@@ -46,6 +70,10 @@ mod _native {
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::parallel_request_limiter::{
+        NativeParallelRequestLimiter, NativeParallelRequestLimiterState,
+    };
     #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
@@ -76,7 +104,7 @@ mod _native {
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
     };
     #[pymodule_export]
-    use crate::router::{RouterCall, RouterCoreHandle};
+    use crate::router::{AttemptShape, RouterCall, RouterCoreHandle};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -97,6 +125,8 @@ mod _native {
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
     use crate::routes::traces::trace_encode_error;
+    #[pymodule_export]
+    use crate::s3_log::NativeS3Log;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -106,6 +136,10 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let _ = rustls::crypto::ring::default_provider().install_default();
+        module.add(
+            "JWT_ID_JAG_TYP",
+            litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
+        )?;
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -151,6 +185,7 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeTokenRedactor",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
@@ -166,6 +201,8 @@ mod tests {
                 "GuardedReply",
                 "GaugesAcquired",
                 "GaugeOverLimit",
+                "NativeParallelRequestLimiter",
+                "NativeParallelRequestLimiterState",
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
@@ -180,6 +217,7 @@ mod tests {
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "NativeDatabase",
+                "NativeDatabaseFailure",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
@@ -197,10 +235,43 @@ mod tests {
                 "Tokenizer",
                 "RouterCoreHandle",
                 "RouterCall",
+                "AttemptShape",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
+                "NativeBudgets",
+                "budget_check_decision",
+                "NativeModelCapacity",
+                "NativeModelCapacityState",
+                "NativeS3Log",
+                "auth_allowed_routes_grant",
+                "auth_first_denied_route",
+                "auth_jwt_team_routes_grant",
+                "auth_managed_agent_route_allowed",
+                "auth_managed_route",
+                "auth_route_matches_denied",
+                "auth_route_matches_prefix",
+                "auth_route_matches_wildcard",
+                "JWT_ID_JAG_TYP",
+                "RustAuth",
+                "RustAuthOutcome",
+                "RustAuthSettings",
+                "RustAuthStep",
+                "RustClaimIdentity",
+                "RustDenial",
+                "RustIdentity",
+                "RustJwtMapping",
+                "RustKeyContext",
+                "RustMappedClaims",
+                "RustPlan",
+                "RustTeamGrant",
+                "jwt_claims",
+                "jwt_is_allowed_domain",
+                "jwt_is_jwt",
+                "jwt_key_mapping_cache_key",
+                "jwt_presents_claims",
+                "jwt_unverified_claims",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

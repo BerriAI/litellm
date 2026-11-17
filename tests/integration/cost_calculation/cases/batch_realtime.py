@@ -184,6 +184,32 @@ GPT_REALTIME_MINI_2025_12_15_REALTIME_SESSION_WITHOUT_TURNS_ZERO_SPEND: Final = 
     ),
 )
 
+GPT_REALTIME_2_1_REALTIME_SINGLE_TURN_TEXT: Final = RealtimeCostCase(
+    name="gpt-realtime-2.1-realtime-single_turn_text",
+    covers="quota_management.spend_tracking.realtime_costs.single_turn",
+    model="gpt-realtime-2.1",
+    litellm_model="openai/gpt-realtime-2.1",
+    turns=(
+        RealtimeTurn(
+            input_tokens=129,
+            output_tokens=17,
+            input_text_tokens=129,
+            input_audio_tokens=0,
+            input_cached_tokens=0,
+            output_text_tokens=17,
+            output_audio_tokens=0,
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.000924,
+        input_cost=0.000516,
+        output_cost=0.000408,
+        prompt_tokens=129,
+        completion_tokens=17,
+        cost_header=False,
+    ),
+)
+
 
 BATCH_CASES: Final[tuple[BatchCostCase, ...]] = (
     GPT_5_6_BATCH_HALVED_RATES_WHEN_MAP_HAS_NO_BATCH_KEYS,
@@ -197,4 +223,8 @@ REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = (
     GPT_REALTIME_MINI_2025_12_15_REALTIME_TWO_TURNS_SUMMED_INTO_ONE_ROW,
     GPT_REALTIME_MINI_2025_12_15_REALTIME_PRICED_FROM_SESSION_CREATED_MODEL,
     GPT_REALTIME_MINI_2025_12_15_REALTIME_SESSION_WITHOUT_TURNS_ZERO_SPEND,
+    GPT_REALTIME_2_1_REALTIME_SINGLE_TURN_TEXT,
+)
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[tuple[RealtimeCostCase, ...]] = (
+    GPT_REALTIME_2_1_REALTIME_SINGLE_TURN_TEXT,
 )

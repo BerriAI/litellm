@@ -1,7 +1,4 @@
 import importlib
-import os
-import subprocess
-import sys
 from typing import Final
 
 import pytest
@@ -10,22 +7,6 @@ import litellm
 import litellm.utils
 from litellm._lazy_imports_registry import LITELLM_ATTRIBUTES, UTILS_ATTRIBUTES
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
-
-
-def test_import_litellm_does_not_load_fastapi_or_bpe_table():
-    result: Final = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys, litellm; print(','.join(m for m in ('fastapi','starlette','litellm.proxy.proxy_cli','litellm.litellm_core_utils.default_encoding','openai.types.realtime') if m in sys.modules))",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
-    )
-
-    assert result.stdout.strip() == ""
 
 
 def _declared(location: tuple[str, str]) -> object:

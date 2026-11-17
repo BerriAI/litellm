@@ -5058,6 +5058,51 @@ class TestMCPRegistryEndpoint:
         assert custom_entry["name"] == "zapier"
         assert custom_entry["remotes"][0]["url"].endswith("/zapier/mcp")
 
+    @pytest.mark.parametrize(
+        ("server_name", "mcp_info", "expected_title", "expected_description"),
+        [
+            ("docs_mcp", {"description": "Docs MCP server"}, "docs_mcp", "Docs MCP server"),
+            ("docs_mcp", {"description": ""}, "docs_mcp", "docs"),
+            ("docs_mcp", None, "docs_mcp", "docs"),
+            (None, {"description": "Docs MCP server"}, "docs", "Docs MCP server"),
+        ],
+    )
+    def test_registry_entry_uses_saved_description_and_server_name(
+        self,
+        server_name: str | None,
+        mcp_info: dict[str, str] | None,
+        expected_title: str,
+        expected_description: str,
+    ) -> None:
+        from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+        client: Final = create_mcp_router_test_client()
+        server: Final = MCPServer(
+            server_id="server-docs",
+            name="docs",
+            alias="docs",
+            server_name=server_name,
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            available_on_public_internet=True,
+            mcp_info=mcp_info,
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {server.server_id: server}
+
+        with (
+            patch_proxy_general_settings({"enable_mcp_registry": True}),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        ):
+            response: Final = client.get("/v1/mcp/registry.json")
+
+        assert response.status_code == 200, response.text
+        entry: Final = response.json()["servers"][1]["server"]
+        assert entry["description"] == expected_description
+        assert entry["title"] == expected_title
+        assert entry["name"] == "docs"
+        assert entry["remotes"][0]["url"].endswith("/docs/mcp")
+
     @pytest.mark.asyncio
     async def test_health_check_specific_servers(self):
         """

@@ -21,6 +21,8 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
+    MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -46,6 +48,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -587,6 +590,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
+    PRICING_CURRENCY_FIELD,
 )
 
 _SECRET_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("os.environ/", OIDC_SECRET_REFERENCE_PREFIX)
@@ -1921,22 +1925,37 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
+            "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    entity: Literal["key", "team"],
+    entity: Literal["key", "team", "project"],
 ) -> None:
-    """Only a proxy admin may change a key or team's batch limits.
+    """Only a proxy admin may change a key, team, or project's batch limits.
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
     own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. Gated on the resulting value rather than on presence, so a form
-    resending the stored value stays a no-op.
+    own credentials. A project only enforces ``model_batch_enqueued_token_limit``,
+    so that is the one key gated there. Gated on the resulting value rather than
+    on presence, so a form resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -1944,16 +1963,17 @@ def enforce_batch_limits_are_admin_only(
     requested: Final[Mapping[str, object]] = (
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
+    admin_only_keys: Final[tuple[str, ...]] = (
+        (MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,) if entity == "project" else _ADMIN_ONLY_METADATA_KEYS
+    )
     changed: Final = next(
-        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in admin_only_keys if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
     )
     raise HTTPException(
         status_code=403,
@@ -2660,7 +2680,7 @@ def _cache_prediction_model_candidates(
 
 
 def _extract_model_candidates_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
@@ -2714,10 +2734,11 @@ def _extract_model_candidates_from_request(
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
         session: Final = request_data.get("session")
-        if isinstance(session, dict):
+        if isinstance(session, Mapping):
             _append_model_candidates(candidates, session.get("model"))
-    if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
-        _append_model_candidates(candidates, request_data["completion"].get("model"))
+    completion: Final = request_data.get("completion")
+    if uses_completion_model_sources and isinstance(completion, Mapping):
+        _append_model_candidates(candidates, completion.get("model"))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
@@ -2787,7 +2808,7 @@ def request_dispatched_to_provider_pass_through(request: Request) -> bool:
 
 
 def get_model_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,

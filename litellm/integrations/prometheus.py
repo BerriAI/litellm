@@ -31,6 +31,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import (
     CallerCredentialAuthenticationError,
+    DeploymentCredentialAuthenticationError,
     MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -56,7 +57,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.llms.azure.common_utils import caused_by_entra_rejection
-from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
+from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamTable
@@ -178,6 +179,18 @@ class _CustomerBudgetRow(Protocol):
 
     @property
     def litellm_budget_table(self) -> _JoinedBudgetRow | None: ...
+
+
+def _dynamic_limiter_holder_labels(
+    kind: Literal["team", "key", "customer_org"], holder_id: str, holder_alias: str | None
+) -> Mapping[str, str | None]:
+    match kind:
+        case "team":
+            return {"team": holder_id, "team_alias": holder_alias}
+        case "key":
+            return {"hashed_api_key": holder_id, "api_key_alias": holder_alias}
+        case "customer_org":
+            return {"customer_org_id": holder_id, "customer_org_alias": holder_alias}
 
 
 def _customer_budget_metrics_enabled() -> bool:
@@ -544,7 +557,7 @@ def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
         or _sent_a_provider_credential_or_endpoint(_logged_fields(proxy_server_request.get("body")))
         or bool(litellm_params.get("token_exchange_endpoint"))
         or logged_metadata.get("used_client_oauth_token") is True
-        or github_copilot_user_session_from(litellm_params) is not None
+        or is_github_copilot_per_user_request(litellm_params)
     )
 
 
@@ -555,7 +568,11 @@ def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str,
     return not (
         isinstance(exception, CallerCredentialAuthenticationError)
         or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
-        or (logged_call.get("api_call_start_time") is None and not caused_by_entra_rejection(exception))
+        or (
+            logged_call.get("api_call_start_time") is None
+            and not isinstance(exception, DeploymentCredentialAuthenticationError)
+            and not caused_by_entra_rejection(exception)
+        )
         or _used_a_caller_credential(logged_call)
     )
 
@@ -4196,14 +4213,17 @@ class PrometheusLogger(CustomLogger):
     def set_dynamic_limiter_share(
         self,
         model_group: str,
-        team: str,
-        team_alias: str | None,
+        holder_kind: Literal["team", "key", "customer_org"],
+        holder_id: str,
+        holder_alias: str | None,
         priority: str,
         share_tokens: int,
         borrowed_tokens: int,
     ) -> None:
         enum_values: Final = UserAPIKeyLabelValues(
-            model_group=model_group, team=team, team_alias=team_alias, priority=priority
+            model_group=model_group,
+            priority=priority,
+            **_dynamic_limiter_holder_labels(holder_kind, holder_id, holder_alias),
         )
         self._set_labeled_gauge(
             self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", enum_values, share_tokens
@@ -4234,8 +4254,9 @@ class PrometheusLogger(CustomLogger):
     def increment_dynamic_limiter_throttled(
         self,
         model_group: str,
-        team: str,
-        team_alias: str | None,
+        holder_kind: Literal["team", "key", "customer_org"],
+        holder_id: str,
+        holder_alias: str | None,
         priority: str,
         rate_limit_type: str,
         reason: str,
@@ -4245,11 +4266,10 @@ class PrometheusLogger(CustomLogger):
             "litellm_dynamic_limiter_throttled_total",
             UserAPIKeyLabelValues(
                 model_group=model_group,
-                team=team,
-                team_alias=team_alias,
                 priority=priority,
                 rate_limit_type=rate_limit_type,
                 reason=reason,
+                **_dynamic_limiter_holder_labels(holder_kind, holder_id, holder_alias),
             ),
         )
 

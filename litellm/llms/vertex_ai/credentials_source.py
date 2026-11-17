@@ -159,6 +159,14 @@ def load_vertex_credentials_source(credentials: str) -> VertexCredentialsSource:
     return _read_json_file(credentials)
 
 
+def vertex_credentials_file_version(path: str) -> str | None:
+    try:
+        stat: Final = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return f"{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_size}"
+
+
 def build_vertex_credentials(
     source: VertexCredentialsJson, build: Callable[[Mapping[str, object]], _Credentials]
 ) -> _Credentials:

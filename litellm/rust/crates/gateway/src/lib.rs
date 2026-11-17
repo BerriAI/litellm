@@ -1,11 +1,9 @@
-mod auth;
 mod error;
 mod redis;
-mod secrets;
 pub use error::Error;
 pub use redis::RedisClients;
 
-use std::{sync::Arc, time::Instant};
+use std::{path::Path, sync::Arc, time::Instant};
 
 use axum::{
     Router,
@@ -17,27 +15,50 @@ use axum::{
 use http_body_util::BodyExt;
 
 use litellm_config::Config;
-use litellm_gateway_auth::Auth;
+use litellm_config_load::{ConfigEnvironment, environment_values};
+use litellm_env::{Lookup, ProcessEnvironment};
+use litellm_gateway_auth::{Auth, BearerOrXApiKey};
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     media::PublicDnsResolver,
 };
 use litellm_inference::resources::CoreResources;
-use litellm_secrets::source::EnvironmentSecrets;
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
+use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
+/// The config at `path`, its `os.environ/` references read from the process environment.
+pub async fn load_config(path: impl AsRef<Path>) -> Result<Config, Error> {
+    let pool = HttpClientPool::new(Arc::new(PublicDnsResolver));
+    let lookup = |name: &str| std::env::var(name).ok();
+    let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&lookup)]);
+    let client = pool.client(&Resolution::from(&settings).config, ClientVariant::Provider)?;
+    let secrets = environment_secrets(Arc::new(ProcessEnvironment), client);
+    Ok(litellm_config_load::load(path, secrets).await?)
+}
+
+fn environment_secrets(
+    environment: Arc<dyn Lookup + Send + Sync>,
+    client: litellm_http::Client,
+) -> SecretResolver {
+    SecretResolver::new_python_compatible(
+        Arc::new(SecretManagerState::default()),
+        environment,
+        OidcResolver::new(client),
+    )
+}
+
 pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-    let environment = secrets::environment_values(&config.environment_variables)?;
-    let lookup = |name: &str| {
-        environment
-            .get(name)
-            .map(|value| value.expose().to_owned())
-            .or_else(|| std::env::var(name).ok())
-    };
-    let router = ModelRouter::from_config(config, &lookup);
+    let environment = Arc::new(ConfigEnvironment::new(
+        environment_values(&config.environment_variables)?,
+        Arc::new(ProcessEnvironment),
+    ));
+    let lookup = |name: &str| environment.get(name);
+    let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
+    let router = ModelRouter::from_config(config, &catalog);
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -60,12 +81,12 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     ]);
     let http = Resolution::from(&http_settings).config;
     let client = pool.client(&http, ClientVariant::Provider)?;
-    let secrets = Arc::new(secrets::ConfigSecrets::new(
-        environment,
-        Arc::new(EnvironmentSecrets::python_compatible(client)),
-    ));
+    let secrets = Arc::new(environment_secrets(environment.clone(), client));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
+    Ok(Arc::new(
+        Gateway::new(resources, http, secrets, router)?
+            .with_client_side_credentials(config.general_settings.allow_client_side_credentials),
+    ))
 }
 
 pub fn install_crypto_provider() {
@@ -79,7 +100,7 @@ pub async fn build_redis(
     pool: &HttpClientPool,
     http: &litellm_http::HttpClientConfig,
 ) -> Result<RedisClients, Error> {
-    let environment = Arc::new(secrets::environment_values(&config.environment_variables)?);
+    let environment = Arc::new(environment_values(&config.environment_variables)?);
     let lookup: litellm_redis_connect::SharedEnvironment = Arc::new(move |name: &str| {
         environment
             .get(name)
@@ -93,69 +114,15 @@ pub async fn build_redis(
     redis::connect(config, &*lookup, &resources).await
 }
 
-pub async fn build_mcp(
-    config: &Config,
-    secrets: Arc<dyn litellm_secrets::source::SecretSource>,
-    shutdown: tokio_util::sync::CancellationToken,
-    pool: &HttpClientPool,
-    http: &litellm_http::HttpClientConfig,
-) -> Result<Option<litellm_gateway_mcp::ConfiguredGateway>, Error> {
-    if !config.mcp_tools.is_empty() {
-        return Err(Error::McpSetting("mcp_tools".into()));
-    }
-    if config.mcp_servers.is_empty() {
-        return Ok(None);
-    }
-    if let Some(setting) = config
-        .general_settings
-        .additional_fields
-        .keys()
-        .chain(config.litellm_settings.additional_fields.keys())
-        .find(|key| key.starts_with("mcp_"))
-    {
-        return Err(Error::McpSetting(setting.clone()));
-    }
-    if !config.guardrails.is_empty()
-        || !config.policies.is_empty()
-        || !config.policy_attachments.is_empty()
-    {
-        return Err(Error::McpGuardrails);
-    }
-    Auth::from_config(config, secrets.clone())
-        .validate()
-        .await?;
-    let client = pool.client(http, ClientVariant::NoRedirect)?;
-    Ok(Some(
-        litellm_gateway_mcp::ConfiguredGateway::connect(
-            &config.mcp_servers,
-            (*client).clone(),
-            secrets.as_ref(),
-            shutdown,
-        )
-        .await?,
-    ))
-}
-
-pub fn router(
-    inference: Arc<Gateway>,
-    config: &Config,
-    ui: Option<Router>,
-    mcp: Option<Router>,
-) -> Router {
-    let auth = Auth::from_config(config, inference.secrets.clone());
-    let inference = litellm_gateway_inference::router(inference)
-        .merge(mcp.unwrap_or_default())
-        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+pub fn router(inference: Arc<Gateway>, config: &Config) -> Router {
+    let auth = Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey));
+    litellm_gateway_inference::router(inference)
         .route_layer(axum::middleware::from_fn_with_state(
             auth,
             litellm_gateway_auth::authenticate,
         ))
-        .layer(axum::middleware::from_fn(log_request));
-    let health = Router::new().route("/health/readiness", axum::routing::get(readiness));
-    match ui {
-        Some(ui) => inference.merge(ui).merge(health),
-        None => inference.merge(health),
-    }
+        .layer(axum::middleware::from_fn(log_request))
+        .route("/health/readiness", axum::routing::get(readiness))
 }
 
 async fn readiness() -> axum::Json<serde_json::Value> {
