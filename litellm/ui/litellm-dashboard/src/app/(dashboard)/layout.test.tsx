@@ -1,4 +1,3 @@
-import type { MobileSidebarHandle } from "@/components/shared/MobileSidebar";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, renderWithProviders as render, screen, waitFor, within } from "../../../tests/test-utils";
 import { usePathname } from "next/navigation";
@@ -44,17 +43,16 @@ vi.mock("@/components/DashboardHeader", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/components/AppSidebar", async () => {
-  const { useSidebar } = await import("@/components/ui/sidebar");
-  const { ShellSidebar } = await import("@/components/shared/MobileSidebar");
+  const { Sidebar, useSidebar } = await import("@/components/ui/sidebar");
   return {
-    default: function FakeAppSidebar({ mobileNavigationHandle }: { mobileNavigationHandle: MobileSidebarHandle }) {
+    default: function FakeAppSidebar() {
       const { state, toggleSidebar } = useSidebar();
       return (
-        <ShellSidebar handle={mobileNavigationHandle} sheetTitle="Navigation">
+        <Sidebar collapsible="icon">
           <div data-testid="sidebar" data-collapsed={String(state === "collapsed")}>
             <button onClick={toggleSidebar}>Close navigation</button>
           </div>
-        </ShellSidebar>
+        </Sidebar>
       );
     },
   };
@@ -123,13 +121,13 @@ describe("(dashboard) Layout", () => {
     );
     pendingUiConfig.resolve();
 
-    const trigger = await screen.findByRole("button", { name: "Open navigation" });
-    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+    const trigger = await screen.findByRole("button", { name: "Toggle Sidebar" });
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
-    const navigation = await screen.findByRole("dialog", { name: "Navigation" });
+    const navigation = await screen.findByRole("dialog", { name: "Sidebar" });
     fireEvent.click(within(navigation).getByRole("button", { name: "Close navigation" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
   });
 
   it("records one page view per route segment, not per query change", async () => {
@@ -142,7 +140,7 @@ describe("(dashboard) Layout", () => {
     );
     const { rerender } = render(dashboard());
     pendingUiConfig.resolve();
-    await screen.findByRole("button", { name: "Open navigation" });
+    await screen.findByRole("button", { name: "Toggle Sidebar" });
     searchParamsValue = new URLSearchParams("tab=members");
     rerender(dashboard());
     vi.mocked(usePathname).mockReturnValue("/ui/teams/abc-123");
@@ -169,15 +167,15 @@ describe("(dashboard) Layout", () => {
     );
     const { rerender } = render(dashboard());
     pendingUiConfig.resolve();
-    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
-    expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    expect(await screen.findByRole("dialog", { name: "Sidebar" })).toBeInTheDocument();
 
     vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
     rerender(dashboard());
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
     rerender(dashboard());
-    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
   });
 
   it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {

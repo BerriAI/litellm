@@ -8622,10 +8622,6 @@
       "plugin": "Plugin",
       "configure": "Configure the plugin URL in settings"
     },
-    "dashboardShell": {
-      "navigation": "Navigation",
-      "openNavigation": "Open navigation"
-    },
     "telemetryEnvNotice": {
       "vetoed": "Telemetry is turned off by an environment variable",
       "set": "Telemetry environment variables are set",
@@ -9341,10 +9337,7 @@
       "organizationLogo": "Organization logo",
       "settings": "Settings",
       "signOut": "Sign out",
-      "chatNavigation": "Chat navigation",
-      "openChatNavigation": "Open chat navigation",
-      "sheetTitle": "LiteLLM Chat",
-      "sheetDescription": "Conversations and chat workspace navigation"
+      "chatNavigation": "Chat navigation"
     },
     "conversationList": {
       "yesterday": "Yesterday",

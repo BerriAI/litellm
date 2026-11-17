@@ -42,7 +42,6 @@ vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({ useLogout: () => mockLogou
 
 describe("ChatShell", () => {
   beforeEach(() => {
-    stubViewportMatchMedia();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => Response.json({ values: {} })),
@@ -155,8 +154,8 @@ describe("ChatShell", () => {
     );
 
     expect(screen.queryByRole("navigation", { name: "Chat workspace" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
-    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+    expect(await screen.findByRole("dialog", { name: "Sidebar" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Models" }));
 
     expect(mockPush).toHaveBeenCalledWith("/ui/chat/models");
@@ -173,7 +172,7 @@ describe("ChatShell", () => {
       </ChatShell>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
+    await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
     const home = await screen.findByRole("link", { name: "Chat home" });
     expect(home).toHaveAttribute("href", "/ui/chat");
     await user.click(home);
@@ -192,9 +191,9 @@ describe("ChatShell", () => {
       </ChatShell>,
     );
 
-    const trigger = screen.getByRole("button", { name: "Open chat navigation" });
+    const trigger = screen.getByRole("button", { name: "Toggle Sidebar" });
     await user.click(trigger);
-    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Sidebar" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -226,13 +225,15 @@ describe("ChatShell", () => {
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
     await resizeTo(390);
     fireEvent.keyDown(document, { key: "k", code: "KeyK", ctrlKey: true });
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Search conversations" })).toHaveFocus());
-    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("dialog", { name: "Search conversations" })).toBeInTheDocument();
     await resizeTo(1280);
-    expect(await screen.findByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByRole("button", { name: "Collapse sidebar", hidden: true })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
-  it("should focus conversation search when the mobile sidebar starts closed", async () => {
+  it("should open only conversation search at phone width and focus it", async () => {
     vi.stubGlobal("innerWidth", 390);
     const user = userEvent.setup();
     render(
@@ -243,6 +244,7 @@ describe("ChatShell", () => {
     fireEvent.keyDown(document, { key: "k", code: "KeyK", ctrlKey: true });
     const search = await screen.findByRole("textbox", { name: "Search conversations" });
     await waitFor(() => expect(search).toHaveFocus());
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
     await user.type(search, "release notes");
     expect(search).toHaveValue("release notes");
   });

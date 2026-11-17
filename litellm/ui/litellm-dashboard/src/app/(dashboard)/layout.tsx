@@ -26,12 +26,8 @@ import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import {
-  createMobileSidebarHandle,
-  MobileSidebarTrigger,
-  useCloseMobileSidebarOn,
-} from "@/components/shared/MobileSidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
 import { sidebarProviderClassName, sidebarWidthStyle } from "@/components/shared/sidebarStyles";
 import { cn } from "@/lib/cva.config";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
@@ -143,7 +139,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
-  const [mobileNavigationHandle] = useState(createMobileSidebarHandle);
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
@@ -187,17 +182,12 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         className={cn("h-screen overflow-hidden bg-background max-md:h-dvh", sidebarProviderClassName)}
       >
         <CloseMobileSidebarOnNavigation navigationKey={navigationKey} />
-        <AppSidebar mobileNavigationHandle={mobileNavigationHandle} />
+        <AppSidebar />
         <CommandPaletteProvider>
           <SidebarInset className="min-w-0 overflow-hidden">
             <DashboardHeader
               accessToken={accessToken}
-              navigationTrigger={
-                <MobileSidebarTrigger
-                  handle={mobileNavigationHandle}
-                  label={t("shell.dashboardShell.openNavigation")}
-                />
-              }
+              navigationTrigger={<SidebarTrigger className="size-11 md:hidden" />}
               deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
               deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
             />

@@ -119,8 +119,8 @@ describe("dashboard overlay boundaries", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Gateway page" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Open navigation" })).toBeVisible();
-    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Toggle Sidebar" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
   });
 
   it.each([
@@ -192,9 +192,9 @@ describe("dashboard overlay boundaries", () => {
       </AuthProvider>,
     );
 
-    const trigger = await screen.findByRole("button", { name: "Open navigation" });
+    const trigger = await screen.findByRole("button", { name: "Toggle Sidebar" });
     await user.click(trigger);
-    const navigation = await screen.findByRole("dialog", { name: "Navigation" });
+    const navigation = await screen.findByRole("dialog", { name: "Sidebar" });
     expect(within(navigation).getByRole("link", { name: "Virtual Keys" })).toBeVisible();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveFocus());

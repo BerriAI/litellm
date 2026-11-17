@@ -20,6 +20,8 @@ export const navMenuSubClassName = "my-0.5 translate-x-0 gap-0.5 px-0 pl-3";
 
 export const navMenuClassName = "gap-0.5";
 
+export const shellSidebarClassName = "border-sidebar-border ease-in-out";
+
 export const sidebarProviderClassName = "[&_[data-slot=sidebar-gap]]:ease-in-out";
 
 export const sidebarWidthStyle = { "--sidebar-width": "280px", "--sidebar-width-icon": "72px" } as CSSProperties;

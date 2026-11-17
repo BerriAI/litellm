@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Sidebar,
   SidebarFooter,
   SidebarGroup,
   SidebarInset,
@@ -31,17 +32,14 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
-import {
-  createMobileSidebarHandle,
-  MobileSidebarTrigger,
-  ShellSidebar,
-  useCloseMobileSidebarOn,
-  useShellSidebar,
-} from "@/components/shared/MobileSidebar";
+import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
 import {
   navMenuButtonClassName,
   navMenuClassName,
+  shellSidebarClassName,
   sidebarProviderClassName,
   sidebarWidthStyle,
 } from "@/components/shared/sidebarStyles";
@@ -57,6 +55,7 @@ import { uiHref } from "@/utils/uiHref";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import ConversationList from "./ConversationList";
+import ConversationSearchDialog from "./ConversationSearchDialog";
 
 const conversationUrl = (chatsRoute: string, id: string) => `${chatsRoute}?id=${encodeURIComponent(id)}`;
 
@@ -121,14 +120,13 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
   const pathname = stripTrailingSlash(usePathname() ?? "");
   const { accessToken, conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
   const handleLogout = useLogout(accessToken);
-  const { isDesktop, collapsed, setOpen, setOpenMobile } = useShellSidebar();
+  const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
+  const collapsed = state === "collapsed" && !isMobile;
   useCloseMobileSidebarOn();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [mobileNavigationHandle] = useState(createMobileSidebarHandle);
   const shortcut = useShortcutLabel();
   const openSearch = () => {
     setOpen(true);
-    if (!isDesktop) setOpenMobile(true);
     setSearchOpen(true);
   };
   useHotkeys("mod+k", openSearch, { enableOnFormTags: true, preventDefault: true, useKey: true });
@@ -226,10 +224,6 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
             if (id === activeConversationId) navigate(routes.chats);
           }}
           onRename={renameConversation}
-          searchOpen={searchOpen}
-          onSearchOpenChange={setSearchOpen}
-          hideSearchButton
-          enableSearchShortcut={false}
         />
       </div>
       <SidebarFooter className="mt-auto flex-none gap-2.5 border-t border-sidebar-border p-3">
@@ -256,23 +250,26 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <ShellSidebar
-        handle={mobileNavigationHandle}
-        label={t("chat.shell.chatNavigation")}
-        sheetTitle={t("chat.shell.sheetTitle")}
-        sheetDescription={t("chat.shell.sheetDescription")}
-        sheetInitialFocus={searchOpen ? false : undefined}
+      <Sidebar
+        collapsible="icon"
+        role="complementary"
+        aria-label={t("chat.shell.chatNavigation")}
+        className={shellSidebarClassName}
       >
         {sidebar}
-      </ShellSidebar>
+      </Sidebar>
+      <ConversationSearchDialog
+        open={searchOpen}
+        conversations={conversations}
+        onSelect={(id) => navigate(conversationUrl(routes.chats, id))}
+        onClose={() => setSearchOpen(false)}
+      />
       <SidebarInset className="min-w-0 overflow-hidden">
         <DashboardHeader
           accessToken={accessToken}
           title={title}
           workspace="chat"
-          navigationTrigger={
-            <MobileSidebarTrigger handle={mobileNavigationHandle} label={t("chat.shell.openChatNavigation")} />
-          }
+          navigationTrigger={<SidebarTrigger className="size-11 md:hidden" />}
         />
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </SidebarInset>

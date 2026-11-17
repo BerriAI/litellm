@@ -9,8 +9,7 @@ import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadine
 import { getProxyBaseUrl } from "@/components/networking";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SidebarHeader } from "@/components/ui/sidebar";
-import { useShellSidebar } from "@/components/shared/MobileSidebar";
+import { SidebarHeader, useSidebar } from "@/components/ui/sidebar";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import { productNames } from "@/i18n/untranslated/productNames";
@@ -33,7 +32,8 @@ export function SidebarBrand({
   homeLabel?: string;
 }) {
   const { t } = useTranslation();
-  const { collapsed, drawerOpen, toggleSidebar, setOpenMobile } = useShellSidebar();
+  const { state, isMobile, toggleSidebar, setOpenMobile } = useSidebar();
+  const collapsed = state === "collapsed" && !isMobile;
   const { logoUrl, logoUrlDark } = useTheme();
   const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
@@ -74,7 +74,7 @@ export function SidebarBrand({
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={drawerOpen ? () => setOpenMobile(false) : toggleSidebar}
+          onClick={toggleSidebar}
           aria-expanded={!collapsed}
           aria-label={collapsed ? t("shell.navbar.expandSidebar") : t("shell.navbar.collapseSidebar")}
           className="flex-none text-muted-foreground group-data-[collapsible=icon]:size-9"

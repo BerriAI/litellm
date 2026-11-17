@@ -1,5 +1,4 @@
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
-import { type MobileSidebarHandle, ShellSidebar, useShellSidebar } from "@/components/shared/MobileSidebar";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -8,6 +7,7 @@ import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
@@ -19,6 +19,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarSeparator,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -26,6 +27,7 @@ import {
   navMenuClassName,
   navMenuSubButtonClassName,
   navMenuSubClassName,
+  shellSidebarClassName,
 } from "@/components/shared/sidebarStyles";
 import {
   Activity,
@@ -95,7 +97,6 @@ import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 const ICON = { strokeWidth: 1.75 } as const;
 
 interface SidebarProps {
-  mobileNavigationHandle: MobileSidebarHandle;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
@@ -591,7 +592,6 @@ const groupsOpenFor = (route: string) => {
 };
 
 const Sidebar_: React.FC<SidebarProps> = ({
-  mobileNavigationHandle,
   enabledPagesInternalUsers,
   enableProjectsUI,
   disableAgentsForInternalUsers,
@@ -607,7 +607,8 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const logout = useLogout(accessToken);
-  const { inDrawer, collapsed, openMobile, setOpen, setOpenMobile } = useShellSidebar();
+  const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
+  const collapsed = state === "collapsed" && !isMobile;
   const closeMobileSidebarOnLinkClick = (event: MouseEvent) => {
     if (event.target instanceof Element && event.target.closest("a[href]")) setOpenMobile(false);
   };
@@ -616,14 +617,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
-  const [drawerOpenGroups, setDrawerOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
-  const [drawerWasOpen, setDrawerWasOpen] = useState(openMobile);
-  if (openMobile !== drawerWasOpen) {
-    setDrawerWasOpen(openMobile);
-    if (openMobile) setDrawerOpenGroups(groupsOpenFor(currentRoute));
-  }
-  const shownGroups = inDrawer ? drawerOpenGroups : openGroups;
-  const setShownGroups = inDrawer ? setDrawerOpenGroups : setOpenGroups;
 
   // Keep the active page's parent group expanded as the user navigates, using the
   // "adjust state during render" pattern rather than an effect (avoids a
@@ -670,10 +663,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const setGroupOpen = (key: string, open: boolean) => {
     if (collapsed) {
       setOpen(true);
-      setShownGroups((prev) => new Set(prev).add(key));
+      setOpenGroups((prev) => new Set(prev).add(key));
       return;
     }
-    setShownGroups((prev) => {
+    setOpenGroups((prev) => {
       const next = new Set(prev);
       if (open) next.add(key);
       else next.delete(key);
@@ -711,7 +704,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       );
     }
 
-    const open = shownGroups.has(item.key);
+    const open = openGroups.has(item.key);
     return (
       <Collapsible
         key={item.key}
@@ -751,11 +744,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   return (
-    <ShellSidebar
-      handle={mobileNavigationHandle}
-      sheetTitle={t("shell.dashboardShell.navigation")}
-      keepScrollAcrossBreakpoint
-    >
+    <Sidebar collapsible="icon" role="complementary" className={shellSidebarClassName}>
       <div className="contents" onClickCapture={closeMobileSidebarOnLinkClick}>
         <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
 
@@ -794,7 +783,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
         </SidebarFooter>
       </div>
-    </ShellSidebar>
+    </Sidebar>
   );
 };
 
