@@ -5012,6 +5012,16 @@ class ProxyLogging:
             return
         await limiter.async_release_request_parallel_slot()
 
+    async def arelease_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        match limiter:
+            case PROXY_MaxParallelRequestsHandler_v3():
+                await limiter.async_release_request_parallel_slot()
+            case _PROXY_MaxParallelRequestsHandler():
+                await limiter.async_release_slot_before_logging(logging_obj)
+            case _:
+                return
+
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
 
     async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:

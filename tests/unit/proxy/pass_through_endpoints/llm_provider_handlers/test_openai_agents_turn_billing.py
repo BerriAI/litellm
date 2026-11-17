@@ -3,19 +3,25 @@ import contextvars
 import json
 import logging
 import math
+import re
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from typing import Final, TypeAlias
 
 import httpx
+import openai
 import pytest
 import respx
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.constants import OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
     OpenAIAgentsTurnBiller,
@@ -25,7 +31,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_tu
 from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.utils import InternalUsageCache, hash_token
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -55,8 +61,19 @@ SECOND_TURN_USAGE: Final = {
     "output_tokens_details": {"reasoning_tokens": 64},
     "total_tokens": 7405,
 }
-INPUT_MESSAGE: Final = {"type": "agent.session.input.message", "content": [{"type": "input_text", "text": "Say hi"}]}
+USER_TEXT: Final = "Say hi"
 TOOL_RESULT: Final = {"type": "agent.session.input.tool_result", "call_id": "call_5c1d", "output": "42"}
+TURN_ITEMS_PATH: Final = re.compile(r"/turns/(?P<turn_id>[^/]+)/items\?order=asc&limit=100$")
+
+
+def _input_message(text: str) -> dict[str, object]:
+    return {
+        "type": "agent.session.input.message",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": text}]}],
+    }
+
+
+INPUT_MESSAGE: Final = _input_message(USER_TEXT)
 
 
 def _agent(service_tier: str) -> dict[str, object]:
@@ -80,6 +97,12 @@ def _turn(turn_id: str, created_at: int, status: str, usage: Mapping[str, object
 
 def _page(*data: Mapping[str, object]) -> dict[str, object]:
     return {"object": "list", "data": list(data)}
+
+
+def _user_messages(texts: Sequence[str]) -> dict[str, object]:
+    return _page(
+        *({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]} for text in texts)
+    )
 
 
 def _expected_cost(usage: Mapping[str, object], service_tier: str = "auto") -> float:
@@ -107,7 +130,7 @@ class _Clock:
         await asyncio.sleep(0)
 
 
-_Reply: TypeAlias = Mapping[str, object] | int | httpx.HTTPError
+_Reply: TypeAlias = Mapping[str, object] | int | Exception
 
 
 class _AgentsApi:
@@ -118,8 +141,10 @@ class _AgentsApi:
         status_code: int = 200,
         unreachable: bool = False,
         replies: Mapping[str, Sequence[_Reply]] | None = None,
+        turn_texts: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         self._turn_pages: Final = turn_pages
+        self._turn_texts: Final = turn_texts or {}
         self._session: Final = session
         self._status_code: Final = status_code
         self._unreachable: Final = unreachable
@@ -130,7 +155,7 @@ class _AgentsApi:
     def _reply(self, url: str, request: httpx.Request) -> httpx.Response:
         replies: Final = self._replies[url]
         reply: Final = replies[min(self.urls.count(url), len(replies)) - 1]
-        if isinstance(reply, httpx.HTTPError):
+        if isinstance(reply, Exception):
             raise reply
         if isinstance(reply, int):
             return httpx.Response(reply, json={"error": {"message": "upstream"}}, request=request)
@@ -152,6 +177,10 @@ class _AgentsApi:
             return httpx.Response(200, json={"object": "list", "data": list(page)}, request=request)
         if url == f"{SESSIONS_URL}/{SESSION_ID}" and self._session is not None:
             return httpx.Response(200, json=dict(self._session), request=request)
+        turn_items: Final = TURN_ITEMS_PATH.search(url)
+        if turn_items is not None:
+            texts: Final = self._turn_texts.get(turn_items["turn_id"], (USER_TEXT,))
+            return httpx.Response(200, json=_user_messages(texts), request=request)
         if url == SUBAGENTS_URL or "/items?" in url:
             return httpx.Response(200, json=_page(), request=request)
         return httpx.Response(404, json={"error": {"message": "not found"}}, request=request)
@@ -211,12 +240,19 @@ class _SpendRows(CustomLogger):
         return self.rows[0]
 
 
-def _litellm_params(request_headers: Mapping[str, str] | None = None) -> dict[str, object]:
-    return {"metadata": {}, "proxy_server_request": {"headers": dict(request_headers or {})}}
+def _litellm_params(
+    request_headers: Mapping[str, str] | None = None, metadata: Mapping[str, object] | None = None
+) -> dict[str, object]:
+    return {"metadata": dict(metadata or {}), "proxy_server_request": {"headers": dict(request_headers or {})}}
 
 
 def _logging_obj(
-    rows: _SpendRows, litellm_call_id: str, stream: bool, api_base: str, litellm_params: dict[str, object]
+    rows: _SpendRows,
+    litellm_call_id: str,
+    stream: bool,
+    api_base: str,
+    litellm_params: dict[str, object],
+    callbacks: Sequence[CustomLogger] = (),
 ) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="unknown",
@@ -226,7 +262,7 @@ def _logging_obj(
         start_time=CALL_TIME,
         litellm_call_id=litellm_call_id,
         function_id="1234",
-        dynamic_async_success_callbacks=[rows],
+        dynamic_async_success_callbacks=[rows, *callbacks],
     )
     logging_obj.update_environment_variables(
         model="unknown",
@@ -253,13 +289,15 @@ async def _relay_call(
     litellm_call_id: str,
     status_code: int = 200,
     request_headers: Mapping[str, str] | None = None,
+    metadata: Mapping[str, object] | None = None,
+    callbacks: Sequence[CustomLogger] = (),
 ) -> None:
-    litellm_params: Final = _litellm_params(request_headers)
+    litellm_params: Final = _litellm_params(request_headers, metadata)
     await PassThroughEndpointLogging(agents_turn_biller=biller).pass_through_async_success_handler(
         httpx_response=httpx.Response(status_code, json=response_body, request=httpx.Request("POST", url_route)),
         response_body=response_body,
         logging_obj=_logging_obj(
-            rows, litellm_call_id, stream=False, api_base=url_route, litellm_params=litellm_params
+            rows, litellm_call_id, stream=False, api_base=url_route, litellm_params=litellm_params, callbacks=callbacks
         ),
         url_route=url_route,
         result="",
@@ -319,7 +357,7 @@ async def test_a_session_create_with_input_bills_its_first_turn_at_the_agent_ser
         _biller(api, _Clock()),
         rows,
         SESSIONS_URL,
-        {"agent": {"model": AGENT_MODEL}, "input": "Say hi in one word"},
+        {"agent": {"model": AGENT_MODEL}, "input": USER_TEXT},
         _session(service_tier),
         "1e3a5c7e-9b2d-4f6a-8c0e-2a4c6e8a0b17",
     )
@@ -407,7 +445,7 @@ async def test_a_shared_claim_store_outage_still_bills_the_turn(
         OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, claims=TurnClaims(lambda: redis)),
         rows,
         SESSIONS_URL,
-        {"agent": {"model": AGENT_MODEL}, "input": "Say hi in one word"},
+        {"agent": {"model": AGENT_MODEL}, "input": USER_TEXT},
         _session(),
         "1f3b5d7f-9a2c-4e6b-8d0f-2b4d6f8a0c13",
     )
@@ -447,6 +485,7 @@ async def test_a_turn_created_before_the_call_is_never_billed_to_it(local_model_
             ),
         ),
         session=_session(),
+        turn_texts={"turn_old": ("an earlier message",)},
     )
     rows: Final = _SpendRows()
 
@@ -471,7 +510,10 @@ async def test_a_turn_created_before_the_call_is_never_billed_to_it(local_model_
             ((_turn("turn_1", CALL_STARTED_AT + 1, "completed", None),),), 200, False, id="usage_never_arrives"
         ),
         pytest.param(
-            ((_turn("turn_old", CALL_STARTED_AT - 1, "completed", TURN_USAGE),),), 200, False, id="no_turn_to_claim"
+            ((_turn("turn_old", CALL_STARTED_AT - OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS - 1, "completed", TURN_USAGE),),),
+            200,
+            False,
+            id="no_turn_to_claim",
         ),
         pytest.param((({"id": "turn_1", "status": "completed"},),), 200, False, id="turns_page_unreadable"),
         pytest.param(((),), 500, False, id="turns_list_fails"),
@@ -586,7 +628,7 @@ async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed
         ),
         passthrough_success_handler_obj=PassThroughEndpointLogging(agents_turn_biller=_biller(api, _Clock())),
         url_route=SESSIONS_URL,
-        request_body={"agent": {"model": AGENT_MODEL}, "input": "Say hi in one word", "stream": True},
+        request_body={"agent": {"model": AGENT_MODEL}, "input": USER_TEXT, "stream": True},
         endpoint_type=EndpointType.OPENAI,
         start_time=CALL_TIME,
         raw_bytes=(
@@ -629,7 +671,7 @@ async def test_a_key_at_its_parallel_limit_can_call_again_while_its_agent_turn_b
     rows: Final = _SpendRows()
     released: Final = asyncio.Event()
 
-    async def release_request_slot() -> None:
+    async def release_request_slot(logging_obj: LiteLLMLoggingObj) -> None:
         await limiter.async_release_request_parallel_slot()
         released.set()
 
@@ -680,6 +722,9 @@ async def test_the_polls_send_the_passthrough_key_and_the_callers_openai_scope(
         session: Final = upstream.get(f"{SESSIONS_URL}/{SESSION_ID}").respond(json=_session())
         subagents: Final = upstream.get(SUBAGENTS_URL).respond(json=_page())
         items: Final = upstream.get(ROOT_ITEMS_URL).respond(json=_page())
+        messages: Final = upstream.get(f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?order=asc&limit=100").respond(
+            json=_user_messages((USER_TEXT,))
+        )
         await _relay_call(
             OpenAIAgentsTurnBiller(get=live_agents_api_get, sleep=clock.sleep, clock=clock),
             rows,
@@ -697,7 +742,7 @@ async def test_the_polls_send_the_passthrough_key_and_the_callers_openai_scope(
         row: Final = await rows.only_row()
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    for poll in (route.calls.last.request for route in (turns, session, subagents, items)):
+    for poll in (route.calls.last.request for route in (turns, session, subagents, items, messages)):
         assert poll.headers["authorization"] == "Bearer sk-agents-turns-poll"
         assert poll.headers["openai-beta"] == "agents=v1"
         assert poll.headers["openai-project"] == "proj_agents_scoped"
@@ -714,22 +759,15 @@ async def _failing_sleep(seconds: float) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("sleep", "lost_reason"),
-    [pytest.param(_cancelled_sleep, "cancelled", id="cancelled"), pytest.param(_failing_sleep, "failed", id="failed")],
-)
-async def test_a_billing_task_that_dies_reports_the_lost_row(
-    local_model_cost_map: None,
-    caplog: pytest.LogCaptureFixture,
-    sleep: Callable[[float], Awaitable[None]],
-    lost_reason: str,
+async def test_a_billing_task_that_is_cancelled_reports_the_lost_row(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
 ):
     api: Final = _AgentsApi(turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),))
     rows: Final = _SpendRows()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await _relay_call(
-            OpenAIAgentsTurnBiller(get=api.get, sleep=sleep, clock=_Clock()),
+            OpenAIAgentsTurnBiller(get=api.get, sleep=_cancelled_sleep, clock=_Clock()),
             rows,
             EVENTS_URL,
             {"events": [INPUT_MESSAGE]},
@@ -740,7 +778,38 @@ async def test_a_billing_task_that_dies_reports_the_lost_row(
             await asyncio.sleep(0)
 
     assert rows.rows == []
-    assert any(f"turn billing {lost_reason}, the call logged no row" in message for message in caplog.messages)
+    assert any("turn billing cancelled, the call logged no row" in message for message in caplog.messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sleep_fails", "replies"),
+    [
+        pytest.param(True, {}, id="sleep_fails"),
+        pytest.param(False, {TURNS_URL: (ValueError("unexpected turns reply"),)}, id="poll_raises"),
+    ],
+)
+async def test_a_poll_that_breaks_unexpectedly_still_logs_the_call_at_zero(
+    local_model_cost_map: None, sleep_fails: bool, replies: Mapping[str, Sequence[_Reply]]
+):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),), replies=replies
+    )
+    clock: Final = _Clock()
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=_failing_sleep if sleep_fails else clock.sleep, clock=clock),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "0e2a4c6e-8a0c-4e2d-8b6c-9e1a3c5e7a81",
+    )
+    row: Final = await rows.only_row()
+
+    assert not row["spend"]
+    assert row["total_tokens"] == 0
 
 
 @pytest.mark.asyncio
@@ -814,6 +883,8 @@ async def test_transient_poll_failures_still_bill_the_turn(local_model_cost_map:
                 503,
                 500,
                 httpx.ConnectError("connection refused"),
+                openai.OpenAIError("The api_key client option must be set"),
+                LiteLLMOpenAIError(status_code=401, message="credential refresh failed"),
                 429,
                 408,
                 _page(_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE)),
@@ -992,3 +1063,173 @@ async def test_web_searches_in_a_billed_turn_add_their_per_call_price(local_mode
 
     assert per_search > 0
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE) + 2 * per_search)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stamped_before_the_call_by_a_skewed_clock_is_still_billed(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT - OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS, "completed", TURN_USAGE),),),
+        session=_session(),
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "1a3c5e7a-9c1e-4a3c-8e5a-7c9e1a3c5e01",
+    )
+
+    assert (await rows.only_row())["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
+async def test_a_message_merged_into_another_calls_turn_never_takes_a_later_calls_turn(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (
+                _turn("turn_2", CALL_STARTED_AT + 5, "completed", SECOND_TURN_USAGE),
+                _turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),
+            ),
+        ),
+        session=_session(),
+        turn_texts={"turn_1": ("first message", "second message"), "turn_2": ("third message",)},
+    )
+    biller: Final = _biller(api, _Clock())
+    rows: Final = tuple(_SpendRows() for _ in range(3))
+
+    for call_rows, text, call_id in zip(
+        rows,
+        ("first message", "second message", "third message"),
+        (
+            "2b4d6f8b-0d2f-4b4d-8f6b-8d0f2b4d6f01",
+            "2b4d6f8b-0d2f-4b4d-8f6b-8d0f2b4d6f02",
+            "2b4d6f8b-0d2f-4b4d-8f6b-8d0f2b4d6f03",
+        ),
+        strict=True,
+    ):
+        await _relay_call(biller, call_rows, EVENTS_URL, {"events": [_input_message(text)]}, None, call_id)
+    first, merged, third = [(await call_rows.only_row())["total_tokens"] for call_rows in rows]
+
+    assert first == TURN_USAGE["total_tokens"]
+    assert merged == 0
+    assert third == SECOND_TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_two_workers_without_a_shared_claim_store_bill_each_message_its_own_turn(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (
+                _turn("turn_2", CALL_STARTED_AT, "completed", SECOND_TURN_USAGE),
+                _turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),
+            ),
+        ),
+        session=_session(),
+        turn_texts={"turn_1": ("message on worker one",), "turn_2": ("message on worker two",)},
+    )
+    clock: Final = _Clock()
+    first: Final = _SpendRows()
+    second: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, clock),
+        first,
+        EVENTS_URL,
+        {"events": [_input_message("message on worker one")]},
+        None,
+        "3c5e7a9c-1e3a-4c5e-8a7c-9e1a3c5e7a01",
+    )
+    await _relay_call(
+        _biller(api, clock),
+        second,
+        EVENTS_URL,
+        {"events": [_input_message("message on worker two")]},
+        None,
+        "3c5e7a9c-1e3a-4c5e-8a7c-9e1a3c5e7a02",
+    )
+
+    assert (await first.only_row())["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert (await second.only_row())["total_tokens"] == SECOND_TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_closed_before_the_turn_started_is_never_polled(local_model_cost_map: None):
+    closed_turns_url: Final = f"{SESSIONS_URL}/{SESSION_ID}/subagents/subagent_0/turns?order=desc&limit=100"
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        session=_session(),
+        replies={
+            SUBAGENTS_URL: (
+                _page(
+                    {"id": "subagent_1", "object": "agent.session.subagent", "closed_at": None},
+                    {"id": "subagent_0", "object": "agent.session.subagent", "closed_at": CALL_STARTED_AT - 30},
+                ),
+            ),
+            SUBAGENT_TURNS_URL: (_page(_turn("subturn_1", CALL_STARTED_AT + 3, "completed", SECOND_TURN_USAGE)),),
+            closed_turns_url: (_page(_turn("subturn_0", CALL_STARTED_AT + 3, "completed", SECOND_TURN_USAGE)),),
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "4d6f8b0d-2f4b-4d6f-9b8d-0f2b4d6f8b01",
+    )
+    row: Final = await rows.only_row()
+
+    assert closed_turns_url not in api.urls
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"] + SECOND_TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_row_on_the_legacy_limiter_frees_its_slot_once(local_model_cost_map: None):
+    limiter: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: CALL_TIME
+    )
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-agents-legacy-parallel"), max_parallel_requests=1)
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    clock: Final = _GatedClock()
+    rows: Final = _SpendRows()
+    released: Final = asyncio.Event()
+
+    async def release_request_slot(logging_obj: LiteLLMLoggingObj) -> None:
+        await proxy_logging.arelease_slot_before_logging(logging_obj)
+        released.set()
+
+    async def call(litellm_call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=DualCache(),
+            data={"litellm_call_id": litellm_call_id},
+            call_type="pass_through_endpoint",
+        )
+
+    await call("5e7a9c1e-3a5c-4e7a-8c9e-1a3c5e7a9c01")
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, release_request_slot=release_request_slot),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "5e7a9c1e-3a5c-4e7a-8c9e-1a3c5e7a9c01",
+        metadata={"user_api_key": key.api_key, "user_api_key_model_max_budget": key.model_max_budget},
+        callbacks=(limiter,),
+    )
+    await asyncio.wait_for(released.wait(), timeout=5)
+    await call("5e7a9c1e-3a5c-4e7a-8c9e-1a3c5e7a9c02")
+    clock.gate.set()
+    _ = await rows.only_row()
+
+    with pytest.raises(ProxyRateLimitError):
+        await call("5e7a9c1e-3a5c-4e7a-8c9e-1a3c5e7a9c03")

@@ -28,6 +28,7 @@ from litellm.types.utils import CallTypes, Usage
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
 
     Span = _Span
@@ -49,11 +50,15 @@ def _response_total_tokens(response_obj: object) -> int:
 
 
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
+SLOT_RELEASED_BEFORE_LOGGING: Final = "parallel_request_slot_released_before_logging"
 
 
 def _slots_released(kwargs: Mapping[str, object]) -> int:
-    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
-    return 0 if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES else 1
+    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect.
+    A row whose slot was released before it logged releases nothing again."""
+    if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True:
+        return 0
+    return 1
 
 
 class CacheObject(TypedDict):
@@ -810,6 +815,19 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             start_time=now,
             end_time=now,
         )
+
+    @with_service_target("rate_limits")
+    async def async_release_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        now: Final = self._clock()
+        details: Final[Mapping[str, object]] = logging_obj.model_call_details
+        await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # legacy callback signature is untyped
+            kwargs={"litellm_params": details.get("litellm_params"), "user": details.get("user")},
+            response_obj=None,
+            start_time=now,
+            end_time=now,
+        )
+        released: Final = {SLOT_RELEASED_BEFORE_LOGGING: True}
+        logging_obj.model_call_details |= released  # rebind-ok: the row's details reach its later success callback
 
     async def get_internal_user_object(
         self,
