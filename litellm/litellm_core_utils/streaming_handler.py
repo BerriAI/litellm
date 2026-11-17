@@ -90,7 +90,7 @@ def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, o
 
 
 def _carries_payload(choice: StreamingChoices) -> bool:
-    return bool(choice.model_dump(include={"logprobs"}, exclude_none=True)) or any(
+    return getattr(choice, "logprobs", None) is not None or any(
         choice.delta.model_dump(exclude_none=True, exclude={"role"}).values()
     )
 
@@ -1832,18 +1832,23 @@ class CustomStreamWrapper:
                 response.hidden_params["additional_headers"] = {}
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
-    def _set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+    def _set_final_chunk_usage(self, chunk: ModelResponseStream, *, estimate_unreported_usage: bool = False) -> None:
         reported_usage: Final = _reported_total_usage(chunks=self.chunks)
         set_hidden_param(
             chunk,
             "usage",
-            UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            self._usage_when_unreported(estimate=estimate_unreported_usage)
             if reported_usage is None
             else reported_usage,
         )
         self._last_returned_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
             dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
         )
+
+    def _usage_when_unreported(self, *, estimate: bool) -> Usage:
+        if self.stream_options is None and not estimate:
+            return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        return UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
     def _record_and_strip_usage_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
         self.chunks.append(chunk.model_copy())
@@ -1857,14 +1862,16 @@ class CustomStreamWrapper:
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
 
     def _returned_sync_stream_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
-        if getattr(chunk, "usage", None) is None:
+        if getattr(chunk, "usage", None) is None or (not self.send_stream_usage and chunk.choices):
             self.chunks.append(chunk)
             return chunk
         return self._record_and_strip_usage_chunk(chunk)
 
-    def _maybe_set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+    def _maybe_set_final_chunk_usage(
+        self, chunk: ModelResponseStream, *, estimate_unreported_usage: bool = False
+    ) -> None:
         if self.sent_last_chunk is True and not self.send_stream_usage:
-            self._set_final_chunk_usage(chunk)
+            self._set_final_chunk_usage(chunk, estimate_unreported_usage=estimate_unreported_usage)
 
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
@@ -2191,7 +2198,7 @@ class CustomStreamWrapper:
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                         if (returned_chunk := self._returned_sync_stream_chunk(processed_chunk)) is None:
                             continue
-                        self._maybe_set_final_chunk_usage(returned_chunk)
+                        self._maybe_set_final_chunk_usage(returned_chunk, estimate_unreported_usage=True)
                         return returned_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)
