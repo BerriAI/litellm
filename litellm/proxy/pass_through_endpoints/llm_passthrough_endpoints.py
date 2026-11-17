@@ -2804,7 +2804,7 @@ def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -
     )
 
 
-def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+def is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
     """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``.
 
     A proxy in no-auth dev mode without custom auth authenticated nothing, so none of the caller's values is one.
@@ -2837,7 +2837,7 @@ def _caller_headers_without_litellm_secrets(
         {
             name: value
             for name, value in incoming.items()
-            if name not in dropped_by_name and not _is_authenticated_caller_secret(value, user_api_key_dict)
+            if name not in dropped_by_name and not is_authenticated_caller_secret(value, user_api_key_dict)
         }
     )
 

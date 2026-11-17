@@ -2601,30 +2601,85 @@ async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
     assert streamed == upstream_body.replace(raw_id.encode(), managed_id.encode())
 
 
+_SERVER_ANTHROPIC_KEY: Final = {"x-api-key": "server-anthropic-key"}
+_PINNED_KEY_METADATA: Final = {"anthropic_user_profile_id": "uprof_key"}
+_PROXY_MASTER_KEY: Final = "sk-proxy-master"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("key_metadata", "inbound_headers", "forward_headers", "sent_profile_id"),
+    ("key_metadata", "route_headers", "inbound_headers", "forward_headers", "sent_profile_id"),
     [
         pytest.param(
-            {"anthropic_user_profile_id": "uprof_key"},
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
             {"x-pass-anthropic-user-profile-id": "uprof_caller"},
             False,
             "uprof_key",
             id="pin-replaces-x-pass-id",
         ),
         pytest.param(
-            {"anthropic_user_profile_id": "uprof_key"},
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
             {"Anthropic-User-Profile-Id": "uprof_caller"},
             True,
             "uprof_key",
             id="pin-replaces-forwarded-id",
         ),
-        pytest.param({"anthropic_user_profile_id": "uprof_key"}, {}, False, None, id="pin-adds-nothing"),
-        pytest.param({}, {"x-pass-anthropic-user-profile-id": "uprof_caller"}, False, "uprof_caller", id="no-pin"),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-api-key": "caller-anthropic-key", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="route-credential-replaces-the-callers-so-the-pin-applies",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"Authorization": "Bearer sk-test", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="forwarded-proxy-key-is-no-caller-credential",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-litellm-api-key": _PROXY_MASTER_KEY, "api-key": _PROXY_MASTER_KEY, "anthropic-user-profile-id": "x"},
+            True,
+            "uprof_key",
+            id="forwarded-master-key-is-no-caller-credential",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"x-api-key": "caller-anthropic-key", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_caller",
+            id="forwarded-caller-credential-keeps-its-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"Authorization": "Bearer sk-ant-oat01-caller", "x-pass-anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_caller",
+            id="forwarded-caller-oauth-keeps-its-id",
+        ),
+        pytest.param(_PINNED_KEY_METADATA, _SERVER_ANTHROPIC_KEY, {}, False, None, id="pin-adds-nothing"),
+        pytest.param(
+            {},
+            _SERVER_ANTHROPIC_KEY,
+            {"x-pass-anthropic-user-profile-id": "uprof_caller"},
+            False,
+            "uprof_caller",
+            id="no-pin",
+        ),
     ],
 )
 async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
     key_metadata: dict[str, str],
+    route_headers: dict[str, str],
     inbound_headers: dict[str, str],
     forward_headers: bool,
     sent_profile_id: str | None,
@@ -2663,11 +2718,14 @@ async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
     request.query_params = QueryParams({})
 
     try:
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):  # test-quality-ok: read at call time
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: read at call time
+            patch("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY),  # test-quality-ok: read at call time
+        ):
             response: Final = await pass_through_request(
                 request=request,
                 target="http://internal-api.test/v1/messages",
-                custom_headers={},
+                custom_headers=dict(route_headers),
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
                 forward_headers=forward_headers,
             )
