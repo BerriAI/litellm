@@ -6,6 +6,7 @@ import math
 import re
 import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -109,6 +110,25 @@ def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
 
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
 _Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
 
@@ -141,6 +161,13 @@ def without(
     return {key: value for key, value in mapping.items() if key not in keys}
 
 
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
+
+
 def decoded_json_object(value: object) -> Mapping[str, object]:
     mapping: Final = as_str_mapping(value)
     if mapping is not None:
@@ -163,6 +190,23 @@ def attribute_or_none(source: object, name: str) -> object:
 
 
 _Shape: Final = TypeVar("_Shape")
+
+
+@dataclass(frozen=True, slots=True)
+class FinishEvidence:
+    """Finish reasons a stream received from the provider. ``unindexed`` is a received reason whose
+    choice the stream could not tell, so it is only evidence for a single-choice response."""
+
+    by_choice: Mapping[int, str]
+    unindexed: str | None
+
+
+NO_FINISH_EVIDENCE: Final = FinishEvidence(by_choice=MappingProxyType({}), unindexed=None)
+
+
+def finish_evidence_of(stream: object) -> FinishEvidence:
+    evidence: Final[object] = getattr(stream, "finish_evidence", None)
+    return evidence if isinstance(evidence, FinishEvidence) else NO_FINISH_EVIDENCE
 
 
 def has_attributes(

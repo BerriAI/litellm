@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import Final, Generic, TypeVar
 
 from pydantic import TypeAdapter
@@ -90,6 +91,13 @@ def _over_limit(raw: list[RawValue]) -> tuple[int, int, int] | None:
     return None
 
 
+def counter_pairs(
+    counters: Sequence[RateLimitCounter], text: Callable[[RateLimitCounter], str | None]
+) -> list[str | None]:
+    """Each counter's window start, always ``None`` here, then its count, the shape ``BATCH_COUNTER_READ_SCRIPT`` answers in."""
+    return list(chain.from_iterable((None, text(counter)) for counter in counters))
+
+
 @dataclass
 class FakeRateLimits:
     """Assign a fake to a ``*_script`` attribute to give the limiter a Redis that runs it; a script the test
@@ -152,14 +160,19 @@ class FakeRateLimits:
         keys: Final = [key for counter in counters for key in (window_key(counter), counter_key(counter))]
 
         async def reply() -> list[str | None]:
+            if self.batch_counter_read_script is None:
+                return counter_pairs(counters, self._local_text)
             raw: Final = await self._run(self.batch_counter_read_script, "batch_counter_read_script", keys, [])
             return [_text(value) for value in raw]
 
         return Resolved(reply, send, "read_counters")
 
-    def check_and_increment(
-        self, counters: Sequence[AtomicCounter], send: object
-    ) -> Resolved[AtomicReply]:
+    def _local_text(self, counter: RateLimitCounter) -> str | None:
+        """Memory standing in for Redis when the test gave no read script, as ``get`` does."""
+        value: Final = self.memory.get_local(counter)
+        return None if value is None or isinstance(value, dict) else str(value)
+
+    def check_and_increment(self, counters: Sequence[AtomicCounter], send: object) -> Resolved[AtomicReply]:
         keys: Final = [key for atomic in counters for key in (window_key(atomic.counter), counter_key(atomic.counter))]
         args: Final = [
             arg for atomic in counters for arg in (atomic.limit, atomic.increment, atomic.ttl, atomic.window_size)
@@ -225,7 +238,9 @@ class FakeRateLimits:
 
         return Resolved(reply, send, "parallel_release")
 
-    def parallel_count(self, gauges: Sequence[RateLimitScope], slot_ttl_seconds: int, send: object) -> Resolved[list[int]]:
+    def parallel_count(
+        self, gauges: Sequence[RateLimitScope], slot_ttl_seconds: int, send: object
+    ) -> Resolved[list[int]]:
         keys: Final = [scope_key(scope, "max_parallel_requests") for scope in gauges]
 
         async def reply() -> list[int]:

@@ -3789,6 +3789,8 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "anthropic_keycloak_client_secret_ref",
         "anthropic_identity_token_file",
         "openai_identity_token_file",
+        "github_copilot_app_private_key",
+        "github_copilot_app_private_key_ref",
         "vertex_credentials",
         "vertex_ai_credentials",
         "extra_headers",

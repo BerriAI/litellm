@@ -1,0 +1,534 @@
+{
+  "rows": [
+    {
+      "input": "null",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "true",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": null
+    },
+    {
+      "input": "false",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": null
+    },
+    {
+      "input": "0",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": null
+    },
+    {
+      "input": "1",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": null
+    },
+    {
+      "input": "2",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "-1",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "0.0",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": null
+    },
+    {
+      "input": "0.5",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "1.0",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": null
+    },
+    {
+      "input": "[]",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "[false]",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "{}",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "{\"a\": null}",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null,
+      "env_flag": null
+    },
+    {
+      "input": "\"\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": false
+    },
+    {
+      "input": "\" \"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": false
+    },
+    {
+      "input": "\"true\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"True\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"TRUE\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"tRuE\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\" true \"",
+      "str_to_bool": true,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"\\ttrue\\n\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"\\u001ctrue\\u001f\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"\\u00a0false\\u2003\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"true\\u200b\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"false\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"False\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"FALSE\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\" false\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"1\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"0\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\" 1\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"yes\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"Yes\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"YES\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\" yes\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"no\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"on\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"On\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"off\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"t\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"f\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"y\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true,
+      "env_flag": true
+    },
+    {
+      "input": "\"n\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false,
+      "env_flag": false
+    },
+    {
+      "input": "\"2\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"-1\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"1.0\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"truthy\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"maybe\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"None\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"null\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"\\u0130\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    },
+    {
+      "input": "\"tru\\u212a\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null,
+      "env_flag": true
+    }
+  ]
+}

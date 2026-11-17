@@ -49,6 +49,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
+from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drops_unsupported_params,
@@ -95,6 +96,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex, claude_hosted_web_tool_call
 from litellm.types.llms.base import CachedTokensDetails
+from litellm.types.llms.bedrock import S3MediaFileObjectFile, S3MediaImageUrlObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -103,7 +105,6 @@ from litellm.types.llms.openai import (
     ChatCompletionCachedContent,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
-    ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -307,8 +308,8 @@ def _valid_content_type(content_type: str) -> ValidChatCompletionMessageContentT
 
 
 _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
-_IMAGE_URL_ADAPTER: Final = TypeAdapter(ChatCompletionImageUrlObject)
-_FILE_PART_ADAPTER: Final = TypeAdapter(_ResponsesFilePart)
+_IMAGE_URL_ADAPTER: Final = TypeAdapter(S3MediaImageUrlObject)
+_FILE_ADAPTER: Final = TypeAdapter(S3MediaFileObjectFile)
 _MessageT = TypeVar("_MessageT")
 _MediaT: Final = TypeVar("_MediaT")
 _InputItemT: Final = TypeVar("_InputItemT")
@@ -344,6 +345,11 @@ def _validate_responses_media(adapter: TypeAdapter[_MediaT], value: object) -> _
         ) from exc
 
 
+def _s3_bucket_owner_field(url: object, bucket_owner: object) -> Mapping[str, object]:
+    is_s3_url: Final = isinstance(url, str) and is_s3_uri(url)
+    return {"bucket_owner": bucket_owner} if is_s3_url and bucket_owner is not None else {}
+
+
 def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
     source: Final = item.get("image_url") or item.get("url")
     fields: Final = _validate_responses_media(_STR_KEY_DICT_ADAPTER, source) if isinstance(source, Mapping) else {}
@@ -357,13 +363,15 @@ def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
     )
     detail: Final = fields.get("detail") or item.get("detail")
     video_metadata: Final = fields.get("video_metadata") or item.get("video_metadata")
+    url: Final = (fields.get("url") if isinstance(source, Mapping) else source) or ""
     image_url: Final = _validate_responses_media(
         _IMAGE_URL_ADAPTER,
         {
-            "url": (fields.get("url") if isinstance(source, Mapping) else source) or "",
+            "url": url,
             "detail": detail if isinstance(detail, str) else "auto",
             **({"format": media_format} if media_format is not None else {}),
             **({"video_metadata": video_metadata} if video_metadata is not None else {}),
+            **_s3_bucket_owner_field(url, fields.get("bucket_owner", item.get("bucket_owner"))),
         },
     )
     return (
@@ -378,18 +386,19 @@ def _responses_file_part(item: Mapping[str, object]) -> _ResponsesFilePart:
     fields: Final = {**nested, **{key: value for key, value in item.items() if key != "file" and value is not None}}
     file_id: Final = fields.get("file_id") or fields.get("file_url")
     media_format: Final = fields.get("format") or fields.get("mime_type") or fields.get("content_type")
-    file: Final = {
-        **{key: fields[key] for key in ("file_data", "filename", "detail", "video_metadata") if fields.get(key)},
-        **({"file_id": file_id} if file_id else {}),
-        **({"format": media_format} if media_format is not None else {}),
-    }
-    return _validate_responses_media(
-        _FILE_PART_ADAPTER,
+    file: Final = _validate_responses_media(
+        _FILE_ADAPTER,
         {
-            "type": "file",
-            "file": file,
-            **({"cache_control": item["cache_control"]} if "cache_control" in item else {}),
+            **{key: fields[key] for key in ("file_data", "filename", "detail", "video_metadata") if fields.get(key)},
+            **({"file_id": file_id} if file_id else {}),
+            **({"format": media_format} if media_format is not None else {}),
+            **_s3_bucket_owner_field(file_id or fields.get("file_data"), fields.get("bucket_owner")),
         },
+    )
+    return (
+        _ResponsesFilePart(type="file", file=file, cache_control=item["cache_control"])
+        if "cache_control" in item
+        else _ResponsesFilePart(type="file", file=file)
     )
 
 

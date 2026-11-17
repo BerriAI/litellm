@@ -37,6 +37,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import (
     ID_JAG_TYP,
@@ -56,6 +57,8 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.types.agents import AgentResponse
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 
 
 async def _jwt_team_selection_identity(
@@ -2814,7 +2817,8 @@ async def test_auth_builder_rbac_team_denies_passthrough_without_allowlist():
 
 
 @pytest.mark.asyncio
-async def test_auth_builder_admin_on_llm_route_honors_team_header():
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_auth_builder_admin_on_llm_route_honors_team_header(route: str):
     """JWT proxy_admin + x-litellm-team-id on an LLM API route -> team context is
     attached to the admin result so team TPM/RPM limits and attribution apply."""
     from litellm.caching import DualCache
@@ -2832,6 +2836,7 @@ async def test_auth_builder_admin_on_llm_route_honors_team_header():
                 "management_routes",
                 "info_routes",
                 "openai_routes",
+                "/queue/chat/completions",
             ],
         ),
     )
@@ -2858,7 +2863,7 @@ async def test_auth_builder_admin_on_llm_route_honors_team_header():
             jwt_handler=jwt_handler,
             request_data={"model": "gpt-4"},
             general_settings={},
-            route="/chat/completions",
+            route=route,
             prisma_client=None,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
@@ -8175,6 +8180,8 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     users: Final = database.db.litellm_usertable
     users.find_unique = AsyncMock(return_value=user if existing_user else None)
     users.find_first = AsyncMock(return_value=None)
+    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    database.writer_db.litellm_usertable.update_many = AsyncMock(return_value=1)
     users.create = AsyncMock()
     handler: Final = JWTHandler()
     handler.update_environment(
@@ -8859,3 +8866,112 @@ async def test_decode_trusted_assertion_runs_the_configured_custom_validate_on_t
     else:
         assert isinstance(verified, AssertionRejection)
         assert "custom_validate" in verified.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "claims, links", [({"email_verified": False}, False), ({"email_verified": "false"}, False), ({}, True)]
+)
+async def test_get_objects_links_by_email_only_when_the_token_does_not_mark_it_unverified(
+    claims: dict[str, object], links: bool
+) -> None:
+    auth_checks.last_db_access_time.clear()
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+    handler: Final = JWTHandler()
+    cache: Final = UserApiKeyCache()
+    handler.update_environment(
+        prisma_client=prisma_over(table),
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(user_id_jwt_field="sub", user_email_jwt_field="email"),
+    )
+
+    async def sign_in() -> str | None:
+        objects: Final = await JWTAuthManager.get_objects(
+            user_id="idp-new",
+            user_email="owner@example.com",
+            org_id=None,
+            end_user_id=None,
+            team_id=None,
+            valid_user_email=None,
+            jwt_handler=handler,
+            prisma_client=prisma_over(table),
+            user_api_key_cache=cache,
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            route="/key/info",
+            email_verified=handler.get_email_verified(claims),
+        )
+        return None if objects[0] is None else objects[0].user_id
+
+    if links:
+        assert await sign_in() == "owner"
+    else:
+        with pytest.raises(UserNotFoundError):
+            await sign_in()
+
+    assert table.row("owner").sso_user_id == ("idp-new" if links else None)
+
+
+async def _signed_sign_in(
+    monkeypatch: pytest.MonkeyPatch, table: UserTable, claims: Mapping[str, object]
+) -> str | None:
+    from litellm.proxy.utils import ProxyLogging
+
+    cache: Final = UserApiKeyCache()
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwks_url: Final = "https://identity.invalid/email-link/jwks"
+    cache.set_cache(
+        f"litellm_jwt_auth_keys_{jwks_url}",
+        [{**json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())), "kid": "k1"}],
+    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=prisma_over(table),
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub", user_email_jwt_field="email", admin_jwt_scope="litellm_proxy_admin"
+        ),
+    )
+    token: Final = jwt.encode(
+        {"sub": "idp-new", "email": "owner@example.com", "exp": 4_102_444_800, **claims},
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "k1"},
+    )
+    try:
+        result: Final = await JWTAuthManager.auth_builder(
+            api_key=token,
+            jwt_handler=handler,
+            request_data={},
+            general_settings={},
+            route="/key/info",
+            prisma_client=prisma_over(table),
+            user_api_key_cache=cache,
+            parent_otel_span=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+        )
+    except UserNotFoundError:
+        return None
+    user: Final = result["user_object"]
+    return None if user is None else user.user_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [{}, {"scope": "litellm_proxy_admin"}])
+@pytest.mark.parametrize(
+    "verified, resolved",
+    [({"email_verified": False}, None), ({"email_verified": "false"}, None), ({}, "owner")],
+)
+async def test_signed_token_links_by_email_only_when_it_does_not_mark_the_email_unverified(
+    monkeypatch: pytest.MonkeyPatch, scope: dict[str, object], verified: dict[str, object], resolved: str | None
+) -> None:
+    auth_checks.last_db_access_time.clear()
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+
+    user_id: Final = await _signed_sign_in(monkeypatch, table, {**scope, **verified})
+
+    assert user_id == resolved
+    assert table.row("owner").sso_user_id == ("idp-new" if resolved else None)

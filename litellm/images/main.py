@@ -465,6 +465,7 @@ def image_generation(
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
+            litellm.LlmProviders.REPLICATE,
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
@@ -496,6 +497,7 @@ def image_generation(
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 client=client,
+                _is_async=aimg_generation is True and custom_llm_provider == litellm.LlmProviders.REPLICATE,
             )
         elif custom_llm_provider == "black_forest_labs":
             # Route to BFL-specific handler (polling required)
@@ -851,6 +853,14 @@ def _tokenhub_passthrough_edit_params(
     }
 
 
+def _custom_handler_edit_params(
+    kwargs: Mapping[str, object], openai_params: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: CustomLLM.image_edit takes optional_params as a dict
+    dropped: Final = frozenset(_listed_drop_params(kwargs.get("additional_drop_params")))
+    requested: Final = {key: value for key, value in openai_params.items() if value is not None}
+    return {key: value for key, value in {**kwargs, **requested}.items() if key not in dropped}
+
+
 @client
 def image_edit(
     image: FileTypes | list[FileTypes] | None = None,
@@ -930,6 +940,17 @@ def image_edit(
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             model_response: Final = ImageResponse()
+            custom_optional_params: Final = _custom_handler_edit_params(
+                _OBJECT_DICT_ADAPTER.validate_python(kwargs),
+                {
+                    "mask": mask,
+                    "n": n,
+                    "quality": quality,
+                    "response_format": response_format,
+                    "size": size,
+                    "user": user,
+                },
+            )
 
             if _is_async:
                 async_custom_client: AsyncHTTPHandler | None = None
@@ -943,7 +964,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=async_custom_client,
@@ -960,7 +981,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=custom_client,

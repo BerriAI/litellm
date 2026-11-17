@@ -1,5 +1,4 @@
 import asyncio
-import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
@@ -108,23 +107,14 @@ async def _streamed_pre_call_input(server: RecordingServer) -> object:
 
 
 @pytest.mark.asyncio
-async def test_stream_logs_the_request_body_as_input_like_python(server: RecordingServer) -> None:
+async def test_stream_logs_the_request_body_as_input_in_the_python_handler_key_order(server: RecordingServer) -> None:
     logged: Final = await _streamed_pre_call_input(server)
 
     assert_served_natively(server)
     assert logged == [
         {
             "role": "user",
-            "content": json.dumps(
-                {
-                    "messages": [{"role": "user", "content": "Hello"}],
-                    "max_tokens": 64,
-                    "model": "claude-sonnet-5",
-                    "metadata": {"user_id": "user-1"},
-                    "stop_sequences": ["END"],
-                    "stream": True,
-                    "system": "Be brief",
-                }
-            ),
+            "content": '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":64,"model":"claude-sonnet-5",'
+            '"metadata":{"user_id":"user-1"},"stop_sequences":["END"],"stream":true,"system":"Be brief"}',
         }
     ]
