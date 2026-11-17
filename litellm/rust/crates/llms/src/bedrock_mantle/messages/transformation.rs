@@ -934,6 +934,7 @@ mod tests {
     #[rstest]
     #[case::missing(None, json!({"input_tokens": 0, "output_tokens": 0}))]
     #[case::null(Some(json!(null)), json!({"input_tokens": 0, "output_tokens": 0}))]
+    #[case::not_an_object(Some(json!([1])), json!({"input_tokens": 0, "output_tokens": 0}))]
     #[case::partial(Some(json!({"output_tokens": 7, "cache_read_input_tokens": 3})), json!({"input_tokens": 0, "output_tokens": 7, "cache_read_input_tokens": 3}))]
     fn response_usage_is_zero_filled(#[case] usage: Option<Value>, #[case] expected: Value) {
         let response: MessagesResponse = serde_json::from_value(json!({

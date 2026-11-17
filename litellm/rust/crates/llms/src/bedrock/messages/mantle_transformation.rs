@@ -12,7 +12,6 @@ use litellm_host::interceptors::RetriedRequest;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesResponse},
     providers::anthropic::BetaProvider,
-    recognized::python_truthy,
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
@@ -163,30 +162,18 @@ fn move_betas_into_header(request: &MessagesRequest, headers: Headers) -> Result
             error,
         ))
     })?;
-    let not_a_list = || {
-        Error::InvalidRequest(ErrorDetail::Expected {
-            subject: "anthropic_beta",
-            expected: "a list of strings",
-        })
-    };
-    let betas: Vec<&str> = match body
-        .get("anthropic_beta")
-        .filter(|betas| python_truthy(betas))
-    {
-        None => Vec::new(),
-        Some(Value::Array(betas)) => betas
-            .iter()
-            .map(|beta| beta.as_str().ok_or_else(not_a_list))
-            .collect::<Result<_, _>>()?,
-        Some(_) => return Err(not_a_list()),
-    };
+    let betas: Option<Vec<String>> =
+        serde_json::from_value(body.get("anthropic_beta").cloned().unwrap_or(Value::Null))
+            .map_err(|error| {
+                Error::InvalidRequest(ErrorDetail::invalid("anthropic_beta", error))
+            })?;
     let headers = without_exact(headers, "anthropic-beta");
-    Ok(match betas.is_empty() {
-        true => headers,
-        false => headers
+    Ok(match betas {
+        Some(betas) if !betas.is_empty() => headers
             .into_iter()
             .chain([("anthropic-beta".to_string(), betas.join(","))])
             .collect(),
+        _ => headers,
     })
 }
 
@@ -245,11 +232,8 @@ pub(crate) fn mantle_wire_body(body: Value, model_id: impl Fn(&str) -> String) -
 /// Python's `AmazonMantleMessagesConfig.transform_anthropic_messages_response`.
 pub(crate) fn with_zero_usage(response: MessagesResponse) -> MessagesResponse {
     let existing = match response.usage {
-        Some(ref usage) if python_truthy(usage) => usage.clone(),
-        _ => Value::Object(Map::new()),
-    };
-    let Value::Object(existing) = existing else {
-        return response;
+        Some(Value::Object(ref usage)) => usage.clone(),
+        _ => Map::new(),
     };
     let zero_filled = ZERO_USAGE_FIELDS.map(|name| {
         (
@@ -455,6 +439,7 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
 
@@ -667,5 +652,38 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[rstest]
+    #[case::absent(json!({}), Ok(None))]
+    #[case::empty(json!({"anthropic_beta": []}), Ok(None))]
+    #[case::listed(json!({"anthropic_beta": ["a", "b"]}), Ok(Some("a,b")))]
+    #[case::not_a_list(json!({"anthropic_beta": "a"}), Err(()))]
+    fn betas_move_into_one_header(
+        #[case] extra: Value,
+        #[case] expected: Result<Option<&str>, ()>,
+    ) {
+        let fields = json!({"model": "m", "max_tokens": 1, "messages": []})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(extra.as_object().unwrap().clone())
+            .collect::<Map<_, _>>();
+        let request: MessagesRequest = serde_json::from_value(Value::Object(fields)).unwrap();
+        let moved = move_betas_into_header(
+            &request,
+            vec![("anthropic-beta".to_string(), "stale".to_string())],
+        );
+        let beta = moved.map(|headers| {
+            headers
+                .into_iter()
+                .find(|(name, _)| name == "anthropic-beta")
+                .map(|(_, value)| value)
+        });
+        assert_eq!(
+            beta.as_ref().map(Option::as_deref).map_err(|_| ()),
+            expected
+        );
     }
 }
