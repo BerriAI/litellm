@@ -157,6 +157,13 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
+        if previous_response_client_ids:
+            raise litellm.BadRequestError(
+                message="previous_response_id on the chat completions bridge is only supported by litellm.aresponses()",
+                model=model,
+                llm_provider=custom_llm_provider or "",
+            )
+
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
             **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
