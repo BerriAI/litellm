@@ -104842,7 +104842,6 @@
         "output_cost_per_image": 0.063,
         "output_cost_per_image_2K": 0.063,
         "output_cost_per_image_4K": 0.094,
-        "output_cost_per_image_8K": 0.157,
         "source": "https://fal.ai/models/kling/v4/text-to-image",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -104856,7 +104855,6 @@
         "output_cost_per_image": 0.066,
         "output_cost_per_image_2K": 0.066,
         "output_cost_per_image_4K": 0.097,
-        "output_cost_per_image_8K": 0.16,
         "source": "https://fal.ai/models/kling/v4/image-to-image",
         "supported_endpoints": [
             "/v1/images/edits",
