@@ -2,6 +2,8 @@ import pytest
 import sys
 import os
 from datetime import datetime, timezone
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1735,6 +1737,23 @@ _ISSUER: Final = "https://issuer-a.example.com"
 _NEW_TOKEN_HASH: Final = "a" * 64
 
 
+class _InMemoryMappingTable:
+    """The rows of `litellm_jwtkeymapping`, matched the way Prisma's `find_first` matches `where`."""
+
+    def __init__(self) -> None:
+        self.rows: tuple[Mapping[str, object], ...] = ()
+
+    async def find_first(self, where: Mapping[str, object]) -> MagicMock | None:
+        return next(
+            (MagicMock(**row) for row in self.rows if all(row.get(k) == v for k, v in where.items())),
+            None,
+        )
+
+    async def create(self, data: Mapping[str, object]) -> MagicMock:
+        self.rows = (*self.rows, MappingProxyType({**data, "is_active": True}))
+        return _mock_mapping(claim_name=str(data["jwt_claim_name"]), claim_value=str(data["jwt_claim_value"]))
+
+
 def _jwt_handler_with_issuer() -> JWTHandler:
     handler = JWTHandler()
     handler.litellm_jwtauth = LiteLLM_JWTAuth(
@@ -1751,7 +1770,7 @@ def _jwt_handler_with_issuer() -> JWTHandler:
 
 
 @pytest.mark.asyncio
-async def test_creating_a_global_mapping_evicts_an_issuers_cached_miss():
+async def test_creating_a_global_mapping_evicts_an_issuers_cached_miss() -> None:
     """An issuer's unmapped token caches ``__NO_MAPPING__`` under its issuer-scoped
     key. Creating the mapping without ``jwt_issuer`` (which the lookup falls back to
     for every issuer) must evict that miss, or the issuer keeps being told there is
@@ -1759,21 +1778,10 @@ async def test_creating_a_global_mapping_evicts_an_issuers_cached_miss():
     from litellm.proxy._types import CreateJWTKeyMappingRequest
 
     jwt_handler = _jwt_handler_with_issuer()
-    rows: list[dict] = []
-
-    async def fake_find_first(where):
-        for row in rows:
-            if all(row.get(k) == v for k, v in where.items()):
-                return MagicMock(**row)
-        return None
-
-    async def fake_create(data):
-        rows.append({**data, "is_active": True})
-        return _mock_mapping(claim_name=data["jwt_claim_name"], claim_value=data["jwt_claim_value"])
-
+    table = _InMemoryMappingTable()
     prisma_client = _mock_prisma()
-    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(side_effect=fake_find_first)
-    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=fake_create)
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(side_effect=table.find_first)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=table.create)
 
     user_api_key_cache = DualCache()
     await user_api_key_cache.async_set_cache(
@@ -1782,7 +1790,7 @@ async def test_creating_a_global_mapping_evicts_an_issuers_cached_miss():
     )
     jwt_claims = {JWTHandler.LITELLM_JWT_ISSUER_CLAIM: _ISSUER, "sub": "dev-alice"}
 
-    async def resolve():
+    async def resolve() -> UserAPIKeyAuth | None:
         return await _resolve_jwt_to_virtual_key(
             jwt_claims=jwt_claims,
             jwt_handler=jwt_handler,
@@ -1816,7 +1824,7 @@ async def test_creating_a_global_mapping_evicts_an_issuers_cached_miss():
 
 
 @pytest.mark.asyncio
-async def test_moving_a_mapping_to_global_scope_evicts_every_issuers_cached_miss():
+async def test_moving_a_mapping_to_global_scope_evicts_every_issuers_cached_miss() -> None:
     """Updating a mapping to the global scope makes it answer every configured
     issuer, so each issuer's cached miss for the new claim must go too."""
     from litellm.proxy._types import UpdateJWTKeyMappingRequest
