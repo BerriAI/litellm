@@ -19,6 +19,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
 from litellm.constants import LITELLM_EXECUTED_BATCH_CONCURRENCY
+from litellm.exceptions import router_class_names
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
@@ -345,7 +346,7 @@ def _status_code_of(error: Exception) -> int:
 
 def _error_body(error: Exception) -> _ErrorBody:
     body: Final[_ErrorBody] = {
-        "error": {"message": str(error), "type": type(error).__name__, "param": None, "code": None}
+        "error": {"message": str(error), "type": router_class_names(error)[0], "param": None, "code": None}
     }
     return body
 
