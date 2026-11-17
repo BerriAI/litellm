@@ -2144,61 +2144,38 @@ def _parsed_client_tool_calls(
     )
 
 
-def _client_call_ids(call_id: str, object_count: int, suffixes: Mapping[str, Iterator[str]]) -> tuple[str, ...]:
-    if object_count < 2:
-        return (call_id,)
-    return (call_id, *itertools.islice(suffixes[sanitize_anthropic_tool_use_id(call_id)], object_count - 1))
+def _client_call_ids(call_id: str, object_count: int, turn: int) -> tuple[str, ...]:
+    return (call_id, *(f"{call_id}__concat_t{turn}_{n}" for n in range(1, object_count)))
 
 
 def _turn_client_tool_calls(
-    turn: Sequence[object], answered_tool_ids: Container[str], sanitized_reserved_ids: frozenset[str]
+    turn_messages: Sequence[object], answered_tool_ids: Container[str], turn: int
 ) -> _ClientToolCalls:
     parsed: Final = tuple(
-        itertools.chain.from_iterable(_parsed_client_tool_calls(message, answered_tool_ids) for message in turn)
+        itertools.chain.from_iterable(
+            _parsed_client_tool_calls(message, answered_tool_ids) for message in turn_messages
+        )
     )
     occurrences: Final = Counter(call_id for call_id, _ in parsed)
-    unique: Final = tuple(call for call in parsed if occurrences[call[0]] == 1)
-    object_counts: Final = tuple((call_id, len(arguments.objects)) for call_id, arguments in unique)
-    suffixes: Final[Mapping[str, Iterator[str]]] = (
-        _concat_suffix_streams(object_counts, sanitized_reserved_ids)
-        if any(count > 1 for _, count in object_counts)
-        else MappingProxyType({})
-    )
     return MappingProxyType(
         {
-            call_id: _ClientToolCall(_client_call_ids(call_id, len(arguments.objects), suffixes), arguments)
-            for call_id, arguments in unique
+            call_id: _ClientToolCall(_client_call_ids(call_id, len(arguments.objects), turn), arguments)
+            for call_id, arguments in parsed
+            if occurrences[call_id] == 1
         }
-    )
-
-
-def _assistant_tool_call_ids(message: object) -> Iterator[str]:
-    return (
-        call_id
-        for tool_call in parts_of(message_field(message, "tool_calls"))
-        if isinstance(call_id := message_field(tool_call, "id"), str)
     )
 
 
 def _client_tool_calls_by_message(
     messages: Sequence[object], answered_tool_ids: Container[str]
 ) -> Iterator[_ClientToolCalls]:
-    sanitized_reserved_ids: Final = frozenset(
-        map(
-            sanitize_anthropic_tool_use_id,
-            itertools.chain(
-                _tool_call_ids_in_tool_messages(messages),
-                itertools.chain.from_iterable(_assistant_tool_call_ids(message) for message in messages),
-            ),
-        )
-    )
     latest_assistant_turn = _NO_CLIENT_TOOL_CALLS  # rebind-ok: each message reads the latest assistant turn
-    for is_assistant, run in itertools.groupby(
-        messages, key=lambda message: message_field(message, "role") == "assistant"
+    for turn, (is_assistant, run) in enumerate(
+        itertools.groupby(messages, key=lambda message: message_field(message, "role") == "assistant")
     ):
         run_messages = tuple(run)
         if is_assistant:
-            latest_assistant_turn = _turn_client_tool_calls(run_messages, answered_tool_ids, sanitized_reserved_ids)
+            latest_assistant_turn = _turn_client_tool_calls(run_messages, answered_tool_ids, turn)
         yield from itertools.repeat(latest_assistant_turn, len(run_messages))
 
 
@@ -6666,25 +6643,18 @@ def _optional_tool_name(value: object) -> str | None:
     return None
 
 
-def _concat_suffix_streams(
-    calls: Sequence[tuple[str | None, int]], sanitized_reserved_ids: frozenset[str] = frozenset()
-) -> Mapping[str, Iterator[str]]:
+def _split_tool_call_ids(calls: Sequence[tuple[str | None, int]]) -> tuple[tuple[str | None, ...], ...]:
     taken: Final = frozenset(sanitize_anthropic_tool_use_id(call_id) for call_id, _ in calls if call_id)
 
-    def is_free(candidate: str) -> bool:
-        sanitized: Final = sanitize_anthropic_tool_use_id(candidate)
-        return sanitized not in taken and sanitized not in sanitized_reserved_ids
-
     def fresh(call_id: str) -> Iterator[str]:
-        return filter(is_free, (f"{call_id}__concat_{n}" for n in itertools.count(1)))
+        return filter(
+            lambda candidate: sanitize_anthropic_tool_use_id(candidate) not in taken,
+            (f"{call_id}__concat_{n}" for n in itertools.count(1)),
+        )
 
-    return MappingProxyType(
+    suffixes: Final = MappingProxyType(
         {sanitize_anthropic_tool_use_id(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
     )
-
-
-def _split_tool_call_ids(calls: Sequence[tuple[str | None, int]]) -> tuple[tuple[str | None, ...], ...]:
-    suffixes: Final = _concat_suffix_streams(calls)
     return tuple(
         (
             call_id,

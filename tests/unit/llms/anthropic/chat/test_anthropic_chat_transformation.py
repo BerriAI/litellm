@@ -11817,15 +11817,15 @@ def test_completion_splits_concatenated_tool_call_arguments_into_paired_tool_use
     response: Final = _complete_after_read_file_call('{"path": "/a"}{"path": "/b"}')
 
     tool_uses, tool_results = _sent_tool_round(route)
-    assert tool_uses == (
-        ("call_1", "read_file", {"path": "/a"}),
-        ("call_1__concat_1", "read_file", {"path": "/b"}),
-    )
+    first_call, (split_id, split_name, split_input) = tool_uses
+    assert first_call == ("call_1", "read_file", {"path": "/a"})
+    assert split_id != "call_1"
+    assert (split_name, split_input) == ("read_file", {"path": "/b"})
     assert sorted(tool_use_id for tool_use_id, _ in tool_results) == sorted(tool_use[0] for tool_use in tool_uses)
     result_text: Final = dict(tool_results)
     assert result_text["call_1"] == _FILE_CONTENTS
-    assert "call_1" in result_text["call_1__concat_1"]
-    assert _FILE_CONTENTS not in result_text["call_1__concat_1"]
+    assert "call_1" in result_text[split_id]
+    assert _FILE_CONTENTS not in result_text[split_id]
     assert response.choices[0].message.content == _FINAL_REPLY
 
 
