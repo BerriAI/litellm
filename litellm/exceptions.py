@@ -17,7 +17,6 @@ from typing import Any, ClassVar, Final, Protocol, SupportsIndex, SupportsInt, r
 
 import httpx
 import openai
-from pydantic import TypeAdapter
 from typing_extensions import Buffer
 
 import litellm
@@ -1191,12 +1190,12 @@ class OpenAIServiceUnavailableError(ServiceUnavailableError, openai.InternalServ
     sdk_parity_bases: ClassVar[tuple[type, ...]] = (openai.InternalServerError,)
 
 
-_CLASSES: Final = TypeAdapter(tuple[type, ...])
-
-
 def _sdk_parity_classes(cls: type) -> tuple[type, ...]:
     declared: Final[object] = vars(cls).get("sdk_parity_bases")
-    return () if declared is None else (cls, *_CLASSES.validate_python(declared))
+    if not isinstance(declared, tuple):
+        return ()
+    bases: Final[tuple[object, ...]] = declared  # pyright: ignore[reportUnknownVariableType]  # a tuple's items are read as objects
+    return (cls, *(base for base in bases if isinstance(base, type)))
 
 
 def reported_class_names(error: BaseException) -> tuple[str, ...]:
