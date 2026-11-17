@@ -6,6 +6,10 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: ui
+  {{- with .Values.ui.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.ui.service.type }}
   ports:
