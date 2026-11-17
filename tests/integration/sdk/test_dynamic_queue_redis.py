@@ -139,14 +139,7 @@ async def test_waiters_on_two_workers_probe_in_one_priority_order_with_fifo_ties
     await _enqueue(capacity, arrivals)
     clock.ms = 1_000
 
-    order: list[str] = []
-    remaining: Final = {waiter_id: worker for waiter_id, _, worker in arrivals}
-    while remaining:
-        waiter_id, probe = await _probed(remaining, capacity)
-        assert await remaining.pop(waiter_id).report(capacity, waiter_id, probe, OtherFailure()) is None
-        order.append(waiter_id)
-
-    assert order == [
+    expected_order: Final = (
         "minus-huge",
         "minus-three-first",
         "minus-three-second",
@@ -154,7 +147,15 @@ async def test_waiters_on_two_workers_probe_in_one_priority_order_with_fifo_ties
         "five-first",
         "five-second",
         "huge",
-    ]
+    )
+    participants: Final = MappingProxyType({waiter_id: worker for waiter_id, _, worker in arrivals})
+
+    for index, expected in enumerate(expected_order):
+        waiter_id, probe = await _probed(
+            MappingProxyType({queued: participants[queued] for queued in expected_order[index:]}), capacity
+        )
+        assert waiter_id == expected
+        assert await participants[waiter_id].report(capacity, waiter_id, probe, OtherFailure()) is None
 
 
 @pytest.mark.asyncio
@@ -192,12 +193,14 @@ async def test_consecutive_successes_recover_into_a_snapshot_claimed_in_order_ah
     )
     await _enqueue(capacity, arrivals)
     clock.ms = 1_000
-    remaining: Final = {waiter_id: worker for waiter_id, _, worker in arrivals}
+    outcomes: Final = (("a", Succeeded()), ("b", OtherFailure()), ("c", Succeeded()), ("d", Succeeded()))
 
-    for expected, outcome in (("a", Succeeded()), ("b", OtherFailure()), ("c", Succeeded()), ("d", Succeeded())):
-        waiter_id, probe = await _probed(remaining, capacity)
+    for index, (expected, outcome) in enumerate(outcomes):
+        waiter_id, probe = await _probed(
+            MappingProxyType({queued: worker for queued, _, worker in arrivals[index:]}), capacity
+        )
         assert waiter_id == expected
-        assert await remaining.pop(waiter_id).report(capacity, waiter_id, probe, outcome) is None
+        assert await arrivals[index][2].report(capacity, waiter_id, probe, outcome) is None
     arrival: Final = await first.admit(WaitRequest(capacity, "after-recovery", -100), FAR)
     f_early: Final = await second.poll(capacity, "f")
     e: Final = await first.poll(capacity, "e")
