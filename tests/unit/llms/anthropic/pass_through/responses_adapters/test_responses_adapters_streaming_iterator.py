@@ -10,9 +10,9 @@ import sys
 import threading
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
@@ -756,12 +757,26 @@ class _ProviderStreamThatPausesAfterTheFirstTextDelta(httpx.AsyncByteStream):
         self.closed = True
 
 
-def _logging_obj_that_records_failures() -> Mock:
-    logging_obj: Final = Mock(spec=LitellmLogging)
-    logging_obj.completion_start_time = None
-    logging_obj.model_call_details = {"litellm_params": {}}
-    logging_obj.async_failure_handler = AsyncMock()
-    return logging_obj
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[object, ...] = ()
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.failures = (*self.failures, kwargs.get("exception"))
+
+
+def _logging_obj_that_records_failures(failure_recorder: _FailureRecorder) -> LitellmLogging:
+    return LitellmLogging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="close-test",
+        function_id="close-test",
+        dynamic_async_failure_callbacks=[failure_recorder],
+    )
 
 
 @pytest.mark.parametrize(
@@ -781,7 +796,7 @@ def test_closing_the_sse_stream_mid_response_closes_the_provider_response(
             response=httpx.Response(200, stream=provider_stream),
             model="m",
             responses_api_provider_config=OpenAIResponsesAPIConfig(),
-            logging_obj=_logging_obj_that_records_failures(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
         )
         sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
         async for frame in sse:
@@ -800,7 +815,7 @@ def test_a_close_refused_while_another_task_reads_leaves_the_provider_response_t
             response=httpx.Response(200, stream=provider_stream),
             model="m",
             responses_api_provider_config=OpenAIResponsesAPIConfig(),
-            logging_obj=_logging_obj_that_records_failures(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
         )
         sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
         text_deltas: Final = (frame async for frame in sse if b'"text_delta"' in frame)
@@ -840,7 +855,7 @@ class _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta(httpx.SyncByteStrea
 
 
 async def _close_after_cancelling_a_quiet_read(
-    provider_stream: _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta, logging_obj: Mock
+    provider_stream: _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta, logging_obj: LitellmLogging
 ) -> None:
     upstream: Final = SyncResponsesAPIStreamingIterator(
         response=httpx.Response(200, stream=provider_stream),
@@ -861,16 +876,18 @@ async def _close_after_cancelling_a_quiet_read(
 
 def test_closing_a_sync_stream_after_a_cancelled_read_closes_the_provider_response_once_that_read_returns():
     provider_stream: Final = _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta()
-    logging_obj: Final = _logging_obj_that_records_failures()
+    failure_recorder: Final = _FailureRecorder()
 
     async def _give_up_while_the_provider_is_quiet() -> None:
-        await _close_after_cancelling_a_quiet_read(provider_stream, logging_obj)
+        await _close_after_cancelling_a_quiet_read(
+            provider_stream, _logging_obj_that_records_failures(failure_recorder)
+        )
         provider_stream.next_bytes.set()
 
     asyncio.run(_give_up_while_the_provider_is_quiet())
     assert provider_stream.sent_next_bytes
     assert provider_stream.closed
-    assert logging_obj.async_failure_handler.await_count == 0
+    assert failure_recorder.failures == ()
 
 
 def test_closing_a_sync_stream_during_a_quiet_read_leaves_the_other_worker_threads_free():
@@ -879,7 +896,9 @@ def test_closing_a_sync_stream_during_a_quiet_read_leaves_the_other_worker_threa
     async def _run_other_work_while_the_provider_is_quiet() -> int:
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=2))
         try:
-            await _close_after_cancelling_a_quiet_read(provider_stream, _logging_obj_that_records_failures())
+            await _close_after_cancelling_a_quiet_read(
+                provider_stream, _logging_obj_that_records_failures(_FailureRecorder())
+            )
             return await asyncio.wait_for(asyncio.to_thread(threading.get_ident), timeout=2)
         finally:
             provider_stream.next_bytes.set()
