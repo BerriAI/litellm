@@ -1907,12 +1907,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     input_type,
                 )
 
-        # Enrich request_data with model if missing (post-call metadata loss)
-        if not request_data.get("model"):
-            if inputs.get("model"):
-                request_data["model"] = inputs["model"]
-            elif logging_obj:
-                request_data["model"] = getattr(logging_obj, "model", None)
+        scanned_model: Final = (
+            request_data.get("model")
+            or inputs.get("model")
+            or (getattr(logging_obj, "model", None) if logging_obj else None)
+        )
 
         # Enrich request_data with metadata from logging_obj (post-call metadata loss).
         # Merge: logging_obj provides the base, request_data keys win on conflict.
@@ -1925,7 +1924,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     existing_meta = {}
                 request_data["metadata"] = {**_orig_meta, **existing_meta}
 
-        metadata: Final = self._prepare_metadata_from_request(request_data)
+        metadata: Final = self._prepare_metadata_from_request({**request_data, "model": scanned_model})
         start_time: Final = datetime.now()
         new_texts: Final[list[str]] = []
 
