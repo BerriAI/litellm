@@ -5492,7 +5492,9 @@ async def test_native_messages_match_python(
         case "dispatch":
             assert not native.fell_back
         case "request":
-            assert _comparable(native.requests) == _comparable(python.requests)
+            assert _comparable(_with_decoded_labels(native.requests)) == _comparable(
+                _with_decoded_labels(python.requests)
+            )
         case "outcome":
             assert _without_login_text(case, aspect, native.outcome) == _without_login_text(
                 case, aspect, _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
@@ -5568,6 +5570,28 @@ def _stream_type_reference(case: Case, python: object) -> object:
     if provider in ("azure_ai", "vertex_ai") or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
         return python
     return "AsyncStream"
+
+
+def _decoded_labels(value: str) -> object:
+    try:
+        return tuple(json.loads(base64.b64decode(value, validate=True)).items())
+    except ValueError:
+        return value
+
+
+def _with_decoded_labels(requests: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    """The requests with a labels header read as its ordered labels: by owner ruling (2026-11-17) Rust writes the
+    header's JSON compactly, where Python's `json.dumps` puts a space after each separator."""
+    return tuple(
+        {
+            **request,
+            "headers": {
+                name: _decoded_labels(value) if name == "x-vertex-ai-labels" and isinstance(value, str) else value
+                for name, value in cast(Mapping[str, object], request.get("headers", {})).items()
+            },
+        }
+        for request in requests
+    )
 
 
 def _comparable(value: object) -> object:

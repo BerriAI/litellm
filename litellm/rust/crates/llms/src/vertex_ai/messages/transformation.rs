@@ -712,7 +712,7 @@ mod tests {
     #[rstest]
     #[case::configured(
         json!(["user_api_key_team_id"]),
-        vec![("X-Vertex-AI-Labels".to_string(), "eyJ1c2VyX2FwaV9rZXlfdGVhbV9pZCI6ICJ0MSJ9".to_string())]
+        vec![("X-Vertex-AI-Labels".to_string(), base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json!({"user_api_key_team_id": "t1"}).to_string()))]
     )]
     #[case::unset(json!(null), vec![("x-vertex-ai-labels".to_string(), "forged".to_string())])]
     fn configured_label_fields_replace_the_callers_labels_header(
