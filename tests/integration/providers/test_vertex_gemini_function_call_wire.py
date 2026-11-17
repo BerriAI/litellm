@@ -1,3 +1,4 @@
+import itertools
 import json
 from typing import Final
 
@@ -6,6 +7,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 _BACKEND: Final = "gemini-3.7-flash"
 _PROJECT: Final = "scripted-project"
@@ -262,15 +264,45 @@ def _tool_turn_call(gateway: Gateway, model: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def _function_call_signatures(request: Request) -> tuple[JsonValue, ...]:
-    contents: Final = _JSON_OBJECT.validate_json(request.body)["contents"]
-    parts: Final = tuple(part for content in contents for part in content["parts"])
-    return tuple(part.get("thoughtSignature") for part in parts if "functionCall" in part)
+class _GeminiPart(TypedDict):
+    function_call: NotRequired[ReadOnly[JsonValue]]
+    thoughtSignature: NotRequired[ReadOnly[str]]
 
 
-def _sent_tool_call_ids(request: Request) -> tuple[JsonValue, ...]:
-    messages: Final = _JSON_OBJECT.validate_json(request.body)["messages"]
-    calls: Final = tuple(call for message in messages for call in message.get("tool_calls") or ())
+class _GeminiContent(TypedDict):
+    parts: ReadOnly[tuple[_GeminiPart, ...]]
+
+
+class _GeminiRequest(TypedDict):
+    contents: ReadOnly[tuple[_GeminiContent, ...]]
+
+
+class _ToolCall(TypedDict):
+    id: ReadOnly[str]
+
+
+class _ChatMessage(TypedDict):
+    tool_calls: NotRequired[ReadOnly[tuple[_ToolCall, ...] | None]]
+    tool_call_id: NotRequired[ReadOnly[str]]
+
+
+class _ChatRequest(TypedDict):
+    messages: ReadOnly[tuple[_ChatMessage, ...]]
+
+
+_GEMINI_REQUEST: Final = TypeAdapter(_GeminiRequest)
+_CHAT_REQUEST: Final = TypeAdapter(_ChatRequest)
+
+
+def _function_call_signatures(request: Request) -> tuple[str | None, ...]:
+    contents: Final = _GEMINI_REQUEST.validate_json(request.body)["contents"]
+    parts: Final = itertools.chain.from_iterable(content["parts"] for content in contents)
+    return tuple(part.get("thoughtSignature") for part in parts if "function_call" in part)
+
+
+def _sent_tool_call_ids(request: Request) -> tuple[str, ...]:
+    messages: Final = _CHAT_REQUEST.validate_json(request.body)["messages"]
+    calls: Final = itertools.chain.from_iterable(message.get("tool_calls") or () for message in messages)
     return (
         *(call["id"] for call in calls),
         *(message["tool_call_id"] for message in messages if "tool_call_id" in message),
