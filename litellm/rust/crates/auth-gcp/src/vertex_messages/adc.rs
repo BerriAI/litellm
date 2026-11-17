@@ -11,7 +11,7 @@ use super::{
     environment::GoogleEnvironment,
     external_account::{self, OsEnvironment},
     external_authorized_user,
-    failure::{GoogleLoginFailure, PythonException, python_str, python_type_name},
+    failure::{GoogleLoginFailure, PythonException, python_str},
 };
 
 const MISSING_CREDENTIALS: &str = "Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.";
@@ -59,11 +59,10 @@ fn wrapped(
     file: &str,
 ) -> Result<Loaded, GoogleLoginFailure> {
     build.map_err(|cause| {
-        GoogleLoginFailure::caused_by(
-            PythonException::DefaultCredentials,
-            &format!("Failed to load {credential} credentials from {file}"),
-            &cause,
-        )
+        default_failure(format!(
+            "Failed to load {credential} credentials from {file}: {}",
+            cause.message
+        ))
     })
 }
 
@@ -107,14 +106,10 @@ fn external_account(
                 return external_account::pluggable(info, os_env(env));
             }
         }
-        Some(other) => {
-            return Err(GoogleLoginFailure::new(
-                PythonException::Attribute,
-                format!(
-                    "'{}' object has no attribute 'get'",
-                    python_type_name(Some(other))
-                ),
-            ));
+        Some(_) => {
+            return Err(default_failure(format!(
+                "Failed to load external account credentials from {file}"
+            )));
         }
     }
     let unloadable = |failure: GoogleLoginFailure| match failure.exception {
@@ -134,29 +129,25 @@ fn external_account(
     }
 }
 
-/// `impersonated_credentials.Credentials.from_impersonated_service_account_info` crashes on
-/// `info.get("source_credentials").get("type")` and on `rfind` over the impersonation URL
-/// before it checks anything.
-fn impersonated_crash(info: &Map<String, Value>) -> Option<GoogleLoginFailure> {
-    let crash = |value: Option<&Value>, attribute: &str| {
-        GoogleLoginFailure::new(
-            PythonException::Attribute,
-            format!(
-                "'{}' object has no attribute '{attribute}'",
-                python_type_name(value)
-            ),
-        )
-    };
-    let source = info.get("source_credentials");
-    let Some(Value::Object(source)) = source else {
-        return Some(crash(source, "get"));
-    };
+/// Impersonated service account credentials without source credentials of a supported type or
+/// without an impersonation URL cannot be used.
+fn unusable_impersonation(info: &Map<String, Value>, file: &str) -> Option<GoogleLoginFailure> {
     let supported = matches!(
-        source.get("type").and_then(Value::as_str),
+        info.get("source_credentials")
+            .and_then(|source| source.get("type"))
+            .and_then(Value::as_str),
         Some("authorized_user" | "service_account" | "external_account_authorized_user")
     );
-    let url = info.get("service_account_impersonation_url");
-    (supported && !matches!(url, Some(Value::String(_)))).then(|| crash(url, "rfind"))
+    (!supported
+        || !matches!(
+            info.get("service_account_impersonation_url"),
+            Some(Value::String(_))
+        ))
+    .then(|| {
+        default_failure(format!(
+            "Failed to load impersonated service account credentials from {file}"
+        ))
+    })
 }
 
 /// `_default.load_credentials_from_file`.
@@ -172,18 +163,14 @@ fn load_credentials_from_file(
     })?;
     let info = match serde_json::from_str::<Value>(&contents) {
         Ok(Value::Object(info)) => info,
-        Ok(other) => {
-            return Err(GoogleLoginFailure::new(
-                PythonException::Attribute,
-                format!(
-                    "'{}' object has no attribute 'get'",
-                    python_type_name(Some(&other))
-                ),
-            ));
+        Ok(_) => {
+            return Err(default_failure(format!(
+                "File {file} is not a valid json file."
+            )));
         }
         Err(error) => {
             return Err(default_failure(format!(
-                "('File {file} is not a valid json file.', JSONDecodeError('{error}'))"
+                "File {file} is not a valid json file: {error}"
             )));
         }
     };
@@ -212,7 +199,9 @@ fn load_credentials_from_file(
             None,
             Kind::ExternalAccount { info },
         )),
-        Some("impersonated_service_account") if let Some(crash) = impersonated_crash(&info) => {
+        Some("impersonated_service_account")
+            if let Some(crash) = unusable_impersonation(&info, file) =>
+        {
             Err(crash)
         }
         Some("impersonated_service_account") => Ok(found(

@@ -14,8 +14,8 @@ use super::{
     builders::token_failure,
     credentials::{Credentials, Expiry, Loaded, Minted, RefreshFuture, TokenState},
     external_authorized_user::oauth_error,
-    failure::{GoogleLoginFailure, PythonException, python_repr, python_str, python_type_name},
-    service_account::not_subscriptable,
+    failure::{GoogleLoginFailure, PythonException, python_str},
+    service_account::{invalid_lifetime, not_an_object},
     transport::Requests,
 };
 use crate::constants::CLOUD_PLATFORM_SCOPE;
@@ -268,10 +268,7 @@ impl ExternalAccount {
             .await
             .map_err(|error| token_failure(&error))?;
         let refused = |message: &str| {
-            GoogleLoginFailure::new(
-                PythonException::Refresh,
-                format!("({}, {})", python_repr(message), python_repr(&body)),
-            )
+            GoogleLoginFailure::new(PythonException::Refresh, format!("{message}: {body}"))
         };
         if status != 200 {
             return Err(refused(IMPERSONATION_REFUSED));
@@ -282,9 +279,6 @@ impl ExternalAccount {
             ))
         };
         let data = serde_json::from_str::<Value>(&body).map_err(|_| malformed())?;
-        if let Some(failure) = not_subscriptable(&data) {
-            return Err(failure);
-        }
         let (Some(token), Some(expire_time)) = (data.get("accessToken"), data.get("expireTime"))
         else {
             return Err(malformed());
@@ -336,44 +330,20 @@ fn target_principal(url: &str) -> Option<&str> {
 /// `access_token` and `expires_in` matter, and either may be missing or of any type.
 fn sts_reply(body: &str, now: OffsetDateTime) -> Result<Minted, GoogleLoginFailure> {
     let data = match body {
-        "" => Value::Object(Map::new()),
-        body => serde_json::from_str::<Value>(body)
-            .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))?,
-    };
-    let Value::Object(data) = data else {
-        return Err(GoogleLoginFailure::new(
-            PythonException::Attribute,
-            format!(
-                "'{}' object has no attribute 'get'",
-                python_type_name(Some(&data))
-            ),
-        ));
+        "" => Map::new(),
+        body => match serde_json::from_str::<Value>(body) {
+            Ok(Value::Object(data)) => data,
+            _ => return Err(not_an_object()),
+        },
     };
     let seconds = match data.get("expires_in") {
         Some(Value::String(text)) => text
             .trim()
             .parse::<i64>()
             .map(|seconds| seconds as f64)
-            .map_err(|_| {
-                GoogleLoginFailure::new(
-                    PythonException::Value,
-                    format!(
-                        "invalid literal for int() with base 10: {}",
-                        python_repr(text)
-                    ),
-                )
-            })?,
+            .map_err(|_| invalid_lifetime())?,
         Some(Value::Number(number)) => number.as_f64().unwrap_or_default(),
-        Some(Value::Bool(flag)) => f64::from(u8::from(*flag)),
-        other => {
-            return Err(GoogleLoginFailure::new(
-                PythonException::Type,
-                format!(
-                    "unsupported type for timedelta seconds component: {}",
-                    python_type_name(other)
-                ),
-            ));
-        }
+        _ => return Err(invalid_lifetime()),
     };
     Ok(Minted::from_reply(
         data.get("access_token"),
@@ -405,10 +375,9 @@ fn parse_token_data(
                     ),
                 )
             };
-            let data = serde_json::from_str::<Value>(content).map_err(|_| unparseable())?;
-            if let Some(failure) = not_subscriptable(&data) {
-                return Err(failure);
-            }
+            let Ok(Value::Object(data)) = serde_json::from_str::<Value>(content) else {
+                return Err(unparseable());
+            };
             data.get(field).cloned().ok_or_else(unparseable)?
         }
     };
@@ -470,10 +439,7 @@ impl SubjectToken for UrlSource {
             if status != 200 {
                 return Err(GoogleLoginFailure::new(
                     PythonException::Refresh,
-                    format!(
-                        "('Unable to retrieve Identity Pool subject token', {})",
-                        python_repr(&body)
-                    ),
+                    format!("Unable to retrieve Identity Pool subject token: {body}"),
                 ));
             }
             parse_token_data(&body, &self.url, &self.format)
@@ -485,22 +451,14 @@ fn malformed(message: impl Into<String>) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Malformed, message)
 }
 
-fn attribute_error(value: &Value, attribute: &str) -> GoogleLoginFailure {
-    GoogleLoginFailure::new(
-        PythonException::Attribute,
-        format!(
-            "'{}' object has no attribute '{attribute}'",
-            python_type_name(Some(value))
-        ),
-    )
-}
-
 /// `identity_pool._validate_file_or_url_config`.
 fn source_format(source: &Map<String, Value>) -> Result<Format, GoogleLoginFailure> {
     let empty = Value::Object(Map::new());
     let format = source.get("format").unwrap_or(&empty);
     let Value::Object(format) = format else {
-        return Err(attribute_error(format, "get"));
+        return Err(malformed(
+            "Invalid credential_source format. The format is not a dict.",
+        ));
     };
     let kind = format
         .get("type")
@@ -588,13 +546,7 @@ pub(crate) fn identity_pool(
 /// `pluggable._parse_subject_token` over the executable's JSON answer.
 fn executable_subject_token(response: &Value, now: f64) -> Result<String, GoogleLoginFailure> {
     let Value::Object(response) = response else {
-        return Err(GoogleLoginFailure::new(
-            PythonException::Type,
-            format!(
-                "argument of type '{}' is not iterable",
-                python_type_name(Some(response))
-            ),
-        ));
+        return Err(malformed("The executable response is not a JSON object."));
     };
     let Some(version) = response.get("version") else {
         return Err(malformed(
@@ -663,23 +615,6 @@ fn executable_subject_token(response: &Value, now: f64) -> Result<String, Google
         .ok_or_else(|| GoogleLoginFailure::new(PythonException::Refresh, format!("'{field}'")))
 }
 
-/// Python's `repr()` of the bytes an executable printed.
-fn bytes_repr(bytes: &[u8]) -> String {
-    let text: String = bytes
-        .iter()
-        .map(|byte| match byte {
-            b'\\' => "\\\\".to_owned(),
-            b'\'' => "\\'".to_owned(),
-            b'\n' => "\\n".to_owned(),
-            b'\r' => "\\r".to_owned(),
-            b'\t' => "\\t".to_owned(),
-            0x20..=0x7e => char::from(*byte).to_string(),
-            other => format!("\\x{other:02x}"),
-        })
-        .collect();
-    format!("b'{text}'")
-}
-
 struct Executable {
     command: String,
     timeout: Duration,
@@ -725,12 +660,16 @@ impl Executable {
         if let Some(token) = self.cached()? {
             return Ok(token);
         }
-        let words = shlex::split(&self.command).ok_or_else(|| {
-            GoogleLoginFailure::new(PythonException::Value, "No closing quotation")
-        })?;
-        let (program, arguments) = words.split_first().ok_or_else(|| {
-            GoogleLoginFailure::new(PythonException::Index, "list index out of range")
-        })?;
+        let unusable = |problem: &str| {
+            GoogleLoginFailure::new(
+                PythonException::Value,
+                format!("The credential_source executable command {problem}."),
+            )
+        };
+        let words = shlex::split(&self.command).ok_or_else(|| unusable("has an unclosed quote"))?;
+        let (program, arguments) = words
+            .split_first()
+            .ok_or_else(|| unusable("names no program"))?;
         let mut command = tokio::process::Command::new(program);
         command
             .args(arguments)
@@ -772,7 +711,7 @@ impl Executable {
                 format!(
                     "Executable exited with non-zero return code {}. Error: {}",
                     output.status.code().unwrap_or(-1),
-                    bytes_repr(&printed)
+                    String::from_utf8_lossy(&printed).trim_end()
                 ),
             ));
         }
@@ -830,7 +769,9 @@ pub(crate) fn pluggable(
         ));
     };
     let Value::Object(executable) = executable else {
-        return Err(attribute_error(executable, "get"));
+        return Err(malformed(
+            "Missing credential_source. The executable is not a dict.",
+        ));
     };
     let Some(command) = executable
         .get("command")
@@ -1020,27 +961,18 @@ mod tests {
     #[rstest]
     #[case::no_lifetime(
         r#"{"access_token": "t"}"#,
-        PythonException::Type,
-        "unsupported type for timedelta seconds component: NoneType"
+        "The token endpoint's reply has an expires_in that is not a number of seconds."
     )]
     #[case::bad_lifetime(
         r#"{"access_token": "t", "expires_in": "soon"}"#,
-        PythonException::Value,
-        "invalid literal for int() with base 10: 'soon'"
+        "The token endpoint's reply has an expires_in that is not a number of seconds."
     )]
-    #[case::list(
-        r#"["t"]"#,
-        PythonException::Attribute,
-        "'list' object has no attribute 'get'"
-    )]
-    fn an_sts_reply_google_auth_cannot_read_raises_its_error(
-        #[case] body: &str,
-        #[case] exception: PythonException,
-        #[case] message: &str,
-    ) {
+    #[case::list(r#"["t"]"#, "The token endpoint's reply is not a JSON object.")]
+    #[case::not_json("<html>", "The token endpoint's reply is not a JSON object.")]
+    fn an_unreadable_sts_reply_is_a_refresh_error(#[case] body: &str, #[case] message: &str) {
         assert_eq!(
             sts_reply(body, NOW).unwrap_err(),
-            GoogleLoginFailure::new(exception, message)
+            GoogleLoginFailure::new(PythonException::Refresh, message)
         );
     }
 

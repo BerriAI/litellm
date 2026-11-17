@@ -11,7 +11,7 @@ use super::{
     builders::token_failure,
     credentials::Loaded,
     external_account::{ExternalAccount, OsEnvironment, Settings, SubjectFuture, SubjectToken},
-    failure::{GoogleLoginFailure, PythonException, python_repr, python_str, python_type_name},
+    failure::{GoogleLoginFailure, PythonException, python_str},
     transport::Requests,
 };
 
@@ -133,11 +133,6 @@ fn refresh_error(message: impl Into<String>) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Refresh, message)
 }
 
-/// Python's `str()` of the bytes `requests` read, which `format` interpolates as their repr.
-fn bytes_text(body: &str) -> String {
-    format!("b{}", python_repr(body))
-}
-
 /// google-auth's `_DefaultAwsSecurityCredentialsSupplier`: the region and keys from the
 /// environment, else from the EC2 metadata service, asked through `requests`.
 struct MetadataCallerIdentity {
@@ -204,7 +199,7 @@ impl MetadataCallerIdentity {
         if status != 200 {
             return Err(refresh_error(format!(
                 "Unable to retrieve AWS Session Token: {}",
-                bytes_text(&body)
+                body
             )));
         }
         Ok(Some(body))
@@ -268,15 +263,9 @@ impl MetadataCallerIdentity {
                 "Unable to retrieve AWS security credentials: {body}"
             )));
         }
-        let granted = serde_json::from_str::<Value>(&body)
-            .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))?;
-        let Value::Object(granted) = granted else {
-            return Err(GoogleLoginFailure::new(
-                PythonException::Attribute,
-                format!(
-                    "'{}' object has no attribute 'get'",
-                    python_type_name(Some(&granted))
-                ),
+        let Ok(Value::Object(granted)) = serde_json::from_str::<Value>(&body) else {
+            return Err(refresh_error(
+                "Unable to retrieve AWS security credentials: the metadata service's reply is not a JSON object",
             ));
         };
         let field = |name: &str| {
@@ -330,13 +319,10 @@ pub(crate) fn metadata_aws_credentials(
             ));
         }
         Some(Value::Object(source)) => source,
-        Some(other) => {
+        Some(_) => {
             return Err(GoogleLoginFailure::new(
-                PythonException::Attribute,
-                format!(
-                    "'{}' object has no attribute 'get'",
-                    python_type_name(Some(other))
-                ),
+                PythonException::InvalidResource,
+                "No valid AWS 'credential_source' provided",
             ));
         }
     };
