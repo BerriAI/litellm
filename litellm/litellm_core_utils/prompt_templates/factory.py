@@ -2123,12 +2123,11 @@ def _parsed_client_tool_call(
     call_id: Final = message_field(tool_call, "id")
     function: Final = message_field(tool_call, "function")
     arguments: Final = message_field(function, "arguments")
-    if (
-        not isinstance(call_id, str)
-        or message_field(tool_call, "type") != "function"
-        or not (arguments is None or isinstance(arguments, str))
-        or not _is_client_tool_use(call_id, answered_tool_ids, server_tool_call_ids)
-    ):
+    if not isinstance(call_id, str) or message_field(tool_call, "type") != "function":
+        return None
+    if arguments is not None and not isinstance(arguments, str):
+        return None
+    if not _is_client_tool_use(call_id, answered_tool_ids, server_tool_call_ids):
         return None
     return call_id, _tool_arguments(arguments, string_field(function, "name"))
 
