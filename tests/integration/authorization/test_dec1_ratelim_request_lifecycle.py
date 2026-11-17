@@ -199,15 +199,16 @@ def test_a_pass_through_call_uses_the_keys_request_window(gateway: Gateway, pass
         )
 
 
-def test_a_pass_through_call_is_not_held_to_a_per_model_limit(gateway: Gateway, passthrough: Gateway) -> None:
+def test_a_pass_through_call_is_held_to_a_per_model_limit(gateway: Gateway, passthrough: Gateway) -> None:
     """A key with ``model_rpm_limit={"gpt-4o-mini": 1}`` calls the pass-through route three times with
-    ``model: gpt-4o-mini`` in the body. All must be forwarded: pass-through bodies are not resolved to a proxy model
-    group, so no ``model_per_key`` descriptor is built. UNVERIFIED: read from ``_rate_limited_model`` returning None
-    for a name the router does not serve."""
+    ``model: gpt-4o-mini`` in the body. Only the first is forwarded and the next two get 429: the pass-through route
+    runs the pre-call hook on the parsed body (``pass_through_endpoints.py:1619``) and the v3 limiter builds a
+    ``model_per_key`` descriptor from the body's ``model`` whether or not the router serves it
+    (``parallel_request_limiter_v3.py:2890``, falling back to the requested name at ``:2753``)."""
     with gateway.scenario() as scenario:
         key: Final = scenario.key(model_rpm_limit={"gpt-4o-mini": 1})
         body: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": probe()}]}
         codes: Final = [
             passthrough.request("POST", "/ratelim-passthrough", body, key=key).status_code for _ in range(3)
         ]
-        assert codes == [200, 200, 200]
+        assert codes == [200, 429, 429]
