@@ -3789,6 +3789,8 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "anthropic_keycloak_client_secret_ref",
         "anthropic_identity_token_file",
         "openai_identity_token_file",
+        "github_copilot_app_private_key",
+        "github_copilot_app_private_key_ref",
         "vertex_credentials",
         "vertex_ai_credentials",
         "extra_headers",
@@ -5270,6 +5272,12 @@ class TestConfigBaseForHealthCheck:
         assert "api_base" not in base
         assert "vertex_credentials" not in base
         assert base["rpm"] == 100
+
+    @pytest.mark.parametrize("param", ["vertex_project", "vertex_location", "vertex_ai_project", "vertex_ai_location"])
+    def test_request_naming_a_vertex_target_still_inherits_config_credentials(self, param: str) -> None:
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", param: "us-central1"}, selected_by_id=False)
+        assert base["vertex_credentials"] == "configured-creds"
+        assert base["api_key"] == "sk-configured"
 
     def test_add_model_flow_keeps_its_own_credentials(self):
         """Adding a second deployment for an already-configured name sends a

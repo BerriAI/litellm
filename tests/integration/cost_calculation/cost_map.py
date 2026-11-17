@@ -115,6 +115,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "mode": "chat",
         "input_cost_per_token": 1.13e-06,
         "output_cost_per_token": 1.05e-06,
+        "cache_read_input_token_cost": 1.13e-07,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.005,
             "search_context_size_medium": 0.008,
@@ -549,7 +550,6 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "web_search_billing_unit": "per_query",
     },
     "vertex_ai/gemini-3.1-pro-preview": {
-        "cache_creation_input_token_cost_above_200k_tokens": 2.75e-07,
         "cache_read_input_token_cost": 2.2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4.4e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.92e-07,

@@ -30,6 +30,7 @@ from litellm.redis.stores.spend_counters.types import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +58,7 @@ __all__ = [
     "team_member_counter",
     "team_window_counter",
     "user_counter",
+    "user_window_counter",
 ]
 
 
@@ -75,6 +77,10 @@ class SpendCounterStore:
         """Adds the Redis tier once, keeping the memory copies, as ``DualCache.attach_redis_cache`` does."""
         if redis.client is not None:
             self._handle.attach(redis.client)
+
+    @property
+    def handle(self) -> SpendCountersHandle:
+        return self._handle
 
     @property
     def redis_ttl(self) -> float | None:

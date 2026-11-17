@@ -7,8 +7,10 @@ import time
 from hashlib import sha256
 from typing import Final
 
+import httpx
 import pytest
 import websockets
+from _pytest.mark.structures import ParameterSet
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.assertions import assert_exact
@@ -150,46 +152,54 @@ def _batch_input_lines(case: BatchCostCase, model_name: str) -> bytes:
     ).encode()
 
 
-@pytest.mark.parametrize(
-    "case",
-    tuple(pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name) for case in BATCH_CASES),
-)
+def _batch_retrieved_twice(
+    gateway: Gateway, scenario: Scenario, case: BatchCostCase
+) -> tuple[str, str, httpx.Response]:
+    key: Final = scenario.key()
+    model_name, identity = _register_deployment(
+        scenario,
+        case.litellm_model,
+        _batch_response(case),
+        case.name,
+        realtime=False,
+    )
+    file_response: Final = gateway.request_multipart(
+        "/v1/files",
+        {"purpose": "batch", "model": model_name},
+        {"file": ("in.jsonl", _batch_input_lines(case, model_name), "application/jsonl")},
+        key=key,
+    )
+    assert file_response.is_success, file_response.text
+    file_body: Final = JSON_OBJECT.validate_json(file_response.content)
+    batch_response: Final = gateway.request(
+        "POST",
+        "/v1/batches",
+        {
+            "input_file_id": string_value(file_body["id"]),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": model_name,
+        },
+        key=key,
+    )
+    assert batch_response.is_success, batch_response.text
+    batch_body: Final = JSON_OBJECT.validate_json(batch_response.content)
+    batch_id: Final = string_value(batch_body["id"])
+    first_retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
+    second_retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
+    assert first_retrieval.is_success, first_retrieval.text
+    assert second_retrieval.is_success, second_retrieval.text
+    return key, identity, second_retrieval
+
+
+def _batch_params(cases: tuple[BatchCostCase, ...]) -> tuple[ParameterSet, ...]:
+    return tuple(pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name) for case in cases)
+
+
+@pytest.mark.parametrize("case", _batch_params(tuple(case for case in BATCH_CASES if case.expected.spend > 0)))
 def test_batch_costs(gateway: Gateway, case: BatchCostCase) -> None:
     with gateway.scenario() as scenario:
-        key: Final = scenario.key()
-        model_name, identity = _register_deployment(
-            scenario,
-            case.litellm_model,
-            _batch_response(case),
-            case.name,
-            realtime=False,
-        )
-        file_response: Final = gateway.request_multipart(
-            "/v1/files",
-            {"purpose": "batch", "model": model_name},
-            {"file": ("in.jsonl", _batch_input_lines(case, model_name), "application/jsonl")},
-            key=key,
-        )
-        assert file_response.is_success, file_response.text
-        file_body: Final = JSON_OBJECT.validate_json(file_response.content)
-        batch_response: Final = gateway.request(
-            "POST",
-            "/v1/batches",
-            {
-                "input_file_id": string_value(file_body["id"]),
-                "endpoint": "/v1/chat/completions",
-                "completion_window": "24h",
-                "model": model_name,
-            },
-            key=key,
-        )
-        assert batch_response.is_success, batch_response.text
-        batch_body: Final = JSON_OBJECT.validate_json(batch_response.content)
-        batch_id: Final = string_value(batch_body["id"])
-        first_retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
-        second_retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
-        assert first_retrieval.is_success, first_retrieval.text
-        assert second_retrieval.is_success, second_retrieval.text
+        key, identity, second_retrieval = _batch_retrieved_twice(gateway, scenario, case)
         retrieval_rows: Final = poll_rows_where(key, 1, lambda row: row.call_type == "aretrieve_batch")
         assert len(retrieval_rows) == 1
         rows: Final = read_rows_now(key)
@@ -201,6 +211,22 @@ def test_batch_costs(gateway: Gateway, case: BatchCostCase) -> None:
         assert_exact(case.name, "application/json", case.expected, row, second_retrieval)
         time.sleep(3)
         assert len(tuple(row for row in read_rows_now(key) if row.call_type == "aretrieve_batch")) == 1
+
+
+@pytest.mark.parametrize("case", _batch_params(tuple(case for case in BATCH_CASES if case.expected.spend == 0)))
+def test_batch_with_no_billable_request_is_retrieved_free_and_writes_no_cost_row(
+    gateway: Gateway, case: BatchCostCase
+) -> None:
+    with gateway.scenario() as scenario:
+        key, _, _ = _batch_retrieved_twice(gateway, scenario, case)
+        later_model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        later: Final = gateway.chat(later_model, key=key, text="sent after the batch retrievals")
+        assert later["usage"] == {"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40}, later
+        rows: Final = poll_rows_where(key, 1, lambda row: row.call_type == "acompletion")
+        assert [row.spend for row in rows] == [pytest.approx(20 * 0.001 + 20 * 0.002)], rows
+        every_row: Final = read_rows_now(key)
+        assert [row.call_type for row in every_row if row.call_type == "aretrieve_batch"] == [], every_row
+        assert sum(row.spend or 0.0 for row in every_row) == pytest.approx(20 * 0.001 + 20 * 0.002), every_row
 
 
 def _realtime_response(case: RealtimeCostCase) -> RealtimeResponse:

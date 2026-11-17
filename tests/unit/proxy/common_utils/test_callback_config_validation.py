@@ -345,7 +345,7 @@ def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metad
 
 
 @pytest.mark.usefixtures("otel_v2_on")
-@pytest.mark.parametrize("callback_var", ["capture_message_content", "excluded_services"])
+@pytest.mark.parametrize("callback_var", ["capture_message_content", "excluded_services", "baggage_metadata_keys"])
 def test_key_logging_metadata_rejects_non_string_destination_callback_vars(callback_var: str) -> None:
     error: Final = logging_metadata_config_error(
         {
@@ -575,3 +575,72 @@ def test_a_non_string_credential_name_is_not_a_reference(name: object) -> None:
         credential_reference_rejection({"logging": [entry]}, None, is_proxy_admin=False, is_defined=lambda _: False)
         is None
     )
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
+def test_baggage_metadata_keys_is_accepted_on_every_otel_v2_destination(callback_name: str) -> None:
+    assert (
+        callback_config_error(
+            callback_name, {"baggage_metadata_keys": "requester_metadata.tenant_id, requester_metadata.order.id"}
+        )
+        is None
+    )
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", "arize_phoenix", None])
+def test_baggage_metadata_keys_is_rejected_where_it_would_never_take_effect(callback_name: str | None) -> None:
+    error: Final = callback_config_error(callback_name, {"baggage_metadata_keys": "requester_metadata.tenant_id"})
+    assert error is not None and "baggage_metadata_keys" in error and "newrelic" in error
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("tenant_id", "requester_metadata.<key>"),
+        ("requester_metadata.", "requester_metadata.<key>"),
+        ("requester_metadata.tenant_id,", "requester_metadata.<key>"),
+        ("user_api_key_user_id", "requester_metadata.<key>"),
+        ("requester_metadata.user_api_key_user_id", "proxy identity attribute"),
+        ("requester_metadata.user_api_key_hash", "proxy identity attribute"),
+        ("requester_metadata.requester_ip_address", "proxy identity attribute"),
+        ("requester_metadata.headers.x-internal-token", "would export request headers"),
+        ("requester_metadata.headers", "would export request headers"),
+        ("requester_metadata.Headers.authorization", "would export request headers"),
+        (",".join(f"requester_metadata.k{index}" for index in range(21)), "at most 20 keys"),
+    ],
+)
+def test_unusable_baggage_metadata_keys_are_rejected(value: str, reason: str) -> None:
+    error: Final = callback_config_error("newrelic", {"newrelic_api_key": "nr-key", "baggage_metadata_keys": value})
+    assert error is not None and reason in error, error
+
+
+def test_baggage_metadata_keys_is_rejected_while_otel_v2_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        error: Final = callback_config_error("newrelic", {"baggage_metadata_keys": "requester_metadata.tenant_id"})
+    finally:
+        is_otel_v2_enabled.cache_clear()
+    assert error is not None and "baggage_metadata_keys" in error and "LITELLM_OTEL_V2" in error
+
+
+@pytest.mark.parametrize(
+    ("stored", "rejected"),
+    [
+        ("requester_metadata.b, requester_metadata.a", False),
+        ("requester_metadata.a", True),
+    ],
+)
+def test_entries_for_one_backend_share_one_baggage_metadata_keys_list(stored: str, rejected: bool) -> None:
+    error: Final = conflicting_callback_var_error(
+        "newrelic",
+        "baggage_metadata_keys",
+        {"baggage_metadata_keys": "requester_metadata.a,requester_metadata.b"},
+        [("newrelic", {"baggage_metadata_keys": stored})],
+    )
+    assert (error is not None) is rejected, error
