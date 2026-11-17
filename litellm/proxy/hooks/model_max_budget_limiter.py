@@ -189,19 +189,17 @@ def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedMode
         router.settings().default_deployment is not None
         or router.settings().router_general_settings.pass_through_all_models
     )
-    served_names: Final = (
-        frozenset(router.registry().names(kind="group_set"))
-        | frozenset(router.registry().aliases())
-        | (frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset())
+    model_groups: Final = frozenset(router.registry().names(kind="group_set")) | (
+        frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
     )
     team_members: Final = _team_public_names_by_group(router=router, team_id=team_id)
     return RoutedModels(
-        served_names=served_names,
+        served_names=model_groups | frozenset(router.registry().aliases()),
         group_members=MappingProxyType(
             {
                 group: frozenset(members) | team_members.get(group, frozenset())
                 for group, members in router.registry().access_groups().items()
-                if group not in served_names
+                if group not in model_groups
             }
         ),
     )

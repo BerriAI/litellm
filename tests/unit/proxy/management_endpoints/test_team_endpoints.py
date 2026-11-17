@@ -18071,6 +18071,36 @@ def test_team_admin_cannot_lift_a_pattern_cap_off_a_global_alias_with_a_model_gr
     assert "'fast*'" in exc.value.detail["error"]
 
 
+def test_team_admin_cannot_lift_a_pattern_cap_with_an_access_group_named_like_a_global_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collided_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "real-x",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["shared"]},
+            },
+            {
+                "model_name": "other",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+            },
+        ],
+        model_group_alias={"shared": "other"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", collided_router)
+    existing: Final = {"real-*": {"max_budget": 10.0, "budget_duration": "1d"}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=existing,
+            requested={**existing, "shared": {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=routed_models_of(router=collided_router, team_id="t1"),
+        )
+    assert exc.value.status_code == 403
+    assert "'real-*'" in exc.value.detail["error"]
+
+
 def test_team_admin_cannot_outrank_a_group_cap_through_a_team_model_both_groups_serve() -> None:
     from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
 
