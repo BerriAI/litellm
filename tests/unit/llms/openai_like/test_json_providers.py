@@ -395,6 +395,29 @@ def test_json_provider_without_its_key_fails_before_sending_the_openai_key(
     assert route.call_count == 0
 
 
+@pytest.mark.parametrize("provider", ("chutes", "nano-gpt"))
+def test_json_text_completion_provider_without_its_key_fails_before_sending_the_openai_key(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+):
+    import respx
+
+    import litellm
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_config: Final = JSONProviderRegistry.get(provider)
+    assert provider_config is not None
+    assert provider in litellm.openai_text_completion_compatible_providers
+    monkeypatch.delenv(provider_config.api_key_env, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route().respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match=provider_config.api_key_env):
+            litellm.text_completion(model=f"{provider}/some-model", prompt="hi")
+
+    assert route.call_count == 0
+
+
 def test_json_provider_moderation_sends_its_own_env_key(monkeypatch: pytest.MonkeyPatch):
     import asyncio
 
