@@ -3660,6 +3660,31 @@ def test_update_github_app_treats_a_blank_app_field_as_a_deletion(
     assert _written_values(update) == _github_app_values()
 
 
+def test_update_github_app_keeps_a_stored_key_sent_as_null(
+    credential_store: _InstallCredentialStore, app_pem: str
+) -> None:
+    uploaded: Final = {key: value for key, value in _github_app_values().items() if not key.endswith("_ref")}
+    stored_values: Final = {**uploaded, "github_copilot_app_private_key": app_pem}
+    stored: Final = _encrypted_row(
+        CredentialItem(
+            credential_name="copilot-app",
+            credential_values=stored_values,
+            credential_info={"custom_llm_provider": "github_copilot"},
+        )
+    )
+    update: Final = AsyncMock()
+    credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update)
+    response: Final = _patch_credential(
+        "copilot-app",
+        {
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+            "credential_values": {"github_copilot_app_private_key": None},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _written_values(update) == stored_values
+
+
 @pytest.mark.parametrize("pem", ["not-a-private-key", "x" * 16385, "-----BEGIN PRIVATE KEY----- secret-invalid"])
 def test_invalid_uploaded_app_key_is_rejected_without_echoing_it(
     credential_store: _InstallCredentialStore, pem: str
