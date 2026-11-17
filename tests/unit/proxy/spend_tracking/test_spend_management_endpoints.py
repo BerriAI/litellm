@@ -8379,13 +8379,13 @@ async def test_spend_calc_model_on_router_messages(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom_rates", [{}, {"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}])
+@pytest.mark.parametrize("backend_model", ["openai/deployment-minimum-fixture", "deployment-minimum-fixture"])
 async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_minimum(
-    monkeypatch, custom_rates: dict[str, float]
+    monkeypatch, custom_rates: dict[str, float], backend_model: str
 ):
-    backend_model: Final = "openai/deployment-minimum-fixture"
     monkeypatch.setitem(
         litellm.model_cost,
-        backend_model,
+        "openai/deployment-minimum-fixture",
         {
             "litellm_provider": "openai",
             "mode": "chat",
@@ -8398,7 +8398,12 @@ async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_mi
         model_list=[
             {
                 "model_name": name,
-                "litellm_params": {"model": backend_model, "api_key": "fake-key", **custom_rates},
+                "litellm_params": {
+                    "model": backend_model,
+                    "custom_llm_provider": "openai",
+                    "api_key": "fake-key",
+                    **custom_rates,
+                },
                 "model_info": model_info,
             }
             for name, model_info in (

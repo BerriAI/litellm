@@ -2511,9 +2511,12 @@ async def calculate_spend(request: SpendCalculateRequest):
                 _cost = completion_cost(
                     model=_litellm_model_name,
                     messages=request.messages,
+                    custom_llm_provider=_litellm_params.get("custom_llm_provider"),
                     custom_cost_per_token=cost_per_token,
                     requested_model_info_override=deployment_billing_model_info(
-                        _litellm_model_name, _model_in_llm_router.get("model_info") or {}
+                        _litellm_model_name,
+                        _model_in_llm_router.get("model_info") or {},
+                        custom_llm_provider=_litellm_params.get("custom_llm_provider"),
                     ),
                 )
             else:

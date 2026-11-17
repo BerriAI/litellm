@@ -7441,7 +7441,6 @@ def get_model_info_helper(
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
-                min_billed_input_tokens=_model_info.get("min_billed_input_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
@@ -7733,6 +7732,8 @@ def get_model_info_helper(
             for cost_key, cost_value in cost_entries.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
+            if (minimum := _model_info.get("min_billed_input_tokens")) is not None:
+                return {**returned_model_info, "min_billed_input_tokens": minimum}
             return returned_model_info
     except ModelNotMappedError:
         raise
