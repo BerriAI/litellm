@@ -683,7 +683,6 @@ _PYTHON_LOGIN_FAILURES: Final[Mapping[str, _ERROR_CLASS]] = MappingProxyType(
     {
         "ValueError": ValueError,
         "TypeError": TypeError,
-        "ImportError": ImportError,
         "OSError": OSError,
     }
 )

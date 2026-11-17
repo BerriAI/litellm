@@ -74,9 +74,6 @@ pub struct VertexShaping {
     /// routes the call by.
     #[serde(default)]
     pub supported_regions: Vec<String>,
-    /// google-auth is not installed, so Python's login raises its `ImportError`.
-    #[serde(default)]
-    pub google_sdk_missing: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
