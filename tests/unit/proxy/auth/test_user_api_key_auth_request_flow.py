@@ -12696,6 +12696,7 @@ async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> N
         ("GET", "/v1/mcp/tools", 0, False),
         ("GET", "/vector_store/list", 0, False),
         ("POST", "/utils/token_counter", 8388608, False),
+        ("POST", "/utils/transform_request", 8388608, False),
         ("POST", "/v1beta/models/gemini-3-pro:countTokens", 8388608, False),
         ("GET", "/v1/batches", 8388608, True),
     ],
