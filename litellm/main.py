@@ -161,6 +161,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
 )
 from litellm.llms.openai.common_utils import get_openai_credentials
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -2787,21 +2788,6 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     logging.post_call(input=messages, api_key=api_key, original_response=response)
 
     return response
-
-
-def missing_json_provider_key_error(
-    custom_llm_provider: str | None, model: str, api_key: str | None, uses_openai_client: bool
-) -> AuthenticationError | None:
-    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
-    if json_provider is None or uses_openai_client:
-        return None
-    if api_key or litellm.api_key:
-        return None
-    return AuthenticationError(
-        message=f"Set {json_provider.api_key_env} or pass api_key",
-        llm_provider=json_provider.slug,
-        model=model,
-    )
 
 
 def _missing_provider_key_error(ctx: CompletionDispatchContext) -> AuthenticationError | None:
@@ -8525,6 +8511,20 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
     )
 
 
+def _moderation_provider_route(
+    model: str | None, custom_llm_provider: str | None, optional_params: GenericLiteLLMParams
+) -> tuple[str | None, str | None, str | None, str | None]:
+    try:
+        return litellm.get_llm_provider(
+            model=model or "",
+            custom_llm_provider=custom_llm_provider,
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
+        )
+    except litellm.BadRequestError:
+        return model, custom_llm_provider, None, None
+
+
 @client
 async def amoderation(
     input: str,
@@ -8535,27 +8535,22 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
-    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
-    _dynamic_api_base = None
-    try:
-        (
-            model,
-            custom_llm_provider,
-            _dynamic_api_key,
-            _dynamic_api_base,
-        ) = litellm.get_llm_provider(
-            model=model or "",
-            custom_llm_provider=custom_llm_provider,
-            api_base=optional_params.api_base,
-            api_key=optional_params.api_key,
-        )
-    except litellm.BadRequestError:
-        # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
-        pass
-
+    (model, custom_llm_provider, _dynamic_api_key, _dynamic_api_base) = _moderation_provider_route(
+        model, custom_llm_provider, optional_params
+    )
     openai_client: Final = kwargs.get("client", None)
+    provider_api_key: Final = (
+        (api_key or _dynamic_api_key) if JSONProviderRegistry.exists(custom_llm_provider or "") else api_key
+    )
+    if missing_key_error := missing_json_provider_key_error(
+        custom_llm_provider, model or "", provider_api_key, isinstance(openai_client, AsyncOpenAI)
+    ):
+        raise missing_key_error
+    static_api_key: Final = (
+        provider_api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    )
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients

@@ -335,9 +335,27 @@ def _generate_image(model: str) -> object:
     return litellm.image_generation(model=model, prompt="a red square")
 
 
+def _moderate(model: str) -> object:
+    import asyncio
+
+    import litellm
+
+    return asyncio.run(litellm.amoderation(model=model, input="hi"))
+
+
+def _create_realtime_client_secret(model: str) -> object:
+    import asyncio
+
+    import litellm
+
+    return asyncio.run(litellm.acreate_realtime_client_secret(model=model))
+
+
 @pytest.mark.parametrize("provider", ("resetdata", "parasail"))
 @pytest.mark.parametrize(
-    "call", (_complete, _transcribe, _speak, _generate_image), ids=("chat", "transcription", "speech", "image")
+    "call",
+    (_complete, _transcribe, _speak, _generate_image, _moderate, _create_realtime_client_secret),
+    ids=("chat", "transcription", "speech", "image", "moderation", "realtime_client_secret"),
 )
 def test_json_provider_without_its_key_fails_before_sending_the_openai_key(monkeypatch, provider, call):
     import respx
@@ -356,3 +374,28 @@ def test_json_provider_without_its_key_fails_before_sending_the_openai_key(monke
             call(f"{provider}/some-model")
 
     assert route.call_count == 0
+
+
+def test_json_provider_moderation_sends_its_own_env_key(monkeypatch):
+    import asyncio
+
+    import respx
+
+    import litellm
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_config = JSONProviderRegistry.get("parasail")
+    assert provider_config is not None
+    monkeypatch.delenv(provider_config.api_base_env or "", raising=False)
+    monkeypatch.setenv(provider_config.api_key_env, "sk-parasail-env")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock() as upstream:
+        route = upstream.post(f"{provider_config.base_url}/moderations").respond(
+            200, json={"id": "modr_1", "model": "some-model", "results": [{"flagged": False}]}
+        )
+        asyncio.run(litellm.amoderation(model="parasail/some-model", input="hi"))
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-parasail-env"
