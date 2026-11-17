@@ -29,14 +29,17 @@ const REAUTH_NEEDED: &str =
 
 /// Authorized user info, as `Credentials.from_authorized_user_info` reads it. The fields it
 /// requires are `Some(None)` when null, which it accepts and only fails to refresh with.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 pub(crate) struct AuthorizedUserInfo {
+    #[redact(with = "[REDACTED]")]
     #[serde(default, deserialize_with = "present")]
     pub(crate) refresh_token: Option<Option<String>>,
     #[serde(default, deserialize_with = "present")]
     pub(crate) client_id: Option<Option<String>>,
+    #[redact(with = "[REDACTED]")]
     #[serde(default, deserialize_with = "present")]
     pub(crate) client_secret: Option<Option<String>>,
+    #[redact(with = "[REDACTED]")]
     pub(crate) rapt_token: Option<String>,
     pub(crate) universe_domain: Option<String>,
     pub(crate) expiry: Option<String>,

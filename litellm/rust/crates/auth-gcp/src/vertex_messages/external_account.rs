@@ -51,7 +51,7 @@ pub(crate) trait SubjectToken: Send + Sync {
 
 /// An external account's file, as `external_account.Credentials.from_info` and LiteLLM's
 /// explicit AWS login read it.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 pub(crate) struct ExternalAccountInfo {
     pub(crate) audience: Option<String>,
     pub(crate) subject_token_type: Option<String>,
@@ -59,6 +59,7 @@ pub(crate) struct ExternalAccountInfo {
     pub(crate) service_account_impersonation_url: Option<String>,
     pub(crate) service_account_impersonation: Option<ImpersonationOptions>,
     pub(crate) client_id: Option<String>,
+    #[redact(with = "[REDACTED]")]
     pub(crate) client_secret: Option<String>,
     pub(crate) workforce_pool_user_project: Option<String>,
     pub(crate) universe_domain: Option<String>,
@@ -77,13 +78,14 @@ pub(crate) struct ImpersonationOptions {
 
 /// Where an external account reads its subject token: a file, a URL, a certificate, an
 /// executable, or AWS.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 pub(crate) struct CredentialSource {
     pub(crate) environment_id: Option<String>,
     pub(crate) executable: Option<ExecutableSource>,
     pub(crate) file: Option<String>,
     pub(crate) url: Option<String>,
     pub(crate) certificate: Option<serde::de::IgnoredAny>,
+    #[redact(with = "[REDACTED]")]
     pub(crate) headers: Option<BTreeMap<String, String>>,
     pub(crate) format: Option<SourceFormat>,
     pub(crate) region_url: Option<String>,
@@ -584,7 +586,7 @@ pub(crate) fn identity_pool(
 }
 
 /// An executable's JSON answer, as `pluggable._parse_subject_token` reads it.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, veil::Redact)]
 struct ExecutableResponse {
     version: Option<f64>,
     success: Option<bool>,
@@ -592,7 +594,9 @@ struct ExecutableResponse {
     message: Option<String>,
     expiration_time: Option<f64>,
     token_type: Option<String>,
+    #[redact(with = "[REDACTED]")]
     id_token: Option<String>,
+    #[redact(with = "[REDACTED]")]
     saml_response: Option<String>,
 }
 
@@ -871,6 +875,17 @@ mod tests {
 
     fn parsed(value: Value) -> ExternalAccountInfo {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    fn executable_response_debug_never_shows_a_token() {
+        let response = ExecutableResponse::parse(
+            br#"{"version": 1, "success": true, "id_token": "credential-value", "saml_response": "credential-value"}"#,
+        )
+        .unwrap();
+        let debug = format!("{response:?}");
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 
     const NOW: OffsetDateTime = time::macros::datetime!(2026-11-16 12:00 UTC);

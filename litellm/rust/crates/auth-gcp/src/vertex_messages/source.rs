@@ -23,8 +23,8 @@ const PRIVATE_KEY_HINT: &str = "Check for unescaped newlines in private_key.";
 const LEADING_NOISE_HINT: &str = "Remove the quotes or byte-order mark before the opening `{`.";
 
 /// A credentials file's own JSON object, kept only to hand to the builders of Google's Rust SDK.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct SdkJson(pub(crate) Map<String, Value>);
+#[derive(Clone, Default, PartialEq, veil::Redact)]
+pub(crate) struct SdkJson(#[redact(with = "[REDACTED]")] pub(crate) Map<String, Value>);
 
 /// The impersonated service account credentials an application default credentials file holds:
 /// the fields the login checks, and the file itself for Google's Rust SDK to build them from.
@@ -372,6 +372,38 @@ mod tests {
             failure.file,
             Some(UnusableFile::Invalid { problem, .. }) if problem == "is over 1048576 characters, larger than any credentials file"
         ));
+    }
+
+    #[rstest]
+    #[case::service_account(json!({"type": "service_account", "private_key": "credential-value"}))]
+    #[case::authorized_user(json!({
+        "type": "authorized_user",
+        "refresh_token": "credential-value",
+        "client_secret": "credential-value",
+        "rapt_token": "credential-value",
+    }))]
+    #[case::external_account(json!({
+        "type": "external_account",
+        "client_secret": "credential-value",
+        "aws_secret_access_key": "credential-value",
+        "aws_session_token": "credential-value",
+        "credential_source": {"url": "https://example.com", "headers": {"authorization": "credential-value"}},
+    }))]
+    fn credentials_debug_never_shows_a_secret(#[case] info: Value) {
+        let json = load_vertex_credentials_source(&info.to_string()).unwrap();
+        let debug = format!("{json:?}");
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[rstest]
+    fn credentials_file_json_debug_never_shows_a_secret() {
+        let Value::Object(info) = json!({"private_key": "credential-value"}) else {
+            unreachable!()
+        };
+        let debug = format!("{:?}", SdkJson(info));
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 
     #[cfg(unix)]
