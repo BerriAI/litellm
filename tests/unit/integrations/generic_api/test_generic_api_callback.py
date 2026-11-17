@@ -1030,6 +1030,60 @@ async def test_retired_logger_sends_late_events_through_its_replacement(
 
 
 @pytest.mark.asyncio
+async def test_queued_logs_stay_with_the_retired_logger_when_a_later_replacement_drops_their_event_type() -> None:
+    sink: Final = _InProcessLogSink(hold_first=True)
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    old: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "old"},
+        event_types=["llm_api_success"],
+        async_httpx_client=handler,
+        batch_size=1,
+        flush_interval=3600,
+    )
+    middle: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "middle"},
+        event_types=["llm_api_success"],
+        async_httpx_client=handler,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    latest: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "latest"},
+        event_types=["llm_api_failure"],
+        async_httpx_client=handler,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    try:
+        in_flight: Final = asyncio.create_task(
+            old.async_log_success_event({"standard_logging_object": {"id": "in-flight"}}, None, None, None)
+        )
+        await asyncio.wait_for(sink.arrived.wait(), timeout=5)
+        old.log_queue.append({"id": "queued"})
+        old.shutdown(replacement=middle)
+        await asyncio.sleep(0)
+        middle.shutdown(replacement=latest)
+        sink.release.set()
+        await in_flight
+        await asyncio.wait_for(old._flush_task, timeout=5)
+        await asyncio.wait_for(middle._flush_task, timeout=5)
+        await latest.flush_queue()
+        delivered: Final = tuple(_received_log_ids_with_auth(sink.requests))
+        assert delivered == (("in-flight", "old"), ("queued", "old"))
+    finally:
+        sink.release.set()
+        old.shutdown()
+        latest.shutdown()
+        await old._flush_task
+        await middle._flush_task
+        await latest._flush_task
+        await handler.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("old_event_types", "new_event_types", "sent_with"),
     (

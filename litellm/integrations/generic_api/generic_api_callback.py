@@ -210,7 +210,7 @@ class GenericAPILogger(CustomBatchLogger):
             except asyncio.TimeoutError:
                 verbose_logger.debug("CustomLogger periodic flush after %s seconds", self.flush_interval)
                 await self.flush_queue()
-        if self._replacement is not None and self.active_logger()._accepts_every_event_of(self):
+        if self._replacement is not None:
             await self._hand_off_unsent_logs()
         await self.flush_queue()
 
@@ -221,9 +221,12 @@ class GenericAPILogger(CustomBatchLogger):
 
     async def _hand_off_unsent_logs(self) -> None:
         async with self.flush_lock:
+            target: Final = self.active_logger()
+            if not target._accepts_every_event_of(self):
+                return
             unsent: Final = tuple(self.log_queue)
             del self.log_queue[: len(unsent)]
-            self.active_logger().log_queue.extend(unsent)
+            target.log_queue.extend(unsent)
 
     def shutdown(self, replacement: "GenericAPILogger | None" = None) -> None:
         if self._stop_flush.is_set():
