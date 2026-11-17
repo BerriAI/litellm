@@ -1,13 +1,18 @@
 import _hashlib
+import hmac
 from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
-from unittest.mock import Mock
+from typing import Final
+from unittest.mock import MagicMock, Mock
 
+import jwt
 import pytest
 from cryptography.exceptions import InternalError
 from cryptography.hazmat.bindings._rust import openssl as rust_openssl
 from cryptography.hazmat.primitives import hashes
+from jwt.algorithms import HMACAlgorithm
 
+from litellm.proxy.auth.login_utils import encode_ui_session_jwt
 from litellm.proxy.common_utils.fips import (
     FipsModeError,
     cryptography_enforces_fips,
@@ -15,6 +20,7 @@ from litellm.proxy.common_utils.fips import (
     fips_mode_active,
     openssl_enforces_fips,
 )
+from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
 @pytest.fixture(autouse=True)
@@ -152,3 +158,131 @@ def test_fips_mode_stays_inactive_on_a_refused_boot(monkeypatch: pytest.MonkeyPa
 def test_a_fips_openssl_alone_does_not_activate_fips_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
     assert fips_mode_active() is False
+
+
+_HMAC_KEY: Final = "k" * 64
+_SHORT_HMAC_KEY: Final = "thirteen-byte"
+_UI_TOKEN: Final = ReturnedUITokenObject(
+    user_id="u",
+    key="sk-1",
+    user_email=None,
+    user_role="proxy_admin",
+    login_method="username_password",
+    premium_user=False,
+    auth_header_name="Authorization",
+    disabled_non_admin_personal_key_creation=False,
+    server_root_path="",
+    password_reset_required=False,
+)
+
+
+@pytest.fixture
+def hmac_digest(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    digest: Final = MagicMock(wraps=hmac.digest)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips_jwt.hmac", MagicMock(digest=digest))
+    return digest
+
+
+@pytest.mark.parametrize("algorithm, digest_name", [("HS256", "sha256"), ("HS384", "sha384"), ("HS512", "sha512")])
+def test_fips_mode_computes_every_jwt_hmac_with_hmac_digest_and_the_same_bytes(
+    fips_mode: None, hmac_digest: MagicMock, algorithm: str, digest_name: str
+) -> None:
+    token: Final = jwt.encode({"sub": "u"}, _HMAC_KEY, algorithm=algorithm)
+
+    assert token == jwt.PyJWT().encode({"sub": "u"}, _HMAC_KEY, algorithm=algorithm)
+    assert jwt.decode(token, _HMAC_KEY, algorithms=[algorithm]) == {"sub": "u"}
+    assert [call.args[2] for call in hmac_digest.call_args_list] == [digest_name, digest_name]
+
+
+def test_fips_mode_refuses_a_jwt_hmac_key_under_112_bits(fips_mode: None) -> None:
+    token: Final = jwt.PyJWT().encode({"sub": "u"}, _SHORT_HMAC_KEY, algorithm="HS256")
+
+    with pytest.raises(jwt.InvalidKeyError, match="at least 112 bits"):
+        jwt.encode({"sub": "u"}, _SHORT_HMAC_KEY, algorithm="HS256")
+    with pytest.raises(jwt.InvalidKeyError, match="at least 112 bits"):
+        jwt.decode(token, _SHORT_HMAC_KEY, algorithms=["HS256"])
+
+
+def test_turning_fips_mode_off_gives_jwt_its_own_hmac_back(fips_mode: None, hmac_digest: MagicMock) -> None:
+    enforce_fips_mode({})
+
+    token: Final = jwt.encode({"sub": "u"}, _SHORT_HMAC_KEY, algorithm="HS256")
+
+    assert jwt.decode(token, _SHORT_HMAC_KEY, algorithms=["HS256"]) == {"sub": "u"}
+    hmac_digest.assert_not_called()
+
+
+class _OperatorHS256(HMACAlgorithm):
+    pass
+
+
+@pytest.fixture
+def operator_hs256() -> Iterator[_OperatorHS256]:
+    stock: Final = jwt.get_algorithm_by_name("HS256")
+    operator: Final = _OperatorHS256(HMACAlgorithm.SHA256)
+    jwt.unregister_algorithm("HS256")
+    jwt.register_algorithm("HS256", operator)
+    yield operator
+    enforce_fips_mode({})
+    jwt.unregister_algorithm("HS256")
+    jwt.register_algorithm("HS256", stock)
+
+
+@pytest.fixture
+def hs384_unregistered() -> Iterator[None]:
+    stock: Final = jwt.get_algorithm_by_name("HS384")
+    jwt.unregister_algorithm("HS384")
+    yield
+    jwt.register_algorithm("HS384", stock)
+
+
+@pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}])
+def test_fips_mode_off_leaves_an_algorithm_the_operator_registered_in_place(
+    operator_hs256: _OperatorHS256, general_settings: Mapping[str, object]
+) -> None:
+    enforce_fips_mode(general_settings)
+
+    assert jwt.get_algorithm_by_name("HS256") is operator_hs256
+
+
+def test_turning_fips_mode_off_puts_back_the_algorithm_the_operator_registered(
+    operator_hs256: _OperatorHS256, fips_mode: None
+) -> None:
+    assert jwt.get_algorithm_by_name("HS256") is not operator_hs256
+
+    enforce_fips_mode({})
+
+    assert jwt.get_algorithm_by_name("HS256") is operator_hs256
+
+
+@pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}])
+def test_fips_mode_off_leaves_an_algorithm_the_operator_unregistered_out(
+    hs384_unregistered: None, general_settings: Mapping[str, object]
+) -> None:
+    enforce_fips_mode(general_settings)
+
+    with pytest.raises(NotImplementedError):
+        jwt.get_algorithm_by_name("HS384")
+
+
+def test_fips_mode_leaves_an_algorithm_the_operator_unregistered_out(hs384_unregistered: None, fips_mode: None) -> None:
+    with pytest.raises(NotImplementedError):
+        jwt.get_algorithm_by_name("HS384")
+
+
+def test_fips_mode_refuses_a_ui_session_cookie_signed_with_a_master_key_under_112_bits(fips_mode: None) -> None:
+    with pytest.raises(jwt.InvalidKeyError, match="at least 112 bits"):
+        encode_ui_session_jwt(_UI_TOKEN, _SHORT_HMAC_KEY)
+
+
+def test_fips_mode_signs_the_ui_session_cookie_with_hmac_digest(fips_mode: None, hmac_digest: MagicMock) -> None:
+    token: Final = encode_ui_session_jwt(_UI_TOKEN, _HMAC_KEY)
+
+    assert jwt.PyJWT().decode(token, _HMAC_KEY, algorithms=["HS256"])["user_id"] == "u"
+    assert [call.args[0] for call in hmac_digest.call_args_list] == [_HMAC_KEY.encode()]
+
+
+def test_standard_mode_signs_the_ui_session_cookie_with_a_short_master_key() -> None:
+    token: Final = encode_ui_session_jwt(_UI_TOKEN, _SHORT_HMAC_KEY)
+
+    assert jwt.decode(token, _SHORT_HMAC_KEY, algorithms=["HS256"])["user_id"] == "u"
