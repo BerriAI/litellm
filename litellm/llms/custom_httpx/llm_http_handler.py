@@ -260,14 +260,19 @@ def _client_request_headers(
 def _merge_response_api_headers(
     headers: Mapping[str, object], extra_headers: Mapping[str, object] | None
 ) -> dict[str, str]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
-    authorization_overridden: Final = any(name.lower() == "authorization" for name in extra_headers or {})
+    extra_header_items: Final = tuple((name, str(value)) for name, value in (extra_headers or {}).items())
+    caller_authorization: Final = next(
+        ((name, value) for name, value in reversed(extra_header_items) if name.lower() == "authorization"),
+        None,
+    )
     return {
         **{
             name: str(value)
             for name, value in headers.items()
-            if not (authorization_overridden and name.lower() == "authorization")
+            if not (caller_authorization is not None and name.lower() == "authorization")
         },
-        **{name: str(value) for name, value in (extra_headers or {}).items()},
+        **{name: value for name, value in extra_header_items if name.lower() != "authorization"},
+        **({caller_authorization[0]: caller_authorization[1]} if caller_authorization is not None else {}),
     }
 
 

@@ -6796,10 +6796,19 @@ async def test_vector_store_search_sends_once_when_the_connection_drops_without_
     ("provider", "upstream_model"),
     (("openai", "gpt-6-luna"), ("azure", "gpt-6-luna"), ("bigmodel", "glm-5.3-flash")),
 )
+@pytest.mark.parametrize(
+    "caller_authorization_headers",
+    (
+        {"authorization": "Bearer fake-caller-key"},
+        {"Authorization": "Bearer fake-stale-key", "authorization": "Bearer fake-caller-key"},
+    ),
+    ids=("single-case", "case-variant-duplicates"),
+)
 async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
     is_async: bool,
     provider: str,
     upstream_model: str,
+    caller_authorization_headers: Mapping[str, str],
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
@@ -6825,7 +6834,10 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
         "api_key": "fake-configured-key",
         "api_base": "https://responses.example.com/v1",
         "api_version": "2025-04-01-preview",
-        "extra_headers": {"authorization": "Bearer fake-caller-key", "content-type": "application/vnd.example+json"},
+        "extra_headers": {
+            **caller_authorization_headers,
+            "content-type": "application/vnd.example+json",
+        },
         "client": client,
     }
     try:
