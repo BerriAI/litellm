@@ -75,7 +75,7 @@ from litellm.constants import (
     TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
-from litellm.cost_calculator import BaseTokenUsageProcessor
+from litellm.cost_calculator import BaseTokenUsageProcessor, provider_token_cost
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
@@ -211,7 +211,6 @@ from litellm.litellm_core_utils.litellm_logging import (
     Logging,
     deployment_pricing_model_info,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -1570,15 +1569,17 @@ def _deployment_priced_input_cost(
     model: str, custom_llm_provider: str | None, prompt_tokens: int, deployment_pricing: ModelInfo
 ) -> float:
     """Input price for the estimated prompt at the deployment's registered rates, read through
-    ``deployment_pricing_model_info`` and priced by ``generic_cost_per_token`` the way the success
+    ``deployment_pricing_model_info`` and priced by ``provider_token_cost`` the way the success
     path prices them, so a long-context tier the deployment declares (``input_cost_per_token_above_200k_tokens``)
     is honoured instead of flattened to the standard rate. An entry it cannot price keeps the row at $0."""
     usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
     try:
-        prompt_cost, _ = generic_cost_per_token(
+        prompt_cost, _ = provider_token_cost(
             model=model,
             usage=usage,
             custom_llm_provider=custom_llm_provider or str(deployment_pricing.get("litellm_provider") or ""),
+            service_tier=None,
+            data_residency=None,
             model_info=deployment_pricing,
         )
     except Exception as exc:  # noqa: BLE001  # a malformed registered entry must not drop the failure row

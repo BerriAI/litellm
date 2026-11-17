@@ -19,10 +19,10 @@ from pydantic import ConfigDict, Field
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.cost_calculator import provider_token_cost
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_prompt_caching_savings,
-    generic_cost_per_token,
     get_cost_per_unit,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
@@ -251,7 +251,7 @@ def _cost_of_usage(
                 model_info=model_info,
             )
         else:
-            prompt_cost, completion_cost = generic_cost_per_token(
+            prompt_cost, completion_cost = provider_token_cost(
                 model=model.model,
                 usage=usage,
                 custom_llm_provider=model.provider,

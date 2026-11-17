@@ -465,7 +465,7 @@ def _per_second_pricing_cost_from_info(
     return resolved_cost_per_second * seconds, 0.0
 
 
-def _token_cost(
+def provider_token_cost(
     model: str,
     usage: Usage,
     custom_llm_provider: str,
@@ -478,6 +478,8 @@ def _token_cost(
         return openai_cost_per_token(
             model=model, usage=usage, service_tier=service_tier, data_residency=data_residency, model_info=model_info
         )
+    if custom_llm_provider == "anthropic":
+        return anthropic_cost_per_token(model=model, usage=usage, service_tier=service_tier, model_info=model_info)
     return generic_cost_per_token(
         model=model,
         usage=usage,
@@ -627,7 +629,7 @@ def cost_per_token(
             return anthropic_cost_per_token(
                 model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
             )
-        return _token_cost(
+        return provider_token_cost(
             model=model,
             usage=usage_block,
             custom_llm_provider=custom_llm_provider or "",
@@ -707,7 +709,7 @@ def cost_per_token(
         if request_price is not None:
             return request_price, 0.0
         if decisions_overrides:
-            return _token_cost(
+            return provider_token_cost(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
@@ -753,7 +755,7 @@ def cost_per_token(
             prompt_cost = _prompt_cost
             completion_cost = _completion_cost
         elif cost_metric == "cost_per_token":
-            prompt_cost, completion_cost = _token_cost(
+            prompt_cost, completion_cost = provider_token_cost(
                 model=model_without_prefix,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
@@ -796,7 +798,7 @@ def cost_per_token(
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_uses_token_pricing(model_without_prefix, custom_llm_provider, usage_block):
-            return _token_cost(
+            return provider_token_cost(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
