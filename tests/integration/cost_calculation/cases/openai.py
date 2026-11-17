@@ -20,6 +20,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     RecountRates,
     SseResponse,
+    UnsizedFlacUpload,
     WavUpload,
 )
 from pydantic import JsonValue
@@ -8103,6 +8104,18 @@ WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND: Final = CostTrackingTestCase(
 )
 
 
+WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE: Final = CostTrackingTestCase(
+    name="whisper-next-transcriptions-unsized-flac-no-usage",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="whisper-next",
+    endpoint="/v1/audio/transcriptions",
+    upload=UnsizedFlacUpload(kind="unsized_flac"),
+    request={"response_format": "json"},
+    response=JsonResponse(content_type="application/json", body={"text": "hello"}),
+    expected=ExactExpected(spend=0, input_cost=0, output_cost=0, prompt_tokens=0, completion_tokens=0),
+)
+
+
 # whisper-verbose-next
 WHISPER_VERBOSE_NEXT_TRANSCRIPTIONS_DURATION: Final = CostTrackingTestCase(
     name="whisper-verbose-next-transcriptions-duration",
@@ -12206,6 +12219,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_UPSTREAM_500_ZERO_SPEND,
     GPT_5_6_UPSTREAM_429_ZERO_SPEND,
     WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND,
+    WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE,
     WHISPER_VERBOSE_NEXT_TRANSCRIPTIONS_DURATION,
     GPT_4O_TRANSCRIBE_NEXT_TRANSCRIPTIONS_TOKENS,
     TTS_NEXT_SPEECH_PER_CHARACTER,

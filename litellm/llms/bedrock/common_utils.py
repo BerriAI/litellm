@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
+    from .base_aws_llm import BaseAWSLLM
+
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -56,6 +58,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
+BEDROCK_SERVICE_TIER_HEADER: Final = "X-Amzn-Bedrock-Service-Tier"
 BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
@@ -82,6 +85,13 @@ BedrockRoute = Literal[
     "mantle",
     "chat_completions",
 ]
+
+
+def served_service_tier(response_headers: Mapping[str, str] | None) -> str | None:
+    tier_header: Final = BEDROCK_SERVICE_TIER_HEADER.lower()
+    return next(
+        (value for name, value in (response_headers or {}).items() if name.lower() == tier_header and value), None
+    )
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -1184,7 +1194,7 @@ _get_all_bedrock_regions = get_all_bedrock_regions
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
     """Abbreviations of regions AWS Bedrock supports for cross region inference."""
-    return ["global", "us", "eu", "apac", "jp", "au", "us-gov"]
+    return ["global", "us", "eu", "apac", "jp", "au", "ca", "us-gov"]
 
 
 def extract_model_name_from_bedrock_arn(model: str) -> str:
@@ -1637,7 +1647,7 @@ def bedrock_model_accepts_cache_points(
     models without prompt caching support ("You invoked an unsupported model or your
     request did not allow prompt caching"), so a model whose cost-map entry does not declare
     ``supports_prompt_caching`` must not receive them. An explicit
-    ``supports_prompt_cache_breakpoint`` on the entry wins over that flag: a model can price
+    ``supports_bedrock_converse_cache_point`` on the entry wins over that flag: a model can price
     cached tokens through implicit caching yet reject the marker on Converse ("This model
     doesn't support the cachePoint field", Kimi K3). The router registers a deployment's
     ``model_info`` under ``bedrock/<model>`` as configured, route prefix included, while the
@@ -1648,7 +1658,7 @@ def bedrock_model_accepts_cache_points(
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
     it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
     model as configured when ``model`` is its ``base_model``: its own declaration wins.
-    A routed call passes its deployment's ``model_info``, whose breakpoint flag wins outright and
+    A routed call passes its deployment's ``model_info``, whose cache point flag wins outright and
     whose ``supports_prompt_caching`` wins over the catalog's for a known model. Other flags come
     from the catalog as loaded, since the registered keys are shared by every deployment of the
     same model string and carry whichever sibling registered last.
@@ -1679,7 +1689,7 @@ def bedrock_model_known_to_accept_cache_points(
     model: str, deployment_model: str | None = None, model_info: Mapping[str, object] | None = None
 ) -> bool:
     """Like ``bedrock_model_accepts_cache_points``, but only for the Claude and Nova families Bedrock documents
-    as taking cache checkpoints, unless the entry sets ``supports_prompt_cache_breakpoint``: an OpenAI
+    as taking cache checkpoints, unless the entry sets ``supports_bedrock_converse_cache_point``: an OpenAI
     ``prompt_cache_breakpoint`` reaches every model of a mixed fleet, not only the ones a client marked for
     Bedrock caching, and other families price implicit cache reads yet may reject the cachePoint field."""
     deployment_declared: Final = (
@@ -1707,19 +1717,41 @@ def _documents_cache_checkpoints(model: str) -> bool:
     return _is_claude(model) or get_bedrock_base_model(model).startswith("amazon.nova")
 
 
+_CACHE_POINT_FLAG: Final = "supports_bedrock_converse_cache_point"
+_LEGACY_BREAKPOINT_FLAG: Final = "supports_prompt_cache_breakpoint"
+
+
 def _explicit_cache_point_support(model: str, model_info: Mapping[str, object] | None) -> bool | None:
-    deployment_flag: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
-    if deployment_flag is not None:
-        return deployment_flag is True
+    entries: Final = _cache_point_flag_entries(model, model_info)
+    declared: Final = next(
+        (entry.get(_CACHE_POINT_FLAG) is True for entry in entries if entry.get(_CACHE_POINT_FLAG) is not None),
+        None,
+    )
+    if any(
+        entry.get(_LEGACY_BREAKPOINT_FLAG) is not None and entry.get(_CACHE_POINT_FLAG) is None for entry in entries
+    ):
+        _warn_legacy_cache_point_flag(model)
+    return declared
+
+
+def _cache_point_flag_entries(model: str, model_info: Mapping[str, object] | None) -> tuple[Mapping[str, object], ...]:
     catalog_entry: Final = _catalog_entry_reader(model_info)
     registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
-    return next(
-        (
-            entry.get("supports_prompt_cache_breakpoint") is True
-            for key in (*registered_keys, model, get_bedrock_base_model(model))
-            if (entry := catalog_entry(key)) is not None and entry.get("supports_prompt_cache_breakpoint") is not None
-        ),
-        None,
+    catalog_entries: Final = tuple(
+        catalog_entry(key) for key in (*registered_keys, model, get_bedrock_base_model(model))
+    )
+    return tuple(entry for entry in (model_info, *catalog_entries) if entry is not None)
+
+
+@functools.lru_cache(maxsize=256)
+def _warn_legacy_cache_point_flag(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock model %s sets supports_prompt_cache_breakpoint, which no longer controls Converse cachePoint "
+        "blocks and only selects the OpenAI prompt_cache_breakpoint format. Set "
+        "supports_bedrock_converse_cache_point to true or false to choose whether cachePoint blocks are sent. "
+        "Without it, a model in the cost map gets them when it supports prompt caching, and a model the cost map "
+        "does not list, such as an application inference profile ARN, gets them.",
+        model,
     )
 
 
@@ -2641,11 +2673,8 @@ class CommonBatchFilesUtils:
     Provides shared functionality to reduce code duplication between batches and files.
     """
 
-    def __init__(self):
-        # Import here to avoid circular imports
-        from .base_aws_llm import BaseAWSLLM
-
-        self._base_aws = BaseAWSLLM()
+    def __init__(self, aws: BaseAWSLLM) -> None:
+        self._base_aws = aws
 
     def get_bedrock_model_id_from_litellm_model(self, model: str) -> str:
         """

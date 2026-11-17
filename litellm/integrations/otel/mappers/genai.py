@@ -10,7 +10,6 @@ table: one lambda per mapping operation, applied against the typed span data.
 from collections.abc import Callable
 from typing import Final
 
-from litellm._internal_context import REDIS_FAMILIES_METADATA_KEY
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
@@ -200,12 +199,5 @@ class GenAIMapper:
         # semconv naming the server it reached. Internal services (router, budget
         # jobs, …) have no db.system, so they get only the litellm.service.* keys.
         attrs.update(db_span_attributes(data.service_name, data.call_type, postgres_operation(data)))
-        attrs.update(
-            {
-                LiteLLM.REDIS_FAMILIES
-                if key == REDIS_FAMILIES_METADATA_KEY
-                else f"{LiteLLM.METADATA_PREFIX}{key}": value
-                for key, value in data.event_metadata.items()
-            }
-        )
+        attrs.update({f"{LiteLLM.METADATA_PREFIX}{key}": value for key, value in data.event_metadata.items()})
         return attrs

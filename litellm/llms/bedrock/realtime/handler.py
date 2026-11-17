@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mappin
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NoReturn, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Final, NoReturn, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -54,6 +54,7 @@ from litellm.types.utils import StandardLoggingPayloadErrorInformation
 
 from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
+from ..web_identity_session_policy import BEDROCK_REALTIME_SESSION_POLICY, WebIdentitySessionPolicy
 from .transformation import BedrockRealtimeConfig, requested_modalities
 
 if TYPE_CHECKING:
@@ -534,6 +535,8 @@ async def _close_bedrock_input(
 
 class BedrockRealtime(BaseAWSLLM):
     """Handler for Bedrock Nova Sonic realtime speech-to-speech API."""
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_REALTIME_SESSION_POLICY
 
     def __init__(
         self,
