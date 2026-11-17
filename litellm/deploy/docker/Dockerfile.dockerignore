@@ -45,8 +45,11 @@ env/
 .coverage
 htmlcov/
 dist/
+**/dist/
 build/
+**/build/
 *.egg-info/
+**/*.egg-info/
 .DS_Store
 **/node_modules
 litellm/ui/litellm-dashboard/.next
