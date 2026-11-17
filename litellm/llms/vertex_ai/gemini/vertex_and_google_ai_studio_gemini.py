@@ -259,10 +259,7 @@ def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
 
 
 def _prompt_block_fields(feedback: PromptFeedback) -> Mapping[str, str]:
-    message: Final = (
-        {"block_reason_message": feedback["blockReasonMessage"]} if "blockReasonMessage" in feedback else {}
-    )
-    return MappingProxyType({"block_reason": feedback["blockReason"], **message})
+    return MappingProxyType({"block_reason": feedback["blockReason"]})
 
 
 def _names_its_finish(candidate: Candidates) -> bool:
@@ -271,12 +268,7 @@ def _names_its_finish(candidate: Candidates) -> bool:
 
 def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
     reason: Final = candidate.get("finishReason")
-    if reason is None:
-        return None
-    message: Final = candidate.get("finishMessage")
-    return MappingProxyType(
-        {"native_finish_reason": reason, **({"native_finish_message": message} if message is not None else {})}
-    )
+    return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
 
 
 def _served_model_name(model_version: object) -> str | None:

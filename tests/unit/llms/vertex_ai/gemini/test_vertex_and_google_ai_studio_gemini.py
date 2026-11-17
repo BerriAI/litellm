@@ -8222,7 +8222,7 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
         ({"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]}, {"native_finish_reason": "IMAGE_SAFETY"}),
         (
             {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "blocked"}},
-            {"block_reason": "PROHIBITED_CONTENT", "block_reason_message": "blocked"},
+            {"block_reason": "PROHIBITED_CONTENT"},
         ),
     ],
 )
@@ -8256,6 +8256,7 @@ class _GoogleReasonOutcome:
     text: str
     finish_reason: str
     reason_fields: Mapping[str, str]
+    note: str | None = None
 
 
 _GOOGLE_REASON_USAGE: Final = {"promptTokenCount": 11, "candidatesTokenCount": 5, "totalTokenCount": 16}
@@ -8269,62 +8270,69 @@ def _google_finished(candidate: Mapping[str, object]) -> Mapping[str, object]:
     return {"candidates": [{**candidate, "index": 0}], "usageMetadata": _GOOGLE_REASON_USAGE}
 
 
-def _flagged_outcome(candidate: Mapping[str, str], reason_fields: Mapping[str, str]) -> _GoogleReasonOutcome:
+def _with_note(fields: Mapping[str, str], key: str, note: str | None) -> Mapping[str, str]:
+    return {**fields, **({key: note} if note is not None else {})}
+
+
+def _flagged_outcome(reason: str, note: str | None = None) -> _GoogleReasonOutcome:
+    candidate: Final = _with_note({"finishReason": reason}, "finishMessage", note)
     return _GoogleReasonOutcome(
         document=_google_finished(candidate),
         frames=(_google_text_frame("Waves fold "), _google_finished(candidate)),
         text="Waves fold ",
         finish_reason="content_filter",
-        reason_fields=reason_fields,
+        reason_fields={"native_finish_reason": reason},
+        note=note,
     )
 
 
-def _blocked_outcome(prompt_feedback: Mapping[str, str], reason_fields: Mapping[str, str]) -> _GoogleReasonOutcome:
+def _blocked_outcome(reason: str, note: str | None = None) -> _GoogleReasonOutcome:
     blocked: Final = {
-        "promptFeedback": prompt_feedback,
+        "promptFeedback": _with_note({"blockReason": reason}, "blockReasonMessage", note),
         "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
     }
     return _GoogleReasonOutcome(
-        document=blocked, frames=(blocked,), text="", finish_reason="content_filter", reason_fields=reason_fields
+        document=blocked,
+        frames=(blocked,),
+        text="",
+        finish_reason="content_filter",
+        reason_fields={"block_reason": reason},
+        note=note,
     )
 
 
-def _finished_after_text_outcome(native: str, finish_reason: str) -> _GoogleReasonOutcome:
+def _finished_after_text_outcome(native: str, finish_reason: str, note: str | None = None) -> _GoogleReasonOutcome:
+    finish: Final = _with_note({"finishReason": native}, "finishMessage", note)
     return _GoogleReasonOutcome(
         document=_google_finished(
-            {"content": {"role": "model", "parts": [{"text": "Waves fold silver light."}]}, "finishReason": native}
+            {"content": {"role": "model", "parts": [{"text": "Waves fold silver light."}]}, **finish}
         ),
         frames=(
             _google_text_frame("Waves fold "),
             _google_text_frame("silver light."),
-            _google_finished({"finishReason": native}),
+            _google_finished(finish),
         ),
         text="Waves fold silver light.",
         finish_reason=finish_reason,
         reason_fields={"native_finish_reason": native},
+        note=note,
     )
 
 
+_GOOGLE_NOTE_OUTCOMES: Final = (
+    pytest.param(_flagged_outcome("SAFETY", "Candidate was blocked for safety."), id="flagged_with_note"),
+    pytest.param(_blocked_outcome("PROHIBITED_CONTENT", "Prompt was blocked."), id="blocked_with_note"),
+    pytest.param(
+        _finished_after_text_outcome(
+            "MALFORMED_FUNCTION_CALL", "stop", "Malformed function call: print(default_api.lookup(city='Paris'"
+        ),
+        id="malformed_function_call_with_note",
+    ),
+)
 _GOOGLE_REASON_OUTCOMES: Final = (
-    pytest.param(
-        _flagged_outcome(
-            {"finishReason": "SAFETY", "finishMessage": "Candidate was blocked for safety."},
-            {"native_finish_reason": "SAFETY", "native_finish_message": "Candidate was blocked for safety."},
-        ),
-        id="flagged_with_message",
-    ),
-    pytest.param(
-        _flagged_outcome({"finishReason": "RECITATION"}, {"native_finish_reason": "RECITATION"}),
-        id="flagged_without_message",
-    ),
-    pytest.param(
-        _blocked_outcome(
-            {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "Prompt was blocked."},
-            {"block_reason": "PROHIBITED_CONTENT", "block_reason_message": "Prompt was blocked."},
-        ),
-        id="blocked_with_message",
-    ),
-    pytest.param(_blocked_outcome({"blockReason": "SAFETY"}, {"block_reason": "SAFETY"}), id="blocked_without_message"),
+    *_GOOGLE_NOTE_OUTCOMES,
+    pytest.param(_flagged_outcome("RECITATION"), id="flagged_without_note"),
+    pytest.param(_blocked_outcome("SAFETY"), id="blocked_without_note"),
     pytest.param(_finished_after_text_outcome("STOP", "stop"), id="stop"),
     pytest.param(_finished_after_text_outcome("MALFORMED_FUNCTION_CALL", "stop"), id="malformed_function_call"),
 )
@@ -8399,19 +8407,42 @@ async def test_streamed_google_outcome_keeps_text_finish_reason_and_usage(
     )
 
 
-@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
-def test_non_streamed_choice_carries_google_reason_and_its_message_only_when_sent(
-    outcome: _GoogleReasonOutcome,
-) -> None:
-    response: Final = litellm.completion(
+def _google_reason_completion(outcome: _GoogleReasonOutcome) -> ModelResponse:
+    return litellm.completion(
         model="gemini/gemini-3.8-flash",
         messages=[{"role": "user", "content": "Describe the sea."}],
         api_key="fake-gemini-key",
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_google_reason_handler(outcome)))),
     )
 
+
+@pytest.mark.parametrize("outcome", _GOOGLE_REASON_OUTCOMES)
+def test_non_streamed_choice_carries_only_googles_reason_code(outcome: _GoogleReasonOutcome) -> None:
+    response: Final = _google_reason_completion(outcome)
+
     assert response.choices[0].finish_reason == outcome.finish_reason
     assert response.choices[0].provider_specific_fields == outcome.reason_fields
+
+
+@pytest.mark.parametrize("outcome", _GOOGLE_NOTE_OUTCOMES)
+def test_non_streamed_response_never_contains_googles_free_text_note(outcome: _GoogleReasonOutcome) -> None:
+    assert outcome.note is not None
+
+    assert outcome.note not in _google_reason_completion(outcome).model_dump_json()
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("outcome", _GOOGLE_NOTE_OUTCOMES)
+async def test_streamed_chunks_and_rebuilt_response_never_contain_googles_free_text_note(
+    outcome: _GoogleReasonOutcome, is_async: bool
+) -> None:
+    assert outcome.note is not None
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    assert [chunk for chunk in chunks if outcome.note in chunk.model_dump_json()] == []
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert outcome.note not in rebuilt.model_dump_json()
 
 
 _SAFETY_FINISH: Final = {"finishReason": "SAFETY", "finishMessage": "Candidate was blocked for safety."}
@@ -8435,7 +8466,7 @@ async def test_streamed_named_finish_keeps_its_reason_when_a_frame_follows_it(
         frames=(_google_text_frame("Waves fold "), _google_finished(_SAFETY_FINISH), trailing_frame),
         text="Waves fold ",
         finish_reason="content_filter",
-        reason_fields={"native_finish_reason": "SAFETY", "native_finish_message": "Candidate was blocked for safety."},
+        reason_fields={"native_finish_reason": "SAFETY"},
     )
 
     chunks: Final = await _google_reason_stream(outcome, is_async)

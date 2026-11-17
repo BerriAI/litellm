@@ -564,7 +564,6 @@ def gemini_chat_response(
     tool_call: Mapping[str, JsonValue],
     message_fields: Mapping[str, JsonValue],
     usage: Mapping[str, JsonValue],
-    finish_message: str | None = None,
 ) -> Mapping[str, JsonValue]:
     return {
         **GEMINI_3_8_FLASH_TEST_CASE.expected_litellm_response,
@@ -579,10 +578,7 @@ def gemini_chat_response(
                     "images": [],
                     **message_fields,
                 },
-                "provider_specific_fields": {
-                    "native_finish_reason": "STOP",
-                    **({"native_finish_message": finish_message} if finish_message is not None else {}),
-                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
             },
         ],
         "usage": dict(usage),
@@ -632,7 +628,6 @@ GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 358, "text_tokens": 77},
             "prompt_tokens_details": {"text_tokens": 358},
         },
-        finish_message="Model generated function call(s).",
     ),
 )
 
@@ -663,7 +658,6 @@ GEMINI_2_5_FLASH_THOUGHTS_OFF_TEST_CASE: Final = replace(
                 "completion_tokens_details": {"text_tokens": 53},
                 "prompt_tokens_details": {"text_tokens": 334},
             },
-            finish_message="Model generated function call(s).",
         ),
         "model": "gemini/gemini-2.5-flash",
     },
@@ -814,7 +808,6 @@ GEMINI_4_HYDROGEN_XHIGH_TEST_CASE: Final = replace(
                 "completion_tokens_details": {"reasoning_tokens": 345, "text_tokens": 74},
                 "prompt_tokens_details": {"text_tokens": 414},
             },
-            finish_message="Model generated function call(s).",
         ),
         "model": "gemini/gemini-4-hydrogen",
     },
@@ -852,7 +845,6 @@ GEMINI_3_8_FLASH_THINKING_OMITTED_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 108, "text_tokens": 65},
             "prompt_tokens_details": {"text_tokens": 358},
         },
-        finish_message="Model generated function call(s).",
     ),
 )
 
@@ -889,7 +881,6 @@ GEMINI_3_8_FLASH_THINKING_SHOWN_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 105, "text_tokens": 66},
             "prompt_tokens_details": {"text_tokens": 358},
         },
-        finish_message="Model generated function call(s).",
     ),
 )
 

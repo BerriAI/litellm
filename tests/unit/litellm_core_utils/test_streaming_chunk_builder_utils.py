@@ -3018,7 +3018,7 @@ def _as_received(chunks: Sequence[ModelResponseStream], over_http: bool) -> tupl
 @pytest.mark.parametrize(
     "reason_fields",
     [
-        pytest.param({"native_finish_reason": "SAFETY", "native_finish_message": "Flagged."}, id="finish_reason"),
+        pytest.param({"native_finish_reason": "SAFETY"}, id="finish_reason"),
         pytest.param({"block_reason": "PROHIBITED_CONTENT"}, id="block_reason"),
     ],
 )
@@ -3049,7 +3049,7 @@ def test_stream_chunk_builder_adds_no_choice_provider_specific_fields_when_no_ch
 
 _TWO_CHOICE_REASON_FIELDS: Final[Mapping[int, Mapping[str, str]]] = {
     0: {"native_finish_reason": "STOP"},
-    1: {"native_finish_reason": "SAFETY", "native_finish_message": "Flagged."},
+    1: {"native_finish_reason": "SAFETY"},
 }
 
 

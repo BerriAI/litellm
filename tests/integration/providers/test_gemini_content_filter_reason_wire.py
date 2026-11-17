@@ -41,6 +41,7 @@ class _Upstream:
     text: str
     finish_reason: str
     reason_fields: Mapping[str, str]
+    note: str | None = None
 
     @property
     def prompt(self) -> str:
@@ -65,82 +66,88 @@ def _text_frame(text: str) -> Mapping[str, JsonValue]:
     return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "index": 0}]}
 
 
-def _flagged(reason: str, message: str | None = None) -> _Upstream:
-    candidate: Final[Mapping[str, JsonValue]] = {
-        "finishReason": reason,
-        "index": 0,
-        **({} if message is None else {"finishMessage": message}),
-    }
+def _noted(key: str, note: str | None) -> Mapping[str, JsonValue]:
+    return {} if note is None else {key: note}
+
+
+def _with_note_tag(tag: str, note: str | None) -> str:
+    return tag if note is None else f"{tag}-with-note"
+
+
+def _flagged(reason: str, note: str | None = None) -> _Upstream:
+    candidate: Final[Mapping[str, JsonValue]] = {"finishReason": reason, "index": 0, **_noted("finishMessage", note)}
     outcome: Final[Mapping[str, JsonValue]] = {"candidates": [dict(candidate)]}
     return _Upstream(
-        tag=f"flagged-{reason}" if message is None else f"flagged-{reason}-with-message",
+        tag=_with_note_tag(f"flagged-{reason}", note),
         outcome=outcome,
         usage={"promptTokenCount": 11, "candidatesTokenCount": 5, "totalTokenCount": 16},
         frames=(_text_frame(_PARTIAL), outcome),
         text=_PARTIAL,
         finish_reason="content_filter",
-        reason_fields={
-            "native_finish_reason": reason,
-            **({} if message is None else {"native_finish_message": message}),
-        },
+        reason_fields={"native_finish_reason": reason},
+        note=note,
     )
 
 
-def _blocked(reason: str, message: str | None = None) -> _Upstream:
-    feedback: Final[Mapping[str, JsonValue]] = {
-        "blockReason": reason,
-        **({} if message is None else {"blockReasonMessage": message}),
-    }
+def _blocked(reason: str, note: str | None = None) -> _Upstream:
+    feedback: Final[Mapping[str, JsonValue]] = {"blockReason": reason, **_noted("blockReasonMessage", note)}
     outcome: Final[Mapping[str, JsonValue]] = {"promptFeedback": dict(feedback)}
     return _Upstream(
-        tag=f"blocked-{reason}" if message is None else f"blocked-{reason}-with-message",
+        tag=_with_note_tag(f"blocked-{reason}", note),
         outcome=outcome,
         usage={"promptTokenCount": 9, "totalTokenCount": 9},
         frames=(outcome,),
         text="",
         finish_reason="content_filter",
-        reason_fields={"block_reason": reason, **({} if message is None else {"block_reason_message": message})},
+        reason_fields={"block_reason": reason},
+        note=note,
     )
 
 
-def _finished_after_text(native: str, finish_reason: str) -> _Upstream:
+def _finished_after_text(native: str, finish_reason: str, note: str | None = None) -> _Upstream:
+    finish: Final[Mapping[str, JsonValue]] = {"finishReason": native, "index": 0, **_noted("finishMessage", note)}
     return _Upstream(
-        tag=f"answered-{native}",
-        outcome={
-            "candidates": [
-                {"content": {"role": "model", "parts": [{"text": _ANSWER}]}, "finishReason": native, "index": 0}
-            ]
-        },
+        tag=_with_note_tag(f"answered-{native}", note),
+        outcome={"candidates": [{"content": {"role": "model", "parts": [{"text": _ANSWER}]}, **finish}]},
         usage={"promptTokenCount": 7, "candidatesTokenCount": 8, "totalTokenCount": 15},
         frames=(
             _text_frame(_PARTIAL),
             _text_frame(_ANSWER.removeprefix(_PARTIAL)),
-            {"candidates": [{"finishReason": native, "index": 0}]},
+            {"candidates": [dict(finish)]},
         ),
         text=_ANSWER,
         finish_reason=finish_reason,
         reason_fields={"native_finish_reason": native},
+        note=note,
     )
 
 
 _FLAGGED_REASONS: Final = ("RECITATION", "SAFETY", "IMAGE_SAFETY")
 _FLAGGED: Final = MappingProxyType({reason: _flagged(reason) for reason in _FLAGGED_REASONS})
-_FLAGGED_WITH_MESSAGE: Final = _flagged("SAFETY", "The candidate was blocked for safety.")
+_FLAGGED_WITH_NOTE: Final = _flagged("SAFETY", "The candidate was blocked for safety.")
 _BLOCKED: Final = _blocked("SAFETY")
-_BLOCKED_WITH_MESSAGE: Final = _blocked("PROHIBITED_CONTENT", "The prompt was blocked.")
+_BLOCKED_WITH_NOTE: Final = _blocked("PROHIBITED_CONTENT", "The prompt was blocked.")
 _ANSWERED: Final = _finished_after_text("STOP", "stop")
 _MALFORMED: Final = _finished_after_text("MALFORMED_FUNCTION_CALL", "stop")
+_MALFORMED_WITH_NOTE: Final = _finished_after_text(
+    "MALFORMED_FUNCTION_CALL", "stop", "Malformed function call: print(default_api.lookup(city='Paris'"
+)
 _UPSTREAMS: Final = (
     *_FLAGGED.values(),
-    _FLAGGED_WITH_MESSAGE,
+    _FLAGGED_WITH_NOTE,
     _BLOCKED,
-    _BLOCKED_WITH_MESSAGE,
+    _BLOCKED_WITH_NOTE,
     _ANSWERED,
     _MALFORMED,
+    _MALFORMED_WITH_NOTE,
 )
 _FILTERED: Final = tuple(
     pytest.param(upstream, id=upstream.tag)
-    for upstream in (*_FLAGGED.values(), _FLAGGED_WITH_MESSAGE, _BLOCKED, _BLOCKED_WITH_MESSAGE)
+    for upstream in (*_FLAGGED.values(), _FLAGGED_WITH_NOTE, _BLOCKED, _BLOCKED_WITH_NOTE)
+)
+_WITH_NOTE: Final = tuple(
+    pytest.param(upstream, id=upstream.tag)
+    for upstream in (_FLAGGED_WITH_NOTE, _BLOCKED_WITH_NOTE, _MALFORMED_WITH_NOTE)
 )
 _FILTERED_ON_BRIDGES: Final = tuple(
     pytest.param(upstream, id=upstream.tag) for upstream in (_FLAGGED["RECITATION"], _BLOCKED)
@@ -149,11 +156,12 @@ _STREAMED: Final = tuple(
     pytest.param(upstream, id=upstream.tag)
     for upstream in (
         _FLAGGED["RECITATION"],
-        _FLAGGED_WITH_MESSAGE,
+        _FLAGGED_WITH_NOTE,
         _BLOCKED,
-        _BLOCKED_WITH_MESSAGE,
+        _BLOCKED_WITH_NOTE,
         _ANSWERED,
         _MALFORMED,
+        _MALFORMED_WITH_NOTE,
     )
 )
 
@@ -320,7 +328,7 @@ def test_guard_stop_answer_keeps_native_finish_reason_and_text(rig: _Rig) -> Non
 
 @pytest.mark.parametrize("provider", _PROVIDERS)
 @pytest.mark.parametrize("upstream", _STREAMED)
-def test_non_streamed_choice_carries_google_reason_and_message_only_when_sent(
+def test_non_streamed_choice_carries_only_google_reason_code(
     rig: _Rig, upstream: _Upstream, provider: Provider
 ) -> None:
     payload: Final = _chat(rig, upstream, provider)
@@ -363,6 +371,29 @@ def test_guard_streamed_text_finish_reason_and_usage_unchanged(
     usages: Final = tuple(JSON_OBJECT.validate_python(chunk["usage"]) for chunk in chunks if chunk.get("usage"))
     assert usages, chunks
     assert {key: usages[-1][key] for key in upstream.expected_usage()} == upstream.expected_usage(), chunks
+
+
+@pytest.mark.parametrize("provider", _PROVIDERS)
+@pytest.mark.parametrize("upstream", _WITH_NOTE)
+def test_guard_google_free_text_note_never_reaches_the_non_streamed_response(
+    rig: _Rig, upstream: _Upstream, provider: Provider
+) -> None:
+    assert upstream.note is not None
+    payload: Final = _chat(rig, upstream, provider)
+    assert upstream.note not in json.dumps(payload), payload
+
+
+@pytest.mark.parametrize("provider", _PROVIDERS)
+@pytest.mark.parametrize("upstream", _WITH_NOTE)
+def test_guard_google_free_text_note_never_reaches_streamed_chunks_or_the_assembled_response(
+    rig: _Rig, upstream: _Upstream, provider: Provider
+) -> None:
+    assert upstream.note is not None
+    chunks: Final = _stream(rig, rig.models[provider], upstream.prompt)
+    assert [chunk for chunk in chunks if upstream.note in json.dumps(chunk)] == [], chunks
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks))
+    assert assembled is not None
+    assert upstream.note not in assembled.model_dump_json(), chunks
 
 
 def test_guard_openai_stream_without_choice_fields_gains_none(rig: _Rig) -> None:

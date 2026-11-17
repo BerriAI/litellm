@@ -186,10 +186,7 @@ GEMINI_3_8_FLASH_AGENT_TEST_CASE: Final = replace(
                         "thought_signatures": [GEMINI_SKIP_VALIDATION_SIGNATURE],
                     },
                 },
-                "provider_specific_fields": {
-                    "native_finish_reason": "STOP",
-                    "native_finish_message": "Model generated function call(s).",
-                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
             }
         ],
         "usage": {
@@ -258,10 +255,7 @@ GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE: Final = replace(
                         "thought_signatures": [GEMINI_SKIP_VALIDATION_SIGNATURE],
                     },
                 },
-                "provider_specific_fields": {
-                    "native_finish_reason": "STOP",
-                    "native_finish_message": "Model generated function call(s).",
-                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
             }
         ],
         "usage": {
