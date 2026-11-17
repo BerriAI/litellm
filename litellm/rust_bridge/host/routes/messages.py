@@ -852,7 +852,7 @@ def _signing_failure(kind: str, profile: str | None) -> Exception | None:
         return AwsAuthError(status_code=401, message="OIDC token could not be retrieved from secret manager.")
     if kind == "no_credentials" and not os.environ.get("AWS_ACCESS_KEY_ID"):
         return NoCredentialsError()
-    if kind == "profile_not_found":
+    if kind == "profile_not_found" and profile is not None:
         return ProfileNotFound(profile=profile)
     return None
 
