@@ -5382,23 +5382,6 @@ def _cache_entries(cache: Cache) -> tuple[str, ...]:
     return (*keys, *backend.ops) if isinstance(backend, _OrderedMemory) else keys
 
 
-VERTEX_MESSAGES_RULE: Final = catalog.RouteRule(
-    catalog.Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"vertex_ai"})
-)
-
-
-@pytest.fixture(autouse=True)
-def vertex_messages_served_natively() -> Iterator[None]:
-    """Routes vertex_ai Messages calls to Rust as the catalog will once the port is cut over, ahead of the
-    catch-all Python rule. A no-op after the cutover."""
-    if VERTEX_MESSAGES_RULE in catalog.RULES:
-        yield
-        return
-    catch_all: Final = catalog.RULES.index(catalog.RouteRule(catalog.Route.MESSAGES, Rollout.PYTHON_ONLY))
-    with rebound(catalog, "RULES", (*catalog.RULES[:catch_all], VERTEX_MESSAGES_RULE, *catalog.RULES[catch_all:])):
-        yield
-
-
 @pytest.fixture
 def parity_server(recording_server: RecordingServer) -> RecordingServer:
     recording_server.expected_requests = None

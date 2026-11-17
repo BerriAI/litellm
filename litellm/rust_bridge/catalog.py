@@ -213,6 +213,14 @@ RULES: Final[Rules] = (
         providers=frozenset({"bedrock"}),
         targets=frozenset({Target.BEDROCK_INVOKE}),
     ),
+    # Claude on Vertex AI: only a model Python's partner config serves (`"claude" in model`) resolves
+    # to the Messages target; Gemini, Llama, Mistral and other partners keep their Python targets.
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.RUST_REQUIRED,
+        providers=frozenset({"vertex_ai"}),
+        targets=frozenset({Target.MESSAGES}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
