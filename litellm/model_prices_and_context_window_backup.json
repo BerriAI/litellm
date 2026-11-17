@@ -16301,7 +16301,8 @@
         "max_output_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1.8e-06,
-        "source": "https://api.bineric.com/v1/models"
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
     },
     "bineric/lynx-30b": {
         "input_cost_per_token": 3e-06,
@@ -16310,7 +16311,8 @@
         "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "source": "https://api.bineric.com/v1/models"
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
     },
     "bineric/borealis-2": {
         "input_cost_per_token": 2e-06,
@@ -16593,7 +16595,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
-        "source": "https://api.bineric.com/v1/models"
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
     },
     "bineric/mistral_large_24_02": {
         "input_cost_per_token": 4.3e-06,
@@ -16602,7 +16605,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.3e-05,
-        "source": "https://api.bineric.com/v1/models"
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
     },
     "bineric/qwen-3-235b": {
         "input_cost_per_token": 2.2e-07,
@@ -16611,7 +16615,8 @@
         "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 8.8e-07,
-        "source": "https://api.bineric.com/v1/models"
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
     },
     "bineric/gpt-image-1": {
         "input_cost_per_token": 1e-05,
@@ -16650,7 +16655,8 @@
         "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "source": "https://api.bineric.com/v1/models"
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
     },
     "bineric/gpt-oss-20b": {
         "input_cost_per_token": 7e-08,
@@ -16659,7 +16665,8 @@
         "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
-        "source": "https://api.bineric.com/v1/models"
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
     },
     "bineric/o1": {
         "input_cost_per_token": 1.65e-05,
@@ -16680,8 +16687,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "source": "https://api.bineric.com/v1/models",
-        "supports_function_calling": true,
-        "supports_vision": true
+        "supports_function_calling": true
     },
     "bineric/sonar-web-search": {
         "input_cost_per_token": 1e-06,

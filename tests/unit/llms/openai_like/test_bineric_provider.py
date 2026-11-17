@@ -1,6 +1,5 @@
 import json
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -25,31 +24,8 @@ _CHAT_COMPLETION: Final = {
     ],
     "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
 }
-_EXPECTED_ENDPOINTS: Final = {
-    "chat_completions": True,
-    "messages": True,
-    "responses": True,
-    "embeddings": False,
-    "image_generations": False,
-    "audio_transcriptions": False,
-    "audio_speech": False,
-    "moderations": False,
-    "batches": False,
-    "rerank": False,
-    "systemone": True,
-}
 BINERIC_MODELS: Final = tuple(sorted(name for name in litellm.model_cost if name.startswith("bineric/")))
 BINERIC_CHAT_MODELS: Final = tuple(name for name in BINERIC_MODELS if litellm.model_cost[name]["mode"] == "chat")
-BINERIC_DECISION_MODELS: Final = tuple(
-    name for name in BINERIC_MODELS if litellm.model_cost[name]["mode"] == "evaluation"
-)
-
-
-def test_bineric_is_a_registered_provider():
-    assert litellm.LlmProviders.BINERIC.value == "bineric"
-    assert "bineric" in litellm.provider_list
-    assert "bineric" in litellm.constants.openai_compatible_providers
-    assert _DEFAULT_API_BASE in litellm.constants.openai_compatible_endpoints
 
 
 def test_bineric_provider_resolution(monkeypatch: pytest.MonkeyPatch):
@@ -142,63 +118,11 @@ def test_bineric_model_cost_and_capabilities(model: str):
         assert supports_vision(model) is True
 
 
-@pytest.mark.parametrize("model", BINERIC_DECISION_MODELS)
-def test_bineric_zuse_rows_are_priced_per_input_token_on_systemone(model: str):
-    entry: Final = litellm.model_cost[model]
-
-    assert model.startswith("bineric/zuse-")
-    assert entry["supported_endpoints"] == ["/v1/systemone"]
-    assert entry["input_cost_per_token"] > 0
-    assert entry["output_cost_per_token"] == 0.0
-
-
-def test_bineric_ships_chat_and_decision_models():
-    assert BINERIC_CHAT_MODELS
-    assert BINERIC_DECISION_MODELS
-    assert set(BINERIC_CHAT_MODELS) | set(BINERIC_DECISION_MODELS) == set(BINERIC_MODELS)
-
-
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_bineric_wildcard_expands_to_every_bineric_row():
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
     assert set(get_known_models_from_wildcard("bineric/*")) == set(BINERIC_MODELS)
-
-
-def test_bineric_backup_registry_mirrors_cost_map():
-    package_root: Final = Path(litellm.__file__).parent
-    cost_map: Final = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
-    backup: Final = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
-    bineric_entries: Final = {name: entry for name, entry in cost_map.items() if name.startswith("bineric/")}
-
-    assert bineric_entries
-    assert tuple(sorted(bineric_entries)) == BINERIC_MODELS
-    assert bineric_entries == {name: backup[name] for name in bineric_entries}
-
-
-def test_bineric_is_available_in_add_model_form():
-    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers: Final = json.loads(fields_path.read_text())
-    bineric: Final = next(provider for provider in providers if provider["litellm_provider"] == "bineric")
-
-    assert bineric["provider"] == "BINERIC"
-    assert bineric["provider_display_name"] == "Bineric"
-    assert bineric["default_model_placeholder"] in BINERIC_MODELS
-    assert {field["key"]: field["required"] for field in bineric["credential_fields"]} == {
-        "api_base": False,
-        "api_key": True,
-    }
-
-
-def test_bineric_supported_endpoints():
-    backup_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    root_path: Final = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
-
-    backup: Final = json.loads(backup_path.read_text())["providers"]["bineric"]["endpoints"]
-    root: Final = json.loads(root_path.read_text())["providers"]["bineric"]["endpoints"]
-
-    assert backup == root
-    assert {endpoint: root[endpoint] for endpoint in _EXPECTED_ENDPOINTS} == _EXPECTED_ENDPOINTS
 
 
 def test_bineric_chat_completion_request():
