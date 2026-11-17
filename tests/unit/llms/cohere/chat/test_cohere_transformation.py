@@ -923,6 +923,15 @@ UNSUPPORTED_COHERE_V2_PARAMS: Final = [
     ),
     pytest.param(
         JSON_SCHEMA_MODEL,
+        {
+            "response_format": _json_schema_format(
+                _object_schema({"pair": {"type": "array", "items": [{"type": "string"}, {"type": "integer"}]}})
+            )
+        },
+        id="schema-items-list",
+    ),
+    pytest.param(
+        JSON_SCHEMA_MODEL,
         {"response_format": _json_schema_format(_nested_schema(64, {"type": "integer", "minimum": 0}))},
         id="schema-minimum-at-the-deepest-checked-level",
     ),
@@ -1017,6 +1026,14 @@ def test_cohere_v2_tool_choice_without_tools_is_left_out(respx_mock: respx.MockR
         pytest.param(
             _object_schema({"email": {"anyOf": [{"type": "string", "format": "email"}, {"type": "null"}]}}),
             id="nullable-format",
+        ),
+        pytest.param(
+            _object_schema({"pair": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 1}]}}),
+            id="keyword-inside-prefix-items",
+        ),
+        pytest.param(
+            _object_schema({"name": {"type": "string"}}, additionalProperties={"type": "integer", "minimum": 1}),
+            id="keyword-inside-additional-properties",
         ),
         pytest.param(_nested_schema(64, {"type": "integer"}), id="nested-to-the-deepest-checked-level"),
     ],
