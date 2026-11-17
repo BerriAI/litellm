@@ -6039,6 +6039,10 @@ _EMPTY_USER_MESSAGES: Final = (
     pytest.param({"role": "user"}, id="missing"),
     pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
 )
+_WHITESPACE_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": [{"type": "text", "text": " "}]}, id="whitespace_text_block"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": "\n"}]}, id="newline_text_block"),
+)
 _DROPPED_USER_MESSAGES: Final = (
     pytest.param({"role": "user", "content": None}, id="null"),
     pytest.param({"role": "user"}, id="missing"),
@@ -6061,7 +6065,7 @@ _GEMINI_REPLY: Final = {
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
 async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
     respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
 ) -> None:
@@ -6105,7 +6109,7 @@ async def test_a_dropped_trailing_user_message_adds_no_user_turn_for_a_target_th
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
 async def test_an_empty_trailing_user_message_reaches_an_alternating_gemini_deployment_as_the_configured_continue_message(
     respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
 ) -> None:
