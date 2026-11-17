@@ -6510,6 +6510,14 @@ _PROXY_MASTER_KEY: Final = "sk-proxy-master"
         pytest.param(
             _PINNED_KEY_METADATA,
             _SERVER_ANTHROPIC_KEY,
+            {"api-key": "unrelated-caller-value", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="caller-credential-beside-the-route-credential-gets-the-pin",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
             {"Authorization": "Bearer sk-test", "anthropic-user-profile-id": "uprof_caller"},
             True,
             "uprof_key",

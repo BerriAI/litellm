@@ -1302,17 +1302,23 @@ def _upstream_headers_filter_or_pin(
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None,
     user_api_key_dict: UserAPIKeyAuth,
     request_headers: Mapping[str, str],
+    route_headers: Mapping[str, object],
 ) -> Callable[[Mapping[str, str]], Mapping[str, str]]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
 
     if upstream_headers_filter is not None:
         return upstream_headers_filter
-    caller_credentials: Final = {
-        name: value
-        for name in _UPSTREAM_CREDENTIAL_HEADERS
-        if (value := request_headers.get(name)) is not None
-        and not is_authenticated_caller_secret(value, user_api_key_dict)
-    }
+    route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
+    caller_credentials: Final[Mapping[str, str]] = (
+        {}
+        if route_sets_credential
+        else {
+            name: value
+            for name in _UPSTREAM_CREDENTIAL_HEADERS
+            if (value := request_headers.get(name)) is not None
+            and not is_authenticated_caller_secret(value, user_api_key_dict)
+        }
+    )
     return partial(
         _with_pinned_profile_id_where_sent, pinned_anthropic_user_profile_id(user_api_key_dict), caller_credentials
     )
@@ -1462,7 +1468,7 @@ def _prepare_passthrough_client_body(
 async def pass_through_request(
     request: Request,
     target: str,
-    custom_headers: dict,
+    custom_headers: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: dict | None = None,
     forward_headers: bool | None = False,
@@ -1533,13 +1539,13 @@ async def pass_through_request(
         url = httpx.URL(target)
         forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request_headers=safe_get_request_headers(request).copy(),
-            headers=custom_headers,
+            headers=dict(custom_headers),
             forward_headers=forward_headers,
         )
         upstream_headers: Final = _with_trace_context(
-            _upstream_headers_filter_or_pin(upstream_headers_filter, user_api_key_dict, request.headers)(
-                forwarded_headers
-            ),
+            _upstream_headers_filter_or_pin(
+                upstream_headers_filter, user_api_key_dict, request.headers, custom_headers
+            )(forwarded_headers),
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
