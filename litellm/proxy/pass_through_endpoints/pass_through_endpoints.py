@@ -1126,17 +1126,23 @@ def _upstream_request_filter_or_pin(
     upstream_request_filter: UpstreamRequestFilter | None,
     user_api_key_dict: UserAPIKeyAuth,
     request_headers: Mapping[str, str],
+    route_headers: Mapping[str, object],
 ) -> UpstreamRequestFilter:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
 
     if upstream_request_filter is not None:
         return upstream_request_filter
-    caller_credentials: Final = {
-        name: value
-        for name in _UPSTREAM_CREDENTIAL_HEADERS
-        if (value := request_headers.get(name)) is not None
-        and not is_authenticated_caller_secret(value, user_api_key_dict)
-    }
+    route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
+    caller_credentials: Final[Mapping[str, str]] = (
+        {}
+        if route_sets_credential
+        else {
+            name: value
+            for name in _UPSTREAM_CREDENTIAL_HEADERS
+            if (value := request_headers.get(name)) is not None
+            and not is_authenticated_caller_secret(value, user_api_key_dict)
+        }
+    )
     return partial(
         _with_pinned_profile_id_where_sent, pinned_anthropic_user_profile_id(user_api_key_dict), caller_credentials
     )
@@ -1155,7 +1161,7 @@ def _filtered_upstream_request(
 async def pass_through_request(
     request: Request,
     target: str,
-    custom_headers: dict,
+    custom_headers: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: dict | None = None,
     forward_headers: bool | None = False,
@@ -1218,10 +1224,9 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request_headers=safe_get_request_headers(request).copy(),
-            headers=headers,
+            headers=dict(custom_headers),
             forward_headers=forward_headers,
         )
         upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
@@ -1531,7 +1536,9 @@ async def pass_through_request(
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         outbound_headers, upstream_body = _filtered_upstream_request(
-            _upstream_request_filter_or_pin(upstream_request_filter, user_api_key_dict, request.headers),
+            _upstream_request_filter_or_pin(
+                upstream_request_filter, user_api_key_dict, request.headers, custom_headers
+            ),
             upstream_headers,
             outgoing_body,
             _LITELLM_PARAMS.validate_python(kwargs["litellm_params"]),
