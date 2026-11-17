@@ -1375,7 +1375,7 @@ jobs:
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
     needs: rust-bridge
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     permissions:
       contents: read
       pull-requests: read
@@ -1454,7 +1454,7 @@ jobs:
   redis-compat:
     name: redis-py ${{ matrix.redis-py }} compatibility
     needs: rust-bridge
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     permissions:
       contents: read
       id-token: write
@@ -1625,6 +1625,7 @@ jobs:
       - name: Require every unit job to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
+          jq -e --arg event "$EVENT_NAME" 'to_entries | all(.[]; .value.result == "success" or ($event == "pull_request" and (.key == "openai-sdk-compat" or .key == "redis-compat") and .value.result == "skipped"))' <<< "$NEEDS" > /dev/null
