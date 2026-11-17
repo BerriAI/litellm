@@ -249,7 +249,7 @@ fn defers_to_regular_fallbacks(error: &Error) -> bool {
 }
 
 /// `is_bad_request_without_fallback` with `fallback_on_unsupported_params` off: an unsupported
-/// params error, or a provider's plain 400 bad request.
+/// params error, or a provider's plain 400, 413 or 422 bad request.
 fn is_bad_request_without_fallback(failure: &AttemptError) -> bool {
     if !failure.is_a("BadRequestError") {
         return false;
@@ -267,7 +267,7 @@ fn is_bad_request_without_fallback(failure: &AttemptError) -> bool {
     {
         return false;
     }
-    failure.status == Some(400) && failure.names_provider
+    matches!(failure.status, Some(400 | 413 | 422)) && failure.names_provider
 }
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;

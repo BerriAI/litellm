@@ -13,6 +13,7 @@ import {
   SKILL_SORT_FIELDS,
 } from "@/components/claude_code_plugins/skillCatalog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useUserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 const ALL_DOMAINS = "__all_domains__";
 const DASHBOARD_SORT_FIELDS = [...SKILL_SORT_FIELDS, "category", "domain", "enabled"];
@@ -59,6 +60,10 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   const filters = useSkillFilters(DASHBOARD_SORT_FIELDS);
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
+  const users = useUserIdentityLookup(
+    skills.flatMap((skill) => [skill.created_by, skill.approved_by]),
+    { accessToken: publicPage ? null : accessToken ?? null },
+  );
 
   // Derived stats
   const totalSkills = skills.length;
@@ -79,7 +84,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     );
   }, [skills, filters.search, filters.tag, filters.scan, domainFilter]);
 
-  const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: setSelectedSkill }), []);
+  const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: setSelectedSkill, users }), [users]);
 
   const domainItems = useMemo(
     () => [
@@ -95,6 +100,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     return (
       <SkillDetail
         skill={legacySkillDetail(selectedSkill)}
+        users={users}
         onBack={() => setSelectedSkill(null)}
         isAdmin={isAdmin}
         accessToken={accessToken}

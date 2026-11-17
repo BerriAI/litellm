@@ -368,7 +368,7 @@ pub struct AttemptError {
     /// so the core records nothing.
     pub recorded: bool,
     /// The exception names its provider (`llm_provider` is set), which marks a provider's own
-    /// 400 for `fallback_on_unsupported_params`.
+    /// bad request for `fallback_on_unsupported_params`.
     pub names_provider: bool,
     /// An agentic follow-up call failed after the first call was served
     /// (`is_agentic_followup_failure`): never retried, since a retry reruns every paid round. The
