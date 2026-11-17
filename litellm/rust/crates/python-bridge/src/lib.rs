@@ -139,7 +139,7 @@ mod _native {
         )?;
         let py = module.py();
         // `requests` verifies Vertex AI Messages token requests against certifi's bundle when the
-        // environment names none, so the native login reads the same file.
+        // environment names none, so the Rust login reads the same file.
         if let Ok(path) = py
             .import("certifi")
             .and_then(|certifi| certifi.call_method0("where"))

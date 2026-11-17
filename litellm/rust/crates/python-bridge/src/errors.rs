@@ -685,8 +685,8 @@ mod tests {
         };
         Python::initialize();
         Python::attach(|py| {
-            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
-            let named: Marker = native
+            let raised = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let named: Marker = raised
                 .value(py)
                 .getattr(MESSAGES_GOOGLE_LOGIN_FAILURE)
                 .unwrap()
@@ -825,14 +825,14 @@ mod tests {
         );
         Python::initialize();
         Python::attach(|py| {
-            let native = route_failure(
+            let raised = route_failure(
                 py,
                 Error::invalid_request(detail),
                 RequestMarker::Messages,
                 Ok,
             )
             .unwrap();
-            let value = native.value(py);
+            let value = raised.value(py);
             let flag = |name: &str| {
                 value
                     .getattr_opt(name)

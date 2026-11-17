@@ -2586,10 +2586,10 @@ def test_an_attributed_unsupported_param_names_the_provider_and_model(
         "To drop unsupported params, set `litellm.drop_params = True`."
     )
     rejected: Final = ValueError(text)
-    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
-    rejected.messages_unsupported_param = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
+    rejected.messages_unsupported_param = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
     if attributed_model is not None:
-        rejected.messages_unsupported_param_model = attributed_model  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+        rejected.messages_unsupported_param_model = attributed_model  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets
 
     mapped: Final = messages_host.map_failure(
         rejected, {"model": "vertex_ai/claude-sonnet-4-5", "messages": []}, "vertex_ai", True
@@ -3148,14 +3148,14 @@ def test_a_vertex_connect_failure_names_the_host_rust_sent_it_to(
 
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
     monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
-    native: Final = RuntimeError(
+    raised: Final = RuntimeError(
         f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
         "failed to lookup address information: Name or service not known"
     )
-    native.messages_sent_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    raised.messages_sent_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
 
     mapped: Final = messages_host.map_failure(
-        native,
+        raised,
         {"model": _VERTEX_CLAUDE, "messages": [], "custom_llm_provider": "vertex_ai", "vertex_location": "elsewhere"},
         "vertex_ai",
     )
@@ -3201,9 +3201,9 @@ def test_a_tls_close_before_headers_reads_as_a_disconnect_on_vertex_ai_only(
 
 
 def _google_login_failure(name: str, message: str) -> RuntimeError:
-    native: Final = RuntimeError("provider authentication failed: " + message)
-    native.messages_google_login_failure = (name, message)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
-    return native
+    raised: Final = RuntimeError("provider authentication failed: " + message)
+    raised.messages_google_login_failure = (name, message)  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    return raised
 
 
 def _vertex_logger() -> Logging:
@@ -3264,7 +3264,7 @@ def test_a_vertex_credentials_file_failure_is_raised_as_the_file_failure_rust_na
     assert str(mapped) == message
 
 
-def test_a_google_login_failure_outside_vertex_ai_keeps_the_native_mapping() -> None:
+def test_a_google_login_failure_outside_vertex_ai_keeps_the_rust_mapping() -> None:
     mapped: Final = messages_host.map_failure(
         _google_login_failure("ValueError", "Could not resolve project_id"),
         {"model": _BEDROCK_INVOKE, "messages": [], **_AWS},
