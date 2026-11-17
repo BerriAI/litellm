@@ -1373,11 +1373,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         logging_only: Final = self._event_hook_is_event_type(GuardrailEventHooks.logging_only)
         mask: Final = input_type == "response" and self.mask_response_content and not logging_only
         flagged: Final = self._should_block_content(armor_response, allow_sanitization=mask)
+        partly_scanned: Final = fails_on_a_skipped_filter and self._skipped_a_filter(armor_response)
         end_time: Final = time.time()
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=self._build_logging_response(armor_response),
             request_data=request_data,
-            guardrail_status="guardrail_flagged" if flagged else "success",
+            guardrail_status="guardrail_flagged"
+            if flagged
+            else "guardrail_failed_to_respond"
+            if partly_scanned
+            else "success",
             guardrail_provider="model_armor",
             start_time=start_time,
             end_time=end_time,

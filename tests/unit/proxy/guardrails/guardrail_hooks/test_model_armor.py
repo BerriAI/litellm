@@ -5778,12 +5778,15 @@ async def test_apply_guardrail_masks_a_match_found_while_another_filter_was_skip
         [_skipped_with_deidentified("ssn [REDACTED]"), _skipped_with_deidentified("ssn [REDACTED]")],
         fail_on_error=False,
     )
+    request_data: Final[dict] = {"metadata": {}}
 
     result = await guardrail.apply_guardrail(
-        inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        inputs={"texts": ["ssn 078-05-1120"]}, request_data=request_data, input_type="response"
     )
 
     assert result["texts"] == ["ssn [REDACTED]"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
 
 
 @pytest.mark.asyncio
