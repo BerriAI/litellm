@@ -394,23 +394,35 @@ async def _cache_restricted_key(virtual_key: str, models: list[str]) -> DualCach
 
 
 @pytest.mark.parametrize(
-    ("query", "expected_query"),
+    ("key_models", "query", "expected_query"),
     [
-        pytest.param("model_id=eleven_flash_v2_5", "model_id=eleven_flash_v2_5", id="allowed model named"),
         pytest.param(
+            ["elevenlabs/eleven_flash_v2_5"],
+            "model_id=eleven_flash_v2_5",
+            "model_id=eleven_flash_v2_5",
+            id="allowed model named",
+        ),
+        pytest.param(
+            ["elevenlabs/eleven_flash_v2_5"],
             "model_id=eleven_flash_v2_5&model_id=eleven_multilingual_v2",
             "model_id=eleven_flash_v2_5",
             id="denied model behind an allowed one is stripped",
         ),
-        pytest.param("model_id=eleven_multilingual_v2", None, id="denied model named"),
-        pytest.param("", None, id="model omitted, default denied"),
-        pytest.param("model_id=", None, id="model blank, default denied"),
+        pytest.param(["elevenlabs/eleven_flash_v2_5"], "model_id=eleven_multilingual_v2", None, id="denied model named"),
+        pytest.param(["elevenlabs/eleven_flash_v2_5"], "", None, id="model omitted, default denied"),
+        pytest.param(["elevenlabs/eleven_flash_v2_5"], "model_id=", None, id="model blank, default denied"),
+        pytest.param(
+            ["elevenlabs/*"],
+            "model_id=eleven_multilingual_v2",
+            "model_id=eleven_multilingual_v2",
+            id="provider wildcard allows every model",
+        ),
     ],
 )
-def test_key_model_access_is_checked_against_the_model_sent_upstream(query, expected_query, monkeypatch):
+def test_key_model_access_is_checked_against_the_model_sent_upstream(key_models, query, expected_query, monkeypatch):
     monkeypatch.delenv("ELEVENLABS_API_BASE", raising=False)
     monkeypatch.setattr(litellm, "max_budget", 0.0)
-    cache = asyncio.run(_cache_restricted_key("sk-only-flash", ["eleven_flash_v2_5"]))
+    cache = asyncio.run(_cache_restricted_key("sk-only-flash", key_models))
     relay = _FakeRelay()
     client = TestClient(_app_with_relay(relay))
 

@@ -79,6 +79,7 @@ from litellm.llms.deepgram.common_utils import (
 )
 from litellm.llms.elevenlabs.common_utils import (
     ELEVENLABS_API_KEY_HEADER,
+    ELEVENLABS_TTS_BINARY_FRAME_REFUSAL,
     ElevenLabsTextToSpeechStream,
     elevenlabs_tts_client_text,
     elevenlabs_tts_is_priced,
@@ -4115,9 +4116,10 @@ _ELEVENLABS_WS_VOICE_ID_REASON: Final = "voice_id may only contain letters, digi
 _ELEVENLABS_WS_UNPRICED_REASON: Final = (
     "No per-character price for '{registry_key}': add it to the model cost map to enable it"
 )
-_ELEVENLABS_TTS_FRAME_POLICY: Final = WebsocketFramePolicy(
+ELEVENLABS_TTS_FRAME_POLICY: Final = WebsocketFramePolicy(
     client_text=elevenlabs_tts_client_text,
     recorded_upstream_frame=elevenlabs_tts_recorded_upstream_frame,
+    client_binary_refusal=ELEVENLABS_TTS_BINARY_FRAME_REFUSAL,
 )
 
 
@@ -4172,7 +4174,7 @@ async def _elevenlabs_tts_websocket(
         forward_headers=False,
         endpoint=websocket.url.path,
         accept_websocket=False,
-        frame_policy=_ELEVENLABS_TTS_FRAME_POLICY,
+        frame_policy=ELEVENLABS_TTS_FRAME_POLICY,
     )
 
 

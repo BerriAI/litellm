@@ -3023,6 +3023,7 @@ _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
 class WebsocketFramePolicy:
     client_text: Callable[[str], ClientTextDecision]
     recorded_upstream_frame: Callable[[Mapping[str, object]], Mapping[str, object]]
+    client_binary_refusal: RefusedClientText | None = None
 
 
 def _forward_client_text_unchanged(text: str) -> ClientTextDecision:
@@ -3427,10 +3428,16 @@ async def _relay_client_binary_frame(
     websocket: WebSocket,
     upstream_ws: ClientConnection,
     bytes_data: bytes,
+    frame_policy: WebsocketFramePolicy,
     setup_model_rewriter: Callable[[str], str] | None,
     gate: WebsocketFrameModelGate | None,
     ledger: _WebsocketTurnLedger,
 ) -> _ForwardClientFrame | _RefuseClientFrame:
+    if (binary_refusal := frame_policy.client_binary_refusal) is not None:
+        await websocket.close(code=binary_refusal.code, reason=binary_refusal.reason)
+        return _RefuseClientFrame(
+            refusal=WebsocketFrameModelRefused(message=binary_refusal.reason, error_type="invalid_request_error")
+        )
     rewritten_bytes: Final = _rewrite_vertex_live_binary_setup_model(bytes_data, setup_model_rewriter)
     if rewritten_bytes is None:
         await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON)
@@ -3817,6 +3824,7 @@ async def websocket_passthrough_request(
                                     websocket,
                                     upstream_ws,
                                     bytes_data,
+                                    frame_policy,
                                     setup_model_rewriter,
                                     client_frame_model_gate,
                                     ledger,

@@ -102,9 +102,8 @@ def test_websocket_target(api_base, stream, query_string, expected):
 )
 def test_requested_model_is_the_model_the_target_carries(query_string, expected):
     target = elevenlabs_tts_websocket_target(None, "voice1", "stream-input", query_string)
-    assert elevenlabs_tts_requested_model(query_string) == expected
     assert elevenlabs_tts_model(target) == expected
-    assert elevenlabs_tts_registry_key(target) == f"elevenlabs/{expected}"
+    assert elevenlabs_tts_requested_model(query_string) == elevenlabs_tts_registry_key(target) == f"elevenlabs/{expected}"
 
 
 @pytest.mark.parametrize("voice_id", ["21m00Tcm4TlvDq8ikWAM", "my_voice-2", "a"])

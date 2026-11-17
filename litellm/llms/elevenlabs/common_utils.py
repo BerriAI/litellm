@@ -34,14 +34,21 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _UNREADABLE_CLIENT_TEXT: Final = RefusedClientText(
     code=1007, reason="Each text frame must be a JSON object whose text field, when present, is a string"
 )
+ELEVENLABS_TTS_BINARY_FRAME_REFUSAL: Final = RefusedClientText(
+    code=1003, reason="ElevenLabs text-to-speech takes JSON text frames only"
+)
 
 
 class ElevenLabsException(BaseLLMException):
     pass
 
 
+def _registry_key(model_id: str) -> str:
+    return f"{LlmProviders.ELEVENLABS.value}/{model_id}"
+
+
 def elevenlabs_tts_requested_model(query_string: str) -> str:
-    return httpx.QueryParams(query_string).get(_MODEL_ID_PARAM) or ELEVENLABS_TTS_WEBSOCKET_DEFAULT_MODEL
+    return _registry_key(httpx.QueryParams(query_string).get(_MODEL_ID_PARAM) or ELEVENLABS_TTS_WEBSOCKET_DEFAULT_MODEL)
 
 
 def is_elevenlabs_voice_id(voice_id: str) -> bool:
@@ -84,7 +91,7 @@ def elevenlabs_tts_model(upstream_url: str) -> str:
 
 
 def elevenlabs_tts_registry_key(upstream_url: str) -> str:
-    return f"{LlmProviders.ELEVENLABS.value}/{elevenlabs_tts_model(upstream_url)}"
+    return _registry_key(elevenlabs_tts_model(upstream_url))
 
 
 def elevenlabs_tts_is_priced(upstream_url: str) -> bool:
