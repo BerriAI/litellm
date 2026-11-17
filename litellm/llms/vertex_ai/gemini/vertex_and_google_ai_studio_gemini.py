@@ -4205,7 +4205,7 @@ def _transform_long_decode_hops(
 
 
 def _provider_finish_reasons(
-    candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"], blocked: Sequence["StreamingChoices"]
+    candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"], blocked_indices: frozenset[int]
 ) -> tuple[tuple[int, str], ...]:
     """Every streamed choice carries a finish_reason, "stop" when the candidate sent none or Google's
     FINISH_REASON_UNSPECIFIED, so only a candidate that named how it ended, or a blocked prompt, is evidence of it."""
@@ -4214,7 +4214,7 @@ def _provider_finish_reasons(
         for position, candidate in enumerate(candidates)
         if (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
     )
-    finished_or_blocked: Final = finished | {choice.index for choice in blocked}
+    finished_or_blocked: Final = finished | blocked_indices
     return tuple(
         (choice.index, choice.finish_reason)
         for choice in choices
@@ -4469,7 +4469,11 @@ class ModelResponseIterator:
             self._plan_resume(processed_chunk, model_response)
 
             provider_finish_reasons: Final = _provider_finish_reasons(
-                _candidates or (), model_response.choices, blocked_response.choices if blocked_response else ()
+                _candidates or (),
+                model_response.choices,
+                frozenset(choice.index for choice in blocked_response.choices)
+                if blocked_response is not None
+                else frozenset(),
             )
             if provider_finish_reasons:
                 set_hidden_param(model_response, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, provider_finish_reasons)

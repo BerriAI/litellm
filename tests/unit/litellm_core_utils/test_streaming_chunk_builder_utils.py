@@ -3078,3 +3078,27 @@ def test_stream_chunk_builder_keeps_each_choices_own_provider_specific_fields(ov
     assert {
         choice.index: getattr(choice, "provider_specific_fields", None) for choice in response.choices
     } == _TWO_CHOICE_REASON_FIELDS
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+def test_stream_chunk_builder_keeps_the_last_chunks_provider_specific_fields(over_http: bool) -> None:
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-later-reason",
+            created=1,
+            model="gemini-3.8-flash",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Waves fold ", role="assistant"),
+                    provider_specific_fields={"native_finish_reason": "CONTINUATION"},
+                )
+            ],
+        ),
+        *_google_reason_stream({"provider_specific_fields": {"native_finish_reason": "SAFETY"}})[1:],
+    )
+
+    response: Final = stream_chunk_builder(chunks=list(_as_received(chunks, over_http)))
+
+    assert response is not None
+    assert getattr(response.choices[0], "provider_specific_fields", None) == {"native_finish_reason": "SAFETY"}

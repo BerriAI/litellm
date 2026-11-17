@@ -27,6 +27,7 @@ from litellm.constants import (
     PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
     STREAM_CHUNK_CHOICE_FIELDS,
     STREAM_FINISH_CHOICE_FIELDS,
+    VLLM_FINISH_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
@@ -176,6 +177,7 @@ def _prepend_upstream_choice_extras(
 
 _NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _CLOSING_CHOICE_INDEX: Final = 0
+_CLOSING_ONLY_FINISH_FIELDS: Final = frozenset(STREAM_FINISH_CHOICE_FIELDS) - frozenset(VLLM_FINISH_CHOICE_FIELDS)
 _NO_CHOICE_FIELDS_BY_INDEX: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
 _NO_FINISH_REASONS_BY_INDEX: Final[Mapping[int, str]] = MappingProxyType({})
 
@@ -264,20 +266,15 @@ def _apply_choice_fields(choice: StreamingChoices, fields: Mapping[str, object])
         setattr(choice, field, value)
 
 
-def _hold_back_closing_finish_fields(choices: Sequence[StreamingChoices], upstream_chunk: object) -> None:
-    held_back: Final = next(
-        (
-            choice
-            for choice in choices
-            if choice.index == _CLOSING_CHOICE_INDEX
-            and choice.finish_reason is None
-            and (choice.model_extra or {}).get("provider_specific_fields") is not None
-        ),
-        None,
-    )
-    if held_back is None or _CLOSING_CHOICE_INDEX not in _finish_reasons_by_index(upstream_chunk):
-        return
-    delattr(held_back, "provider_specific_fields")
+def _closing_only_fields_to_hold_back(upstream_chunk: object, upstream_choice: BaseModel) -> frozenset[str]:
+    held_back: Final = _CLOSING_ONLY_FINISH_FIELDS.intersection(upstream_choice.model_extra or {})
+    if (
+        not held_back
+        or getattr(upstream_choice, "index", None) != _CLOSING_CHOICE_INDEX
+        or _CLOSING_CHOICE_INDEX not in _finish_reasons_by_index(upstream_chunk)
+    ):
+        return frozenset()
+    return held_back
 
 
 def _choice_fields_chunk(
@@ -1064,7 +1061,7 @@ class CustomStreamWrapper:
                 "usage": usage,
                 "chunk_choice_fields": _non_null_upstream_choice_fields(chunk, STREAM_CHUNK_CHOICE_FIELDS),
                 "choice_index": choice_index,
-                "sibling_finish_reason": finish_reason if choice_index != 0 else None,
+                "sibling_finish_reason": finish_reason if choice_index != _CLOSING_CHOICE_INDEX else None,
             }
 
         except Exception as e:
@@ -1429,7 +1426,9 @@ class CustomStreamWrapper:
                             _prepend_upstream_choice_extras(
                                 model_response.choices[0],
                                 upstream_choice,
-                                upstream_choice_extra_keys - _STREAMING_CHOICE_KEYS,
+                                upstream_choice_extra_keys
+                                - _STREAMING_CHOICE_KEYS
+                                - _closing_only_fields_to_hold_back(original_chunk, upstream_choice),
                             )
                         else:
                             choices: Final = []
@@ -1439,7 +1438,12 @@ class CustomStreamWrapper:
                                         choices.append(
                                             StreamingChoices(
                                                 **_keyword_fields(
-                                                    without(choice.model_dump(), "finish_reason", "logprobs")
+                                                    without(
+                                                        choice.model_dump(),
+                                                        "finish_reason",
+                                                        "logprobs",
+                                                        *_closing_only_fields_to_hold_back(original_chunk, choice),
+                                                    )
                                                 ),  # for mistral etc. which return a value in their last chunk (not-openai compatible).
                                                 logprobs=getattr(choice, "logprobs", None),
                                             )
@@ -1479,8 +1483,7 @@ class CustomStreamWrapper:
                 if sibling_finish_reason is not None:
                     self._finish_sibling_choice(model_response.choices[0], sibling_finish_reason)
                 elif response_obj.get("is_finished"):
-                    self._apply_finish_choice_fields(model_response.choices[0])
-                _hold_back_closing_finish_fields(model_response.choices, response_obj.get("original_chunk"))
+                    self._apply_finish_choice_fields(model_response.choices[0], VLLM_FINISH_CHOICE_FIELDS)
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
                 return model_response
@@ -2274,8 +2277,11 @@ class CustomStreamWrapper:
             return "tool_calls"
         return finish_reason
 
-    def _apply_finish_choice_fields(self, choice: StreamingChoices) -> None:
-        _apply_choice_fields(choice, self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS))
+    def _apply_finish_choice_fields(
+        self, choice: StreamingChoices, fields: Sequence[str] = STREAM_FINISH_CHOICE_FIELDS
+    ) -> None:
+        received: Final = self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS)
+        _apply_choice_fields(choice, {field: received[field] for field in fields if field in received})
 
     def _finish_sibling_choice(self, choice: StreamingChoices, finish_reason: str) -> None:
         choice.finish_reason = map_finish_reason(finish_reason)  # rebind-ok: chunks are built in place here
