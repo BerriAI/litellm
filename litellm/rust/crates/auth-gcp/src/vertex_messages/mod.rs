@@ -105,6 +105,8 @@ pub struct VertexLogin {
 /// Messages config, and so one credential cache, per model for this many models.
 const MAX_CACHED_MODELS: u64 = 64;
 
+/// The Vertex AI Messages login: credentials loaded once per model and key, and tokens served
+/// from them until google-auth would refresh them.
 #[derive(Clone)]
 pub struct VertexMessagesAuth {
     /// Python's credential cache lives on the Messages config, which it caches per model as the

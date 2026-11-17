@@ -1,3 +1,6 @@
+//! What the Vertex AI Messages login reads from the machine besides credential files: the
+//! process environment, the gcloud CLI, the GCE metadata server and Cloud Resource Manager.
+
 use std::{future::Future, pin::Pin, time::Duration};
 
 use google_cloud_auth::credentials::mds;

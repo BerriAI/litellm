@@ -26,6 +26,8 @@ pub fn set_certifi_bundle(path: PathBuf) {
 
 type Environment = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 
+/// The HTTP clients token requests go through, chosen per request from the proxy and CA bundle
+/// the process environment names at that moment.
 #[derive(Clone)]
 pub(crate) struct Requests {
     pool: Arc<HttpClientPool>,

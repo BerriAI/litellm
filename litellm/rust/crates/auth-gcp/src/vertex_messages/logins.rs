@@ -64,6 +64,8 @@ pub(crate) fn identity(
     }
 }
 
+/// What a login is cached under: the credentials it was loaded from and the project the call
+/// names, `None` until the credentials resolve one.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct LoginKey {
     pub(crate) identity: Option<Identity>,
@@ -136,6 +138,8 @@ fn token_fetch_failed(failure: &GoogleLoginFailure) -> bool {
     )
 }
 
+/// The logins of one model: loaded credentials by key, and the keys used most recently, which an
+/// unloadable replacement key file falls back through.
 pub(crate) struct Logins {
     cache: Cache<LoginKey, Arc<Login>>,
     /// The keys most recently used last, which the earlier key file is looked up in.

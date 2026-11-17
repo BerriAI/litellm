@@ -1,3 +1,6 @@
+//! A Vertex AI Messages login failure: the exception class Python's `VertexBase.load_auth`
+//! raises for it, its text, and the credentials file it is about, whose path only the log names.
+
 use litellm_auth_types::Error;
 
 pub(crate) const FILE_FAILURE_MESSAGE: &str =

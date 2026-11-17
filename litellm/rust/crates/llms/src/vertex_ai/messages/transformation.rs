@@ -1,3 +1,7 @@
+//! Claude on Vertex AI's `/v1/messages`: the Anthropic request reshaped for Vertex (version in
+//! the body, model in the URL, Vertex's betas and labels), sent with a Google access token to the
+//! project and region the call resolves.
+
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
