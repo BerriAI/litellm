@@ -40,7 +40,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 
 # Cache for the loaded configuration
-_BETA_HEADERS_CONFIG: dict | None = None
+_BETA_HEADERS_CONFIG: dict[str, object] | None = None
 _BETA_HEADERS_CONFIG_LOCK: Final = threading.Lock()
 _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="litellm-beta-headers-config")
 
@@ -208,6 +208,19 @@ def _load_beta_headers_config() -> dict:
 async def aload_beta_headers_config() -> None:
     if _BETA_HEADERS_CONFIG is None:
         await asyncio.get_running_loop().run_in_executor(_BETA_HEADERS_CONFIG_LOADER, _load_beta_headers_config)
+
+
+def loaded_beta_headers_config() -> Mapping[str, object] | None:
+    return _BETA_HEADERS_CONFIG
+
+
+def _cache_beta_headers_config() -> None:
+    _load_beta_headers_config()
+
+
+def load_beta_headers_config_in_background() -> None:
+    if _BETA_HEADERS_CONFIG is None:
+        _ = _BETA_HEADERS_CONFIG_LOADER.submit(_cache_beta_headers_config)
 
 
 @cache
