@@ -29,9 +29,9 @@ use crate::{
         chat::{
             streaming::StreamShape,
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                BaseConfig, DropParams, Headers, ProviderChatRequestData, ProviderChatResponseData,
                 ValidatedEnvironment, map_openai_param_names, map_openai_stop, unsupported_message,
-                unsupported_param,
+                unsupported_param, without_rejected_sampling_params,
             },
         },
     },
@@ -127,6 +127,7 @@ impl BaseConfig for AmazonConverseConfig {
         &self,
         model: &str,
         params: Map<String, Value>,
+        drop_params: DropParams,
     ) -> Result<Map<String, Value>, Decline> {
         if has_model_specific_token_and_stop_rules(model)
             && MODEL_SPECIFIC_OPENAI_PARAMS
@@ -138,7 +139,10 @@ impl BaseConfig for AmazonConverseConfig {
         map_openai_param_names(
             SUPPORTED_PARAMS,
             CALLER_CONFIG_PARAMS,
-            map_openai_stop(params, stop_sequences),
+            map_openai_stop(
+                without_rejected_sampling_params(params, drop_params),
+                stop_sequences,
+            ),
         )
     }
 
@@ -413,7 +417,7 @@ mod tests {
         Error,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{BaseConfig, DropParams, ProviderChatResponseData},
         },
         bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
     };
@@ -457,7 +461,7 @@ mod tests {
     }
 
     fn map(model: &str, opts: Value) -> Result<Map<String, Value>, Decline> {
-        BEDROCK_CHAT_COMPLETIONS_CONFIG.map_openai_params(model, params(opts))
+        BEDROCK_CHAT_COMPLETIONS_CONFIG.map_openai_params(model, params(opts), DropParams::Off)
     }
 
     const CLAUDE: &str = "us-east-1/anthropic.claude-sonnet-4-5-v1:0";
@@ -545,6 +549,33 @@ mod tests {
         #[case] converse: Value,
     ) {
         assert_eq!(map(model, openai), Ok(params(converse)));
+    }
+
+    #[rstest]
+    #[case::sampling_on_a_model_that_rejects_it(
+        DropParams::On { model_rejects_sampling: true },
+        json!({"temperature": 0.2, "top_p": 0.9, "max_tokens": 16}),
+        json!({"maxTokens": 16})
+    )]
+    #[case::sampling_on_a_model_that_takes_it(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"temperature": 0.2, "top_p": 0.9}),
+        json!({"temperature": 0.2, "topP": 0.9})
+    )]
+    #[case::whitespace_stop_is_kept(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": " "}),
+        json!({"stopSequences": [" "]})
+    )]
+    fn drop_params_drops_what_python_drops_on_converse(
+        #[case] drop_params: DropParams,
+        #[case] openai: Value,
+        #[case] converse: Value,
+    ) {
+        assert_eq!(
+            BEDROCK_CHAT_COMPLETIONS_CONFIG.map_openai_params(CLAUDE, params(openai), drop_params),
+            Ok(params(converse))
+        );
     }
 
     #[rstest]

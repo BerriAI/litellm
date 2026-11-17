@@ -3,7 +3,7 @@ use std::time::Duration;
 use litellm_core_utils::decline::Decline;
 use litellm_inference_chat::{
     Error,
-    types::{ChatCompletionsRequest, ClientSideCredentials, OptionalParams},
+    types::{ChatCompletionsRequest, ClientSideCredentials, DropParams, OptionalParams},
 };
 use rstest::rstest;
 use serde_json::{Map, Value, json};
@@ -49,7 +49,11 @@ fn object(value: Value) -> Map<String, Value> {
 }
 
 fn openai(params: Value) -> OptionalParams {
-    OptionalParams::OpenAi(object(params), ClientSideCredentials::Only(Box::default()))
+    OptionalParams::OpenAi {
+        params: object(params),
+        client_side: ClientSideCredentials::Only(Box::default()),
+        drop_params: DropParams::Off,
+    }
 }
 
 fn anthropic_response() -> ResponseTemplate {
@@ -534,10 +538,13 @@ async fn a_client_side_credential_outside_the_opt_in_declines_before_the_call(
 ) {
     let error = complete(ChatCompletionsRequest {
         api_base: Some(UNREACHABLE_BASE),
-        optional_params: OptionalParams::OpenAi(
-            object(json!({"aws_role_name": "arn:aws:iam::123456789012:role/caller"})),
-            ClientSideCredentials::Only(allowed.iter().map(|name| name.to_string()).collect()),
-        ),
+        optional_params: OptionalParams::OpenAi {
+            params: object(json!({"aws_role_name": "arn:aws:iam::123456789012:role/caller"})),
+            client_side: ClientSideCredentials::Only(
+                allowed.iter().map(|name| name.to_string()).collect(),
+            ),
+            drop_params: DropParams::Off,
+        },
         ..request(
             "bedrock/us-east-1/anthropic.claude-v2",
             None,

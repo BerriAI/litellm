@@ -333,7 +333,7 @@ mod tests {
         Error,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{BaseConfig, DropParams, ProviderChatResponseData},
         },
         openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
     };
@@ -430,8 +430,11 @@ mod tests {
         let config =
             json!({"custom_endpoint": true, "extra_headers": {"x": "y"}, "max_retries": 2});
         assert_eq!(
-            OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-                .map_openai_params("my-model", params(config.clone())),
+            OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG.map_openai_params(
+                "my-model",
+                params(config.clone()),
+                DropParams::Off
+            ),
             Ok(params(config))
         );
     }

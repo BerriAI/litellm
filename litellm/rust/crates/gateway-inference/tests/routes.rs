@@ -12,7 +12,7 @@ use litellm_http::{
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::{
     ChatCompletionsRoute,
-    types::{ChatCompletionsRequest, ClientSideCredentials, OptionalParams},
+    types::{ChatCompletionsRequest, ClientSideCredentials, DropParams, OptionalParams},
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -257,14 +257,15 @@ async fn chat_errors_come_from_core(
         ChatCompletionsRequest {
             model: "anthropic/test-model",
             messages: fields.get("messages").cloned().unwrap_or_default(),
-            optional_params: OptionalParams::OpenAi(
-                fields
+            optional_params: OptionalParams::OpenAi {
+                params: fields
                     .iter()
                     .filter(|(name, _)| name.as_str() != "messages")
                     .map(|(name, value)| (name.clone(), value.clone()))
                     .collect(),
-                ClientSideCredentials::Only(Box::default()),
-            ),
+                client_side: ClientSideCredentials::Only(Box::default()),
+                drop_params: DropParams::Off,
+            },
             api_key: Some("test-key"),
             api_base: Some(&base),
             custom_llm_provider: None,

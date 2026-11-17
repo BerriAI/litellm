@@ -66,7 +66,11 @@ pub(super) fn resolve_request(
         ));
     }
     let optional_params = match call.optional_params {
-        OptionalParams::OpenAi(params, client_side) => {
+        OptionalParams::OpenAi {
+            params,
+            client_side,
+            drop_params,
+        } => {
             let (call_config, openai): (Map<String, Value>, Map<String, Value>) =
                 params.into_iter().partition(|(name, _)| {
                     config.config_params().contains(&name.as_str()) && client_side.admits(name)
@@ -79,7 +83,7 @@ pub(super) fn resolve_request(
                 return Err(Error::Declined(Decline::new(CLIENT_SIDE_CREDENTIAL)));
             }
             config
-                .map_openai_params(model, openai)
+                .map_openai_params(model, openai, drop_params)
                 .map_err(Error::Declined)?
                 .into_iter()
                 .chain(call_config)

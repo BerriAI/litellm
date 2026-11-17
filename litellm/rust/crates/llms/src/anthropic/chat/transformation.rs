@@ -30,9 +30,10 @@ use crate::{
         chat::{
             streaming::StreamShape,
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                BaseConfig, DropParams, Headers, ProviderChatRequestData, ProviderChatResponseData,
                 ValidatedEnvironment, map_openai_param_names, map_openai_stop, unsupported_message,
                 unsupported_message_content, unsupported_message_fields, unsupported_param,
+                without_rejected_sampling_params,
             },
         },
     },
@@ -160,11 +161,19 @@ impl BaseConfig for AnthropicConfig {
         &self,
         _model: &str,
         params: Map<String, Value>,
+        drop_params: DropParams,
     ) -> Result<Map<String, Value>, Decline> {
+        let to_stop_sequences: fn(Value) -> Option<Value> = match drop_params {
+            DropParams::Off => stop_sequences,
+            DropParams::On { .. } => non_whitespace_stop_sequences,
+        };
         map_openai_param_names(
             SUPPORTED_PARAMS,
             self.caller_config_params(),
-            map_openai_stop(params, stop_sequences),
+            map_openai_stop(
+                without_rejected_sampling_params(params, drop_params),
+                to_stop_sequences,
+            ),
         )
         .map(round_max_tokens)
     }
@@ -315,6 +324,23 @@ fn stop_sequences(stop: Value) -> Option<Value> {
         Value::Array(stops) if stops.is_empty() => None,
         stop => Some(stop),
     }
+}
+
+fn non_whitespace_stop_sequences(stop: Value) -> Option<Value> {
+    match stop {
+        Value::String(stop) if is_whitespace(&stop) => None,
+        Value::Array(stops) => stop_sequences(Value::Array(
+            stops
+                .into_iter()
+                .filter(|stop| !stop.as_str().is_some_and(is_whitespace))
+                .collect(),
+        )),
+        stop => stop_sequences(stop),
+    }
+}
+
+fn is_whitespace(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(char::is_whitespace)
 }
 
 fn unsupported_anthropic_message(message: &ChatMessage) -> Option<Decline> {
@@ -500,7 +526,7 @@ mod tests {
         anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{BaseConfig, DropParams, ProviderChatResponseData},
         },
     };
     use litellm_core_utils::decline::Decline;
@@ -536,7 +562,15 @@ mod tests {
     }
 
     fn map(opts: Value) -> Result<Map<String, Value>, Decline> {
-        ANTHROPIC_CHAT_COMPLETIONS_CONFIG.map_openai_params("claude-sonnet-4-5", params(opts))
+        map_dropping(opts, DropParams::Off)
+    }
+
+    fn map_dropping(opts: Value, drop_params: DropParams) -> Result<Map<String, Value>, Decline> {
+        ANTHROPIC_CHAT_COMPLETIONS_CONFIG.map_openai_params(
+            "claude-sonnet-4-5",
+            params(opts),
+            drop_params,
+        )
     }
 
     #[rstest]
@@ -571,6 +605,46 @@ mod tests {
     #[case::whole_float_limit_becomes_an_integer(json!({"max_tokens": 16.0}), json!({"max_tokens": 16}))]
     fn maps_openai_params_to_anthropic_names(#[case] openai: Value, #[case] anthropic: Value) {
         assert_eq!(map(openai), Ok(params(anthropic)));
+    }
+
+    #[rstest]
+    #[case::whitespace_stop(DropParams::On { model_rejects_sampling: false }, json!({"stop": "\n"}), json!({}))]
+    #[case::whitespace_stops_in_a_list(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": ["\n", "END", " "]}),
+        json!({"stop_sequences": ["END"]})
+    )]
+    #[case::only_whitespace_stops(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": [" ", "\t"]}),
+        json!({})
+    )]
+    #[case::empty_stop_is_not_whitespace(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": ""}),
+        json!({"stop_sequences": [""]})
+    )]
+    #[case::whitespace_stop_without_drop_params(
+        DropParams::Off,
+        json!({"stop": "\n"}),
+        json!({"stop_sequences": ["\n"]})
+    )]
+    #[case::sampling_on_a_model_that_rejects_it(
+        DropParams::On { model_rejects_sampling: true },
+        json!({"temperature": 0.5, "top_p": 0.9, "max_tokens": 8}),
+        json!({"max_tokens": 8})
+    )]
+    #[case::sampling_on_a_model_that_takes_it(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"temperature": 0.5, "top_p": 0.9}),
+        json!({"temperature": 0.5, "top_p": 0.9})
+    )]
+    fn drop_params_drops_what_python_drops_on_anthropic(
+        #[case] drop_params: DropParams,
+        #[case] openai: Value,
+        #[case] anthropic: Value,
+    ) {
+        assert_eq!(map_dropping(openai, drop_params), Ok(params(anthropic)));
     }
 
     #[rstest]

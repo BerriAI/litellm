@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+pub use litellm_llms::base_llm::chat::transformation::DropParams;
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
@@ -18,7 +19,11 @@ impl ClientSideCredentials {
 }
 
 pub enum OptionalParams {
-    OpenAi(Map<String, Value>, ClientSideCredentials),
+    OpenAi {
+        params: Map<String, Value>,
+        client_side: ClientSideCredentials,
+        drop_params: DropParams,
+    },
     ProviderMapped(Map<String, Value>),
 }
 

@@ -28,6 +28,14 @@ const STOP_PARAM: &str = "stop";
 
 const UNRECOGNIZED_PARAM: &str = "unrecognized request parameter";
 
+const SAMPLING_PARAMS: [&str; 2] = ["temperature", "top_p"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropParams {
+    Off,
+    On { model_rejects_sampling: bool },
+}
+
 /// Message fields that carry no meaning for the upstream body, so their
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
@@ -44,6 +52,7 @@ pub trait BaseConfig: Sync {
         &self,
         _model: &str,
         params: Map<String, Value>,
+        _drop_params: DropParams,
     ) -> Result<Map<String, Value>, Decline> {
         map_openai_param_names(
             self.supported_openai_param_mappings(),
@@ -180,6 +189,21 @@ fn provider_param_name(
                 .any(|(_, provider_name)| *provider_name == name)
                 .then_some(name)
         })
+}
+
+pub fn without_rejected_sampling_params(
+    params: Map<String, Value>,
+    drop_params: DropParams,
+) -> Map<String, Value> {
+    match drop_params {
+        DropParams::On {
+            model_rejects_sampling: true,
+        } => params
+            .into_iter()
+            .filter(|(name, _)| !SAMPLING_PARAMS.contains(&name.as_str()))
+            .collect(),
+        DropParams::On { .. } | DropParams::Off => params,
+    }
 }
 
 pub fn map_openai_stop(

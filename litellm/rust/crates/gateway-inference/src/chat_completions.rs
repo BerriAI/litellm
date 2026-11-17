@@ -6,7 +6,9 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use litellm_inference_chat::types::{ChatCompletionsCall, ClientSideCredentials, OptionalParams};
+use litellm_inference_chat::types::{
+    ChatCompletionsCall, ClientSideCredentials, DropParams, OptionalParams,
+};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -65,13 +67,24 @@ async fn handle(
     } else {
         ClientSideCredentials::Only(deployment.configurable_clientside_auth_params.clone())
     };
+    let drop_params = if deployment.shaping.settings.drop_params {
+        DropParams::On {
+            model_rejects_sampling: !deployment.shaping.capabilities.supports_sampling_params,
+        }
+    } else {
+        DropParams::Off
+    };
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
         route.machine(
             ChatCompletionsCall {
                 model: deployment.model.clone(),
                 messages,
-                optional_params: OptionalParams::OpenAi(params, client_side),
+                optional_params: OptionalParams::OpenAi {
+                    params,
+                    client_side,
+                    drop_params,
+                },
                 api_key: deployment.api_key.clone(),
                 api_base: deployment.api_base.clone(),
                 custom_llm_provider: deployment.custom_llm_provider.clone(),
