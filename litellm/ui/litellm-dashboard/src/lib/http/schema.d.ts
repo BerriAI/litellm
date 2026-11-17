@@ -45807,6 +45807,11 @@ export interface components {
              */
             context_window_escalation_buffer: number;
             /**
+             * Conversation Header
+             * @description Request header whose value names the application conversation for session_affinity, deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. A request without a usable value (header missing, empty, or a redacted credential header, and any SDK call without proxy request headers) gets no conversation-based reuse from this router and never falls back to its session_id. A separately enabled Router-level session_affinity pre-call check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. Unset keeps the session_id behavior
+             */
+            conversation_header?: string | null;
+            /**
              * Custom Dimensions
              * @description Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
              * @default []
