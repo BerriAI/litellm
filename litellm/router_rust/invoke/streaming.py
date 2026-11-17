@@ -1356,6 +1356,7 @@ def _hop_error_frame(
     model: str,
     bridged_failure: Exception | None,
 ) -> bytes:
+    from litellm._logging import redact_internal_details_from_client_message
     from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 
     if attempt.explain_failure is None or not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
@@ -1366,7 +1367,8 @@ def _hop_error_frame(
     message: Final = attempt.explain_failure(provider_error(hop_error))
     if message is None:
         return chunk
-    return b"\n".join(_error_line_with_message(line, message) for line in bytes(chunk).split(b"\n"))
+    client_message: Final = redact_internal_details_from_client_message(message)
+    return b"\n".join(_error_line_with_message(line, client_message) for line in bytes(chunk).split(b"\n"))
 
 
 def wrap_anthropic_stream(
@@ -1386,7 +1388,7 @@ def wrap_anthropic_stream(
     from litellm.llms.anthropic.messages.native.utils import safeguard_refusal_error
 
     source_iterator: Final = response
-    framed_source: Final = sse_frames(source_iterator) if attempt.explain_failure is not None else source_iterator
+    framed_source: Final = sse_frames(source_iterator) if attempt.level > 0 else source_iterator
     replays_a_finished_agentic_turn: Final = isinstance(source_iterator, FakeAnthropicMessagesStreamIterator)
     model: Final = attempt.group
     usage: Final = _AnthropicStreamUsage()
@@ -1534,6 +1536,7 @@ async def _anthropic_recover_stream_error(
     inner: Final = response
     if isinstance(inner, FallbackAwareAnthropicMessagesStream):
         inner.attempt.attempted_retries = attempted
+        inner.attempt.explain_failure = attempt.explain_failure
         inner.attempt.committed_budget = budget
     async for item in _anthropic_yield_recovered(inner, wrapper, (attempted, budget)):
         yield item
@@ -1950,7 +1953,9 @@ async def _responses_recover_stream_error(
         trigger: Final = _mid_stream_retry_trigger(e)
         retried: Final = await attempt.retry(trigger)
         if not isinstance(retried, BaseException):
-            async for retried_item in _responses_yield_retried(retried, wrapper, adopt_headers):
+            async for retried_item in _responses_yield_retried(
+                retried, wrapper, adopt_headers, attempt.explain_failure
+            ):
                 yield retried_item
             return
         if retried is not trigger:
@@ -1965,7 +1970,10 @@ async def _responses_recover_stream_error(
 
 
 async def _responses_yield_retried(
-    retried: tuple[object, int, int], wrapper: object, adopt_headers: Callable[[object], _Prepared]
+    retried: tuple[object, int, int],
+    wrapper: object,
+    adopt_headers: Callable[[object], _Prepared],
+    explain_failure: "Callable[[BaseException], str | None] | None",
 ) -> AsyncGenerator[object, None]:
     """Hands a same-group retry's stream to the client through the wrapper, with the retry's headers, and
     closes it after. A retried stream that breaks again counts on from the retries already made, and when
@@ -1975,6 +1983,7 @@ async def _responses_yield_retried(
     if isinstance(inner_attempt, StreamAttempt):
         inner_attempt.attempted_retries = attempted
         inner_attempt.committed_budget = budget
+        inner_attempt.explain_failure = explain_failure
 
     served_as: Final = _prepare_fallback_hidden_params(wrapper)[1].get("x-litellm-model-group")
 

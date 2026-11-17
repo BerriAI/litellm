@@ -751,3 +751,35 @@ async def test_a_fallback_stream_raising_inside_a_frame_forwards_the_partial_fra
         await drain_into(await open_stream(core), seen)
     assert seen == [MESSAGE_START, delta[:30]]
     assert raised.value.message == "litellm.InternalServerError: boom"
+
+
+async def test_a_fallback_streams_combined_error_frame_redacts_internal_details_of_the_primary(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit(message="failed at /etc/service/keys on db.internal"))
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, FALLBACK_FRAME_DOWN))
+    core = with_router_debug(make_core, host)
+    frames = await collect_bytes(await open_stream(core))
+    message = frame_error_message(frames[1])
+    assert "/etc/service/keys" not in message
+    assert "db.internal" not in message
+    assert OUTCOME in message
+
+
+async def test_a_fallback_groups_stream_retry_failing_before_content_carries_the_primarys_error(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b1", anthropic_stream(MESSAGE_START, error=server_error()))
+    host.answer("openai/b2", anthropic_stream(MESSAGE_START, error=server_error()))
+    host.set_dynamic(expose_router_debug_in_errors=True)
+    core = make_core(
+        model_list=[deployment("a", "a"), deployment("b", "b1"), deployment("b", "b2")],
+        fallbacks=[{"a": ["b"]}],
+        num_retries=1,
+    )
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await collect_bytes(await open_stream(core))
+    assert [called for called in host.deployments_called() if called != "a"] in (["b1", "b2"], ["b2", "b1"])
+    assert raised.value.message.startswith(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
+    assert "boom" in raised.value.message.removeprefix(f"{PRIMARY_RATE_LIMITED}{OUTCOME}")
