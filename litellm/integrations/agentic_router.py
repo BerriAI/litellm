@@ -382,6 +382,7 @@ LIN_GRADUATION = 50     # LinUCB joins the EXP3 pool at 50 samples
 KNN_GRADUATION = 30     # k-NN joins the EXP3 pool at 30 experiences
 DECISION_WINDOW = 200
 EXPLORATION_EPS = 0.08  # tier-level epsilon exploration (0 disables)
+MAX_LOG_MB = 10         # JSONL log rotation threshold (AGENTIC_ROUTER_MAX_LOG_MB)
 
 
 def default_home():
@@ -408,10 +409,20 @@ def fresh_state():
 
 
 class Store:
-    """Local, plain-text, auditable persistence (state.json + JSONL logs)."""
+    """Local, plain-text, auditable persistence (state.json + JSONL logs).
+
+    JSONL logs (decisions/rewards) are size-rotated: past MAX_LOG_MB the
+    current file is moved to <name>.1 (one previous generation is kept) so
+    sustained traffic cannot exhaust the filesystem. DECISION_WINDOW only
+    bounds the in-memory state snapshot, not these files."""
 
     def __init__(self, home=None):
         self.home = Path(home or default_home())
+        try:
+            mb = float(os.environ.get("AGENTIC_ROUTER_MAX_LOG_MB", "") or MAX_LOG_MB)
+        except ValueError:
+            mb = MAX_LOG_MB
+        self.max_log_bytes = max(mb, 1.0) * 1024 * 1024
         self.home.mkdir(parents=True, exist_ok=True)
 
     def _atomic_write(self, path, content):
@@ -433,8 +444,20 @@ class Store:
         self._atomic_write(self.home / "state.json", json.dumps(state, ensure_ascii=False))
 
     def append_jsonl(self, name, obj):
-        with open(self.home / name, "a", encoding="utf-8") as f:
-            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        line = json.dumps(obj, ensure_ascii=False) + "\n"
+        p = self.home / name
+        try:
+            if p.exists() and p.stat().st_size + len(line) > self.max_log_bytes:
+                # 尺寸轮转：当前文件挪到 .1（覆盖更旧的），新行写进新文件。
+                # 轮转失败不影响请求路径（只影响磁盘占用）。
+                old = self.home / (name + ".1")
+                if old.exists():
+                    old.unlink()
+                os.replace(str(p), str(old))
+        except OSError:
+            pass
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(line)
 
     def load_jsonl(self, name):
         try:
@@ -625,7 +648,9 @@ class AgenticRouterHook(CustomLogger):
     """Learning model-tier router as a LiteLLM callback.
 
     - async_pre_call_hook: classify + decide; in active mode rewrites data["model"]
-      (never to a model the key/team is not allowed to use)
+      (never to a model the key/team is not allowed to use, and never into a
+      model listed in guarded_models — model-level guardrails are wired by the
+      proxy for the requested model and a rewrite would skip their input checks)
     - async_post_call_success_hook: latency/cost → reward → flywheel
     - async_post_call_failure_hook: reward 0
     """
@@ -634,7 +659,8 @@ class AgenticRouterHook(CustomLogger):
     PENDING_TTL = 900.0  # seconds; stale entries are evicted on insert
 
     def __init__(self, router=None, mode="shadow", tier_models=None,
-                 cross_provider=True, home=None, cost_multiplier=1.0, **router_kwargs):
+                 cross_provider=True, home=None, cost_multiplier=1.0,
+                 guarded_models=None, **router_kwargs):
         if router is not None:
             self.router = router
         else:
@@ -642,17 +668,26 @@ class AgenticRouterHook(CustomLogger):
                                  model_tiers=_normalize_tiers(tier_models),
                                  cross_provider=cross_provider, **router_kwargs)
         self.cost_multiplier = cost_multiplier
+        # 模型级 guardrail（PII/拦截）在 proxy 选定模型后才挂接：把请求改写到
+        # 受保护模型会跳过它的输入检查。把这些模型列出来（构造参数或
+        # AGENTIC_ROUTER_GUARDED_MODELS 环境变量，逗号分隔），active 模式拒绝
+        # 路由进入它们——即使 key 的白名单允许。
+        self.guarded_models = {m for m in (guarded_models or []) if isinstance(m, str) and m}
+        self.guarded_models.update(
+            m.strip() for m in os.environ.get("AGENTIC_ROUTER_GUARDED_MODELS", "").split(",")
+            if m.strip())
         self._lock = threading.RLock()
-        self._pending = {}  # call id → (decision_id, insert ts)
+        self._pending = {}  # call id → {id, ts, mode, train}
 
-    def _track(self, request_id, decision_id):
+    def _track(self, request_id, decision_id, mode, train):
         with self._lock:
             now = time.time()
             if len(self._pending) > self.MAX_PENDING // 2:
-                for k in [k for k, (_, ts) in self._pending.items()
-                          if now - ts > self.PENDING_TTL]:
+                for k in [k for k, v in self._pending.items()
+                          if now - v["ts"] > self.PENDING_TTL]:
                     del self._pending[k]
-            self._pending[request_id] = (decision_id, now)
+            self._pending[request_id] = {"id": decision_id, "ts": now,
+                                         "mode": mode, "train": train}
             while len(self._pending) > self.MAX_PENDING:
                 self._pending.pop(next(iter(self._pending)))  # drop oldest
 
@@ -662,7 +697,7 @@ class AgenticRouterHook(CustomLogger):
             return None
         with self._lock:
             entry = self._pending.pop(request_id, None)
-        return entry[0] if entry else None
+        return entry
 
     async def async_pre_call_hook(self, user_api_key_dict=None, cache=None,
                                   data=None, call_type=None, **kwargs):
@@ -674,31 +709,41 @@ class AgenticRouterHook(CustomLogger):
         request_id = _find_call_id(data, kwargs) or id(data)
         with self._lock:
             decision = self.router.decide(text, "default")
-        self._track(request_id, decision["id"])
+        train = self.router.mode == "active"
         if self.router.mode == "active" and decision.get("model"):
             allowed = _key_allowed_models(user_api_key_dict)
-            if not allowed or decision["model"] in allowed:
+            blocked = None
+            if allowed and decision["model"] not in allowed:
+                blocked = "key-model-restriction"
+            elif decision["model"] in self.guarded_models:
+                blocked = "guardrail-model-restriction"
+            if blocked is None:
                 data["model"] = decision["model"]
                 data.setdefault("metadata", {})["agentic_router"] = {
                     "decision_id": decision["id"], "tier": decision["tier"],
                     "expert": decision["chosen"], "reason": decision["reason"]}
             else:
-                # Key/team is restricted to models that exclude the routed tier:
-                # keep the caller's requested model, record the block for audits.
+                # Key/team restricted, or the target model is guardrail-protected:
+                # keep the caller's requested model, record the block for audits,
+                # and mark no-train — the request is served by the original model,
+                # so its outcome cannot be attributed to the rejected tier.
+                train = False
                 data.setdefault("metadata", {})["agentic_router"] = {
                     "decision_id": decision["id"], "tier": decision["tier"],
-                    "model": decision["model"], "blocked": "key-model-restriction",
+                    "model": decision["model"], "blocked": blocked,
                     "reason": decision["reason"]}
+        self._track(request_id, decision["id"], self.router.mode, train)
         return data
 
     async def async_post_call_success_hook(self, user_api_key_dict=None, kwargs=None,
                                            response_obj=None, start_time=None,
                                            end_time=None, **kw):
-        decision_id = self._take(kwargs, kw)
-        if decision_id is None:
+        entry = self._take(kwargs, kw)
+        if entry is None:
             return
-        if self.router.mode != "active":
-            return  # shadow: outcome belongs to the original model, do not train
+        if not entry["train"]:
+            return  # shadow or rejected rewrite: outcome belongs to the original model
+        decision_id = entry["id"]
         dt_ms = None
         if start_time is not None and end_time is not None:
             dt_ms = (end_time - start_time).total_seconds() * 1000
@@ -711,11 +756,12 @@ class AgenticRouterHook(CustomLogger):
     async def async_post_call_failure_hook(self, user_api_key_dict=None, request_obj=None,
                                            original_exception=None, user_model=None,
                                            start_time=None, end_time=None, **kwargs):
-        decision_id = self._take(request_obj, kwargs)
-        if decision_id is None:
+        entry = self._take(request_obj, kwargs)
+        if entry is None:
             return
-        if self.router.mode != "active":
-            return  # shadow: outcome belongs to the original model, do not train
+        if not entry["train"]:
+            return  # shadow or rejected rewrite: outcome belongs to the original model
+        decision_id = entry["id"]
         with self._lock:
             self.router.settle(decision_id, success=False)
 

@@ -183,3 +183,52 @@ def test_hook_pending_is_bounded(tmp_path):
                 "messages": [{"role": "user", "content": "你好"}]}
         asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
     assert len(hook._pending) <= 10  # never unbounded, even if settles never match
+
+
+def test_hook_guarded_model_blocks_rewrite_and_does_not_train(tmp_path):
+    """Model-level guardrails are wired for the requested model; routing into a
+    guarded model would skip its input checks even when the key allows it."""
+    hook = AgenticRouterHook(mode="active", home=str(tmp_path), exploration=0,
+                             tier_models={"fast": "flash-model", "mid": "base-model",
+                                          "strong": "pro-model"},
+                             guarded_models={"flash-model"})
+    data = {"model": "base-model", "litellm_call_id": "call-g",
+            "messages": [{"role": "user", "content": "帮我总结这篇文章的要点"}]}
+    key = _Key(models=None)  # key is unrestricted; guardrail must still block
+    out = asyncio.run(hook.async_pre_call_hook(key, None, data, "acompletion"))
+    assert out["model"] == "base-model"
+    assert out["metadata"]["agentic_router"]["blocked"] == "guardrail-model-restriction"
+    asyncio.run(hook.async_post_call_success_hook(
+        None, {"litellm_call_id": "call-g"}, None, start_time=None, end_time=None))
+    assert hook.stats()["linSamples"] == 0  # rejected decisions never train
+
+
+def test_hook_settle_uses_decision_time_mode(tmp_path):
+    """Flipping shadow -> active mid-flight must not mis-attribute the request."""
+    hook = AgenticRouterHook(mode="shadow", home=str(tmp_path),
+                             tier_models={"fast": "f", "mid": "m", "strong": "s"})
+    data = {"model": "m", "litellm_call_id": "call-m",
+            "messages": [{"role": "user", "content": "帮我总结这篇文章的要点"}]}
+    asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
+    hook.router.set_mode("active")
+    asyncio.run(hook.async_post_call_success_hook(
+        None, {"litellm_call_id": "call-m"}, None, start_time=None, end_time=None))
+    assert hook.stats()["linSamples"] == 0  # decision was made in shadow mode
+
+
+def test_jsonl_logs_are_size_rotated(tmp_path):
+    """decisions.jsonl / rewards.jsonl must rotate past the size threshold,
+    not grow without bound."""
+    hook = AgenticRouterHook(mode="active", home=str(tmp_path), exploration=0,
+                             tier_models={"fast": "f", "mid": "m", "strong": "s"})
+    hook.router.store.max_log_bytes = 512  # tiny threshold for the test
+    for i in range(30):
+        data = {"model": "m", "litellm_call_id": "call-r%d" % i,
+                "messages": [{"role": "user", "content": "帮我总结这篇文章的要点"}]}
+        asyncio.run(hook.async_pre_call_hook(None, None, data, "acompletion"))
+    from pathlib import Path
+    home = Path(str(tmp_path))
+    active = (home / "decisions.jsonl").stat().st_size
+    assert active <= 512 * 4, "current log must stay small"
+    assert (home / "decisions.jsonl.1").exists(), "rotated generation must exist"
+    assert sum(1 for _ in (home / "decisions.jsonl").open()) < 30
