@@ -4578,7 +4578,7 @@ def test_team_service_account_key_allowed_key_management_routes(route):
     assert result is None
 
 
-@pytest.mark.parametrize("route", ["/team/new", "/spend/logs", "/key/delete", "/key/regenerate"])
+@pytest.mark.parametrize("route", ["/team/new", "/spend/logs/ui", "/key/delete", "/key/regenerate"])
 def test_team_service_account_key_rejected_outside_generate_and_update(route):
     """The service account carve-out covers only /key/generate and /key/update; other
     key-management routes lack team scoping for a userless caller and stay denied."""

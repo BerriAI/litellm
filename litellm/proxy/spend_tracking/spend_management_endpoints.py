@@ -78,7 +78,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team,
     get_spend_by_team_and_customer,
 )
-from litellm.proxy.utils import handle_exception_on_proxy, query_raw_within_statement_timeout
+from litellm.proxy.utils import handle_exception_on_proxy, hash_token_if_needed, query_raw_within_statement_timeout
 from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
@@ -2878,6 +2878,8 @@ async def ui_view_spend_logs(
         read_scope: Final = (
             await _spend_log_read_scope(user_api_key_dict, log_team_lookup) if user_scope_applies else AllRows()
         )
+        if _reads_spend_logs_as_key(user_api_key_dict):
+            where_conditions["api_key"] = _own_spend_log_api_key(user_api_key_dict, api_key=api_key, user_id=user_id)
         if not is_admin_view:
             if team_id is not None:
                 can_view_team: Final = await _can_team_member_view_log(
@@ -3555,13 +3557,13 @@ async def view_spend_logs(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if (
-        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
-        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-    ):
-        user_id = user_api_key_dict.user_id
-
     try:
+        if _reads_spend_logs_as_key(user_api_key_dict):
+            api_key = _own_spend_log_api_key(  # rebind-ok: the handler's filters read the caller-supplied names
+                user_api_key_dict, api_key=api_key, user_id=user_id
+            )
+        elif not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            user_id = user_api_key_dict.user_id
         verbose_proxy_logger.debug("inside view_spend_logs")
         if prisma_client is None:
             raise Exception(
@@ -4938,6 +4940,34 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
         )
         and user_id is not None
     )
+
+
+def _reads_spend_logs_as_key(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    from litellm.proxy.auth.user_api_key_auth import is_no_auth_dev_mode
+    from litellm.proxy.proxy_server import general_settings, master_key
+
+    return not (
+        is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        or user_api_key_dict.user_role == LitellmUserRoles.ORG_ADMIN
+        or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+        or is_no_auth_dev_mode(master_key, general_settings)
+    )
+
+
+def _own_spend_log_api_key(user_api_key_dict: UserAPIKeyAuth, *, api_key: str | None, user_id: str | None) -> str:
+    """The caller's own hashed key, the only spend-log owner a key without an admin or internal-user role may read."""
+    own_api_key: Final = user_api_key_dict.token or user_api_key_dict.api_key
+    requested_api_key: Final = hash_token_if_needed(api_key) if api_key is not None else None
+    if (
+        own_api_key is None
+        or (requested_api_key is not None and requested_api_key != hash_token_if_needed(own_api_key))
+        or (user_id is not None and user_id != user_api_key_dict.user_id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view spend logs for a key or user other than your own",
+        )
+    return hash_token_if_needed(own_api_key)
 
 
 async def _user_can_view_spend_log_owner(
