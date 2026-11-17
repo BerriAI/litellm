@@ -49131,22 +49131,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
-    "resetdata/deepseek/deepseek-v4.1-flash": {
-        "cache_read_input_token_cost": 2.905e-09,
-        "input_cost_per_token": 1.446e-07,
-        "litellm_provider": "resetdata",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "mode": "chat",
-        "output_cost_per_token": 5.784e-07,
-        "source": "https://docs.resetdata.ai/models/overview",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
-    },
     "resetdata/google/gemma-4-26b-a4b-it": {
         "input_cost_per_token": 6.054e-08,
         "litellm_provider": "resetdata",
