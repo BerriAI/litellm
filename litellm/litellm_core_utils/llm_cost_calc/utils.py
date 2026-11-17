@@ -2154,6 +2154,20 @@ def calculate_prompt_caching_savings(
     ``billed_at`` is the request's completion time, so off-peak windows resolve as the
     biller saw them rather than at the later spend write.
     """
+    if custom_llm_provider == "openai" or custom_llm_provider == "anthropic":  # noqa: PLR1714  # narrows the literal
+        billed_fields: Final = type(resolved_model_config("", custom_llm_provider, model_info)).model_fields
+        return calculate_prompt_caching_savings(
+            cast(
+                ModelInfo,
+                {key: value for key, value in model_info.items() if "cost" not in key or key in billed_fields},
+            ),
+            usage,
+            None,
+            service_tier,
+            data_residency,
+            vertex_location,
+            billed_at,
+        )
     model_info_with_cache_read_default: Final = apply_provider_cache_read_default(model_info, custom_llm_provider)
     base_costs: Final = _get_token_base_cost(
         model_info=model_info_with_cache_read_default,
