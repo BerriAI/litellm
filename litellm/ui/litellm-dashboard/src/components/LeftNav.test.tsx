@@ -7,7 +7,7 @@ import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
-import LeftNav, { menuGroups, getBreadcrumb } from "./leftnav";
+import LeftNav, { menuGroups, getBreadcrumb } from "./LeftNav";
 
 const Sidebar = ({ collapsed = false, ...props }: ComponentProps<typeof LeftNav> & { collapsed?: boolean }) => (
   <SidebarProvider defaultOpen={!collapsed}>

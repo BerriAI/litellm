@@ -1,6 +1,6 @@
 "use client";
 
-import Sidebar from "@/components/leftnav";
+import Sidebar from "@/components/LeftNav";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const AppSidebar = () => {

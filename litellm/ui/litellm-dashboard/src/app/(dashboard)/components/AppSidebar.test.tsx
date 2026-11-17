@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { expect, it, vi } from "vitest";
-import Sidebar from "@/components/leftnav";
+import Sidebar from "@/components/LeftNav";
 import AppSidebar from "./AppSidebar";
 
 const { getSettings } = vi.hoisted(() => ({
@@ -10,7 +10,7 @@ const { getSettings } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/networking", () => ({ getUiSettings: getSettings, getProxyBaseUrl: () => "http://localhost" }));
-vi.mock("@/components/leftnav", () => ({
+vi.mock("@/components/LeftNav", () => ({
   default: ({ enableProjectsUI }: ComponentProps<typeof Sidebar>) => (
     <nav>{enableProjectsUI && <a href="/projects">Projects</a>}</nav>
   ),
