@@ -600,11 +600,12 @@ async def test_custom_native_content_preserves_images_and_config(
 
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize("config", [None, {}])
+@pytest.mark.parametrize("config_field", ["config", "generationConfig", "generation_config"])
 @pytest.mark.asyncio
 async def test_custom_native_content_preserves_empty_request(
-    native_content_handler: NativeContentLLM, is_async: bool, config: object
+    native_content_handler: NativeContentLLM, is_async: bool, config: object, config_field: str
 ) -> None:
-    request: Final = dict(model="native_image_test/image-model", contents=[], config=config)
+    request: Final = {"model": "native_image_test/image-model", "contents": [], config_field: config}
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
     assert result == native_content_handler.response
     received: Final = native_content_handler.requests[0]

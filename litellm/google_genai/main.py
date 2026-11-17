@@ -498,11 +498,10 @@ def generate_content(
         )
         if custom_handler is not None and native_hook_overridden:
             logging_obj: Final = setup_result.litellm_logging_obj
-            native_config: Final = (
-                setup_result.generate_content_config_dict
-                if config is not None or setup_result.generate_content_config_dict
-                else None
+            request_sent_config: Final = config is not None or any(
+                kwargs.get(field) is not None for field in ("generationConfig", "generation_config")
             )
+            native_config: Final = setup_result.generate_content_config_dict if request_sent_config else None
             native_contents: Final = _GENERATE_CONTENT_RESULT.validate_python(contents)
             native_tools: Final = _GENERATE_CONTENT_RESULT.validate_python(tools)
             native_optional_params: Final[Mapping[str, object]] = _CUSTOM_GENERATE_CONTENT_BODY.validate_python(
