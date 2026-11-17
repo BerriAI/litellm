@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createLiteAdminOperations, type AriaAccess } from "./operations";
+import { createLiteAdminOperations, type AriaAccess, type OperationContext } from "./operations";
 
 const accessModes: AriaAccess[] = [
   { mode: "admin" },
@@ -8,8 +8,8 @@ const accessModes: AriaAccess[] = [
   { mode: "usage", scope: { type: "user_and_teams", userId: "user" } },
 ];
 
-const operations = (access: AriaAccess) =>
-  createLiteAdminOperations({
+const operations = (access: AriaAccess) => {
+  const context: OperationContext = {
     access,
     accessToken: "test-session",
     signal: new AbortController().signal,
@@ -18,7 +18,9 @@ const operations = (access: AriaAccess) =>
     confirm: vi.fn(async () => false),
     onResult: vi.fn(),
     onChart: vi.fn(),
-  });
+  };
+  return createLiteAdminOperations(context);
+};
 
 function formats(value: unknown): unknown[] {
   if (Array.isArray(value)) return value.flatMap(formats);
