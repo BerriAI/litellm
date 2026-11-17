@@ -158,3 +158,54 @@ def test_meragpt_wildcard_lists_every_meragpt_catalog_model():
 
     assert catalog_models
     assert sorted(get_provider_models("meragpt") or []) == catalog_models
+
+
+@pytest.fixture
+def openai_key_but_no_meragpt_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MERAGPT_API_KEY", raising=False)
+    monkeypatch.delenv("MERAGPT_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-global-key")
+
+
+@pytest.mark.usefixtures("openai_key_but_no_meragpt_key")
+def test_missing_meragpt_key_fails_speech_locally_instead_of_sending_the_openai_key():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{MERAGPT_API_BASE}/audio/speech").respond(200, content=b"audio")
+        with pytest.raises(litellm.AuthenticationError, match="MERAGPT_API_KEY"):
+            litellm.speech(model="meragpt/restyler-1", input="hello", voice="alloy")
+
+    assert route.calls.call_count == 0
+
+
+def test_meragpt_speech_sends_the_meragpt_key_not_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MERAGPT_API_KEY", "meragpt-env-key")
+    monkeypatch.delenv("MERAGPT_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-global-key")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{MERAGPT_API_BASE}/audio/speech").respond(200, content=b"audio")
+        litellm.speech(model="meragpt/restyler-1", input="hello", voice="alloy")
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer meragpt-env-key"
+
+
+@pytest.mark.usefixtures("openai_key_but_no_meragpt_key")
+def test_missing_meragpt_key_fails_transcription_locally_instead_of_sending_the_openai_key():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{MERAGPT_API_BASE}/audio/transcriptions").respond(200, json={"text": "hi"})
+        with pytest.raises(litellm.AuthenticationError, match="MERAGPT_API_KEY"):
+            litellm.transcription(model="meragpt/restyler-1", file=("a.wav", b"RIFF0000WAVE", "audio/wav"))
+
+    assert route.calls.call_count == 0
+
+
+@pytest.mark.usefixtures("openai_key_but_no_meragpt_key")
+async def test_missing_meragpt_key_fails_moderation_locally_instead_of_sending_the_openai_key():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{MERAGPT_API_BASE}/moderations").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="MERAGPT_API_KEY"):
+            await litellm.amoderation(model="meragpt/restyler-1", input="hello")
+
+    assert route.calls.call_count == 0
