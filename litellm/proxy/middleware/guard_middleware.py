@@ -29,7 +29,8 @@ Design constraints honored here:
   its proxy headers off: ``X-Forwarded-For`` is honored only from the peers in
   ``LITELLM_GUARD_TRUSTED_PROXIES`` when that variable is set (an empty value
   trusts nobody), and otherwise from the peers in ``FORWARDED_ALLOW_IPS``, or
-  ``127.0.0.1`` when that is unset too (``*`` trusts every address). A caller
+  ``127.0.0.1`` when that is unset too (``*`` trusts every address; entries that
+  are not IPs or CIDRs, such as a unix socket path, are dropped with a warning). A caller
   cannot spoof its way past allowlists, limits, or bans by setting the header
   from an unlisted peer, and a loopback reverse proxy keeps working by default.
   Deployments behind a load balancer must list their ingress addresses. The
@@ -208,17 +209,34 @@ _UVICORN_DEFAULT_TRUSTED: Final = "127.0.0.1"
 _EVERY_ADDRESS: Final = ("0.0.0.0/0", "::/0")
 
 
+_WARNED_DROPPED_LITERALS: Final[set[tuple[str, ...]]] = set()
+
+
+def _warn_once_about_dropped_literals(dropped: tuple[str, ...]) -> None:
+    if not dropped or dropped in _WARNED_DROPPED_LITERALS:
+        return
+    _WARNED_DROPPED_LITERALS.add(dropped)
+    verbose_proxy_logger.warning(
+        "guard: ignoring FORWARDED_ALLOW_IPS entries %s: they are not IPs or CIDRs, "
+        "so they never match a TCP peer address, which is what uvicorn compared them with",
+        ", ".join(dropped),
+    )
+
+
 def _trusted_proxy_entries() -> tuple[str, ...]:
     """The trusted proxies: ``LITELLM_GUARD_TRUSTED_PROXIES`` when it is set,
     even to an empty string (trust nobody); when it is not set, the trust
     uvicorn would have used, ``FORWARDED_ALLOW_IPS`` or else ``127.0.0.1``,
-    with ``*`` meaning every address."""
+    with ``*`` meaning every address. Entries of that list that are not IPs or
+    CIDRs are dropped with a warning, the explicit list is strictly validated."""
     explicit: Final = os.getenv(TRUSTED_PROXIES_ENV)
     if explicit is not None:
         return _validate_entries(TRUSTED_PROXIES_ENV, _csv(explicit), allow_unix=True)
     inherited: Final = _csv(os.getenv("FORWARDED_ALLOW_IPS", _UVICORN_DEFAULT_TRUSTED))
     expanded: Final = tuple(chain.from_iterable(_EVERY_ADDRESS if entry == "*" else (entry,) for entry in inherited))
-    return _validate_entries("FORWARDED_ALLOW_IPS", expanded, allow_unix=True)
+    kept: Final = tuple(entry for entry in expanded if _parse_network(entry) is not None)
+    _warn_once_about_dropped_literals(tuple(entry for entry in expanded if entry not in kept))
+    return kept
 
 
 def _listed(client: IPAddress, entries: Sequence[str]) -> bool:

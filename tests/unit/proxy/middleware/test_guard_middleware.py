@@ -1030,3 +1030,33 @@ def test_guard_list_wins_over_forwarded_allow_ips(guard_on_without_trust_variabl
 @pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
 def test_untrusted_peer_headers_change_nothing_with_default_trust(guard_on_without_trust_variables):
     assert _identity_through_guard("203.0.113.7") == ("203.0.113.7", "http")
+
+
+def test_inherited_trust_drops_non_address_literals_with_one_warning(guard_on_without_trust_variables):
+    from litellm.proxy.middleware.guard_middleware import _trusted_proxy_entries
+
+    warnings: Final = []
+    guard_on_without_trust_variables.setattr(
+        verbose_proxy_logger, "warning", lambda msg, *args: warnings.append(msg % args)
+    )
+    guard_on_without_trust_variables.setenv("FORWARDED_ALLOW_IPS", "127.0.0.1,localhost,/tmp/uv.sock")
+    assert _trusted_proxy_entries() == ("127.0.0.1",)
+    assert _trusted_proxy_entries() == ("127.0.0.1",)
+    assert len(warnings) == 1
+    assert "localhost" in warnings[0]
+    assert "/tmp/uv.sock" in warnings[0]
+
+
+def test_inherited_trust_of_only_a_literal_is_empty(guard_on_without_trust_variables):
+    from litellm.proxy.middleware.guard_middleware import _trusted_proxy_entries
+
+    guard_on_without_trust_variables.setenv("FORWARDED_ALLOW_IPS", "localhost")
+    assert _trusted_proxy_entries() == ()
+
+
+def test_invalid_explicit_trust_entry_still_raises(guard_on_without_trust_variables):
+    from litellm.proxy.middleware.guard_middleware import _trusted_proxy_entries
+
+    guard_on_without_trust_variables.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "127.0.0.1,localhost")
+    with pytest.raises(ValueError, match="LITELLM_GUARD_TRUSTED_PROXIES: invalid IP or CIDR entry 'localhost'"):
+        _trusted_proxy_entries()
