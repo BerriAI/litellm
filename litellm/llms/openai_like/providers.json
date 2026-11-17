@@ -84,13 +84,7 @@
     "base_url": "https://api.sarvam.ai/v2",
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
-    "supported_endpoints": [
-      "/v1/chat/completions",
-      "/v1/responses"
-    ],
-    "special_handling": {
-      "force_store_false": true
-    }
+    "supported_endpoints": ["/v1/chat/completions"]
   },
   "assemblyai": {
     "base_url": "https://llm-gateway.assemblyai.com/v1",
