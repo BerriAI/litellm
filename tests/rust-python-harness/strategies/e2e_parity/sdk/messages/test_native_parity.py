@@ -50,6 +50,7 @@ from collections.abc import (
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import MappingProxyType
 from typing import ClassVar, Final, cast
 
@@ -4279,8 +4280,8 @@ def _without_login_text(case: Case, aspect: str, value: object) -> object:
     """A worded login failure or log with its text left out, for the cases in `VERTEX_LITELLM_WORDED_LOGIN`."""
     if case.name not in VERTEX_LITELLM_WORDED_LOGIN:
         return value
-    if aspect == "warnings" and isinstance(value, tuple):
-        return tuple("<log line>" for _ in cast(tuple[object, ...], value))
+    if aspect == "warnings" and isinstance(value, list | tuple):
+        return tuple("<log line>" for _ in cast(Sequence[object], value))
     if aspect not in ("outcome", "logged_error") or not isinstance(value, Mapping):
         return value
     fields: Final = cast(Mapping[str, object], value)
@@ -5427,10 +5428,47 @@ def parity_server(recording_server: RecordingServer) -> RecordingServer:
 _LEGS: Final[dict[str, tuple[Leg, Leg]]] = {}
 
 
+# The Python Vertex AI Messages request path is gone, so these cases compare Rust against the Python leg captured
+# once from it, with ports and temporary directories that change between runs written as placeholders.
+VERTEX_PYTHON_FIXTURES: Final = Path(__file__).parent / "fixtures" / "vertex"
+VERTEX_FIXTURE_CASES: Final = frozenset(
+    case.name
+    for case in (
+        *VERTEX_CREDENTIAL_CASES,
+        *VERTEX_SHAPING_CASES,
+        *VERTEX_LABELS_CASES,
+        *VERTEX_REGIONAL_COST_CASES,
+        *VERTEX_BETA_GATED_CASES,
+        *VERTEX_AUTH_CASES,
+        *VERTEX_REGIONAL_CASES,
+    )
+)
+_RUN_SPECIFIC: Final = (
+    (re.compile(r"127\.0\.0\.1:\d+"), "127.0.0.1:<port>"),
+    (re.compile(r"/tmp/vertex-adc-[A-Za-z0-9_]+"), "/tmp/vertex-adc-<dir>"),
+)
+
+
+def _fixture_form(leg: Leg) -> Leg:
+    """A leg as its captured fixture holds it: a JSON round trip with run-specific values replaced."""
+    text: Final = functools.reduce(
+        lambda text, rule: rule[0].sub(rule[1], text), _RUN_SPECIFIC, json.dumps(asdict(leg), default=repr)
+    )
+    return Leg(**json.loads(text))
+
+
+def _python_fixture(name: str) -> Leg:
+    return Leg(**json.loads((VERTEX_PYTHON_FIXTURES / f"{name}.json").read_text()))
+
+
 async def _legs(case: Case, server: RecordingServer, probe: FallbackProbe) -> tuple[Leg, Leg]:
-    if case.name not in _LEGS:
-        _LEGS[case.name] = (await _leg(case, server, probe=None), await _leg(case, server, probe=probe))
-        _dump(case.name, *_LEGS[case.name])
+    if case.name in _LEGS:
+        return _LEGS[case.name]
+    if case.name in VERTEX_FIXTURE_CASES:
+        _LEGS[case.name] = (_python_fixture(case.name), _fixture_form(await _leg(case, server, probe=probe)))
+        return _LEGS[case.name]
+    _LEGS[case.name] = (await _leg(case, server, probe=None), await _leg(case, server, probe=probe))
+    _dump(case.name, *_LEGS[case.name])
     return _LEGS[case.name]
 
 
