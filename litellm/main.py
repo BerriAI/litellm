@@ -2873,7 +2873,7 @@ def _complete_custom_openai(
     outbound_headers: Final = (
         request_headers
         if attribution_source is None
-        else with_attribution_headers(attribution_source.get_attribution_headers(), request_headers)
+        else with_attribution_headers(attribution_source.get_attribution_headers(), request_headers, client)
     )
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")

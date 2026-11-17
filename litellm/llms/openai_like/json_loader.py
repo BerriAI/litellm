@@ -3,6 +3,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+import os
 import platform
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -52,7 +53,8 @@ class SimpleProviderConfig:
         if not self.user_agent:
             return {}
         return {
-            "User-Agent": self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
+            "User-Agent": os.environ.get("LITELLM_USER_AGENT")
+            or self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
                 _PYTHON_PLACEHOLDER, platform.python_version()
             )
         }

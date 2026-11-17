@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+import openai
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
@@ -71,17 +72,29 @@ class BaseLLMException(Exception):
 _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 
+def _client_header_names(client: object) -> frozenset[str]:
+    if not isinstance(client, (openai.OpenAI, openai.AsyncOpenAI)):
+        return frozenset()
+    return frozenset(
+        name.lower()
+        for name, value in client.default_headers.items()
+        if name != "User-Agent" or value != client.user_agent
+    )
+
+
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
     headers: dict[str, object] | None,  # mutable-ok: returned as-is when there is nothing to add
+    client: object = None,
 ) -> dict[str, object] | None:  # mutable-ok: becomes the request's outbound headers
     """
-    `headers` plus any attribution header the caller didn't already set (names
-    compared case-insensitively). Builds a new dict; `headers` is never mutated.
+    `headers` plus any attribution header the caller didn't already set, on the
+    request or as a default header of its own OpenAI client (names compared
+    case-insensitively). Builds a new dict; `headers` is never mutated.
     """
     if not attribution_headers:
         return headers
-    caller_names: Final = {name.lower() for name in headers or {}}
+    caller_names: Final = {name.lower() for name in headers or {}} | _client_header_names(client)
     return {
         **{name: value for name, value in attribution_headers.items() if name.lower() not in caller_names},
         **(headers or {}),
