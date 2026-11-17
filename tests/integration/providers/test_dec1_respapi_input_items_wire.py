@@ -125,12 +125,12 @@ def test_a_message_item_without_a_role_is_a_user_message(gateway: Gateway) -> No
         assert chat_messages(provider.only()) == [{"role": "user", "content": prompt}]
 
 
-def test_a_developer_message_keeps_the_developer_role_on_an_openai_chat_wire(gateway: Gateway) -> None:
+def test_a_developer_message_becomes_a_system_message_on_an_openai_chat_wire(gateway: Gateway) -> None:
     """A `{"role": "developer", "content": "be terse"}` item before the user turn on the OpenAI chat carrier.
 
-    The role is forwarded verbatim (`_input_item_role` does no validation), so the chat body must hold
-    `{"role": "developer", "content": "be terse"}` first. UNVERIFIED: assumes the gpt-4o-mini chat transform
-    does not rewrite `developer` to `system`; see `litellm/llms/openai/chat/gpt_transformation.py`.
+    Pinned current behaviour (run 44176682961): the chat body holds `{"role": "system", "content": "be terse"}`
+    first; the gpt-4o-mini chat transform rewrites `developer` to `system`
+    (`litellm/llms/openai/chat/gpt_transformation.py`).
     """
     prompt: Final = marker()
     with peer() as provider, gateway.scenario() as scenario:
@@ -142,7 +142,7 @@ def test_a_developer_message_keeps_the_developer_role_on_an_openai_chat_wire(gat
                 input=[{"role": "developer", "content": "be terse"}, {"role": "user", "content": prompt}],
             )
         )
-        assert chat_messages(provider.only())[0] == {"role": "developer", "content": "be terse"}
+        assert chat_messages(provider.only())[0] == {"role": "system", "content": "be terse"}
 
 
 def test_input_text_parts_become_text_parts(gateway: Gateway) -> None:
@@ -455,12 +455,12 @@ def test_a_function_call_output_with_an_empty_call_id_is_dropped(gateway: Gatewa
         assert chat_messages(provider.only()) == [{"role": "user", "content": prompt}]
 
 
-def test_a_structured_function_call_output_reaches_the_tool_message_as_text_parts(gateway: Gateway) -> None:
+def test_a_structured_text_function_call_output_reaches_the_tool_message_as_a_string(gateway: Gateway) -> None:
     """A `function_call_output` whose `output` is a list `[{"type": "input_text", "text": "sunny"}]`.
 
     `tool_output_to_chat_content` (`transformation.py:472`) normalises the list into chat text blocks, so the
-    `tool` message content must be `[{"type": "text", "text": "sunny"}]`. UNVERIFIED: the exact normalised
-    block shape; read `tool_output_to_chat_content`.
+    `tool` message content is the plain string `"sunny"`: a text-only output list is flattened to its text.
+    Pinned current behaviour (run 44176682961, `tool_output_to_chat_content`).
     """
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = chat_bridge(scenario, provider)
@@ -482,7 +482,7 @@ def test_a_structured_function_call_output_reaches_the_tool_message_as_text_part
         )
         tool: Final = chat_messages(provider.only())[2]
         assert tool["role"] == "tool"
-        assert tool["content"] == [{"type": "text", "text": "sunny"}]
+        assert tool["content"] == "sunny"
 
 
 def test_a_replayed_function_call_reaches_anthropic_as_tool_use_and_tool_result(gateway: Gateway) -> None:

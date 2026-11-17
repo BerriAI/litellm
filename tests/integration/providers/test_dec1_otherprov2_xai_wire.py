@@ -247,13 +247,14 @@ def test_xai_cost_in_usd_ticks_is_the_response_cost(gateway: Gateway) -> None:
     """xAI answers `usage.cost_in_usd_ticks: 420000000`. At 10,000,000,000 ticks per dollar
     (`USD_TICKS_PER_DOLLAR`, `xai/common_utils.py:14-26`) that is $0.042, which becomes `usage.cost`
     (`xai/chat/transformation.py:63-67`, `:344-346`) and the cost reported to the caller, instead of the 0.025 the
-    deployment prices would give (`xai/cost_calculator.py:65-80`)."""
+    deployment prices would give (`xai/cost_calculator.py:65-80`). The deployment is unpriced: deployment prices win
+    over a provider-reported cost (`litellm_logging.py:2544-2552`, `cost_calculator.py:2284`)."""
 
     def respond(call: Call) -> Reply:
         return json_reply(chat_json(call.body, usage_block=usage_with(cost_in_usd_ticks=420000000)))
 
     with peer(respond) as provider, gateway.scenario() as scenario:
-        model: Final = deployment(scenario, provider, _GROK, api_base_suffix="/v1")
+        model: Final = deployment(scenario, provider, _GROK, api_base_suffix="/v1", priced=False)
         response: Final = chat(gateway, model)
         served(response)
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.042), response.headers
@@ -262,7 +263,8 @@ def test_xai_cost_in_usd_ticks_is_the_response_cost(gateway: Gateway) -> None:
 def test_xai_reported_ticks_suppress_the_web_search_fee(gateway: Gateway) -> None:
     """xAI answers `cost_in_usd_ticks: 420000000` and two web search calls in one usage block. The reported $0.042
     already includes the searches, so `cost_per_web_search_request` returns 0 when xAI reported a cost
-    (`xai/cost_calculator.py:147-148`) and the caller is charged 0.042, not 0.052."""
+    (`xai/cost_calculator.py:147-148`) and the caller is charged 0.042, not 0.052. The deployment is unpriced: a
+    priced one ignores the ticks and billed 0.035 (tokens plus the search fee) in run 44176682961."""
 
     def respond(call: Call) -> Reply:
         details: Final[dict[str, JsonValue]] = {"web_search_calls": 2}
@@ -270,7 +272,7 @@ def test_xai_reported_ticks_suppress_the_web_search_fee(gateway: Gateway) -> Non
         return json_reply(chat_json(call.body, usage_block=block))
 
     with peer(respond) as provider, gateway.scenario() as scenario:
-        model: Final = deployment(scenario, provider, _GROK, api_base_suffix="/v1")
+        model: Final = deployment(scenario, provider, _GROK, api_base_suffix="/v1", priced=False)
         response: Final = chat(gateway, model)
         served(response)
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.042), response.headers

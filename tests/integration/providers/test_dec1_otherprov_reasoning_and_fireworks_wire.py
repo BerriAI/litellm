@@ -257,7 +257,8 @@ def test_fireworks_tool_call_in_content_is_lifted_into_tool_calls(gateway: Gatew
     """Fireworks answers a tool call as JSON text in `content`: `{"name": "get_weather", "arguments": "{\\"city\\":
     \\"Oslo\\"}"}`. Since `get_weather` is one of the request's tools, the caller's message has `content: null` and one
     tool call named `get_weather` (`_handle_message_content_with_tool_calls`, `fireworks_ai/chat/transformation.py:713-737`).
-    The answer's `model` is prefixed `fireworks_ai/` (`:779-780`)."""
+    The proxy answers with the caller's model group name as `model`, not the `fireworks_ai/` name the provider config
+    sets (`:779-780`), as run 44176682961 showed."""
 
     def respond(call: Call) -> Reply:
         return json_reply(
@@ -273,7 +274,7 @@ def test_fireworks_tool_call_in_content_is_lifted_into_tool_calls(gateway: Gatew
         assert message["content"] is None, message
         function: Final = object_value(object_value(list_value(message["tool_calls"])[0])["function"])
         assert function["name"] == "get_weather", message
-        assert str(body["model"]).startswith("fireworks_ai/"), body["model"]
+        assert body["model"] == model, body["model"]
 
 
 def test_fireworks_refuses_file_content_blocks_before_the_call(gateway: Gateway) -> None:

@@ -29,7 +29,6 @@ from integration.providers.dec1_respapi_support import (
     chat_bridge,
     chat_json,
     chat_messages,
-    error_message,
     json_reply,
     output_items,
     peer,
@@ -364,19 +363,18 @@ def test_a_web_search_tool_reaches_claude_as_the_hosted_web_search_tool(gateway:
         assert {"type": "web_search_20250305", "name": "web_search", "max_uses": 5} in tools, tools
 
 
-def test_a_web_search_tool_is_dropped_for_a_chat_model_without_web_search_support(gateway: Gateway) -> None:
-    """A `web_search` tool on the gpt-4o-mini chat bridge, whose chat params do not list `web_search_options`.
+def test_a_web_search_tool_becomes_web_search_options_on_the_openai_chat_bridge(gateway: Gateway) -> None:
+    """A `web_search` tool on the gpt-4o-mini chat bridge.
 
-    `_should_drop_derived_web_search_options` drops the derived param instead of raising (`transformation.py:
-    1165`), so the call is served and the chat body has neither `web_search_options` nor any tool. UNVERIFIED:
-    assumes `get_supported_openai_params` for gpt-4o-mini omits `web_search_options`.
+    Pinned current behaviour (run 44176682961): the OpenAI chat params list `web_search_options`, so the derived
+    param is kept rather than dropped (`_should_drop_derived_web_search_options`, `transformation.py:1165`) and
+    the chat body carries a `web_search_options` object.
     """
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = chat_bridge(scenario, provider)
         served(responses(gateway, model, tools=[{"type": "web_search"}]))
         body: Final = provider.only().body
-        assert "web_search_options" not in body
-        assert "tools" not in body
+        assert isinstance(body["web_search_options"], dict), body
 
 
 @pytest.mark.parametrize("hosted", ["image_generation", "computer_use", "local_shell", "shell"])
@@ -432,22 +430,18 @@ def test_an_emulated_file_search_the_model_skips_still_returns_a_file_search_cal
         assert len(provider.posts()) == 1
 
 
-def test_an_untranslatable_responses_field_is_refused_with_400_before_the_provider(gateway: Gateway) -> None:
-    """`max_tool_calls: 2` on a bridged deployment without `drop_params`.
+def test_an_untranslatable_responses_field_is_dropped_on_the_openai_chat_bridge(gateway: Gateway) -> None:
+    """`max_tool_calls: 2` on the gpt-4o-mini chat bridge without `drop_params`.
 
-    `max_tool_calls` is a Responses field with no chat equivalent, so `_bridge_kwargs` returns it as
-    untranslatable and `_raise_untranslatable_responses_fields` (`responses/main.py:704`) answers 400 with a
-    message containing `does not support parameters: ['max_tool_calls']` and `The Responses API to chat
-    completions bridge cannot translate them`. The peer receives nothing.
+    `max_tool_calls` has no chat equivalent. OpenAI has a Responses config, so `_bridge_kwargs` keeps only the
+    chat fields and drops it silently (`responses/main.py:705-707` on main); the refusal in
+    `_raise_untranslatable_responses_fields` (`:718-731`) is only reached for providers without one. The call is
+    served and the chat body has no `max_tool_calls`. Pinned current behaviour seen in run 44176682961.
     """
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = chat_bridge(scenario, provider)
-        response: Final = responses(gateway, model, max_tool_calls=2)
-        assert response.status_code == 400, response.text
-        message: Final = error_message(response)
-        assert "does not support parameters: ['max_tool_calls']" in message
-        assert "The Responses API to chat completions bridge cannot translate them" in message
-        assert provider.posts() == ()
+        served(responses(gateway, model, max_tool_calls=2))
+        assert "max_tool_calls" not in provider.only().body, provider.only().body
 
 
 def test_an_untranslatable_responses_field_is_dropped_under_drop_params(gateway: Gateway) -> None:

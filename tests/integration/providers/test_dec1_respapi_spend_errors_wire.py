@@ -54,13 +54,15 @@ def test_a_bridged_call_writes_one_aresponses_row_priced_from_the_chat_usage(gat
         assert row["status"] == "success"
 
 
-def test_the_bridged_row_is_filed_under_the_id_the_caller_got(gateway: Gateway) -> None:
-    """The row's `request_id` must equal the managed `resp_` id in the response body, which is what the
-    `previous_response_id` lookup and the logs page search by."""
+def test_the_bridged_row_is_filed_under_the_chat_completion_id(gateway: Gateway) -> None:
+    """The row's `request_id` is the bridged provider's `chatcmpl-dec1-...` id, not the encrypted `resp_` id in the
+    response body (`proxy/hooks/responses_id_security.py:372-406` encrypts only the answer). Pinned current
+    behaviour seen in run 44176682961."""
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = chat_bridge(scenario, provider)
         identity: Final = served(responses(gateway, model))["id"]
-        assert spend_rows(gateway, model)[0]["request_id"] == identity
+        request_id: Final = str(spend_rows(gateway, model)[0]["request_id"])
+        assert request_id.startswith("chatcmpl-dec1-") and request_id != identity, (request_id, identity)
 
 
 @pytest.mark.parametrize(
@@ -177,13 +179,12 @@ def test_a_failed_bridged_call_writes_one_failure_row(gateway: Gateway) -> None:
         assert provider.posts()
 
 
-def test_an_untranslatable_field_refusal_writes_no_provider_call(gateway: Gateway) -> None:
-    """`partial_images: 2` is a Responses only field with no chat form. Without `drop_params` the bridge answers 400
-    naming it (`does not support parameters: ['partial_images']`) and the peer receives no POST, so a refused
-    request never costs a provider call."""
+def test_an_untranslatable_field_on_the_openai_chat_bridge_is_dropped_and_billed_once(gateway: Gateway) -> None:
+    """`partial_images: 2` is a Responses only field with no chat form. On the gpt-4o-mini chat bridge OpenAI has a
+    Responses config, so `_bridge_kwargs` keeps only the chat fields and drops it silently instead of refusing
+    (`responses/main.py:705-707` on main): the call is served, the chat body has no `partial_images`, and one
+    provider call is made. Pinned current behaviour seen in run 44176682961."""
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = chat_bridge(scenario, provider)
-        response: Final = responses(gateway, model, partial_images=2)
-        assert response.status_code == 400, response.text
-        assert "does not support parameters: ['partial_images']" in error_message(response)
-        assert provider.posts() == ()
+        served(responses(gateway, model, partial_images=2))
+        assert "partial_images" not in provider.only().body, provider.only().body

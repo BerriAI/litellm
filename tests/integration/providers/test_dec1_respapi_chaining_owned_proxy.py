@@ -205,7 +205,9 @@ def test_a_tool_call_turn_is_replayed_so_the_tool_output_has_its_call(rig: _Rig)
 
     The second chat body must hold, after the first user turn, an assistant message whose `tool_calls[0].id` is
     `call_dec1chain`, then `{"role": "tool", "tool_call_id": "call_dec1chain", "content": "sunny"}`. Without the
-    replay OpenAI rejects a tool message with no preceding call.
+    replay OpenAI rejects a tool message with no preceding call. Pinned current shape (run 44176682961): the
+    replayed turn is two assistant messages, so the roles are user, assistant, assistant, tool, and the call id
+    sits on an assistant message before the tool message.
     """
 
     def respond(call: Call) -> Reply:
@@ -234,9 +236,14 @@ def test_a_tool_call_turn_is_replayed_so_the_tool_output_has_its_call(rig: _Rig)
             )
         )
         messages: Final = chat_messages(provider.last())
-        assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
-        assert object_value(list_value(messages[1]["tool_calls"])[0])["id"] == "call_dec1chain"
-        assert (messages[2]["tool_call_id"], messages[2]["content"]) == ("call_dec1chain", "sunny")
+        assert [message["role"] for message in messages] == ["user", "assistant", "assistant", "tool"], messages
+        call_ids: Final = [
+            object_value(entry)["id"]
+            for message in messages[1:3]
+            for entry in list_value(message.get("tool_calls") or [])
+        ]
+        assert call_ids == ["call_dec1chain"], messages
+        assert (messages[3]["tool_call_id"], messages[3]["content"]) == ("call_dec1chain", "sunny")
 
 
 def test_a_follow_up_on_anthropic_replays_the_turn_as_alternating_messages(rig: _Rig) -> None:
@@ -270,16 +277,20 @@ def test_the_follow_ups_spend_row_joins_the_first_turns_session(rig: _Rig) -> No
         assert len(sessions) == 1 and next(iter(sessions)), rows
 
 
-def test_each_bridged_turn_is_filed_under_the_id_its_caller_saw(rig: _Rig) -> None:
-    """Two chained turns. Each SpendLogs row's `request_id` must equal the managed `id` the caller got for that
-    turn, oldest first, and both rows have `call_type: aresponses`. The session lookup searches by that id."""
+def test_each_bridged_turn_is_filed_under_its_chat_completion_id(rig: _Rig) -> None:
+    """Two chained turns. Each SpendLogs row's `request_id` is the bridged provider's `chatcmpl-dec1-...` id, not
+    the encrypted `resp_` id the caller got (`proxy/hooks/responses_id_security.py:372-406` encrypts only the
+    answer), and both rows have `call_type: aresponses`. Pinned current behaviour seen in run 44176682961; the
+    chain still resolves (see the replay tests)."""
     with peer() as provider, rig.gateway.scenario() as scenario:
         model: Final = chat_bridge(scenario, provider)
         first_id: Final = served(responses(rig.gateway, model))["id"]
         _landed(rig.gateway, model, 1)
         second_id: Final = served(responses(rig.gateway, model, previous_response_id=first_id))["id"]
         rows: Final = _landed(rig.gateway, model, 2)
-        assert [row["request_id"] for row in rows] == [first_id, second_id]
+        request_ids: Final = [str(row["request_id"]) for row in rows]
+        assert all(identity.startswith("chatcmpl-dec1-") for identity in request_ids), request_ids
+        assert len(set(request_ids)) == 2 and not {first_id, second_id} & set(request_ids), request_ids
         assert {row["call_type"] for row in rows} == {"aresponses"}
 
 

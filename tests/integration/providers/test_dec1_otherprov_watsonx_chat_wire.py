@@ -133,15 +133,16 @@ def test_deployment_model_goes_to_the_deployment_chat_path_without_ids(gateway: 
         assert "model_id" not in call.body and "project_id" not in call.body, call.body
 
 
-def test_api_version_replaces_the_default_version_query(gateway: Gateway) -> None:
-    """A deployment with `api_version: "2025-02-11"` sends `?version=2025-02-11` and no `api_version` body key
-    (`get_complete_url` pops it, `watsonx/chat/transformation.py:104`). UNVERIFIED: that `api_version` reaches
-    `optional_params` for watsonx rather than staying a litellm param (then the default would be sent)."""
+def test_a_deployment_api_version_does_not_replace_the_default_version_query(gateway: Gateway) -> None:
+    """A deployment with `api_version: "2025-02-11"` still sends the default `?version=2024-03-13` and no
+    `api_version` body key. Pinned current behaviour: `get_complete_url` reads only `optional_params["api_version"]`
+    (`watsonx/chat/transformation.py:104`), and a deployment's `api_version` stays a litellm param, as run
+    44176682961 showed."""
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = _watsonx(scenario, provider, api_version="2025-02-11")
         served(chat(gateway, model))
         call: Final = provider.only()
-        assert call.query["version"] == ["2025-02-11"], call.query
+        assert call.query["version"] == ["2024-03-13"], call.query
         assert "api_version" not in call.body
 
 

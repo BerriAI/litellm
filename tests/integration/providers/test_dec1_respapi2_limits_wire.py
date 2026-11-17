@@ -19,7 +19,7 @@ from typing import Final
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value
 from integration._support.wire import Reply
-from integration.providers.dec1_respapi2_support import every_respond, gemini, groq, key_spend
+from integration.providers.dec1_respapi2_support import every_respond, gemini, key_spend
 from integration.providers.dec1_respapi_support import (
     CALL_COST,
     Call,
@@ -99,11 +99,13 @@ def test_a_key_without_the_model_is_refused_403_on_responses(gateway: Gateway) -
 
 
 def test_a_key_rpm_limit_of_one_refuses_the_second_responses_call_with_429(gateway: Gateway) -> None:
-    """A key with `rpm_limit: 1` makes two bridged Groq calls in a row. The first is served; the second must be
+    """A key with `rpm_limit: 1` makes two bridged Gemini calls in a row. The first is served; the second must be
     refused with 429, and the peer must have received exactly one POST, so the Responses route counts against the
-    same per key request window as chat (`parallel_request_limiter_v3`)."""
+    same per key request window as chat (`parallel_request_limiter_v3`). Gemini, not Groq: a Groq reply without
+    `service_tier` fails (groq/chat/transformation.py:329) and the first llama-3 call loads a HuggingFace tokenizer
+    for about 23 seconds where the network is closed, which timed this test out in run 44176682961."""
     with peer(every_respond) as provider, gateway.scenario() as scenario:
-        model: Final = groq(scenario, provider)
+        model: Final = gemini(scenario, provider)
         key: Final = scenario.key(models=[model], rpm_limit=1)
         served(responses(gateway, model, key=key))
         second: Final = responses(gateway, model, key=key)
@@ -135,20 +137,24 @@ def test_a_streamed_bridged_call_adds_its_price_to_the_key_spend(gateway: Gatewa
 
 def test_a_team_at_its_budget_is_refused_on_responses(gateway: Gateway) -> None:
     """A team with `max_budget: 0.5` whose stored spend is set to 1.0 owns a key that asks `/v1/responses` for a
-    bridged Anthropic deployment. The proxy must refuse with 422 `budget_exceeded` and the peer receives nothing.
-    UNVERIFIED: that `/team/update` accepts `spend` the way `/key/update` does; if not, the team spend must be
-    reached with a priced call first."""
+    bridged Anthropic deployment. Once the stored spend is seen (the key's cached team object may serve a few calls
+    first, which run 44176682961 showed reaching the peer), the proxy refuses with 422 `budget_exceeded` and a
+    refused call adds no provider call. UNVERIFIED: that `/team/update` accepts `spend` the way `/key/update`
+    does; if not, the team spend must be reached with a priced call first."""
     with peer(every_respond) as provider, gateway.scenario() as scenario:
         model: Final = anthropic(scenario, provider)
         team: Final = scenario.team(max_budget=0.5, models=[model])
         gateway.post("/team/update", {"team_id": team, "spend": 1.0})
         key: Final = scenario.key(team_id=team, models=[model])
-        response: Final = eventually(
+        eventually(
             lambda: responses(gateway, model, key=key),
             lambda answered: answered.status_code == 422,
             seconds=30,
         )
-        assert provider.posts() == ()
+        before: Final = len(provider.posts())
+        response: Final = responses(gateway, model, key=key)
+        assert response.status_code == 422, response.text
+        assert len(provider.posts()) == before, provider.posts()
     assert _error(response.content)["type"] == "budget_exceeded"
 
 

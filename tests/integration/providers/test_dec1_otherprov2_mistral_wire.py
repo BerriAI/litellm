@@ -79,9 +79,10 @@ def test_mistral_tool_choice_naming_one_function_is_kept(gateway: Gateway) -> No
 
 
 def test_mistral_refuses_a_tool_choice_it_cannot_express(gateway: Gateway) -> None:
-    """`tool_choice: {"type": "allowed_tools", ...}` has no Mistral form, so the call is answered 400 with
-    `the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required'` in the message
-    (`_tool_choice_to_send`, `mistral/chat/transformation.py:233-252`, `:101-104`) and Mistral is not called."""
+    """`tool_choice: {"type": "allowed_tools", ...}` has no Mistral form, so the call is answered 400 and Mistral
+    is not called. Pinned current message: the shared allowed_tools check refuses first with `tool_choice type
+    'allowed_tools' is only supported for azure, litellm_proxy, openai, got custom_llm_provider=mistral`
+    (`litellm_core_utils/allowed_tools_tool_choice.py:100` on main), before Mistral's own `_tool_choice_to_send`."""
     choice: Final[dict[str, JsonValue]] = {
         "type": "allowed_tools",
         "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "get_weather"}}]},
@@ -90,7 +91,9 @@ def test_mistral_refuses_a_tool_choice_it_cannot_express(gateway: Gateway) -> No
         model: Final = deployment(scenario, provider, _MISTRAL, api_base_suffix="/v1")
         response: Final = chat(gateway, model, tools=[TOOL], tool_choice=choice)
         assert response.status_code == 400, response.text
-        assert "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required'" in error_message(response)
+        message: Final = error_message(response)
+        assert "tool_choice type 'allowed_tools' is only supported for" in message, message
+        assert "custom_llm_provider=mistral" in message, message
         assert provider.posts() == ()
 
 

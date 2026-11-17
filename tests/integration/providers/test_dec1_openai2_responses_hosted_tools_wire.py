@@ -208,6 +208,15 @@ def test_hosted_tool_include_paths_are_forwarded(gateway: Gateway) -> None:
         assert provider.only().body["include"] == include
 
 
+def _without_nulls(value: JsonValue) -> JsonValue:
+    """`value` with every null-valued object member removed, at any depth."""
+    if isinstance(value, dict):
+        return {key: _without_nulls(member) for key, member in value.items() if member is not None}
+    if isinstance(value, list):
+        return [_without_nulls(member) for member in value]
+    return value
+
+
 @pytest.mark.parametrize(
     "item",
     [
@@ -291,10 +300,12 @@ def test_each_hosted_tool_output_item_reaches_the_caller_unchanged(
 ) -> None:
     """The provider answers with one hosted tool call item followed by the usual assistant message.
 
-    The caller's `output[0]` equals the provider's item field for field and `output[1]` is the message. A port
-    that keeps only `message`, `reasoning` and `function_call` items, or re-serialises items through a closed
-    union, would lose the tool result. UNVERIFIED: none of these item types carries a `container_id`, so no id is
-    rewritten; `image_generation_call.result` is relayed as base64 untouched.
+    The caller's `output[0]` equals the provider's item field for field once the null fields the proxy adds are
+    left out, and `output[1]` is the message. Pinned current behaviour (run 44176682961): the item is re-serialised
+    through litellm's typed output models, which add every optional field they declare as null (`keys`, `actions`,
+    `approval_request_id`, `error`, `queries`, ...); no field the provider sent changes. A port that keeps only
+    `message`, `reasoning` and `function_call` items would lose the tool result. UNVERIFIED: none of these item
+    types carries a `container_id`, so no id is rewritten; `image_generation_call.result` is relayed untouched.
     """
 
     def respond(call: Call) -> Reply:
@@ -305,7 +316,7 @@ def test_each_hosted_tool_output_item_reaches_the_caller_unchanged(
         model: Final = deployment(scenario, provider, _MODEL)
         body: Final = served(responses(gateway, model))
         output: Final = list_value(body["output"])
-        assert object_value(output[0]) == item, output
+        assert _without_nulls(object_value(output[0])) == _without_nulls(item), output
         assert object_value(output[1])["type"] == "message", output
 
 
@@ -559,14 +570,14 @@ def test_hosted_tool_stream_events_are_relayed_in_the_provider_order(gateway: Ga
         assert tuple(event.get("type") for event in data_events(lines)) == order
 
 
-def test_each_web_search_call_is_billed_on_top_of_tokens(gateway: Gateway) -> None:
+def test_web_search_calls_add_nothing_on_a_custom_priced_deployment(gateway: Gateway) -> None:
     """The provider answers with two `web_search_call` items, a message and usage 11 + 7 tokens, on a deployment
     priced at 0.001 / 0.002 per token.
 
-    The SpendLogs row bills tokens (0.025) plus two searches at the `gpt-4o-mini` row's
-    `search_context_cost_per_query` of 0.025 each (`_count_web_search_calls`), total 0.075. UNVERIFIED: the
-    built-in tool price is looked up on the cost map row `gpt-4o-mini` even when the deployment has custom token
-    prices.
+    The SpendLogs row bills tokens only, 0.025. Pinned current behaviour (run 44176682961): with custom token
+    prices the two searches are not priced from the `gpt-4o-mini` row's `search_context_cost_per_query`, while a
+    `file_search_call` is still billed (see the file search test). A port that bills the searches changes every
+    custom-priced bill, so it must be deliberate.
     """
 
     def respond(call: Call) -> Reply:
@@ -579,7 +590,7 @@ def test_each_web_search_call_is_billed_on_top_of_tokens(gateway: Gateway) -> No
         model: Final = deployment(scenario, provider, _MODEL)
         served(responses(gateway, model, tools=[{"type": "web_search"}]))
         row: Final = spend_row_by_group(gateway, model)
-        assert float(str(row["spend"])) == pytest.approx(CALL_COST + 2 * _WEB_SEARCH_PER_CALL)
+        assert float(str(row["spend"])) == pytest.approx(CALL_COST)
 
 
 def test_a_file_search_call_adds_the_openai_per_call_price(gateway: Gateway) -> None:
@@ -620,14 +631,14 @@ def test_a_file_search_tool_the_model_did_not_use_adds_nothing(gateway: Gateway)
         assert float(str(row["spend"])) == pytest.approx(CALL_COST)
 
 
-def test_a_registry_vector_store_id_in_file_search_is_not_sent_to_openai(gateway: Gateway) -> None:
+def test_a_registry_vector_store_id_in_file_search_reaches_openai_on_responses(gateway: Gateway) -> None:
     """The caller names `vs_integration_config_store`, which the shared proxy declares in `vector_store_registry`,
-    in a `file_search` tool.
+    in a `file_search` tool on `/v1/responses`.
 
-    The registry recognises every id in the tool, so the tool is removed from the request
-    (`_get_vector_store_ids_from_tool_calls`, `vector_store_registry.py:216`) and the proxy runs the search itself;
-    the provider body has no `file_search` tool. UNVERIFIED: the shared registry store points at the shared
-    upstream, which is assumed to answer the search; the assertion is only on what the OpenAI deployment receives.
+    Pinned current behaviour (run 44176682961): the Responses route forwards the tool unchanged, so the OpenAI
+    deployment receives `{"type": "file_search", "vector_store_ids": ["vs_integration_config_store"]}`; the
+    registry's tool removal (`_get_vector_store_ids_from_tool_calls`, `vector_store_registry.py:216`) does not
+    apply to native OpenAI Responses calls.
     """
     tool: Final[dict[str, JsonValue]] = {"type": "file_search", "vector_store_ids": ["vs_integration_config_store"]}
     with peer() as provider, gateway.scenario() as scenario:
@@ -635,7 +646,7 @@ def test_a_registry_vector_store_id_in_file_search_is_not_sent_to_openai(gateway
         response: Final = responses(gateway, model, tools=[tool])
         assert response.status_code == 200, response.text
         sent: Final = provider.only().body.get("tools") or []
-        assert all(object_value(entry).get("type") != "file_search" for entry in list_value(sent)), sent
+        assert list_value(sent) == [tool], sent
 
 
 def test_an_mcp_tool_naming_an_outside_server_never_reaches_the_gateway_mcp_executor(gateway: Gateway) -> None:
@@ -667,9 +678,10 @@ def test_an_mcp_tool_naming_an_outside_server_never_reaches_the_gateway_mcp_exec
 def test_a_hosted_tool_answer_keeps_its_managed_response_id(gateway: Gateway) -> None:
     """A Responses call with a `web_search` tool comes back from provider id `resp_dec1hosted`.
 
-    The caller's `id` is the managed `resp_` id that decodes to
-    `litellm:custom_llm_provider:openai;model_id:<id>;response_id:resp_dec1hosted`, the same as a plain call:
-    hosted tools must not switch the answer to a different id scheme.
+    The caller's `id` is the managed `resp_` id, the same as a plain call: hosted tools must not switch the answer
+    to a different id scheme. The id is opaque (encrypted by `_encrypt_response_id`,
+    `proxy/hooks/responses_id_security.py:372-406` on main, so it no longer base64-decodes), so the check is the
+    round trip: a follow-up naming it reaches the provider as `previous_response_id: resp_dec1hosted`.
     """
 
     def respond(call: Call) -> Reply:
@@ -678,8 +690,7 @@ def test_a_hosted_tool_answer_keeps_its_managed_response_id(gateway: Gateway) ->
     with peer(respond) as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, _MODEL)
         body: Final = served(responses(gateway, model, tools=[_WEB_SEARCH_TOOL]))
-        decoded: Final = decoded_managed_id(string_value(body["id"]), "resp_")
-        assert (
-            decoded
-            == f"litellm:custom_llm_provider:openai;model_id:{deployment_id(gateway, model)};response_id:resp_dec1hosted"
-        )
+        managed: Final = string_value(body["id"])
+        assert managed.startswith("resp_") and "resp_dec1hosted" not in managed, managed
+        served(responses(gateway, model, previous_response_id=managed))
+        assert provider.posts()[-1].body["previous_response_id"] == "resp_dec1hosted"

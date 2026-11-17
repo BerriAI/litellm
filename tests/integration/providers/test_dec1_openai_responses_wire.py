@@ -5,10 +5,10 @@ For OpenAI the Responses API is passed through almost untouched (`OpenAIResponse
 model name, and every Responses parameter (`store`, `background`, `include`, `reasoning`, `metadata`,
 `max_output_tokens`, `text`) keeps its name and value. The proxy does change four things a port must keep:
 
-- the response `id` the caller sees is a litellm-managed id, `resp_` plus base64 of
+- the response `id` the caller sees is a litellm-managed id: `resp_` plus base64 of
   `litellm:custom_llm_provider:openai;model_id:<deployment id>;response_id:<provider id>`
-  (`ResponsesAPIRequestUtils._build_responses_api_response_id`), so follow-up calls route back to the same
-  deployment;
+  (`ResponsesAPIRequestUtils._build_responses_api_response_id`), which the proxy then encrypts
+  (`proxy/hooks/responses_id_security.py:372-406`), so follow-up calls route back to the same deployment;
 - `max_output_tokens` under 16 is raised to 16, the OpenAI minimum (`_enforce_min_max_output_tokens`), so a
   Claude Code style `max_tokens: 1` probe does not fail;
 - `reasoning.effort` on a model whose cost map row lacks `supports_reasoning` is refused (or dropped under
@@ -23,7 +23,6 @@ The previous_response_id and lifecycle (retrieve, delete, cancel) contracts alre
 
 from __future__ import annotations
 
-import base64
 import json
 from typing import Final
 
@@ -53,10 +52,6 @@ _MODEL: Final = "openai/gpt-4o-mini"
 _REASONING_MODEL: Final = "openai/gpt-5"
 
 
-def _decoded_id(managed: str) -> str:
-    return base64.b64decode(managed.removeprefix("resp_")).decode()
-
-
 def test_a_plain_request_reaches_the_responses_path_with_the_upstream_model(gateway: Gateway) -> None:
     """The caller sends `{"model": <alias>, "input": "<marker>"}` to an `openai/gpt-4o-mini` deployment whose
     `api_base` ends in `/v1`.
@@ -77,9 +72,11 @@ def test_a_plain_request_reaches_the_responses_path_with_the_upstream_model(gate
 def test_the_caller_gets_a_managed_id_that_wraps_the_provider_id(gateway: Gateway) -> None:
     """The provider answers `id: resp_dec1provider`.
 
-    The caller's `id` starts with `resp_`, differs from the provider id, and base64-decodes to
-    `litellm:custom_llm_provider:openai;model_id:<id>;response_id:resp_dec1provider`. The rest of the object
-    (`object`, `status`, output text) is the provider's.
+    The caller's `id` starts with `resp_` and differs from the provider id. It is opaque: the proxy encrypts the
+    base64 `litellm:custom_llm_provider:...;response_id:...` id (`_encrypt_response_id`,
+    `proxy/hooks/responses_id_security.py:372-406` on main), so it no longer base64-decodes (run 44176682961). A
+    follow-up naming it reaches the provider as `previous_response_id: resp_dec1provider`. The rest of the object
+    (`object`, `status`) is the provider's.
     """
 
     def respond(call: Call) -> Reply:
@@ -90,10 +87,10 @@ def test_the_caller_gets_a_managed_id_that_wraps_the_provider_id(gateway: Gatewa
         body: Final = served(responses(gateway, model))
         managed: Final = string_value(body["id"])
         assert managed.startswith("resp_") and managed != "resp_dec1provider", body
-        decoded: Final = _decoded_id(managed)
-        assert decoded.startswith("litellm:custom_llm_provider:openai;model_id:"), decoded
-        assert decoded.endswith(";response_id:resp_dec1provider"), decoded
+        assert "resp_dec1provider" not in managed, managed
         assert (body["object"], body["status"]) == ("response", "completed"), body
+        served(responses(gateway, model, previous_response_id=managed))
+        assert provider.posts()[-1].body["previous_response_id"] == "resp_dec1provider"
 
 
 @pytest.mark.parametrize(
@@ -386,14 +383,15 @@ def test_previous_response_id_of_a_managed_id_reaches_openai_as_the_raw_id(gatew
         assert provider.posts()[-1].body["previous_response_id"] == "resp_dec1first"
 
 
-def test_an_unknown_responses_field_is_passed_through(gateway: Gateway) -> None:
-    """A field the Responses request type does not declare, `dec1_vendor_flag: true`, is sent through
-    `extra_body` and reaches the provider at the top level. UNVERIFIED: read from
-    `get_supported_openai_params` returning every `ResponsesAPIRequestParams` key plus `extra_body`."""
+def test_an_unknown_top_level_responses_field_is_not_forwarded(gateway: Gateway) -> None:
+    """A field the Responses request type does not declare, `dec1_vendor_flag: true`, sent at the top level does
+    not reach the provider: the body is exactly `{"model", "input"}` (run 44176682961). Pinned current behaviour;
+    the optional params are taken from the declared Responses request keys only, and `extra_body` is the way to
+    send a vendor field."""
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, _MODEL)
         served(responses(gateway, model, dec1_vendor_flag=True))
-        assert provider.only().body.get("dec1_vendor_flag") is True
+        assert "dec1_vendor_flag" not in provider.only().body, provider.only().body
 
 
 def test_a_function_tool_is_forwarded_in_the_responses_flat_shape(gateway: Gateway) -> None:

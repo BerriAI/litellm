@@ -193,7 +193,10 @@ def default_respond(call: Call) -> Reply:
 
 
 def _decoded(request: Request) -> Mapping[str, JsonValue]:
-    if not request.body or "json" not in request.headers.get("content-type", "json"):
+    """The JSON object body, whatever the content-type says. The Ollama chat call carries no JSON content-type (its
+    `validate_environment` sets only `Authorization`, `ollama/chat/transformation.py:234-246`), so gating on the
+    header left every Ollama body empty in run 44176682961; a multipart or binary body still decodes to `{}`."""
+    if not request.body:
         return {}
     try:
         return JSON_OBJECT.validate_json(request.body)

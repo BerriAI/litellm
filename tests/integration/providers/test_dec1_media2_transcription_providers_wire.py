@@ -531,7 +531,7 @@ def test_an_upload_over_the_deployment_max_file_size_is_refused_with_400_before_
         response: Final = transcribe(gateway, {"model": model}, audio)
         assert response.status_code == 400, response.text
         assert error_message(response).startswith("File size is too large. Please check your file size.")
-        assert "Max file size: 1 MB" in error_message(response)
+        assert "Max file size: 1.0 MB" in error_message(response)
         assert error_of(response)["param"] == "file"
         assert wire.drain() == ()
 

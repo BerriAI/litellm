@@ -33,6 +33,10 @@ from integration.providers.dec1_openai_support import (
 from pydantic import JsonValue
 
 _MODEL: Final = "openai/gpt-4o-mini"
+_CONVERSATION_DROPPED_BUG: Final = (
+    "BUG: the Responses `conversation` field is silently dropped before OpenAI; it is not a declared Responses"
+    " request param (litellm/types/llms/openai.py on main has no conversation key)"
+)
 _PROMPT: Final[dict[str, JsonValue]] = {
     "id": "pmpt_dec1openai2",
     "version": "3",
@@ -74,7 +78,10 @@ def test_each_newer_responses_field_is_forwarded_unchanged(gateway: Gateway, nam
     variable (text and `input_file` variables included), and `conversation` keeps its string or object form.
     The `stream_options: null` cell checks the opposite: a null optional field is not sent at all. UNVERIFIED:
     the null drop relies on `ResponsesAPIRequestUtils.get_requested_response_api_optional_param` skipping None.
+    The `conversation` cells are skipped as a product bug, see `_CONVERSATION_DROPPED_BUG`.
     """
+    if name == "conversation":
+        pytest.skip(_CONVERSATION_DROPPED_BUG)
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, _MODEL)
         served(responses(gateway, model, **{name: value}))

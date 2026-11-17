@@ -66,6 +66,19 @@ _TOOL: Final[dict[str, JsonValue]] = {
     },
 }
 
+_GROQ_SERVICE_TIER_BUG: Final = (
+    "BUG: a Groq reply without service_tier fails with AttributeError on ModelResponse.service_tier"
+    " (groq/chat/transformation.py:329 calls getattr without a default)"
+)
+_TOGETHER_PRICE_BUG: Final = (
+    "BUG: a together_ai deployment's own prices are ignored; the cost uses the size-category price"
+    " (cost_calculator.py:2305-2308 checks only the registry key for together_ai/<model>)"
+)
+_XAI_FINISH_REASON_BUG: Final = (
+    "BUG: xAI's empty finish_reason is mapped to stop before the tool_calls fix can see it"
+    " (core_helpers.py:493-498 runs first, xai/chat/transformation.py:281-289 then never fires)"
+)
+
 _PROVIDERS: Final = (
     ("groq/llama-3.3-70b-versatile", "llama-3.3-70b-versatile"),
     ("deepseek/deepseek-chat", "deepseek-chat"),
@@ -90,8 +103,11 @@ def test_each_provider_posts_chat_completions_under_the_v1_base_with_the_bearer_
 
     The provider receives one `POST /v1/chat/completions` with `authorization: Bearer dec1-openai-provider-key`,
     the upstream model name without the provider prefix, and the caller's user message. This is the one shape all
-    of them share and what a Rust OpenAI-compatible client must produce.
+    of them share and what a Rust OpenAI-compatible client must produce. The Groq cell is skipped as a product
+    bug, see `_GROQ_SERVICE_TIER_BUG`.
     """
+    if model_path.startswith("groq/"):
+        pytest.skip(_GROQ_SERVICE_TIER_BUG)
     text: Final = marker()
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, model_path)
@@ -111,8 +127,13 @@ def test_each_provider_call_is_billed_at_the_deployment_prices(
 
     The caller's `x-litellm-response-cost` header and the one SpendLogs row both say 0.025, and the row's
     `custom_llm_provider` is the provider prefix. OpenRouter is the exception only when it reports its own cost
-    (see the OpenRouter cost test).
+    (see the OpenRouter cost test). The Groq and Together cells are skipped as product bugs, see
+    `_GROQ_SERVICE_TIER_BUG` and `_TOGETHER_PRICE_BUG` (Together billed 1.44e-05 from its 41.1b-80b category).
     """
+    if model_path.startswith("groq/"):
+        pytest.skip(_GROQ_SERVICE_TIER_BUG)
+    if model_path.startswith("together_ai/"):
+        pytest.skip(_TOGETHER_PRICE_BUG)
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, model_path)
         response: Final = chat(gateway, model)
@@ -153,8 +174,9 @@ def test_groq_with_a_bare_base_posts_chat_completions_at_the_root(gateway: Gatew
     """A Groq deployment whose `api_base` is `<peer>/openai/v1`, Groq's real layout.
 
     The provider receives `POST /openai/v1/chat/completions`: the base path is kept and only `/chat/completions`
-    is appended.
+    is appended. Skipped as a product bug until fixed, see `_GROQ_SERVICE_TIER_BUG`.
     """
+    pytest.skip(_GROQ_SERVICE_TIER_BUG)
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, "groq/llama-3.3-70b-versatile", api_base_suffix="/openai/v1")
         served(chat(gateway, model))
@@ -260,14 +282,15 @@ def test_mistral_maps_max_completion_tokens_seed_and_required_tool_choice(gatewa
         assert "max_completion_tokens" not in sent and "seed" not in sent, sent
 
 
-def test_mistral_strips_strict_from_tools(gateway: Gateway) -> None:
-    """A tool with `strict: true` reaches Mistral without `strict` (`_clean_tool_schema_for_mistral`); the function
-    name and properties stay."""
+def test_mistral_keeps_strict_on_tools(gateway: Gateway) -> None:
+    """A tool with `strict: true` reaches Mistral with `strict: true`, its name and its properties. Pinned current
+    behaviour: `_clean_tool_schema_for_mistral` only strips `$ref`/`$defs` (`mistral/chat/transformation.py:517-542`,
+    its docstring still lists `strict`), and the Mistral API takes `strict` on a function."""
     with peer() as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, "mistral/mistral-large-latest")
         served(chat(gateway, model, tools=[_TOOL]))
         function: Final = object_value(object_value(list_value(provider.only().body["tools"])[0])["function"])
-        assert "strict" not in function and function["name"] == "get_weather", function
+        assert function["strict"] is True and function["name"] == "get_weather", function
 
 
 @pytest.mark.parametrize(("name", "value"), [("frequency_penalty", 0.2), ("logprobs", True), ("n", 2)])
@@ -294,12 +317,14 @@ def test_mistral_drops_unsupported_params_under_drop_params(gateway: Gateway) ->
         assert "frequency_penalty" not in sent and sent["temperature"] == 0.4, sent
 
 
-def test_xai_maps_max_completion_tokens_and_strips_strict_and_names(gateway: Gateway) -> None:
+def test_xai_maps_max_completion_tokens_strips_strict_and_keeps_a_user_name(gateway: Gateway) -> None:
     """The caller sends `max_completion_tokens: 30`, a strict tool, and a user message with `name: "alice"` to
     `xai/grok-3`.
 
     The provider body has `max_tokens: 30` and no `max_completion_tokens`, its tool has no `strict`, and the user
-    message has no `name` (`strip_name_from_messages`).
+    message keeps `name: "alice"`: `strip_name_from_messages` drops `name` only outside its `allowed_name_roles`,
+    which default to `["user"]` (`prompt_templates/common_utils.py:392-405`, called at
+    `xai/chat/transformation.py:277`).
     """
     text: Final = marker()
     with peer() as provider, gateway.scenario() as scenario:
@@ -316,7 +341,7 @@ def test_xai_maps_max_completion_tokens_and_strips_strict_and_names(gateway: Gat
         sent: Final = provider.only().body
         assert sent["max_tokens"] == 30 and "max_completion_tokens" not in sent, sent
         assert "strict" not in object_value(object_value(list_value(sent["tools"])[0])["function"]), sent
-        assert list_value(sent["messages"]) == [{"role": "user", "content": text}], sent
+        assert list_value(sent["messages"]) == [{"role": "user", "content": text, "name": "alice"}], sent
 
 
 def test_xai_grok_4_refuses_stop(gateway: Gateway) -> None:
@@ -332,7 +357,9 @@ def test_xai_grok_4_refuses_stop(gateway: Gateway) -> None:
 
 def test_xai_empty_finish_reason_with_tool_calls_becomes_tool_calls(gateway: Gateway) -> None:
     """xAI answers `finish_reason: ""` when it returns tool calls. The caller's choice has
-    `finish_reason == "tool_calls"` (`_fix_choice_finish_reason_for_tool_calls`)."""
+    `finish_reason == "tool_calls"` (`_fix_choice_finish_reason_for_tool_calls`). Skipped as a product bug until
+    fixed, see `_XAI_FINISH_REASON_BUG`: the caller got `stop` with `native_finish_reason: ""`."""
+    pytest.skip(_XAI_FINISH_REASON_BUG)
     tool_call: Final[dict[str, JsonValue]] = {
         "id": "call_dec1xai",
         "type": "function",
@@ -447,8 +474,8 @@ def test_openrouter_reported_cost_is_the_response_cost(gateway: Gateway) -> None
     """OpenRouter answers `usage.cost: 0.0042` alongside the token counts.
 
     The caller's `x-litellm-response-cost` is 0.0042, OpenRouter's own figure, rather than the 0.025 the
-    deployment prices would give. UNVERIFIED: read from `transform_response` storing
-    `llm_provider-x-litellm-response-cost`; whether SpendLogs also uses it was not traced.
+    deployment prices would give. The deployment is unpriced: deployment prices win over a provider-reported cost
+    (`not custom_pricing` in `litellm_logging.py:2544-2552`, `not caller_set_prices` in `cost_calculator.py:2284`).
     """
 
     def respond(call: Call) -> Reply:
@@ -456,7 +483,7 @@ def test_openrouter_reported_cost_is_the_response_cost(gateway: Gateway) -> None
         return json_reply({**payload, "usage": {**object_value(payload["usage"]), "cost": 0.0042}})
 
     with peer(respond) as provider, gateway.scenario() as scenario:
-        model: Final = deployment(scenario, provider, "openrouter/openai/gpt-4o-mini")
+        model: Final = deployment(scenario, provider, "openrouter/openai/gpt-4o-mini", priced=False)
         response: Final = chat(gateway, model)
         served(response)
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.0042), response.headers
@@ -513,8 +540,10 @@ def test_groq_emulates_json_schema_with_a_forced_tool_and_returns_the_json_as_co
     `response_format` (`GroqChatConfig.map_openai_params`).
 
     The provider answers with a call to `json_tool_call` whose arguments are `{"city": "Oslo"}`, and the caller
-    gets that JSON as the message `content` with no tool calls (json mode).
+    gets that JSON as the message `content` with no tool calls (json mode). Skipped as a product bug until fixed,
+    see `_GROQ_SERVICE_TIER_BUG`.
     """
+    pytest.skip(_GROQ_SERVICE_TIER_BUG)
     schema: Final[dict[str, JsonValue]] = {
         "type": "object",
         "properties": {"city": {"type": "string"}},

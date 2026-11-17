@@ -148,28 +148,28 @@ def test_v2_maps_top_p_stop_n_and_max_completion_tokens_to_cohere_names(gateway:
         assert not {"top_p", "stop", "n", "max_completion_tokens"} & set(sent), sent
 
 
-def test_v2_keeps_tools_but_never_sends_tool_choice(gateway: Gateway) -> None:
-    """`tool_choice` is in Cohere's supported list but `map_openai_params` has no branch for it
-    (`cohere/chat/transformation.py:190-213`), so `tool_choice: "required"` is accepted (200) and silently not
-    sent, while the tool list reaches the peer with the function name intact.
+def test_v2_keeps_tools_and_sends_tool_choice_required_in_cohere_vocabulary(gateway: Gateway) -> None:
+    """`tool_choice: "required"` with one tool reaches Cohere v2 as `tool_choice: "REQUIRED"` next to the tool list
+    with the function name intact (`_tool_choice_params`, `cohere/chat/transformation.py:117-124` on main).
 
-    Pinned current behaviour; a port that forwards `tool_choice` would change what Cohere does.
+    Pinned current behaviour (run 44176682961 saw `REQUIRED`); the older mapping silently dropped `tool_choice`.
     """
     with peer(_text_answer) as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, _MODEL, api_base_suffix=_V2_PATH)
         served(chat(gateway, model, tools=[TOOL], tool_choice="required"))
         sent: Final = provider.only().body
-        assert "tool_choice" not in sent, sent
+        assert sent["tool_choice"] == "REQUIRED", sent
         function: Final = object_value(object_value(list_value(sent["tools"])[0])["function"])
         assert function["name"] == "get_weather", sent
 
 
-@pytest.mark.parametrize(("name", "value"), [("response_format", {"type": "json_object"}), ("logprobs", True)])
+@pytest.mark.parametrize(("name", "value"), [("logprobs", True)])
 def test_params_outside_the_cohere_list_are_refused_before_the_call(
     gateway: Gateway, name: str, value: JsonValue
 ) -> None:
     """Cohere's supported list (`cohere/chat/transformation.py:166-181`, used for every cohere route by
-    `get_supported_openai_params.py:117-118`) has neither `response_format` nor `logprobs`.
+    `get_supported_openai_params.py:117-118`) has no `logprobs`. (`response_format` joined the list on main and is
+    forwarded, see `test_a_json_object_response_format_reaches_cohere_v2`.)
 
     Each is answered 400 with `cohere_chat does not support parameters: ['<name>']` (`utils.py:5793`) and the peer
     is not called.
@@ -439,12 +439,24 @@ def test_v1_route_sends_the_legacy_message_body(gateway: Gateway) -> None:
         assert object_value(body["usage"])["completion_tokens"] == 7
 
 
-def test_498_invalid_token_from_cohere_reaches_the_caller_as_400(gateway: Gateway) -> None:
+def test_a_json_object_response_format_reaches_cohere_v2(gateway: Gateway) -> None:
+    """`response_format: {"type": "json_object"}` is accepted (200) and reaches Cohere v2 as
+    `response_format: {"type": "json_object"}` (`_response_format_params`, `cohere/chat/transformation.py:156-170`
+    on main). Pinned current behaviour; it used to be refused as unsupported."""
+    with peer(_text_answer) as provider, gateway.scenario() as scenario:
+        model: Final = deployment(scenario, provider, _MODEL, api_base_suffix=_V2_PATH)
+        served(chat(gateway, model, response_format={"type": "json_object"}))
+        sent: Final = provider.only().body
+        assert object_value(sent["response_format"])["type"] == "json_object", sent
+
+
+def test_498_invalid_token_from_cohere_reaches_the_caller_as_498(gateway: Gateway) -> None:
     """Cohere answers HTTP 498 `{"message": "dec1 bad token"}`.
 
-    `_map_cohere_exception` maps 400 and 498 to `BadRequestError` (`exception_mapping_utils.py:1567-1573`), so the
-    caller gets 400 with `CohereException` and `dec1 bad token` in the message. A port that passes 498 through
-    would send clients a non-standard status.
+    `_map_cohere_exception` maps 400 and 498 to `BadRequestError` (`exception_mapping_utils.py:1567-1573`) but keeps
+    the upstream response, and the proxy answers with that response's status: the caller gets 498 (error code
+    "498") with `dec1 bad token` in the message. Pinned current behaviour seen in run 44176682961; a 400 here would
+    be a deliberate change.
     """
 
     def respond(_call: Call) -> Reply:
@@ -453,7 +465,7 @@ def test_498_invalid_token_from_cohere_reaches_the_caller_as_400(gateway: Gatewa
     with peer(respond) as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, _MODEL, api_base_suffix=_V2_PATH)
         response: Final = chat(gateway, model)
-        assert response.status_code == 400, response.text
+        assert response.status_code == 498, response.text
         assert "dec1 bad token" in error_message(response)
         assert len(provider.posts()) == 1
 

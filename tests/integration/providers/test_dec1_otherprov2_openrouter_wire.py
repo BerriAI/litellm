@@ -136,13 +136,15 @@ def test_openrouter_cache_control_marks_only_the_last_block_of_a_list(gateway: G
 def test_openrouter_string_usage_cost_is_the_response_cost(gateway: Gateway) -> None:
     """OpenRouter answers `usage.cost: "0.0042"` as a string. `transform_response` accepts `str | int | float`
     and stores `finite_cost(float(...))` as the provider response cost (`openrouter/chat/transformation.py:
-    247-267`), so the caller's `x-litellm-response-cost` is 0.0042, not the 0.025 the deployment prices give."""
+    247-267`), so the caller's `x-litellm-response-cost` is 0.0042. The deployment is unpriced: deployment prices
+    win over a provider-reported cost (`not custom_pricing`, `litellm_logging.py:2544-2552`; `not caller_set_prices`,
+    `cost_calculator.py:2284`), which billed 0.025 in run 44176682961."""
 
     def respond(call: Call) -> Reply:
         return json_reply(chat_json(call.body, usage_block=usage_with(cost="0.0042")))
 
     with peer(respond) as provider, gateway.scenario() as scenario:
-        model: Final = deployment(scenario, provider, _GPT, api_base_suffix=_BASE)
+        model: Final = deployment(scenario, provider, _GPT, api_base_suffix=_BASE, priced=False)
         response: Final = chat(gateway, model)
         served(response)
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.0042), response.headers
@@ -220,13 +222,15 @@ def test_openrouter_error_choice_with_an_out_of_range_code_becomes_502(gateway: 
         assert "dec1 bad code" in error_message(response)
 
 
-def test_openrouter_unprocessable_entity_reaches_the_caller_as_400(gateway: Gateway) -> None:
+def test_openrouter_unprocessable_entity_reaches_the_caller_as_422(gateway: Gateway) -> None:
     """OpenRouter answers HTTP 422 `dec1 bad schema`. `_map_openrouter_exception` raises a `BadRequestError` for
-    422 (`exception_mapping_utils.py:2335-2342`), so the caller gets 400 with the message."""
+    422 (`exception_mapping_utils.py:2343-2350`) carrying the upstream response, and the proxy answers with that
+    response's status: the caller gets 422 (error code "422") with the message. Pinned current behaviour, seen in
+    run 44176682961."""
     with peer(lambda call: upstream_error(422, "dec1 bad schema")) as provider, gateway.scenario() as scenario:
         model: Final = deployment(scenario, provider, _GPT, api_base_suffix=_BASE)
         response: Final = chat(gateway, model)
-        assert response.status_code == 400, response.text
+        assert response.status_code == 422, response.text
         assert "dec1 bad schema" in error_message(response)
 
 

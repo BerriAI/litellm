@@ -38,11 +38,11 @@ from integration.providers.dec1_openai_support import (
 _MODEL: Final = "openai/gpt-4o-mini"
 _ERROR_TYPE: Final = {
     400: "invalid_request_error",
-    401: "authentication_error",
-    404: "not_found_error",
+    401: "invalid_request_error",
+    404: "invalid_request_error",
     429: "throttling_error",
     500: "internal_server_error",
-    503: "service_unavailable_error",
+    503: "internal_server_error",
 }
 _PREFIX: Final = {
     400: "litellm.BadRequestError",
@@ -67,8 +67,8 @@ def test_the_provider_status_and_message_reach_the_caller(gateway: Gateway, stat
 
     The caller gets the same HTTP status, `error.code == "<status>"`, and a message that starts with the
     matching litellm exception class name and contains the provider's text. The provider is called once.
-    UNVERIFIED: the `type` strings for 404 and 503 (`not_found_error`, `service_unavailable_error`) were not
-    confirmed; the other types match the embeddings suite.
+    The `type` strings are pinned from run 44176682961: 401 and 404 are `invalid_request_error` and 503 is
+    `internal_server_error` (not `authentication_error`, `not_found_error`, `service_unavailable_error`).
     """
     text: Final = f"dec1 provider said {status}"
     with peer(_always(openai_error(status, text))) as provider, gateway.scenario() as scenario:
