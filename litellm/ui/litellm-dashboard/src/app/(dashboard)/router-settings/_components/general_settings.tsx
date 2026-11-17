@@ -16,6 +16,7 @@ import RouterSettings from "@/components/router_settings";
 import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
 import RoutingGroups from "@/components/routing_groups";
 import { RequestTagMappingsEditor, requestTagMappingsAreValid } from "./RequestTagMappings";
+import { MTLSClientAuthEditor, mtlsClientAuthIsValid } from "./MTLSClientAuth";
 
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
@@ -44,6 +45,16 @@ export interface generalSettingsItem {
 
 const NUMERIC_INPUT_WIDTH = "w-36";
 
+const settingIsReadOnly = (setting: generalSettingsItem) =>
+  ["request_tag_mappings", "mtls_client_auth"].includes(setting.field_name) && setting.editable === false;
+
+const settingCannotUpdate = (setting: generalSettingsItem) => {
+  if (settingIsReadOnly(setting)) return true;
+  if (setting.field_name === "mtls_client_auth") return !mtlsClientAuthIsValid(setting.field_value);
+  if (setting.field_name === "request_tag_mappings") return !requestTagMappingsAreValid(setting.field_value);
+  return false;
+};
+
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
 
 const toListValue = (raw: string): string[] | null => {
@@ -61,6 +72,15 @@ const SettingValueEditor: React.FC<{
   onChange: (fieldName: string, newValue: any) => void;
 }> = ({ setting, onChange }) => {
   const { t } = useTranslation();
+  if (setting.field_name === "mtls_client_auth") {
+    return (
+      <MTLSClientAuthEditor
+        value={setting.field_value}
+        disabled={setting.editable === false}
+        onChange={(config) => onChange(setting.field_name, config)}
+      />
+    );
+  }
   if (setting.field_name === "request_tag_mappings") {
     return (
       <RequestTagMappingsEditor
@@ -275,7 +295,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (setting?.field_type === "Select" || setting?.field_type === "List") handleResetField(fieldName);
+      if (
+        setting?.field_type === "Select" ||
+        setting?.field_type === "List" ||
+        setting?.field_name === "mtls_client_auth"
+      )
+        handleResetField(fieldName);
       return;
     }
     try {
@@ -381,15 +406,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                         </TableCell>
                         <TableCell>
                           <Button
-                            disabled={
-                              value.field_name === "request_tag_mappings" &&
-                              (value.editable === false || !requestTagMappingsAreValid(value.field_value))
-                            }
+                            disabled={settingCannotUpdate(value)}
                             onClick={() => handleUpdateField(value.field_name)}
                           >
                             {t("routerSettings.generalSettings.update")}
                           </Button>
-                          {value.field_name === "request_tag_mappings" && value.editable === false ? null : (
+                          {settingIsReadOnly(value) ? null : (
                             <span
                               onClick={() => handleResetField(value.field_name)}
                               className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"

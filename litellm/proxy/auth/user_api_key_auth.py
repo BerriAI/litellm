@@ -141,6 +141,12 @@ from litellm.proxy.auth.impersonation import (
 from litellm.proxy.auth.impersonation import (
     UserLookup as ImpersonationUserLookup,
 )
+from litellm.proxy.auth.mtls_client_auth import (
+    MTLSClientAuth,
+    MTLSDenial,
+    approve_mtls_client,
+    mtls_customer_headers,
+)
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
@@ -291,6 +297,9 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_PASS_THROUGH_ENDPOINTS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = TypeAdapter(
+    tuple[Mapping[str, object], ...] | None
+)
 
 
 async def _normalize_claude_model(
@@ -1215,6 +1224,7 @@ def _auth_request(
     *,
     pass_through_open: bool,
     from_custom_auth: bool,
+    trusted_end_user_id: str | None = None,
 ) -> core.AuthRequest:
     from litellm.proxy.proxy_server import llm_router  # noqa: PLC0415  # runtime globals
 
@@ -1228,7 +1238,7 @@ def _auth_request(
         RouteChecks.get_request_method(request=request),
         headers=headers,
         model=model if isinstance(model, str) else None,
-        end_user_id=get_end_user_id_from_request_body(request_data, headers),
+        end_user_id=get_end_user_id_from_request_body(request_data, headers, trusted_end_user_id=trusted_end_user_id),
         pass_through_open=pass_through_open,
         from_custom_auth=from_custom_auth,
     )
@@ -1953,6 +1963,8 @@ async def _custom_auth(
     route: str,
     parent_otel_span: Span | None,
     user_custom_auth: Callable[..., Awaitable[object]] | None,
+    *,
+    trusted_end_user_id: str | None = None,
 ) -> UserAPIKeyAuth | str | None:
     """The identity custom auth vouched for, a key it handed back to authenticate with instead, or ``None``
     when enterprise custom auth declined and the request keeps its own token."""
@@ -1965,11 +1977,18 @@ async def _custom_auth(
             return response
         if not isinstance(response, UserAPIKeyAuth):
             return None
-        return await _custom_auth_identity(response, request, request_data, route, parent_otel_span)
+        return await _custom_auth_identity(
+            response, request, request_data, route, parent_otel_span, trusted_end_user_id=trusted_end_user_id
+        )
     if user_custom_auth is None:
         return None
     return await _custom_auth_identity(
-        await user_custom_auth(request=request, api_key=api_key), request, request_data, route, parent_otel_span
+        await user_custom_auth(request=request, api_key=api_key),
+        request,
+        request_data,
+        route,
+        parent_otel_span,
+        trusted_end_user_id=trusted_end_user_id,
     )
 
 
@@ -1979,8 +1998,10 @@ async def _custom_auth_identity(
     request_data: dict[str, object],
     route: str,
     parent_otel_span: Span | None,
+    *,
+    trusted_end_user_id: str | None = None,
 ) -> UserAPIKeyAuth:
-    token: Final = _custom_auth_token_for_this_request(response)
+    token: Final = with_mtls_end_user(_custom_auth_token_for_this_request(response), trusted_end_user_id)
     validated: Final = (
         await _run_post_custom_auth_checks(
             valid_token=token,
@@ -2019,6 +2040,35 @@ async def _core_outcome(
             raise ValueError(f"no credential path for auth plan {path!r}")
 
 
+def approved_mtls_end_user_id(request: Request, route: str) -> str | None:
+    from litellm.proxy import proxy_server
+
+    settings: Final = proxy_server.general_settings_view()
+    configured: Final = settings.get("mtls_client_auth")
+    if configured is None:
+        return None
+    if RustAuth.is_public_route(route, core.proxy_settings()) or any(
+        endpoint.get("auth", True) is not True
+        for endpoint in _PASS_THROUGH_ENDPOINTS_ADAPTER.validate_python(settings.get("pass_through_endpoints")) or ()
+        if endpoint.get("path", "") == route
+    ):
+        return None
+    if is_no_auth_dev_mode(proxy_server.master_key, settings) and proxy_server.user_custom_auth is None:
+        return None
+    approved: Final = approve_mtls_client(
+        MTLSClientAuth.model_validate(configured),
+        request.headers.items(),
+        mtls_customer_headers(settings.get("user_header_mappings")),
+    )
+    if isinstance(approved, MTLSDenial):
+        raise ProxyException(message=approved.value, type="auth_error", param=None, code=403)
+    return approved
+
+
+def with_mtls_end_user(auth: UserAPIKeyAuth, end_user_id: str | None) -> UserAPIKeyAuth:
+    return auth.model_copy(update={"end_user_id": end_user_id}) if end_user_id is not None else auth
+
+
 async def user_api_key_auth_builder(
     request: Request,
     api_key: str,
@@ -2050,6 +2100,7 @@ async def user_api_key_auth_builder(
     denied_key: UserAPIKeyAuth | None = None  # rebind-ok: the key a denied request had resolved, for the failure log
 
     try:
+        mtls_end_user_id: Final = approved_mtls_end_user_id(request, route)
         with tracer.trace("litellm.proxy.auth.pre_db_read_auth_checks"):
             await pre_db_read_auth_checks(
                 request_data=request_data,
@@ -2086,7 +2137,15 @@ async def user_api_key_auth_builder(
 
         settings: Final = core.proxy_settings()
         custom: Final = (
-            await _custom_auth(request, api_key, request_data, route, parent_otel_span, user_custom_auth)
+            await _custom_auth(
+                request,
+                api_key,
+                request_data,
+                route,
+                parent_otel_span,
+                user_custom_auth,
+                trusted_end_user_id=mtls_end_user_id,
+            )
             if enterprise_custom_auth is not None or user_custom_auth is not None
             else None
         )
@@ -2103,6 +2162,7 @@ async def user_api_key_auth_builder(
             request_data,
             pass_through_open=pass_through_auth_off(route, pass_through_endpoints),
             from_custom_auth=handed_key,
+            trusted_end_user_id=mtls_end_user_id,
         )
         match RustAuth.plan(auth_request, settings):
             case RustDenial() as denial:
@@ -2110,9 +2170,9 @@ async def user_api_key_auth_builder(
             case RustPlan.Public:
                 return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
             case RustPlan.OAuth2Introspection:
-                return await Oauth2Handler.check_oauth2_token(token=api_key)
+                return with_mtls_end_user(await Oauth2Handler.check_oauth2_token(token=api_key), mtls_end_user_id)
             case RustPlan.OAuth2Proxy:
-                return await handle_oauth2_proxy_request(request=request)
+                return with_mtls_end_user(await handle_oauth2_proxy_request(request=request), mtls_end_user_id)
             case RustPlan.PassThroughOpen:
                 return UserAPIKeyAuth()
             case plan:
@@ -2125,8 +2185,8 @@ async def user_api_key_auth_builder(
         authenticated: Final = await auth_identity.project(outcome, rust_host)
         actor_is_master_key: Final = _impersonation_actor_is_master_key(outcome, api_key, master_key)
         if actor_is_master_key is None:
-            return authenticated
-        return await _apply_impersonation_if_requested(
+            return with_mtls_end_user(authenticated, mtls_end_user_id)
+        impersonated: Final = await _apply_impersonation_if_requested(
             actor=authenticated,
             request=request,
             request_data=request_data,
@@ -2139,6 +2199,7 @@ async def user_api_key_auth_builder(
             model_max_budget_limiter=rust_host.model_max_budget_limiter,
             actor_is_master_key=actor_is_master_key,
         )
+        return with_mtls_end_user(impersonated, mtls_end_user_id)
 
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
@@ -3440,6 +3501,7 @@ async def user_api_key_auth(
     _ensure_parent_otel_span_on_request_state(request)
 
     route: Final[str] = get_request_route(request=request)
+    approved_mtls_end_user_id(request, route)
     await _reject_from_headers_before_reading_body(
         request=request, api_key=api_key, custom_litellm_key_header=custom_litellm_key_header, route=route
     )
