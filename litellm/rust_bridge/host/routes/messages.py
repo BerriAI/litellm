@@ -24,11 +24,8 @@ from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import (
-    _load_beta_headers_config,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the manager's own cached loader, typed bare dict
-    resolve_beta_provider,
-)
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
@@ -1251,21 +1248,12 @@ def filters_beta_headers(model: str, custom_llm_provider: str | None, api_base: 
     return config is not None and config.should_filter_anthropic_beta_headers()
 
 
-def beta_headers_config(
-    model: str, custom_llm_provider: str | None, api_base: str | None
-) -> Mapping[str, object] | None:
-    """The beta map Python's `anthropic-beta` filter reads, loaded as the handler loads it, for a call whose betas
-    are filtered. ``None`` when the call filters none."""
-    affinity_api_base: Final = (
-        AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
-    )
-    takes_another_beta_row: Final = (
-        custom_llm_provider is not None
-        and resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
-    )
-    if not takes_another_beta_row and not filters_beta_headers(model, custom_llm_provider, api_base):
-        return None
-    return _load_beta_headers_config()  # pyright: ignore[reportUnknownVariableType]  # the loader returns a bare dict
+def loaded_beta_headers_config() -> Mapping[str, object] | None:
+    return anthropic_beta_headers_manager.loaded_beta_headers_config()
+
+
+def load_beta_headers_config_in_background() -> None:
+    anthropic_beta_headers_manager.load_beta_headers_config_in_background()
 
 
 def record_guardrail(public: Mapping[str, object], request: Mapping[str, object]) -> None:
