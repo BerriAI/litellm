@@ -681,3 +681,55 @@ def test_a_native_service_tier_sends_no_tier_header_to_invoke_models_whose_repli
     )
 
     assert "X-Amzn-Bedrock-Service-Tier" not in send.call_args.args[0].headers
+
+
+_IMPORTED_LLAMA_ARN: Final = "arn:aws:bedrock:us-west-2:111122223333:imported-model/abc123def456"
+_LLAMA_BASE_MODEL: Final = "meta.llama3-70b-instruct-v1:0"
+_MULTI_TURN: Final = (
+    {"role": "system", "content": "be brief"},
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": "hello"},
+    {"role": "user", "content": "again"},
+)
+
+
+def _sent_llama_prompt(respx_mock: respx.Router, model: str, **kwargs: object) -> str:
+    route: Final = respx_mock.post(host="bedrock-runtime.us-west-2.amazonaws.com").mock(
+        return_value=httpx.Response(
+            200,
+            json={"generation": "ok", "prompt_token_count": 1, "generation_token_count": 1, "stop_reason": "stop"},
+        )
+    )
+    litellm.completion(
+        model=model,
+        messages=[dict(message) for message in _MULTI_TURN],
+        aws_access_key_id="AKIAEXAMPLEKEY",
+        aws_secret_access_key="example-secret-key",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+        **kwargs,
+    )
+    body: Final[dict[str, str]] = json.loads(route.calls.last.request.content)
+    return body["prompt"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [f"bedrock/invoke/{_IMPORTED_LLAMA_ARN}", f"bedrock/invoke/meta/{_IMPORTED_LLAMA_ARN}"],
+    ids=["bare-arn", "provider-in-model-string"],
+)
+def test_an_arn_with_a_llama_base_model_gets_the_prompt_that_model_gets(respx_mock: respx.Router, model: str) -> None:
+    expected: Final = _sent_llama_prompt(respx_mock, f"bedrock/invoke/{_LLAMA_BASE_MODEL}")
+
+    assert _sent_llama_prompt(respx_mock, model, base_model=_LLAMA_BASE_MODEL) == expected
+
+
+def test_custom_prompt_roles_still_win_over_the_base_model_template(respx_mock: respx.Router) -> None:
+    prompt: Final = _sent_llama_prompt(
+        respx_mock,
+        f"bedrock/invoke/meta/{_IMPORTED_LLAMA_ARN}",
+        base_model=_LLAMA_BASE_MODEL,
+        roles={"user": {"pre_message": "<U>", "post_message": "</U>"}},
+    )
+
+    assert prompt == "be brief<U>hi</U>hello<U>again</U>"
