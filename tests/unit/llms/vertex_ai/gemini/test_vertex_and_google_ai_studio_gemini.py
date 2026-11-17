@@ -8222,7 +8222,7 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
         ({"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]}, {"native_finish_reason": "IMAGE_SAFETY"}),
         (
             {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "blocked"}},
-            {"block_reason": "PROHIBITED_CONTENT"},
+            {"block_reason": "PROHIBITED_CONTENT", "block_reason_message": "blocked"},
         ),
     ],
 )
@@ -8412,6 +8412,41 @@ def test_non_streamed_choice_carries_google_reason_and_its_message_only_when_sen
 
     assert response.choices[0].finish_reason == outcome.finish_reason
     assert response.choices[0].provider_specific_fields == outcome.reason_fields
+
+
+_SAFETY_FINISH: Final = {"finishReason": "SAFETY", "finishMessage": "Candidate was blocked for safety."}
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "trailing_frame",
+    [
+        pytest.param({"usageMetadata": _GOOGLE_REASON_USAGE}, id="usage_only"),
+        pytest.param(
+            {**_google_text_frame(""), "usageMetadata": _GOOGLE_REASON_USAGE}, id="candidate_without_finish_reason"
+        ),
+    ],
+)
+async def test_streamed_named_finish_keeps_its_reason_when_a_frame_follows_it(
+    trailing_frame: Mapping[str, object], is_async: bool
+) -> None:
+    outcome: Final = _GoogleReasonOutcome(
+        document=_google_finished(_SAFETY_FINISH),
+        frames=(_google_text_frame("Waves fold "), _google_finished(_SAFETY_FINISH), trailing_frame),
+        text="Waves fold ",
+        finish_reason="content_filter",
+        reason_fields={"native_finish_reason": "SAFETY", "native_finish_message": "Candidate was blocked for safety."},
+    )
+
+    chunks: Final = await _google_reason_stream(outcome, is_async)
+
+    finish_choices: Final = _finish_choices(chunks)
+    assert [choice.finish_reason for choice in finish_choices] == ["content_filter"]
+    assert getattr(finish_choices[0], "provider_specific_fields", None) == outcome.reason_fields
+    rebuilt: Final = litellm.stream_chunk_builder(list(chunks))
+    assert rebuilt is not None
+    assert rebuilt.choices[0].finish_reason == "content_filter"
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == outcome.reason_fields
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():

@@ -63,6 +63,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
                 },
                 "provider_specific_fields": {
                     "native_finish_reason": "STOP",
+                    "native_finish_message": "Model generated function call(s).",
                 },
             },
         ],
@@ -215,6 +216,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
                 },
                 "provider_specific_fields": {
                     "native_finish_reason": "STOP",
+                    "native_finish_message": "Model generated function call(s).",
                 },
             },
         ],
@@ -370,6 +372,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                 },
                 "provider_specific_fields": {
                     "native_finish_reason": "STOP",
+                    "native_finish_message": "Model generated function call(s).",
                 },
             },
         ],

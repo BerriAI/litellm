@@ -223,6 +223,19 @@ def _upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Ma
     return MappingProxyType({field: upstream_extras[field] for field in fields if field in upstream_extras})
 
 
+def _upstream_choice_fields_at(upstream_chunk: object, index: int, fields: Sequence[str]) -> Mapping[str, object]:
+    choice: Final = next(
+        (
+            choice
+            for choice in object_items(getattr(upstream_chunk, "choices", None))
+            if isinstance(choice, BaseModel) and getattr(choice, "index", None) == index
+        ),
+        None,
+    )
+    upstream_extras: Final[Mapping[str, object]] = (choice.model_extra or {}) if choice is not None else {}
+    return MappingProxyType({field: upstream_extras[field] for field in fields if field in upstream_extras})
+
+
 def _upstream_choice_index(upstream_chunk: object) -> int:
     upstream_index: Final[object] = getattr(_upstream_first_choice(upstream_chunk), "index", 0)
     return upstream_index if isinstance(upstream_index, int) else 0
@@ -1876,8 +1889,7 @@ class CustomStreamWrapper:
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
-                self._record_finish_choice_fields(chunk)
-            self._record_finish_reasons(chunk)
+            self._record_finishes(chunk)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -2240,6 +2252,21 @@ class CustomStreamWrapper:
         if received:
             self.received_finish_reasons = MappingProxyType({**self.received_finish_reasons, **received})
 
+    def _record_finishes(self, upstream_chunk: object) -> None:
+        received: Final = _finish_reasons_by_index(upstream_chunk)
+        if not received:
+            return
+        self.received_finish_reasons = MappingProxyType({**self.received_finish_reasons, **received})
+        self.received_finish_choice_fields = MappingProxyType(
+            {
+                **self.received_finish_choice_fields,
+                **{
+                    index: _upstream_choice_fields_at(upstream_chunk, index, STREAM_FINISH_CHOICE_FIELDS)
+                    for index in received
+                },
+            }
+        )
+
     def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
         if finish_reason == "stop" and self.tool_call:
             return "tool_calls"
@@ -2328,7 +2355,9 @@ class CustomStreamWrapper:
         )
         if served_tier is not None:
             setattr(model_response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
-        _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
+        _finish_reason: Final = (
+            self.received_finish_reason or self.received_finish_reasons.get(0) or self.intermittent_finish_reason
+        )
         model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
             _finish_reason if _finish_reason is not None else "stop"
         )
