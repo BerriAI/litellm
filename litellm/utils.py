@@ -7453,6 +7453,7 @@ def get_model_info_helper(
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
+                min_billed_input_tokens=_model_info.get("min_billed_input_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
@@ -9135,6 +9136,13 @@ _model_cache: Final = AvailableModelsCache()
 _FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
+def _json_provider_api_key_is_set(provider: str) -> bool:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(provider)
+    return json_provider is not None and json_provider.api_key_env in os.environ
+
+
 def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
     if provider == LlmProviders.TOGETHER_AI:
         return TOGETHER_AI_API_KEY_ENV_VARS
@@ -9149,7 +9157,10 @@ def _infer_valid_provider_from_env_vars(
         provider
         for provider in litellm.provider_list
         if (not custom_llm_provider or provider == custom_llm_provider)
-        and any(name in environ_keys for name in _provider_api_key_env_vars(provider))
+        and (
+            any(name in environ_keys for name in _provider_api_key_env_vars(provider))
+            or _json_provider_api_key_is_set(provider)
+        )
     ]
 
 
