@@ -176,7 +176,14 @@ from litellm.types.completion import (
     CompletionDispatchContext,
     _CompletionDispatchResult,
 )
-from litellm.types.litellm_params import ControlOptions, RetryStrategy
+from litellm.types.litellm_params import (
+    PROMPT_MANAGEMENT_APPLIED,
+    ControlOptions,
+    RetryStrategy,
+    params_the_prompt_hook_changed,
+    prompt_management_applied,
+    prompt_template_applied,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_strictly
 from litellm.types.utils import (
@@ -247,6 +254,7 @@ from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
     resolve_fallbacks,
+    routes_through_a_prompt_manager,
     without_global_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
@@ -794,6 +802,8 @@ async def acompletion(
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
+    model_routes_through_a_prompt_manager: Final = routes_through_a_prompt_manager(model)
+    each_fallback_applies_its_own_prompt: Final = fallbacks is not None and not model_routes_through_a_prompt_manager
     prompt_management_logger: Final = (
         litellm_logging_obj.get_custom_logger_for_prompt_management(
             model=model,
@@ -801,8 +811,11 @@ async def acompletion(
             tools=tools,
             prompt_id=prompt_id,
             dynamic_callback_params=litellm_logging_obj.standard_callback_dynamic_params,
+            template_applied=prompt_template_applied(caller_kwargs),
         )
         if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and not each_fallback_applies_its_own_prompt
+        and not prompt_management_applied(caller_kwargs)
         and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id,
             non_default_params=kwargs,
@@ -812,6 +825,14 @@ async def acompletion(
     )
     each_fallback_writes_its_own_cache_dialect: Final = fallbacks is not None and isinstance(
         prompt_management_logger, AnthropicCacheControlHook
+    )
+    applies_prompt_management: Final = (
+        prompt_management_logger is not None and not each_fallback_writes_its_own_cache_dialect
+    )
+    messages_before_the_prompt_hook: Final = (
+        tuple(cast("list[object]", messages))  # cast-ok: acompletion takes an untyped messages list
+        if applies_prompt_management
+        else ()
     )
 
     prompt_hook_result: Final = (
@@ -830,10 +851,22 @@ async def acompletion(
                 request_kwargs=kwargs,
             ),
         )
-        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
-        and prompt_management_logger is not None
-        and not each_fallback_writes_its_own_cache_dialect
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and applies_prompt_management
         else None
+    )
+    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
+    prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
+    prompt_overrides: Final = params_the_prompt_hook_changed(request_kwargs, prompt_params)
+    prompt_management_marker: Final[Mapping[str, object]] = (
+        PROMPT_MANAGEMENT_APPLIED
+        if prompt_hook_result is not None
+        and not model_routes_through_a_prompt_manager
+        and (
+            prompt_hook_result[0] != model
+            or tuple(prompt_hook_result[1]) != messages_before_the_prompt_hook
+            or len(prompt_overrides) > 0
+        )
+        else MappingProxyType({})
     )
     if prompt_hook_result is not None:
         model, messages, _ = prompt_hook_result
@@ -905,13 +938,6 @@ async def acompletion(
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
-    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
-    prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
-    prompt_overrides: Final = {
-        key: value
-        for key, value in prompt_params.items()
-        if key not in request_kwargs or request_kwargs[key] is not value
-    }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -952,7 +978,9 @@ async def acompletion(
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
         func: Final = partial(
-            completion, **{**completion_kwargs, **prompt_overrides}, **without(request_kwargs, *prompt_overrides)
+            completion,
+            **{**completion_kwargs, **prompt_overrides},
+            **{**without(request_kwargs, *prompt_overrides), **prompt_management_marker},
         )
 
         # Add the context to the function
@@ -5939,6 +5967,8 @@ def completion(
     )
     ######## end of unpacking kwargs ###########
     non_default_params: Final = get_non_default_completion_params(kwargs=kwargs)
+    routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+    fallbacks: Final = resolve_fallbacks(routing_kwargs)
     ## PROMPT MANAGEMENT HOOKS ##
 
     from litellm.integrations.anthropic_cache_control_hook import (
@@ -5958,8 +5988,11 @@ def completion(
         model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
     )
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
-        litellm_logging_obj.should_run_prompt_management_hooks(
+    prompt_applied_elsewhere: Final = prompt_management_applied(routing_kwargs) or fallbacks is not None
+    if (
+        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and not prompt_applied_elsewhere
+        and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
@@ -5976,6 +6009,7 @@ def completion(
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
             request_kwargs=kwargs,
+            template_applied=prompt_template_applied(routing_kwargs),
         )
 
     ### LITELLM SYSTEM PROMPT ###
@@ -5996,8 +6030,6 @@ def completion(
         elif num_retries is not None:
             max_retries = num_retries
         logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
-        fallbacks: Final = resolve_fallbacks(routing_kwargs)
         if fallbacks is not None:
             fallback_runner: Final = (
                 async_completion_with_fallbacks if acompletion is True else completion_with_fallbacks
