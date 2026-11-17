@@ -103,10 +103,7 @@ def _http_error_status(value: object) -> int | None:
 def openai_error_type(exc: object, status_code: int) -> str:
     """OpenAI types ``error.type`` as a required string, so an exception carrying none
     falls back to the type its status code stands for."""
-    carried: Final = attribute_of(exc, "type")
-    if isinstance(carried, str) and carried != STRINGIFIED_NONE:
-        return redact_internal_details_from_client_message(carried)
-    return openai_error_type_for_status(status_code)
+    return _relayable_text(attribute_of(exc, "type")) or openai_error_type_for_status(status_code)
 
 
 def openai_error_type_for_status(status_code: int) -> str:
@@ -121,10 +118,13 @@ def openai_error_type_for_status(status_code: int) -> str:
 def openai_error_param(exc: object) -> str | None:
     """OpenAI types ``error.param`` as nullable, so an exception carrying none
     serializes as JSON ``null``."""
-    carried: Final = attribute_of(exc, "param")
-    if isinstance(carried, str) and carried != STRINGIFIED_NONE:
-        return redact_internal_details_from_client_message(carried)
-    return None
+    return _relayable_text(attribute_of(exc, "param")) or None
+
+
+def _relayable_text(carried: object) -> str:
+    if not isinstance(carried, str) or carried == STRINGIFIED_NONE:
+        return ""
+    return redact_internal_details_from_client_message(carried).strip()
 
 
 def relayed_provider_specific_fields(

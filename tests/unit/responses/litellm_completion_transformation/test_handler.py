@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -29,6 +30,65 @@ from litellm.responses.litellm_completion_transformation.handler import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
+
+
+_UPSTREAM_PARAM_CASES: Final = [
+    pytest.param("max_tokens", None, id="renamed_by_the_bridge"),
+    pytest.param("messages.[0].content", None, id="chat_only_path"),
+    pytest.param("user", "user", id="shared_field"),
+]
+
+
+def _upstream_rejects(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str) -> respx.Route:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            400,
+            json={"error": {"message": "rejected", "type": "invalid_request_error", "param": param, "code": None}},
+        )
+    )
+
+
+@pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
+def test_sync_bridged_turn_relays_an_upstream_param_only_when_it_names_a_responses_field(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: str, relayed_param: str | None
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request={"max_output_tokens": 16, "user": "user-1"},
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
+async def test_async_bridged_turn_relays_an_upstream_param_only_when_it_names_a_responses_field(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: str, relayed_param: str | None
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+    bridged_turn: Final = LiteLLMCompletionTransformationHandler().response_api_handler(
+        model="gpt-5.6",
+        input="hi",
+        responses_api_request={"max_output_tokens": 16, "user": "user-1"},
+        custom_llm_provider="openai",
+        _is_async=True,
+        api_key="sk-bridge-test",
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await bridged_turn
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
 
 
 class _StopForwarding(Exception):
@@ -323,9 +383,7 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),

@@ -5242,6 +5242,30 @@ def test_get_error_information_error_code_priority():
     assert result["error_class"] == "NoCodeException"
 
 
+@pytest.mark.parametrize("provider_code", ["context_length_exceeded", "integer_below_min_value", "content_filter"])
+def test_get_error_information_logs_the_http_status_over_a_provider_error_code(provider_code: str):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    error: Final = litellm.BadRequestError(
+        message="rejected",
+        model="gpt-5.6",
+        llm_provider="openai",
+        body={"message": "rejected", "type": "invalid_request_error", "param": None, "code": provider_code},
+    )
+
+    assert error.code == provider_code
+    assert StandardLoggingPayloadSetup.get_error_information(error)["error_code"] == "400"
+
+
+def test_get_error_information_logs_a_provider_error_code_when_no_http_status_is_known():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    class CodeOnlyError(Exception):
+        code = "invalid_api_key"
+
+    assert StandardLoggingPayloadSetup.get_error_information(CodeOnlyError())["error_code"] == "invalid_api_key"
+
+
 def test_get_error_information_prefers_message_attribute_over_str():
     """
     Regression for empty-error_message-in-spend-logs.

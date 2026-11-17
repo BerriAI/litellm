@@ -2,11 +2,14 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from collections.abc import Coroutine, Mapping, Sequence
+import re
+from collections.abc import Coroutine, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+import openai
 from pydantic import TypeAdapter
 
 import litellm
@@ -29,12 +32,31 @@ from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterat
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIRequestParams,
     ResponsesAPIResponse,
 )
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset({"caller_input", "names_non_string_fields"})
+_RESPONSES_REQUEST_FIELDS: Final = (
+    ResponsesAPIRequestParams.__required_keys__ | ResponsesAPIRequestParams.__optional_keys__
+)
+_PARAM_PATH_SEPARATOR: Final = re.compile(r"[.\[]")
+
+
+def _names_a_responses_field(param: str) -> bool:
+    return _PARAM_PATH_SEPARATOR.split(param, maxsplit=1)[0] in _RESPONSES_REQUEST_FIELDS
+
+
+@contextmanager
+def _error_param_named_as_a_responses_field() -> Generator[None]:
+    try:
+        yield
+    except openai.APIError as error:
+        if error.param is not None and not _names_a_responses_field(error.param):
+            error.param = None
+        raise
 
 
 def _without_bridge_transform_keywords(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -157,9 +179,10 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
-        )
+        with _error_param_named_as_a_responses_field():
+            litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
+                **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            )
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
@@ -258,9 +281,10 @@ class LiteLLMCompletionTransformationHandler:
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
-        )
+        with _error_param_named_as_a_responses_field():
+            litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
+                **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(

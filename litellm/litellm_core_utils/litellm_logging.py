@@ -7548,6 +7548,19 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
     return ()
 
 
+def _logged_error_code(original_exception: Exception | None) -> str:
+    carried_code: Final = str(getattr(original_exception, "code", None))
+    if carried_code.isdigit():
+        return carried_code
+    status_code: Final[object] = getattr(original_exception, "status_code", None)
+    if status_code is not None:
+        return str(status_code)
+    response_status_code: Final[object] = getattr(getattr(original_exception, "response", None), "status_code", None)
+    if response_status_code is not None:
+        return str(response_status_code)
+    return "" if carried_code in ("", "None") else carried_code
+
+
 class StandardLoggingPayloadSetup:
     @staticmethod
     def cleanup_timestamps(
@@ -8036,18 +8049,7 @@ class StandardLoggingPayloadSetup:
     ) -> StandardLoggingPayloadErrorInformation:
         from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 
-        # ProxyException uses .code, LiteLLM exceptions use .status_code,
-        # httpx.HTTPStatusError exposes status only as .response.status_code.
-        # Stringified for Prisma JSON compatibility.
-        error_code_attr: Final[object] = getattr(original_exception, "code", None)
-        if error_code_attr is not None and str(error_code_attr) not in ("", "None"):
-            error_status: str = str(error_code_attr)
-        else:
-            status_code_attr: object = getattr(original_exception, "status_code", None)
-            if status_code_attr is None:
-                response_attr: Final[object] = getattr(original_exception, "response", None)
-                status_code_attr = getattr(response_attr, "status_code", None)
-            error_status = str(status_code_attr) if status_code_attr is not None else ""
+        error_status: Final = _logged_error_code(original_exception)
         error_class: Final[str] = str(original_exception.__class__.__name__) if original_exception else ""
         _llm_provider_in_exception: Final = getattr(original_exception, "llm_provider", "")
 
