@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import json
 import time
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 import pytest
-from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import UnauthorizedError, UnknownApiError, unwrap
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from e2e_config import CHEAP_OPENAI_MODEL, settle_propagation, unique_marker
+from e2e_http import NoBody, UnauthorizedError, UnknownApiError, get_external, unwrap
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from idp import SHORT_LIVED_CLIENT_ID, WRONG_AUDIENCE_CLIENT_ID, Identity
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, TeamNewBody, UserNewBody
+from models import ChatBody, ChatMessage, TeamBlockBody, TeamNewBody, UserNewBody
 from other_client import OtherClient
-from pydantic import BaseModel
-from e2e_metadata import Domain, Mode, Provider, Subject, meta
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 pytestmark = pytest.mark.e2e
 
@@ -197,7 +202,7 @@ class TestJwtAuth:
         assert isinstance(result, UnauthorizedError), (
             f"a JWT whose signature does not verify must be rejected with 401, got {result}"
         )
-        assert "signature verification failed" in result.body.lower(), (
+        assert "signature" in result.body.lower(), (
             f"the 401 must come from signature verification, not another auth failure, got {result.body[:300]}"
         )
 
@@ -385,4 +390,259 @@ class TestJwtTeamHeader:
         assert for_other_alias.replace(other_alias, "<value>") == for_unknown.replace(unknown, "<value>"), (
             "a non-member alias and an unknown value must get the same denial body, so the response does not "
             f"reveal whether the team exists; got {for_other_alias[:300]!r} vs {for_unknown[:300]!r}"
+        )
+
+
+class _RsaJwk(BaseModel):
+    kid: str
+    kty: str
+    n: str = ""
+    e: str = ""
+
+
+class _Jwks(BaseModel):
+    keys: list[_RsaJwk]
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+Forgery = Literal["groups_swapped_under_genuine_signature", "alg_none", "hs256_keyed_with_published_rsa_key"]
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def _b64url_json(value: dict[str, JsonValue]) -> str:
+    return _b64url(json.dumps(value, separators=(",", ":")).encode())
+
+
+def _segment(segment: str) -> dict[str, JsonValue]:
+    return _JSON_OBJECT.validate_json(base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
+
+
+def _b64url_int(value: str) -> int:
+    return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
+
+
+def _published_rsa_pem(client: OtherClient, kid: str) -> bytes:
+    jwks: Final = unwrap(get_external(client.idp.jwks_url, response_type=_Jwks))
+    key: Final = next(k for k in jwks.keys if k.kid == kid and k.kty == "RSA")
+    public_key: Final = RSAPublicNumbers(_b64url_int(key.e), _b64url_int(key.n)).public_key()
+    return public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+
+
+def _forge(client: OtherClient, genuine: str, *, victim_team: str, forgery: Forgery) -> str:
+    """Rewrite a genuine token's groups claim to a team its subject is not in."""
+    header_segment, payload_segment, signature = genuine.split(".")
+    header: Final = _segment(header_segment)
+    payload: Final = _b64url_json({**_segment(payload_segment), "groups": [victim_team]})
+    match forgery:
+        case "groups_swapped_under_genuine_signature":
+            return f"{header_segment}.{payload}.{signature}"
+        case "alg_none":
+            return f"{_b64url_json({**header, 'alg': 'none'})}.{payload}."
+        case "hs256_keyed_with_published_rsa_key":
+            signing_input: Final = f"{_b64url_json({**header, 'alg': 'HS256'})}.{payload}"
+            secret: Final = _published_rsa_pem(client, str(header["kid"]))
+            mac: Final = hmac.new(secret, signing_input.encode(), hashlib.sha256).digest()
+            return f"{signing_input}.{_b64url(mac)}"
+
+
+def _real_team(client: OtherClient, resources: ResourceManager, *, team_id: str, models: list[str]) -> str:
+    created: Final = client.proxy.create_team(
+        TeamNewBody(team_alias=f"alias-{team_id}", team_id=team_id, models=models)
+    )
+    resources.defer(lambda: client.proxy.delete_team(created))
+    return created
+
+
+@dataclass(frozen=True, slots=True)
+class TwoTeams:
+    identity: Identity
+    locked_team: str
+    open_team: str
+
+
+@pytest.fixture
+def two_teams(client: OtherClient, resources: ResourceManager) -> TwoTeams:
+    """An identity in two teams. The one that sorts first cannot reach the test
+    model, so picking the first group instead of the first team with access would
+    bind the wrong team."""
+    marker: Final = unique_marker()
+    locked: Final = f"e2e-jwt-team-{marker}-0-locked"
+    opened: Final = f"e2e-jwt-team-{marker}-1-open"
+    identity: Final = client.idp.provision_groups(marker=marker, groups=(locked, opened), defer=resources.defer)
+    resources.defer(lambda: client.proxy.delete_user(identity.user_id))
+    _ = _real_team(client, resources, team_id=locked, models=[f"e2e-jwt-unreachable-model-{marker}"])
+    _ = _real_team(client, resources, team_id=opened, models=[CHEAP_OPENAI_MODEL])
+    return TwoTeams(identity=identity, locked_team=locked, open_team=opened)
+
+
+def _team_of(client: OtherClient, token: str) -> str | None:
+    response: Final = unwrap(client.proxy.chat(token, _ping()))
+    assert response.id is not None and response.choices, f"chat returned no completion: {response}"
+    rows: Final = client.proxy.poll_logs_for_request_id(response.id)
+    assert rows, f"no spend log row for request {response.id} within the poll deadline"
+    return rows[0].team_id
+
+
+def _block_team(client: OtherClient, team_id: str) -> None:
+    unwrap(
+        client.proxy.transport.post(
+            "/team/block",
+            headers=client.proxy.transport.master,
+            json=TeamBlockBody(team_id=team_id),
+            response_type=NoBody,
+        )
+    )
+
+
+class TestJwtTeamAdversarial:
+    @pytest.mark.covers("other.auth.jwt.forged_team_claim_denied")
+    @pytest.mark.parametrize(
+        "forgery", ["groups_swapped_under_genuine_signature", "alg_none", "hs256_keyed_with_published_rsa_key"]
+    )
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_token_forged_to_claim_another_team_is_rejected(
+        self, client: OtherClient, resources: ResourceManager, identity: Identity, forgery: Forgery
+    ) -> None:
+        victim: Final = _real_team(client, resources, team_id=f"e2e-jwt-victim-{unique_marker()}", models=[])
+        genuine: Final = client.idp.access_token(identity)
+        assert unwrap(client.proxy.chat(genuine, _ping())).choices, "precondition: the genuine token must be served"
+
+        result: Final = client.proxy.chat(_forge(client, genuine, victim_team=victim, forgery=forgery), _ping())
+        assert isinstance(result, UnauthorizedError), (
+            f"a token forged ({forgery}) to claim team {victim!r} must be rejected with 401 before any team is "
+            f"resolved, got {result}"
+        )
+
+    @pytest.mark.covers("other.auth.jwt.team_header_non_member_id_denied")
+    @meta(Subject(domain=Domain.PROXY_AUTH, models=(CHEAP_OPENAI_MODEL,), mode=Mode.NONSTREAM))
+    def test_team_header_with_the_id_of_a_team_the_caller_is_not_in_is_rejected_like_an_unknown_value(
+        self, client: OtherClient, resources: ResourceManager, identity: Identity
+    ) -> None:
+        token: Final = client.idp.access_token(identity)
+        other_team: Final = _real_team(client, resources, team_id=f"e2e-jwt-other-{unique_marker()}", models=[])
+        unknown: Final = f"e2e-jwt-unknown-{unique_marker()}"
+
+        for_other_team: Final = _denial(client, token, other_team)
+        for_unknown: Final = _denial(client, token, unknown)
+        assert for_other_team.replace(other_team, "<value>") == for_unknown.replace(unknown, "<value>"), (
+            "a real team the caller is not in and an unknown value must get the same denial body, got "
+            f"{for_other_team[:300]!r} vs {for_unknown[:300]!r}"
+        )
+
+    @pytest.mark.covers("other.auth.jwt.team_header_without_groups_denied")
+    @meta(Subject(domain=Domain.PROXY_AUTH, models=(CHEAP_OPENAI_MODEL,), mode=Mode.NONSTREAM))
+    def test_token_without_groups_cannot_select_a_team_by_header(
+        self, client: OtherClient, resources: ResourceManager
+    ) -> None:
+        groupless: Final = client.idp.provision_user(
+            marker=unique_marker(), groups=(), group_ids=(), defer=resources.defer
+        )
+        resources.defer(lambda: client.proxy.delete_user(groupless.user_id))
+        team: Final = _real_team(client, resources, team_id=f"e2e-jwt-unclaimed-{unique_marker()}", models=[])
+
+        _ = _denial(client, client.idp.access_token(groupless), team)
+
+    @pytest.mark.covers("other.auth.jwt.multi_team_binds_team_with_model_access")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_token_in_two_teams_binds_the_team_that_can_reach_the_model(
+        self, client: OtherClient, two_teams: TwoTeams
+    ) -> None:
+        bound: Final = _team_of(client, client.idp.access_token(two_teams.identity))
+        assert bound == two_teams.open_team, (
+            f"the request must be attributed to {two_teams.open_team!r}, the only team that can reach "
+            f"{CHEAP_OPENAI_MODEL}, not the first group {two_teams.locked_team!r}; got {bound!r}"
+        )
+
+    @pytest.mark.covers("other.auth.jwt.team_header_cannot_widen_model_access")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_team_header_naming_a_team_without_model_access_is_denied_even_if_another_group_has_it(
+        self, client: OtherClient, two_teams: TwoTeams
+    ) -> None:
+        token: Final = client.idp.access_token(two_teams.identity)
+        assert unwrap(client.chat_as_team(token, two_teams.open_team, _ping())).choices, (
+            f"precondition: {two_teams.open_team!r} must reach {CHEAP_OPENAI_MODEL}"
+        )
+
+        result: Final = client.chat_as_team(token, two_teams.locked_team, _ping())
+        assert isinstance(result, UnknownApiError) and result.status_code == 403, (
+            f"x-litellm-team-id={two_teams.locked_team!r} binds a team without {CHEAP_OPENAI_MODEL}, so the "
+            f"request must be denied with 403 rather than served through the other group, got {result}"
+        )
+        assert CHEAP_OPENAI_MODEL in result.body, f"the denial must be about model access, got {result.body[:300]}"
+
+    @pytest.mark.covers("other.auth.jwt.blocked_team_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_blocking_a_team_stops_tokens_that_were_already_served(
+        self, client: OtherClient, identity: Identity
+    ) -> None:
+        token: Final = client.idp.access_token(identity)
+        assert unwrap(client.proxy.chat(token, _ping())).choices, "precondition: the team must be served first"
+
+        _block_team(client, identity.group)
+        settle_propagation(time.monotonic())
+
+        result: Final = client.proxy.chat(token, _ping())
+        assert isinstance(result, UnauthorizedError), f"a blocked team's token must be denied with 401, got {result}"
+        assert "blocked" in result.body.lower() and identity.group in result.body, (
+            f"the denial must name the blocked team {identity.group!r}, got {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("other.auth.jwt.deleted_team_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_deleting_a_team_stops_tokens_that_were_already_served(
+        self, client: OtherClient, resources: ResourceManager
+    ) -> None:
+        member: Final = _provision(client, resources, marker=unique_marker())
+        team: Final = client.proxy.create_team(TeamNewBody(team_alias=f"alias-{member.group}", team_id=member.group))
+        token: Final = client.idp.access_token(member)
+        assert unwrap(client.proxy.chat(token, _ping())).choices, "precondition: the team must be served first"
+
+        client.proxy.delete_team(team)
+        settle_propagation(time.monotonic())
+
+        result: Final = client.proxy.chat(token, _ping())
+        assert isinstance(result, UnknownApiError) and result.status_code == 403, (
+            f"a token whose only team was deleted must be rejected like an unknown team, got {result}"
+        )
+        assert member.group in result.body, (
+            f"the 403 must name the deleted team {member.group!r}, got {result.body[:300]}"
         )

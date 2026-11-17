@@ -1,6 +1,8 @@
 "use client";
 
 import { getSkillMetadataColumns } from "@/components/claude_code_plugins/SkillMetadataColumns";
+import { getSourceDisplayText, getSourceLink } from "@/components/claude_code_plugins/helpers";
+import type { UserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, ExternalLink, Info, MoreHorizontal } from "lucide-react";
@@ -20,21 +22,6 @@ import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import i18n from "@/i18n/i18n";
-
-function getSkillSourceLink(skill: Plugin): { url: string; label: string } | null {
-  const src = skill.source;
-  if (src?.source === "github" && src.repo) {
-    return { url: `https://github.com/${src.repo}`, label: src.repo };
-  }
-  if (src?.source === "git-subdir" && src.url) {
-    const url = src.path ? `${src.url}/tree/main/${src.path}` : src.url;
-    return { url, label: url.replace("https://github.com/", "") };
-  }
-  if ((src?.source === "url" || src?.source === "archive") && src.url) {
-    return { url: src.url, label: src.url.replace(/^https?:\/\//, "") };
-  }
-  return null;
-}
 
 interface SkillHubRowActionsProps {
   skill: Plugin;
@@ -70,10 +57,11 @@ function SkillHubRowActions({ skill, onSkillClick }: SkillHubRowActionsProps) {
 }
 
 interface SkillHubTableColumnsDeps {
+  users?: UserIdentityLookup;
   onSkillClick: (skill: Plugin) => void;
 }
 
-export const getSkillHubTableColumns = ({ onSkillClick }: SkillHubTableColumnsDeps): ColumnDef<Plugin>[] => [
+export const getSkillHubTableColumns = ({ onSkillClick, users }: SkillHubTableColumnsDeps): ColumnDef<Plugin>[] => [
   {
     id: "name",
     accessorKey: "name",
@@ -131,17 +119,23 @@ export const getSkillHubTableColumns = ({ onSkillClick }: SkillHubTableColumnsDe
     size: 200,
     enableSorting: false,
     cell: ({ row }) => {
-      const link = getSkillSourceLink(row.original);
-      if (!link) return <span className="text-xs text-muted-foreground">-</span>;
+      const link = getSourceLink(row.original.source);
+      const label = getSourceDisplayText(row.original.source);
+      if (!link)
+        return (
+          <span className="block max-w-60 truncate text-xs text-muted-foreground" title={label}>
+            {label}
+          </span>
+        );
       return (
         <a
-          href={link.url}
+          href={link}
           target="_blank"
           rel="noopener noreferrer"
           className="flex max-w-60 items-center gap-1 text-xs text-primary hover:underline"
-          title={link.label}
+          title={label}
         >
-          <span className="truncate">{link.label}</span>
+          <span className="truncate">{label}</span>
           <ExternalLink className="size-3 shrink-0" />
         </a>
       );
@@ -161,7 +155,7 @@ export const getSkillHubTableColumns = ({ onSkillClick }: SkillHubTableColumnsDe
       />
     ),
   },
-  ...getSkillMetadataColumns<Plugin>(),
+  ...getSkillMetadataColumns<Plugin>(users),
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },

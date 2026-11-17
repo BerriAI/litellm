@@ -40,7 +40,7 @@ beforeEach(() => {
         creations.push(await request.json());
         if (freeTierReached)
           return Response.json(
-            { detail: "Free customer portal limit reached. Upgrade to Enterprise." },
+            { detail: "Customer Management free tier limit reached. Upgrade to Enterprise." },
             { status: 403 },
           );
         return rejectCreation
@@ -58,6 +58,16 @@ afterEach(() => {
 });
 
 describe("CreateCustomerDialog", () => {
+  it("adds budget groups without a secure browser context", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });
+    renderWithProviders(<Harness />);
+    await userEvent.click(screen.getByRole("button", { name: "Add budget group" }));
+    fireEvent.change(screen.getByLabelText("Group 4 name"), { target: { value: "extra_group" } });
+    await userEvent.click(screen.getByRole("button", { name: "Add budget group" }));
+    expect(screen.getByLabelText("Group 4 name")).toHaveValue("extra_group");
+    expect(screen.getByLabelText("Group 5 name")).toHaveValue("");
+  });
+
   it("surfaces the free-tier 403 detail", async () => {
     freeTierReached = true;
     renderWithProviders(<Harness />);
@@ -65,7 +75,7 @@ describe("CreateCustomerDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        expect.stringContaining("Free customer portal limit reached. Upgrade to Enterprise."),
+        expect.stringContaining("Customer Management free tier limit reached. Upgrade to Enterprise."),
       ),
     );
   });

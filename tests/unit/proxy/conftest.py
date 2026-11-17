@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
 import litellm
+import litellm.proxy.auth.user_api_key_auth
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.fips import enforce_fips_mode
@@ -33,6 +34,7 @@ from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_budgets_enabled
 from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
 
 
@@ -79,7 +81,7 @@ def setup_and_teardown():
 
     What is NOT reset:
       - Class instances without flush_cache() (e.g. ProxyLogging,
-        JWTHandler, FastAPI routers, loggers). If a test mutates such an
+        LiteLLM_JWTAuth, FastAPI routers, loggers). If a test mutates such an
         instance in-place (setattr on the instance, appending to one of
         its internal lists, etc.), the mutation will leak into later tests.
         Use pytest's monkeypatch.setattr() or a local fixture for those
@@ -147,6 +149,11 @@ def pytest_runtest_teardown(item, nextitem):
             setattr(proxy_server, name, snapshot[name])
         elif name in vars(proxy_server):
             delattr(proxy_server, name)
+
+
+@pytest.fixture
+def native_budgets_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from native_budgets_enabled(monkeypatch)
 
 
 @pytest.fixture
@@ -491,3 +498,12 @@ def import_without_redis_installed(monkeypatch: pytest.MonkeyPatch) -> Callable[
         return importlib.import_module(module_name)
 
     return _import
+
+
+@pytest.fixture(autouse=True)
+def _forget_email_in_use_checks() -> Iterator[None]:
+    from litellm.proxy.auth import auth_checks
+
+    auth_checks.email_in_use_checked_at.clear()
+    yield
+    auth_checks.email_in_use_checked_at.clear()

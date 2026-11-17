@@ -12,8 +12,61 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
+from litellm.proxy._types import (
+    GenerateKeyRequest,
+    GenerateKeyResponse,
+    LiteLLM_VerificationToken,
+    UpdateKeyRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+from litellm.proxy.utils import hash_token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["created", "updated", "rotated", "deleted"])
+async def test_impersonated_key_writes_preserve_actor_attribution(action: str) -> None:
+    actor_hash: Final = hash_token("sk-original-audit-actor")
+    auth: Final = UserAPIKeyAuth(api_key=None, token=actor_hash, user_id="subject").model_copy(
+        update={"impersonated_by": "service-key"}
+    )
+    database: Final = MagicMock()
+    database.db.litellm_auditlog.create = AsyncMock()
+    database.db.litellm_auditlog.create_many = AsyncMock()
+    existing: Final = LiteLLM_VerificationToken(token="target-hash")
+    response: Final = GenerateKeyResponse(key="sk-new", token_id="new-hash")
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", database),
+        patch("litellm.audit_log_callbacks", []),
+    ):
+        if action == "created":
+            await KeyManagementEventHooks.async_key_generated_hook(GenerateKeyRequest(), response, auth)
+        elif action == "updated":
+            await KeyManagementEventHooks.async_key_updated_hook(
+                UpdateKeyRequest(key="target-hash", max_budget=42), existing, None, auth
+            )
+        elif action == "rotated":
+            await KeyManagementEventHooks.async_key_rotated_hook(None, existing, response, auth)
+        else:
+            KeyManagementEventHooks.create_key_deleted_audit_logs((existing,), auth)
+        await asyncio.sleep(0)
+        await drain_audit_tasks()
+    row: Final = (
+        database.db.litellm_auditlog.create_many.call_args.kwargs["data"][0]
+        if action == "deleted"
+        else database.db.litellm_auditlog.create.call_args.kwargs["data"]
+    )
+    assert row["action"] == action
+    assert row["changed_by_api_key"] == actor_hash
+    assert row["changed_by"] == "subject"
+    assert json.loads(row["updated_values"])["_litellm_impersonation"] == {
+        "impersonated_by": "service-key",
+        "subject": "subject",
+    }
+    assert auth.api_key is None
 
 
 class TestKeyManagementEventHooksIndependentOperations:
@@ -200,12 +253,12 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_with_team_id(self):
         """Test that team_id is passed to async_rotate_secret."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
-        from litellm.secret_managers.base_secret_manager import BaseSecretManager
         import litellm
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
@@ -276,12 +329,12 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_without_team_id(self):
         """Test that None team_id is handled correctly."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
-        from litellm.secret_managers.base_secret_manager import BaseSecretManager
         import litellm
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
@@ -340,16 +393,16 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_in_key_rotated_hook(self):
         """Test that async_key_rotated_hook passes team_id to _rotate_virtual_key_in_secret_manager."""
+        import litellm
         from litellm.proxy._types import (
-            LiteLLM_VerificationToken,
             GenerateKeyResponse,
+            LiteLLM_VerificationToken,
             RegenerateKeyRequest,
         )
         from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
             KeyManagementSettings,
+            KeyManagementSystem,
         )
-        import litellm
 
         # Setup
         mock_secret_manager = MagicMock()
@@ -459,11 +512,11 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_store_virtual_keys_disabled(self):
         """Test that rotation is skipped when store_virtual_keys is False."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
         import litellm
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup
         mock_secret_manager = MagicMock()
@@ -489,8 +542,8 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_secret_manager_not_set(self):
         """Test that rotation is skipped when secret_manager_client is None."""
-        from litellm.types.secret_managers.main import KeyManagementSettings
         import litellm
+        from litellm.types.secret_managers.main import KeyManagementSettings
 
         # Setup
         litellm.secret_manager_client = None

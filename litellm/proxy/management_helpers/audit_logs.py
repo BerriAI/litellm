@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, TypeVar
 
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -22,10 +24,36 @@ from litellm.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
 if TYPE_CHECKING:
-    from litellm.integrations.s3_v3 import S3Logger
+    from litellm.integrations.s3_v2 import S3Logger
 
 _audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
+_AUDIT_JSON: Final = TypeAdapter(JsonValue)
+
+
+class _AuditValues(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    updated_values: str | None = None
+
+
+def with_audit_actor(record: LiteLLM_AuditLogs, auth: UserAPIKeyAuth) -> LiteLLM_AuditLogs:
+    if auth.impersonated_by is None:
+        return record
+    updated_values: Final = _AuditValues.model_validate(record).updated_values
+    values: Final = _AUDIT_JSON.validate_json(updated_values) if updated_values is not None else {}
+    return record.model_copy(
+        update={
+            "changed_by": auth.user_id,
+            "changed_by_api_key": auth.token,
+            "updated_values": json.dumps(
+                {
+                    **(values if isinstance(values, dict) else {"value": values}),
+                    "_litellm_impersonation": {"impersonated_by": auth.impersonated_by, "subject": auth.user_id},
+                }
+            ),
+        }
+    )
 
 
 def is_audit_logging_enabled(store_audit_logs: bool | None = None) -> bool:
@@ -78,9 +106,9 @@ def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3Logger | None":
     instance: CustomLogger | S3Logger | None
     audit_params: Final[Mapping[str, object] | None] = getattr(litellm, "s3_audit_callback_params", None)
     if name == "s3_v2" and audit_params is not None:
-        from litellm.integrations import s3_v3
+        from litellm.integrations import s3_v2
 
-        instance = s3_v3.S3Logger(s3_callback_params_override=audit_params)
+        instance = s3_v2.S3Logger(s3_callback_params_override=audit_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
@@ -249,16 +277,19 @@ async def create_object_audit_log(
     )
 
     await create_audit_log_for_update(
-        request_data=LiteLLM_AuditLogs(
-            id=str(uuid.uuid4()),
-            updated_at=datetime.now(timezone.utc),
-            changed_by=_changed_by,
-            changed_by_api_key=user_api_key_dict.api_key,
-            table_name=table_name,
-            object_id=object_id,
-            action=action,
-            updated_values=after_value,
-            before_value=before_value,
+        request_data=with_audit_actor(
+            LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=_changed_by,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=table_name,
+                object_id=object_id,
+                action=action,
+                updated_values=after_value,
+                before_value=before_value,
+            ),
+            user_api_key_dict,
         )
     )
 

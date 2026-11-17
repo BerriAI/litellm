@@ -13,7 +13,7 @@ However, this is under the enterprise license
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -48,7 +48,7 @@ def _metadata_of(payload: StandardLoggingPayload) -> StandardLoggingMetadata:
     return payload["metadata"]
 
 
-_CustomerIdKey = Literal[
+_CustomerIdKey: TypeAlias = Literal[
     "user_api_key_customer_member_id", "user_api_key_customer_team_id", "user_api_key_customer_org_id"
 ]
 
