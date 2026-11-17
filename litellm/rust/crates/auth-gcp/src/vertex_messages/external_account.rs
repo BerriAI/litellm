@@ -337,7 +337,13 @@ impl ExternalAccount {
         if status != 200 {
             return Err(refused(IMPERSONATION_REFUSED));
         }
-        let malformed = || refused("IAM's answer has no accessToken or a malformed expireTime");
+        // A 200 reply can hold a live access token, so it never goes into the message.
+        let malformed = || {
+            GoogleLoginFailure::new(
+                PythonException::Refresh,
+                "IAM's answer has no accessToken or a malformed expireTime",
+            )
+        };
         let reply = serde_json::from_str::<ImpersonationReply>(&body).map_err(|_| malformed())?;
         let (Some(token), Some(expire_time)) = (reply.access_token, reply.expire_time) else {
             return Err(malformed());
@@ -1102,6 +1108,44 @@ mod tests {
         assert_eq!(
             requests[1].2,
             r#"{"delegates": null, "scope": ["https://www.googleapis.com/auth/cloud-platform"], "lifetime": "600s"}"#
+        );
+    }
+
+    #[rstest]
+    #[case::fractional_expiry(
+        r#"{"accessToken": "live-sa-token", "expireTime": "2099-01-01T00:00:00.123Z"}"#
+    )]
+    #[case::no_expiry(r#"{"accessToken": "live-sa-token"}"#)]
+    #[tokio::test]
+    async fn a_malformed_iam_answer_keeps_its_token_out_of_the_error(#[case] answer: &'static str) {
+        let sts = sts(vec![
+            (
+                "/token",
+                200,
+                r#"{"access_token": "sts-token", "expires_in": 3600}"#,
+            ),
+            (
+                "/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken",
+                200,
+                answer,
+            ),
+        ])
+        .await;
+        let account = account(
+            json!({
+                "audience": AUDIENCE, "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "token_url": format!("{}/token", sts.url),
+                "service_account_impersonation_url": format!("{}/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken", sts.url),
+            }),
+            "subject",
+        );
+
+        let failure = account.mint().await.unwrap_err();
+
+        assert_eq!(failure.exception, PythonException::Refresh);
+        assert_eq!(
+            failure.message,
+            "IAM's answer has no accessToken or a malformed expireTime"
         );
     }
 
