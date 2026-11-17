@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.router_api import RoutingContext
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ class SemanticGuardRouteLoader:
     """Loads route definitions from YAML templates and custom configs, builds SemanticRouter."""
 
     @staticmethod
-    def load_builtin_template(template_name: str) -> dict[str, object]:
+    def load_builtin_template(template_name: str) -> Mapping[str, object]:
         """Load a built-in route template YAML by name."""
         file_path: Final = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
         if not os.path.exists(file_path):
@@ -40,7 +41,7 @@ class SemanticGuardRouteLoader:
                 f"Available templates: {SemanticGuardRouteLoader.list_builtin_templates()}"
             )
         with open(file_path, "r") as f:
-            return yaml.safe_load(f)
+            return decoded_json_object(_DECODED_YAML.validate_python(yaml.safe_load(f)))
 
     @staticmethod
     def list_builtin_templates() -> list[str]:

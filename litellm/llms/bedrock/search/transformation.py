@@ -39,6 +39,7 @@ from typing import Final
 import httpx
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -433,7 +434,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         """
         text: Final = raw_response.text
         if not text.lstrip().startswith(_SSE_LINE_PREFIXES):
-            return raw_response.json()
+            return decoded_json_object(_JSON_VALUE.validate_python(raw_response.json()))
 
         events: Final = tuple(_iter_sse_events(text))
         response_event: Final = next(

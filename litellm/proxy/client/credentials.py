@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 from urllib.parse import quote
 
 import requests
@@ -41,7 +41,7 @@ class CredentialsManagementClient:
     def list(
         self,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> object | requests.Request:
         """
         List all credentials.
 
@@ -67,7 +67,7 @@ class CredentialsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

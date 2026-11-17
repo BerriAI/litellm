@@ -2,8 +2,8 @@ import os
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, Protocol, TypeVar
+from collections.abc import Callable, Iterator, Mapping, Sequence, Sized
+from typing import Final, Protocol, TypeVar, runtime_checkable
 from urllib.parse import urlencode
 
 import click
@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     load_cli_token_left_in_keychain,
     save_cli_token,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
@@ -335,6 +336,48 @@ def _login_command(renews: bool) -> str:
     return "lite login --pkce" if renews else "lite login"
 
 
+@runtime_checkable
+class _SupportsIteration(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+@runtime_checkable
+class _SupportsSlicing(Protocol):
+    def __getitem__(self, key: slice, /) -> object: ...
+
+
+def sized_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def joined_names(names: object) -> str:
+    if not isinstance(names, (_SupportsIteration, _SupportsSlicing)):
+        raise TypeError("can only join an iterable")
+    entries: Final = tuple(iter_items(names))
+    strings: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    if len(strings) == len(entries):
+        return ", ".join(strings)
+    first_bad: Final = next(position for position, entry in enumerate(entries) if not isinstance(entry, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(entries[first_bad]).__name__} found")
+
+
+def _leading_models(models: object) -> object:
+    if isinstance(models, _SupportsSlicing):
+        return models[:3]
+    raise TypeError(f"'{type(models).__name__}' object is not subscriptable")
+
+
+def models_summary(models: object) -> str:
+    if not models:
+        return "All models"
+    count: Final = sized_len(models)
+    if count > 3:
+        return joined_names(_leading_models(models)) + f" (+{count - 3} more)"
+    return joined_names(models)
+
+
 # Team selection utilities
 def display_teams_table(teams: list[CliTeam]) -> None:
     """Display teams in a formatted table"""
@@ -424,7 +467,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: Sequence[Mapping[str, object]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console: Final = Console()
 
@@ -436,17 +479,10 @@ def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selec
     for i, team in enumerate(teams):
         team_alias = team.get("team_alias") or "N/A"
         team_id = team.get("team_id", "N/A")
-        models: list[str] = team.get("models", [])
+        models = team.get("models", [])
         max_budget = team.get("max_budget")
 
-        # Format models list
-        if models:
-            if len(models) > 3:
-                models_str = ", ".join(models[:3]) + f" (+{len(models) - 3} more)"
-            else:
-                models_str = ", ".join(models)
-        else:
-            models_str = "All models"
+        models_str = models_summary(models)
 
         # Format budget
         budget_str = f"${max_budget}" if max_budget else "Unlimited"

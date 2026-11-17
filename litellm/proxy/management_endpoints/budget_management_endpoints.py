@@ -16,7 +16,7 @@ import math
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import TypeAdapter
@@ -46,6 +46,15 @@ from litellm.repositories.table_repositories import (
 
 router: Final = APIRouter()
 _WRITE_VALUES: Final = TypeAdapter(Mapping[str, object])
+
+
+class _FieldWithDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+
+
+def _field_default(field: _FieldWithDefault) -> object:
+    return field.default
 
 
 async def new_budget(
@@ -398,7 +407,7 @@ async def budget_settings(
                 field_description=field_info.description or "",
                 field_value=db_budget_row_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
-                field_default_value=field_info.default,
+                field_default_value=_field_default(field_info),
             )
             return_val.append(_response_obj)
 

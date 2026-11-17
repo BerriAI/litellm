@@ -79,6 +79,7 @@ class RerankUsage(TypedDict):
 
 
 _RERANK_META: Final = TypeAdapter(RerankResponseMeta)
+_FIELD_VALUE: Final = TypeAdapter(object)
 
 
 def get_rerank_usage(response: Mapping[str, object]) -> RerankUsage | None:
@@ -146,8 +147,8 @@ class RerankResponse(LiteLLMBaseModel):
     @overload
     def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None: ...
 
-    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None:
-        return self.__dict__[key]
+    def __getitem__(self, key: str) -> object:
+        return _FIELD_VALUE.validate_python(self.__dict__[key])
 
     @overload
     def get(self, key: Literal["id"], default: None = None) -> str | None: ...
@@ -162,7 +163,7 @@ class RerankResponse(LiteLLMBaseModel):
     def get(self, key: str, default: object = None) -> object: ...
 
     def get(self, key: str, default: object = None) -> object:
-        return self.__dict__.get(key, default)
+        return _FIELD_VALUE.validate_python(self.__dict__.get(key, default))
 
     def __contains__(self, key: str) -> bool:
         return key in self.__dict__

@@ -1,9 +1,11 @@
 from typing import Final
 
 from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 
 class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
@@ -57,9 +59,9 @@ class HiddenParams(OpenAIObject):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes

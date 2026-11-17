@@ -5,7 +5,7 @@ Bedrock Token Counter implementation using the CountTokens API.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
@@ -218,7 +218,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: Sequence[Mapping[str, object]] | None,
         contents: Sequence[Mapping[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: Mapping[str, object] | None = None,
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,

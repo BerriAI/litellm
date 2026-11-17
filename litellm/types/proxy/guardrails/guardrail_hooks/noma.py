@@ -4,6 +4,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    TypeAdapter,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
@@ -69,6 +70,9 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         return "Noma Security v2"
 
 
+_VALIDATED_FIELD: Final = TypeAdapter(object)
+
+
 class NomaV2StreamingParams(BaseModel):
     """Streaming settings a Noma v2 guardrail reads from the top level of its litellm_params.
 
@@ -89,7 +93,7 @@ class NomaV2StreamingParams(BaseModel):
         cls, value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
     ) -> object:
         try:
-            validated: Final[object] = handler(value)
+            validated: Final = _VALIDATED_FIELD.validate_python(handler(value))
         except ValidationError:
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail %s: ignoring %s=%.100r, which is not a valid value; the default applies",

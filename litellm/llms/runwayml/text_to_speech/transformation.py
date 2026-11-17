@@ -6,7 +6,7 @@ Maps OpenAI TTS spec to RunwayML Text-to-Speech API
 
 import asyncio
 import time
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypedDict, Union
 
 import httpx
@@ -418,19 +418,18 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             }
 
         # Build request body
-        request_body: Final = {
+        request_body: Final[Mapping[str, object]] = {
             "model": model or self.DEFAULT_MODEL,
             "promptText": input,
             "voice": runwayml_voice,
         }
 
         # Add any other optional parameters (except runwayml_voice which we already used)
-        for k, v in optional_params.items():
-            if k not in request_body and k != "runwayml_voice":
-                request_body[k] = v
-
         return {
-            "dict_body": request_body,
+            "dict_body": {
+                **request_body,
+                **{k: v for k, v in optional_params.items() if k not in request_body and k != "runwayml_voice"},
+            },
             "headers": headers,
         }
 

@@ -1,11 +1,22 @@
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
+from litellm.litellm_core_utils.core_helpers import iter_items, subscript
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 
 BASETEN_MODEL_API_BASE: Final = "https://inference.baseten.co/v1"
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _baseten_model_name(model: object) -> str:
+    model_id: Final = subscript(model, "id")
+    if isinstance(model_id, str):
+        return "baseten/" + model_id
+    raise TypeError(f'can only concatenate str (not "{type(model_id).__name__}") to str')
 
 
 class BasetenConfig(OpenAIGPTConfig):
@@ -125,7 +136,10 @@ class BasetenConfig(OpenAIGPTConfig):
             raise ValueError(
                 f"Failed to fetch models from Baseten. Status code: {response.status_code}, Response: {response.text}"
             )
-        return ["baseten/" + model["id"] for model in response.json()["data"]]
+        return [
+            _baseten_model_name(model)
+            for model in iter_items(subscript(_DECODED_JSON.validate_python(response.json()), "data"))
+        ]
 
     @staticmethod
     def is_dedicated_deployment(model: str) -> bool:
