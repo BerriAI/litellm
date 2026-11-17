@@ -59,8 +59,13 @@ pub(crate) enum Repr {
     #[error("request signing failed")]
     Signature(#[source] litellm_error::Source),
 
+    /// `origin` is the `scheme://host:port` the client could not connect to.
     #[error("could not reach the provider")]
-    Connect(#[source] reqwest::Error),
+    Connect {
+        #[source]
+        source: reqwest::Error,
+        origin: Option<String>,
+    },
     #[error("upstream network error")]
     Network(#[source] reqwest::Error),
     #[error("upstream network error")]
@@ -238,6 +243,14 @@ impl Error {
         .into()
     }
 
+    /// The `scheme://host:port` a request that never connected was sent to.
+    pub fn connect_origin(&self) -> Option<&str> {
+        match &*self.0 {
+            Repr::Connect { origin, .. } => origin.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn body_cut(&self) -> Option<BodyCut> {
         match &*self.0 {
             Repr::BodyCut { cut, .. } => Some(*cut),
@@ -289,7 +302,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
             | Repr::WebSocketSchemeRewrite(_)
@@ -326,7 +339,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::UnsignableBody
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -359,7 +372,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -385,7 +398,7 @@ impl Error {
 
     pub fn is_connect(&self) -> bool {
         match &*self.0 {
-            Repr::Connect(_) => true,
+            Repr::Connect { .. } => true,
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -439,7 +452,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Status { .. }
@@ -475,7 +488,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -515,7 +528,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::WebSocketUrl(_)
@@ -550,7 +563,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -619,15 +632,29 @@ impl From<Repr> for Error {
 
 impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
+        let origin = error.url().and_then(url_origin);
         let error = error.without_url();
         if error.is_timeout() {
             Repr::Timeout(error).into()
         } else if error.is_connect() || error.is_builder() {
-            Repr::Connect(error).into()
+            Repr::Connect {
+                source: error,
+                origin,
+            }
+            .into()
         } else {
             Repr::Network(error).into()
         }
     }
+}
+
+fn url_origin(url: &url::Url) -> Option<String> {
+    Some(format!(
+        "{}://{}:{}",
+        url.scheme(),
+        url.host_str()?,
+        url.port_or_known_default()?
+    ))
 }
 
 impl From<tungstenite::Error> for Error {
@@ -658,6 +685,43 @@ mod tests {
         assert!(!error.dispatched());
         assert!(!report.contains("secret"), "{report}");
         assert!(!report.contains("private"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_connection_names_only_the_origin_it_was_sent_to() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .post(format!(
+                "http://{address}/model/private/invoke?api_key=secret"
+            ))
+            .send()
+            .await
+            .expect_err("nothing listens");
+
+        let error = crate::Error::from(error);
+
+        assert_eq!(
+            error.connect_origin(),
+            Some(format!("http://{address}").as_str())
+        );
+    }
+
+    #[rstest]
+    #[case::default_https_port(
+        "https://bedrock-mantle.us-east-1.api.aws/v1/messages",
+        "https://bedrock-mantle.us-east-1.api.aws:443"
+    )]
+    #[case::explicit_port("http://[::1]:8080/v1?x=1", "http://[::1]:8080")]
+    fn an_origin_keeps_the_scheme_host_and_port(#[case] url: &str, #[case] origin: &str) {
+        assert_eq!(
+            super::url_origin(&url::Url::parse(url).unwrap()).as_deref(),
+            Some(origin)
+        );
     }
 
     fn root_cause<'a>(

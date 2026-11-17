@@ -185,6 +185,15 @@ impl Error {
         }
     }
 
+    /// The `scheme://host:port` a request that never connected was sent to.
+    pub fn connect_origin(&self) -> Option<&str> {
+        match self {
+            Self::Llm(error) => error.connect_origin(),
+            Self::Http(error) => error.connect_origin(),
+            _ => None,
+        }
+    }
+
     pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
         match self {
             Self::Llm(error) => error.body_cut(),
