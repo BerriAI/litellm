@@ -16,9 +16,10 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
+    is_blank_content,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
@@ -694,26 +695,15 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
-def _is_blank_text_part(part: object) -> bool:
-    fields: Final = as_str_mapping(part)
-    return fields is not None and fields.get("type") == "text" and not fields.get("text")
-
-
 def _is_blank_user_message(message: AllMessageValues) -> bool:
     fields: Final = as_str_mapping(message)
-    if fields is None:
-        return False
-    content: Final = fields.get("content")
-    if content is None or content == "":
-        return True
-    parts: Final = as_object_list(content)
-    return parts is not None and all(map(_is_blank_text_part, parts))
+    return fields is not None and is_blank_content(fields.get("content"))
 
 
-def _gemini_empty_user_turn(
-    user_span: Sequence[AllMessageValues], contents: Sequence[ContentType]
+def _gemini_blank_last_user_turn(
+    last_user_span: Sequence[AllMessageValues], contents: Sequence[ContentType]
 ) -> ContentType | None:
-    if not user_span or not all(map(_is_blank_user_message, user_span)):
+    if not last_user_span or not all(map(_is_blank_user_message, last_user_span)):
         return None
     if contents and contents[-1].get("role") == "user":
         return None
@@ -725,6 +715,7 @@ def gemini_convert_messages_with_history(
     model: str | None = None,
     litellm_params: dict | None = None,
     custom_llm_provider: str | None = None,
+    ends_request: bool = True,
 ) -> list[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -884,13 +875,19 @@ def gemini_convert_messages_with_history(
                                     llm_provider="vertex_ai",
                                 )
                     user_content.extend(_parts)
-                elif isinstance(_message_content, str) and _message_content:
+                elif _message_content is not None and isinstance(_message_content, str):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
 
                 msg_i += 1
 
-            if user_content:
+            if (
+                ends_request
+                and msg_i == len(messages)
+                and (blank_user_turn := _gemini_blank_last_user_turn(messages[init_msg_i:], contents)) is not None
+            ):
+                contents.append(blank_user_turn)
+            elif user_content:
                 """
                 check that user_content has 'text' parameter.
                     - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -905,8 +902,6 @@ def gemini_convert_messages_with_history(
                         PartType(text=" ")
                     )  # add a blank text, to ensure Gemini doesn't fail the request.
                 contents.append(ContentType(role="user", parts=user_content))
-            elif (empty_user_turn := _gemini_empty_user_turn(messages[init_msg_i:msg_i], contents)) is not None:
-                contents.append(empty_user_turn)
             assistant_content = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":

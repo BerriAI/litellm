@@ -6716,6 +6716,25 @@ _EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
             id="vertex_ai_gemini",
         ),
         pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/gemini-3.8-flash"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model",
+        ),
+        pytest.param(
+            "1234567890",
+            "vertex_ai",
+            {"role": "user"},
+            {"api_base": "http://10.96.32.8"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_private_service_connect_endpoint",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", {"role": "user"}, {}, [_HELLO], id="vertex_ai_claude_accepts_it_as_before"
+        ),
+        pytest.param(
             "command-a-03-2025", "cohere", {"role": "user"}, {}, [_HELLO], id="cohere_accepts_a_model_turn_end"
         ),
         pytest.param(

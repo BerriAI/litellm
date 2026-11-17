@@ -6037,6 +6037,7 @@ _EMPTY_USER_MESSAGES: Final = (
     pytest.param({"role": "user", "content": []}, id="empty_list"),
     pytest.param({"role": "user", "content": None}, id="null"),
     pytest.param({"role": "user"}, id="missing"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
 )
 _DROPPED_USER_MESSAGES: Final = (
     pytest.param({"role": "user", "content": None}, id="null"),

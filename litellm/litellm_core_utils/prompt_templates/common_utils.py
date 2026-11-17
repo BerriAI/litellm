@@ -21,7 +21,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -391,15 +391,26 @@ def detect_first_expected_role(
     return None
 
 
-def _is_blank(content: object) -> bool:
-    return content is None or (isinstance(content, (str, list)) and not content)
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+
+
+def _is_blank_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and not fields.get("text")
+
+
+def is_blank_content(content: object) -> bool:
+    if content is None or content == "":
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_blank_text_block, blocks))
 
 
 def is_empty_user_message(message: object) -> bool:
     mapping: Final = as_str_mapping(message)
     if mapping is not None:
-        return mapping.get("role") == "user" and _is_blank(mapping.get("content"))
-    return getattr(message, "role", None) == "user" and _is_blank(getattr(message, "content", None))
+        return mapping.get("role") == "user" and is_blank_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and is_blank_content(getattr(message, "content", None))
 
 
 def _counts_for_alternation(message: AllMessageValues) -> bool:
