@@ -11,11 +11,7 @@ use litellm_llms_types::{
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, VERSION_HEADER},
     recognized::Recognized,
 };
-use litellm_python_compat::{
-    Value as PythonValue,
-    repr::repr,
-    urllib::{ParsedUrl, urlparse},
-};
+use litellm_python_compat::{Value as PythonValue, repr::repr};
 use litellm_router_types::LitellmParams;
 use serde_json::{Value, json};
 
@@ -40,7 +36,7 @@ use crate::{
         },
     },
     vertex_ai::{
-        common_utils::{get_vertex_base_url, graft_default_vertex_path, join_api_base},
+        common_utils::{BaseUrl, get_vertex_base_url, graft_default_vertex_path, join_api_base},
         request_labels::with_partner_labels_header,
     },
 };
@@ -300,11 +296,11 @@ pub fn complete_vertex_anthropic_url(
         return Ok(join_api_base(&get_vertex_base_url(location)?, &route));
     };
     let default_url = join_api_base(custom, &route);
-    let base_path = urlparse(custom).path;
+    let base_path = BaseUrl::split(custom).path;
     let url = if base_path.is_empty() || base_path == "/" {
-        join_api_base(custom, &urlparse(&default_url).path)
+        join_api_base(custom, BaseUrl::split(&default_url).path)
     } else if matches!(base_path.trim_end_matches('/'), "/v1" | "/v1beta1")
-        && urlparse(&default_url).path.contains("/projects/")
+        && BaseUrl::split(&default_url).path.contains("/projects/")
     {
         graft_default_vertex_path(custom, &default_url)
     } else {
@@ -313,12 +309,12 @@ pub fn complete_vertex_anthropic_url(
     if !stream {
         return Ok(url);
     }
-    let parsed = urlparse(&url);
+    let parsed = BaseUrl::split(&url);
     let query = match parsed.query.is_empty() {
         true => "alt=sse".to_string(),
         false => format!("{}&alt=sse", parsed.query),
     };
-    Ok(ParsedUrl { query, ..parsed }.geturl())
+    Ok(parsed.with(parsed.path, &query))
 }
 
 /// Python's `sanitize_vertex_anthropic_output_params`: `effort` only reaches models whose
@@ -508,10 +504,12 @@ mod tests {
         true,
         "https://h/a?b&alt=sse#c:streamRawPredict"
     )]
+    // Approved difference: Python's urlparse reads `;x` as path params; the builder keeps it in
+    // the path, so the base is no longer a bare version and gets the verb.
     #[case::version_params(
         Some("https://h/v1;x"),
         true,
-        "https://h/v1/v1;x/v1{P}:streamRawPredict;x?alt=sse"
+        "https://h/v1;x:streamRawPredict?alt=sse"
     )]
     #[case::upper_case_version(Some("https://h/V1"), false, "https://h/V1:rawPredict")]
     fn the_url_matches_python(
@@ -1459,5 +1457,40 @@ mod tests {
             )
         });
         assert_eq!(*warnings.0.lock().unwrap(), expected);
+    }
+
+    /// The URL Python's `get_complete_vertex_url` builds for each base, location, model and
+    /// stream flag in `testdata/python_urls.json`, written by LiteLLM's Python.
+    #[rstest]
+    fn the_url_matches_python_s_for_every_normal_base() {
+        #[derive(serde::Deserialize)]
+        struct Row {
+            api_base: Option<String>,
+            location: String,
+            model: String,
+            stream: bool,
+            url: String,
+        }
+        let rows: Vec<Row> =
+            serde_json::from_str(include_str!("testdata/python_urls.json")).unwrap();
+        assert!(!rows.is_empty());
+        for row in rows {
+            assert_eq!(
+                complete_vertex_anthropic_url(
+                    row.api_base.as_deref(),
+                    "p",
+                    &row.location,
+                    &row.model,
+                    row.stream
+                )
+                .unwrap(),
+                row.url,
+                "{:?} {} {} stream={}",
+                row.api_base,
+                row.location,
+                row.model,
+                row.stream
+            );
+        }
     }
 }

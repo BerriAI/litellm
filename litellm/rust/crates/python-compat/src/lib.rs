@@ -15,7 +15,7 @@
 //! | [`format`] | `format(value, f".{precision}f")` |
 //! | [`unicode`] | `str.isspace()` for one character |
 //! | [`pydantic`] | `TypeAdapter(bool)` and `TypeAdapter(int)` lax validation |
-//! | [`urllib`] | `urllib.parse.quote(text, safe=safe)`, `urlsplit(url)`, `urlparse(url)` and `urlunparse(parsed)` |
+//! | [`urllib`] | `urllib.parse.quote(text, safe=safe)` |
 //! | [`datetime`] | `datetime.fromtimestamp(seconds, timezone.utc)` fields and `datetime.fromisoformat(text)` |
 //! | [`flags`] | LiteLLM's own text-to-bool helpers, such as `str_to_bool` and `_redis._str_to_bool` |
 //! | [`lenient`] | how Python reads an unvalidated config value: `value is True`, or a value of the expected shape |
