@@ -1,4 +1,4 @@
-//! `urllib.parse.quote(text, safe=safe)` over the UTF-8 bytes of `text`.
+//! `urllib.parse.quote` over the UTF-8 bytes of a text, and `urllib.parse.urlsplit`.
 
 /// `urllib.parse.quote(text, safe=safe)`: ASCII letters, digits and `_.-~` are never quoted,
 /// the ASCII characters in `safe` are kept, and every other byte becomes `%XX`.

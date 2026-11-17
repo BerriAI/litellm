@@ -51,9 +51,8 @@ const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
 /// when only running Python's signing again gives its exception.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
-/// `(class, text, file)` of the exception Python's Vertex AI login raises for a login Rust could
-/// not complete, which the route raises in its place. `file` is `(kind, path, detail)` for a
-/// `vertex_credentials` file Python's `raise_vertex_credentials_failure` logs.
+/// `(class, text)` of the exception Python's Vertex AI login raises for a login Rust could not
+/// complete, which the route raises in its place.
 const MESSAGES_GOOGLE_LOGIN_FAILURE: &str = "messages_google_login_failure";
 
 struct ProviderRejection {
