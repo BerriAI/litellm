@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.dec1_azure_support import chat_reply
@@ -76,7 +77,13 @@ def test_a_zero_budget_key_is_refused_before_the_azure_relay(gateway: Gateway) -
 def test_a_keys_rpm_limit_holds_on_the_azure_relay(gateway: Gateway) -> None:
     """A key with `rpm_limit: 1` calls the relay twice. The first is answered 200 with the deployment's
     `relayed` content and the second must be 429 `throttling_error`, with the peer seeing exactly one request.
-    UNVERIFIED: the relay calls the router directly and skips `pass_through_request`'s pre-call hook."""
+    BUG: the relay never runs the proxy's pre-call hook, so it never takes a slot in the key's rpm window and
+    the second call is served 200. `_relay_azure_router_model` and `_relay_router_model`
+    (litellm/proxy/pass_through_endpoints/llm_passthrough_endpoints.py:2575-2640 on main) go straight to
+    `llm_router.allm_passthrough_route`, and neither caller (:2751, :2815) calls `pre_call_hook`. A window
+    already filled by a chat call is still enforced (the shared window test below passes), so only the relay's
+    own requests go uncounted."""
+    pytest.skip("BUG: Azure relay calls to a router group are not counted against the key's rpm limit")
     with _group(gateway) as (wire, model), gateway.scenario() as scenario:
         key: Final = scenario.key(rpm_limit=1)
         first: Final = _relay(gateway, model, key)

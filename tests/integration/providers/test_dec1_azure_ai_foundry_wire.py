@@ -432,20 +432,21 @@ def test_foundry_claude_on_messages_sends_one_credential_only(gateway: Gateway) 
         assert "authorization" not in headers, headers
 
 
-def test_a_caller_api_key_header_replaces_the_foundry_operator_key_on_messages(gateway: Gateway) -> None:
+def test_a_caller_api_key_header_is_not_forwarded_to_foundry_on_messages(gateway: Gateway) -> None:
     """The caller authenticates with its proxy bearer and also sends `api-key: synthetic-caller-foundry-key` on `/v1/messages`.
 
-    Rust replaces the operator key with the caller's key and sends it as `x-api-key` (#51721, "let a caller
-    api-key replace the azure_ai operator key"): Foundry must receive `x-api-key: synthetic-caller-foundry-key`
-    and the operator key nowhere. UNVERIFIED: that the proxy forwards a caller `api-key` header to `azure_ai`
-    on `/v1/messages` without extra forwarding config.
+    The provider handlers let a caller key that reaches them replace the operator key (#51721), but with no
+    header forwarding configured the proxy hands a native Messages call only the caller's `anthropic-version`
+    and `anthropic-beta` (`ANTHROPIC_API_HEADERS`, litellm/types/llms/anthropic.py:843-846, scoped by
+    litellm/proxy/litellm_pre_call_utils.py:4829 and :4849-4853 on main). So Foundry receives the operator's
+    `x-api-key: synthetic-foundry-key` and the caller's key nowhere.
     """
     with foundry(gateway, _anthropic, model=_CLAUDE) as rig:
         response: Final = rig.messages(headers={"api-key": "synthetic-caller-foundry-key"})
         assert response.status_code == 200, response.text
         headers: Final = rig.one_post().headers
-        assert headers.get("x-api-key") == "synthetic-caller-foundry-key"
-        assert all(FOUNDRY_KEY != value for value in headers.values()), headers
+        assert headers.get("x-api-key") == FOUNDRY_KEY
+        assert all("synthetic-caller-foundry-key" not in value for value in headers.values()), headers
 
 
 @pytest.mark.parametrize(

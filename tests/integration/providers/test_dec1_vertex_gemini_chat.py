@@ -388,8 +388,10 @@ def test_an_unsupported_tool_choice_string_is_refused_without_a_vertex_call(gate
 
 def test_a_tool_result_round_trip_is_sent_as_function_call_and_function_response(gateway: Gateway) -> None:
     """An assistant tool call followed by its `tool` message reaches Vertex as a `model` turn with a
-    `functionCall {name, args}` part and a following turn with a `functionResponse` part for the same
-    function name."""
+    function call `{name, args}` part and a following turn with a function response part for the same
+    function name. The parts are keyed in snake case, `function_call` and `function_response`
+    (litellm/litellm_core_utils/prompt_templates/factory.py:1448 and :1807 on main), which Google's proto JSON
+    parser accepts next to the camelCase names."""
     with vertex(gateway, gemini_echo) as rig:
         response: Final = rig.post(
             "/v1/chat/completions",
@@ -416,10 +418,10 @@ def test_a_tool_result_round_trip_is_sent_as_function_call_and_function_response
         contents: Final = list_value(rig.peer.one_body()["contents"])
         assert object_value(contents[1])["role"] == "model"
         call_part: Final = object_value(at(contents[1], "parts", 0))
-        assert object_value(call_part["functionCall"])["name"] == "get_weather"
-        assert object_value(call_part["functionCall"])["args"] == {"city": "Paris"}
+        assert object_value(call_part["function_call"])["name"] == "get_weather"
+        assert object_value(call_part["function_call"])["args"] == {"city": "Paris"}
         response_part: Final = object_value(at(contents[2], "parts", 0))
-        assert object_value(response_part["functionResponse"])["name"] == "get_weather"
+        assert object_value(response_part["function_response"])["name"] == "get_weather"
 
 
 # ---------------------------------------------------------------- response mapping

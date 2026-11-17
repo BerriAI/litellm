@@ -212,12 +212,16 @@ def test_the_router_spreads_deployments_route_calls_over_two_azure_deployments(g
         assert min(counts) >= 1, counts
 
 
-def test_a_429_on_the_deployments_route_retries_on_the_other_azure_deployment(gateway: Gateway) -> None:
-    """One group holds a deployment that always answers 429 and a healthy one; SDK `max_retries: 0`; 6 calls with `num_retries: 2`.
+def test_a_429_on_the_deployments_route_is_retried_within_the_azure_group(gateway: Gateway) -> None:
+    """One group holds a deployment that always answers 429 and a healthy one; SDK `max_retries: 0`; 16 calls with `num_retries: 2`.
 
-    Every call must end in HTTP 200 with the healthy deployment's answer, because the router retries on the
-    other deployment of the group. UNVERIFIED: assumes a retry avoids the deployment that just failed; if the
-    router can pick the 429 deployment three times in a row, this fails about one call in eight.
+    The shared gateway runs with `router_settings.disable_cooldowns: true` (tests/integration/proxy_config.yaml:673-674),
+    so the 429 deployment is never cooled down and each retry is a fresh pick from both deployments: a call can
+    land on the 429 deployment three times in a row and end 429 (round 2 saw exactly that, "LiteLLM Retried: 2
+    times"). So each call is checked on its own: a 200 carries the healthy answer after exactly one healthy POST
+    and at most two 429 POSTs, a 429 follows exactly three POSTs to the 429 deployment and none to the healthy
+    one, and at least one call is served by the healthy deployment after a 429 (each call does so with
+    probability 3/8, so 16 calls all missing it is about 1 in 2000).
     """
     group: Final = f"dec1-azure-pair-{uuid.uuid4().hex}"
     with (
@@ -240,7 +244,17 @@ def test_a_429_on_the_deployments_route_retries_on_the_other_azure_deployment(ga
                 },
             )
             scenario.cleanups.callback(scenario.delete_model, str(created["model_info"]["id"]))  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]
-        for _ in range(6):
+        retried_onto_healthy = 0
+        for _ in range(16):
             response = _deployments_chat(gateway, group, num_retries=2)
-            assert response.status_code == 200, response.text
-            assert response.json()["choices"][0]["message"]["content"] == "healthy"
+            counts = tuple(
+                sum(1 for request in wire.drain() if request.method == "POST") for wire in (limited, healthy)
+            )
+            if response.status_code == 200:
+                assert response.json()["choices"][0]["message"]["content"] == "healthy"
+                assert counts[1] == 1 and counts[0] <= 2, counts
+                retried_onto_healthy += counts[0] > 0
+            else:
+                assert response.status_code == 429, response.text
+                assert counts == (3, 0), counts
+        assert retried_onto_healthy >= 1

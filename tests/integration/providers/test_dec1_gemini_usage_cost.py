@@ -29,6 +29,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway, eventually
+from integration._support.wire import Reply
 from integration.providers.dec1_gemini_support import (
     GEMINI_3_FLASH,
     PRO,
@@ -147,10 +148,20 @@ def test_cached_tokens_above_200k_use_the_tiered_cache_rate(gateway: Gateway) ->
 
 def test_a_streamed_prompt_above_200k_is_billed_at_the_higher_tier(gateway: Gateway) -> None:
     """The tier also applies when the usage arrives on the last SSE frame: 200,001 prompt and 100 output
-    tokens streamed cost `0.5015025`."""
-    from integration.providers.dec1_gemini_support import gemini_sse
+    tokens streamed cost `0.5015025`. Spend is priced on the served `modelVersion`, and `gemini_sse` stamps
+    gemini-2.5-flash on every frame (round 2 billed 0.0602503, the flash price of these tokens), so the frames
+    are restamped with the Pro version the non-streamed tier tests reply with."""
+    from dataclasses import replace
 
-    with gemini(gateway, lambda _r: gemini_sse(usage=usage_metadata(200001, 100)), backend=PRO) as rig:
+    from integration.providers.dec1_gemini_support import FLASH, gemini_sse
+
+    def pro_sse(_: object) -> Reply:
+        frames: Final = gemini_sse(usage=usage_metadata(200001, 100))
+        flash: Final = f'"modelVersion": "{FLASH}"'.encode()
+        pro: Final = f'"modelVersion": "{PRO}"'.encode()
+        return replace(frames, chunks=tuple(chunk.replace(flash, pro) for chunk in frames.chunks or ()))
+
+    with gemini(gateway, pro_sse, backend=PRO) as rig:
         rig.stream("/v1/chat/completions", {"messages": [{"role": "user", "content": marker()}]})
         assert _spend(_one_row(gateway, rig.model)) == pytest.approx(0.5015025)
 

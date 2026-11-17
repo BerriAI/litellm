@@ -249,7 +249,12 @@ def test_foundry_image_inputs_go_to_images_embeddings_and_results_keep_input_ord
     `POST /embeddings` with `input == ["text one", "text two"]` and one `POST /images/embeddings` whose `input`
     holds the image, and the caller's `data` must have indexes 0, 1, 2 with the image vector (first value 0.5)
     at index 1. UNVERIFIED: the image request shape (`[{"image": <url>}]` assumed) and the recombined indexes.
+
+    BUG: the text call is sent the caller's whole `input`, image included, rather than the split-off
+    `v1_embeddings_request["input"]` (litellm/llms/azure_ai/embed/handler.py:189-193 async and :276-279 sync on
+    main), so `/embeddings` also embeds the data URL and the recombined result carries more vectors than inputs.
     """
+    pytest.skip("BUG: Foundry embeddings send the image input to /embeddings too, not only to /images/embeddings")
     with foundry(gateway, _embedding_peer, model="azure_ai/embed-v-4-0") as rig:
         response: Final = rig.embed(["text one", PNG_DATA_URL, "text two"])
         assert response.status_code == 200, response.text

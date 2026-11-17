@@ -49,10 +49,14 @@ _SCHEMA_CLOSED: Final[dict[str, JsonValue]] = {
     "required": ["city", "country"],
     "additionalProperties": False,
 }
+# Open means `additionalProperties: true` (or a dict, `patternProperties`, or an object with no `properties`):
+# an object that lists `properties` and leaves `additionalProperties` out counts as closed
+# (`_is_open_object`, litellm/litellm_core_utils/prompt_templates/json_schema_utils.py:355-359 on main).
 _SCHEMA_OPEN: Final[dict[str, JsonValue]] = {
     "type": "object",
     "properties": {"city": {"type": "string"}},
     "required": ["city"],
+    "additionalProperties": True,
 }
 _PLACE: Final[dict[str, JsonValue]] = {"city": "Paris", "country": "France"}
 
@@ -378,8 +382,8 @@ def _json_tool_respond(call: Call) -> Reply:
 
 
 def test_an_open_json_schema_is_sent_as_a_forced_json_tool_call(gateway: Gateway) -> None:
-    """The caller asks `response_format: json_schema` with a schema that does not close its object
-    (no `additionalProperties: false`) and sends no tools or thinking.
+    """The caller asks `response_format: json_schema` with a schema whose object is open
+    (`additionalProperties: true`) and sends no tools or thinking.
 
     An open object takes the tool path (`uses_native_structured_output_for_schema`): the upstream body must carry
     one tool named `json_tool_call` whose `input_schema.properties` are the caller's, `tool_choice: {"name":

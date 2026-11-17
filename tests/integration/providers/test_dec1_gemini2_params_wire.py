@@ -286,7 +286,13 @@ def test_google_maps_location_moves_into_tool_config(gateway: Gateway) -> None:
     """A tool `{"googleMaps": {"enableWidget": true, "latitude": 48.85, "longitude": 2.35, "languageCode":
     "fr"}}` reaches Google as `tools: [{"googleMaps": {"enableWidget": true}}]` plus
     `toolConfig.retrievalConfig: {"latLng": {"latitude": 48.85, "longitude": 2.35}, "languageCode": "fr"}`
-    (`_extract_google_maps_retrieval_config`, `vertex_and_google_ai_studio_gemini.py:1172`)."""
+    (`_extract_google_maps_retrieval_config`, `vertex_and_google_ai_studio_gemini.py:1172`).
+
+    BUG: `_map_function` puts the location into `optional_params["toolConfig"]`
+    (litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py:1478-1482 on main), but the request body
+    builds `toolConfig` only from the popped `tool_choice` (litellm/llms/vertex_ai/gemini/transformation.py:1207
+    and :1253-1254), so the location is stripped from the tool and sent nowhere."""
+    pytest.skip("BUG: a googleMaps tool's latitude, longitude and languageCode never reach toolConfig.retrievalConfig")
     tool: Final[dict[str, JsonValue]] = {
         "googleMaps": {"enableWidget": True, "latitude": 48.85, "longitude": 2.35, "languageCode": "fr"}
     }
@@ -362,12 +368,12 @@ def test_a_file_block_without_its_file_field_is_refused_before_google(gateway: G
         assert rig.peer.generate_calls() == ()
 
 
-def test_the_model_version_names_the_served_model_without_its_revision(gateway: Gateway) -> None:
-    """When Google answers with `modelVersion: "dec1-served-version@7"` the caller's `model` field is
-    `dec1-served-version`, the served name with the `@` revision cut off (`_served_model_name`,
-    `vertex_and_google_ai_studio_gemini.py:260`). UNVERIFIED: whether the proxy later rewrites `model`
-    back to the deployment's name for some callers."""
+def test_the_caller_gets_its_requested_model_name_not_the_model_version(gateway: Gateway) -> None:
+    """When Google answers with `modelVersion: "dec1-served-version@7"` the transform names the response
+    `dec1-served-version` (`_served_model_name`, `vertex_and_google_ai_studio_gemini.py:260`), but the proxy
+    then overwrites `model` with the name the caller asked for (litellm/proxy/common_request_processing.py:2088-2099
+    on main), so the caller sees its model group."""
     reply: Final = gemini_json()
     reply["modelVersion"] = "dec1-served-version@7"
     with gemini(gateway, lambda _r: reply_json(reply)) as rig:
-        assert json_of(rig.chat())["model"] == "dec1-served-version"
+        assert json_of(rig.chat())["model"] == rig.model

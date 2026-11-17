@@ -415,8 +415,12 @@ def test_a_cached_block_ending_on_an_assistant_turn_is_not_cached(gateway: Gatew
 def test_a_rejected_cache_is_recreated_and_the_call_retried_once(gateway: Gateway) -> None:
     """When generateContent answers 404 "CachedContent not found (or permission denied)" for the cache it was
     given, the proxy forgets that cache, creates a fresh one and sends generateContent again; the caller
-    gets 200 (`post_with_fresh_cache_async`)."""
+    gets 200 (`post_with_fresh_cache_async`). Google names every new cache afresh, and the retry is skipped when
+    the rebuilt body names the rejected cache again
+    (litellm/llms/vertex_ai/context_caching/rejected_cache_retry.py:66-67 on main), so the second create here
+    answers a second name."""
     generated: Final[list[int]] = []
+    created: Final[list[int]] = []
 
     def generate(request: Request) -> Reply:
         generated.append(1)
@@ -424,7 +428,16 @@ def test_a_rejected_cache_is_recreated_and_the_call_retried_once(gateway: Gatewa
             return google_error(404, "NOT_FOUND", "CachedContent not found (or permission denied)")
         return gemini_reply(usage=usage_metadata(5129, 2, cachedContentTokenCount=5120))
 
-    with gemini(gateway, cached_contents_responder(generate=generate)) as rig:
+    answer: Final = cached_contents_responder(generate=generate)
+
+    def respond(request: Request) -> Reply:
+        if path_of(request).endswith("/cachedContents") and request.method == "POST":
+            created.append(1)
+            name = CACHE_NAME if len(created) == 1 else f"{CACHE_NAME}-fresh"
+            return reply_json({"name": name, "model": f"models/{FLASH}", "expireTime": "2999-01-01T00:00:00.000000Z"})
+        return answer(request)
+
+    with gemini(gateway, respond) as rig:
         response: Final = rig.chat(messages=cached_messages())
         assert response.status_code == 200, response.text
         assert len(rig.peer.generate_calls()) == 2

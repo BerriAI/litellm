@@ -87,7 +87,11 @@ def test_a_gemini_function_call_comes_back_as_a_function_call_output_item(gatewa
 def test_function_call_and_output_items_become_function_call_and_function_response_parts(gateway: Gateway) -> None:
     """An input of a user message, a `function_call` item and its `function_call_output` reaches Gemini as
     a user turn, a `model` turn with a `functionCall {name: "get_weather", args: {"city": "Paris"}}` part, and
-    a turn with a `functionResponse` part for `get_weather` whose response carries "sunny and 21C"."""
+    a turn with a `functionResponse` part for `get_weather` whose response carries "sunny and 21C". The parts
+    are keyed in snake case, `function_call` and `function_response`
+    (litellm/litellm_core_utils/prompt_templates/factory.py:1448 and :1807 on main), which Google's proto JSON
+    parser accepts next to the camelCase names. The call part may also carry the call `id`, so only `name` and
+    `args` are compared."""
     with vertex(gateway, gemini_echo) as rig:
         response: Final = rig.post(
             "/v1/responses", {"input": [_user(f"weather {marker()}"), *_ROUND_TRIP], "tools": [_FLAT_TOOL]}
@@ -96,9 +100,10 @@ def test_function_call_and_output_items_become_function_call_and_function_respon
         contents: Final = list_value(rig.peer.one_body()["contents"])
         assert object_value(contents[1])["role"] == "model"
         call_part: Final = object_value(at(contents[1], "parts", 0))
-        assert object_value(call_part["functionCall"]) == {"name": "get_weather", "args": {"city": "Paris"}}
+        function_call: Final = object_value(call_part["function_call"])
+        assert (function_call["name"], function_call["args"]) == ("get_weather", {"city": "Paris"})
         answer_part: Final = object_value(at(contents[2], "parts", 0))
-        function_response: Final = object_value(answer_part["functionResponse"])
+        function_response: Final = object_value(answer_part["function_response"])
         assert function_response["name"] == "get_weather"
         assert "sunny and 21C" in json.dumps(function_response["response"])
 

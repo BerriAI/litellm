@@ -270,18 +270,18 @@ def test_the_azure_retry_after_header_reaches_the_caller_on_a_final_429(gateway:
         assert response.headers.get("llm_provider-retry-after") == "7", dict(response.headers)
 
 
-def test_the_sdk_layer_retries_a_429_when_the_deployment_allows_it(gateway: Gateway) -> None:
+def test_a_router_call_turns_off_the_sdk_retry_the_deployment_allows(gateway: Gateway) -> None:
     """The deployment sets `max_retries: 1` and the request `num_retries: 0`; Azure answers 429 with `retry-after: 1` once.
 
-    The AzureOpenAI SDK retries on its own `max_retries` (`common_utils.py:917`), so Azure must see two POSTs
-    and the caller HTTP 200 even though the router did not retry. A Rust client that drops this inner retry
-    would surface Azure's transient 429s to callers.
+    A proxy call is a router call (its metadata names the `model_group`), and `completion` sets the SDK's
+    `max_retries` to 0 for every router call (litellm/main.py:6026-6029 on main), so the router owns retries
+    and the deployment's `max_retries` never reaches the AzureOpenAI client. Azure sees one POST and the caller
+    gets the 429.
     """
     with azure(gateway, failing_then([_rate_limited()], chat_reply("sdk retry")), max_retries=1) as rig:
         response: Final = rig.chat(num_retries=0)
-        assert response.status_code == 200, response.text
-        assert response.json()["choices"][0]["message"]["content"] == "sdk retry"
-        assert len(rig.posts()) == 2
+        assert response.status_code == 429, response.text
+        assert len(rig.posts()) == 1
 
 
 def test_a_400_is_not_retried(gateway: Gateway) -> None:

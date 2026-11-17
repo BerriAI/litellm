@@ -155,6 +155,13 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         yield _Rig(proxy, tunnel, vertex)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_peer(rig: _Rig) -> None:
+    """Tests that never read the peer (the count-tokens allowlist test) leave their POST queued, and the test
+    order is shuffled, so every test starts from an empty peer queue."""
+    rig.vertex.drain()
+
+
 def _gemini_path(model: str = _GEMINI, action: str = "generateContent") -> str:
     return f"/vertex_ai/v1/projects/{_PROJECT}/locations/{_GEMINI_LOCATION}/publishers/google/models/{model}:{action}"
 

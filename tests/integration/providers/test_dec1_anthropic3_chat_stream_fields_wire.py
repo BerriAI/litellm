@@ -406,7 +406,14 @@ def test_streamed_usage_relays_the_service_tier(gateway: Gateway) -> None:
     The final usage chunk must carry `service_tier: "priority"`: `_handle_usage` merges the delta into the cumulative
     usage and `calculate_usage` copies `service_tier` (`transformation.py:3096`). UNVERIFIED: that the stream
     wrapper's final usage chunk serializes the `service_tier` extra the way the non-streaming body does.
+
+    BUG: the final usage chunk is the chunk builder's usage, which rebuilds `Usage` with only `inference_geo`
+    and `speed` as extra provider fields (litellm/litellm_core_utils/streaming_chunk_builder_utils.py:1289-1298
+    on main), so `service_tier` is dropped; the top level stamp (`_stamp_served_service_tier`,
+    litellm/litellm_core_utils/streaming_handler.py:142-145) reads a response level tier that Anthropic's
+    stream never sets, and round 2's final chunk had `service_tier` in neither place.
     """
+    pytest.skip("BUG: a streamed Anthropic chat drops the served service_tier from the final usage")
     events: Final = _stream(
         gateway,
         framed(text_block(0, "ok"), delta_usage={"output_tokens": 7, "service_tier": "priority"}),

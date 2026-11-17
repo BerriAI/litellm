@@ -90,9 +90,14 @@ def _chat(gateway: Gateway, model: str, beta: str, *, stream: bool = False) -> N
 
 
 _PROVIDERS: Final = ("anthropic", "vertex_ai", "azure_ai")
+# On `/v1/chat/completions` the proxy hands the caller's `anthropic-*` headers to `azure_ai` (and `databricks`)
+# only for native `/v1/messages` calls (`_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS` with
+# `native_anthropic_messages_only=True`, litellm/proxy/litellm_pre_call_utils.py:4815-4817 and :4849-4853 on
+# main), so a Foundry Claude chat call never carries a caller beta and the filter rows apply to these two only.
+_FORWARDING_PROVIDERS: Final = ("anthropic", "vertex_ai")
 
 
-@pytest.mark.parametrize("provider", _PROVIDERS)
+@pytest.mark.parametrize("provider", _FORWARDING_PROVIDERS)
 def test_an_unknown_beta_is_dropped_and_a_supported_one_forwarded(gateway: Gateway, provider: str) -> None:
     """The caller sends `anthropic-beta: context-1m-2025-08-07,dec1-not-a-beta-2099-01-01`. Every provider row
     lists `context-1m-2025-08-07`, none lists the second value, so the provider must receive exactly
@@ -102,7 +107,7 @@ def test_an_unknown_beta_is_dropped_and_a_supported_one_forwarded(gateway: Gatew
         assert _sent_beta(wire) == _CONTEXT_1M
 
 
-@pytest.mark.parametrize("provider", _PROVIDERS)
+@pytest.mark.parametrize("provider", _FORWARDING_PROVIDERS)
 def test_a_beta_mapped_to_null_is_dropped(gateway: Gateway, provider: str) -> None:
     """`bash_20241022` is in every row with a `null` value (a tool version, not a beta). Sent next to
     `context-1m-2025-08-07`, only `context-1m-2025-08-07` reaches the provider."""
@@ -120,7 +125,7 @@ def test_the_header_is_removed_when_no_beta_survives(gateway: Gateway, provider:
         assert _sent_beta(wire) is None
 
 
-@pytest.mark.parametrize("provider", _PROVIDERS)
+@pytest.mark.parametrize("provider", _FORWARDING_PROVIDERS)
 def test_surviving_betas_are_sorted_and_deduplicated(gateway: Gateway, provider: str) -> None:
     """The caller sends `token-efficient-tools-2025-02-19, context-1m-2025-08-07, context-1m-2025-08-07`. The
     provider receives `context-1m-2025-08-07,token-efficient-tools-2025-02-19`: one copy each, sorted, joined
@@ -145,19 +150,31 @@ def test_anthropic_keeps_the_advanced_tool_use_beta_name(gateway: Gateway) -> No
         assert _sent_beta(wire) == _TOOL_USE
 
 
-@pytest.mark.parametrize(("provider", "forwarded"), [("anthropic", True), ("azure_ai", True), ("vertex_ai", False)])
+@pytest.mark.parametrize(("provider", "forwarded"), [("anthropic", True), ("azure_ai", False), ("vertex_ai", False)])
 def test_the_files_api_beta_follows_each_provider_row(gateway: Gateway, provider: str, forwarded: bool) -> None:
-    """`files-api-2025-04-14` is supported on the Anthropic API and Foundry and mapped to `null` for Vertex. Sent
-    alone, it reaches Anthropic and Foundry unchanged and Vertex receives no beta header."""
+    """`files-api-2025-04-14` is supported on the Anthropic API and mapped to `null` for Vertex. Sent alone, it
+    reaches Anthropic unchanged and Vertex receives no beta header. Foundry's row lists it too, but a chat call
+    to Foundry never carries the caller's beta (see `_FORWARDING_PROVIDERS`), so Foundry receives none."""
     with _deployment(gateway, provider) as (wire, model):
         _chat(gateway, model, _FILES_API)
         assert _sent_beta(wire) == (_FILES_API if forwarded else None)
 
 
-@pytest.mark.parametrize("provider", _PROVIDERS)
+@pytest.mark.parametrize("provider", _FORWARDING_PROVIDERS)
 def test_streamed_chat_filters_the_beta_the_same_way(gateway: Gateway, provider: str) -> None:
     """The unknown plus supported pair is sent on a streamed chat. The streaming request takes the same filter,
     so the provider receives exactly `anthropic-beta: context-1m-2025-08-07`."""
     with _deployment(gateway, provider) as (wire, model):
         _chat(gateway, model, f"{_CONTEXT_1M},{_UNKNOWN}", stream=True)
         assert _sent_beta(wire) == _CONTEXT_1M
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["unary", "streamed"])
+def test_a_foundry_claude_chat_call_does_not_carry_the_callers_beta(gateway: Gateway, stream: bool) -> None:
+    """The caller sends `anthropic-beta: context-1m-2025-08-07,dec1-not-a-beta-2099-01-01` on a chat call to an
+    `azure_ai/claude-...` deployment. The caller's `anthropic-*` headers are scoped to native `/v1/messages`
+    calls for Foundry (litellm/proxy/litellm_pre_call_utils.py:4849-4853 on main), so Foundry receives no
+    `anthropic-beta`, not even the supported value."""
+    with _deployment(gateway, "azure_ai") as (wire, model):
+        _chat(gateway, model, f"{_CONTEXT_1M},{_UNKNOWN}", stream=stream)
+        assert _sent_beta(wire) is None

@@ -56,6 +56,8 @@ from integration.providers.dec1_bigprov2_support import (
     wif_peer,
 )
 
+_IAM_SCOPE: Final = "https://www.googleapis.com/auth/iam"
+
 
 def _subject_file(tmp_path: Path, token: str = SUBJECT_TOKEN) -> str:
     path: Final = tmp_path / "dec1-oidc-token"
@@ -143,16 +145,16 @@ def test_impersonation_trades_the_sts_token_for_a_service_account_token(gateway:
 def test_impersonation_asks_sts_for_the_iam_scope_rather_than_the_caller_scope(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    """When impersonating, google-auth asks STS for the IAM scope (`https://www.googleapis.com/auth/cloud-platform`
-    in today's google-auth) and the requested scopes go into the `generateAccessToken` body instead.
-    UNVERIFIED: read from google-auth's `external_account.Credentials.refresh`, which swaps the scope when an
-    impersonation URL is set; the STS form must still carry exactly one `scope`."""
+    """When impersonating, google-auth asks STS for the IAM scope `https://www.googleapis.com/auth/iam` and the
+    requested scopes go into the `generateAccessToken` body instead: `impersonated_credentials.Credentials`
+    rescopes its source credentials to `iam._IAM_SCOPE` (google/auth/impersonated_credentials.py:251-257 and
+    google/auth/iam.py:36 in google-auth 2.62), and the source is the external account without impersonation."""
     with wif_peer() as peer, gateway.scenario() as scenario:
         model: Final = register_vertex(
             scenario, peer, {**identity_pool_file(peer.url, _subject_file(tmp_path)), **impersonation(peer.url)}
         )
         assert chat(gateway, model).status_code == 200
-        assert form_of(peer.sts_calls()[0])["scope"] == CLOUD_PLATFORM
+        assert form_of(peer.sts_calls()[0])["scope"] == _IAM_SCOPE
 
 
 def test_the_federated_token_is_reused_across_calls(gateway: Gateway, tmp_path: Path) -> None:

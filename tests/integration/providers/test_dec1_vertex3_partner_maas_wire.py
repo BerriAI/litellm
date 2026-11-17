@@ -193,10 +193,20 @@ def test_a_maas_error_keeps_its_status(gateway: Gateway, status: int, expected: 
     """An OpenAI error envelope from the openapi route leaves `/v1/chat/completions` with the same status
     and the upstream message in the body; a 429 must stay a 429 so router cooldowns and client retries behave.
     UNVERIFIED: the status mapping goes through `VertexAILlama3Config.get_error_class` (OpenAI's), which keeps
-    the status; look at `litellm/litellm_core_utils/exception_mapping_utils.py` if a 500 comes back."""
+    the status; look at `litellm/litellm_core_utils/exception_mapping_utils.py` if a 500 comes back.
+
+    The call gets a 60 second read timeout instead of the client's 15: on a 400 or 404 the proxy loads the
+    `Xenova/llama-3-tokenizer` Hugging Face tokenizer for this Llama model before it answers
+    (`_load_huggingface_tokenizer`, litellm/utils.py:3314-3329 on main), and with no route to huggingface.co the
+    hub client retries for about 24 seconds before falling back to tiktoken. Round 2 timed out on exactly that."""
     message: Final = f"synthetic maas failure {status}"
     with vertex(gateway, lambda _r: _openai_error(status, message), backend=LLAMA) as rig:
-        response: Final = rig.chat()
+        response: Final = rig.gateway.client.post(
+            "/v1/chat/completions",
+            json={"model": rig.model, "messages": [{"role": "user", "content": f"ping {marker()}"}]},
+            headers={"Authorization": f"Bearer {rig.gateway.key}"},
+            timeout=60,
+        )
         assert response.status_code == expected, response.text
         assert message in response.text
 

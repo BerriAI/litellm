@@ -125,14 +125,16 @@ def test_every_agent_call_carries_the_default_api_version_and_the_key_as_bearer(
 
 def test_the_run_names_the_agent_id_from_the_model(gateway: Gateway) -> None:
     """The run creation body must be exactly `{"assistant_id": "asst_dec1synthetic"}`, the part of the model after
-    `agents/` (`get_agent_id_from_model`), and the thread creation body must be `{}`.
+    `agents/` (`get_agent_id_from_model`). The thread creation is posted with no body at all: the handler sends
+    `data=json.dumps(json_data) if json_data else None`, and the `{}` it passes is falsy
+    (litellm/llms/azure_ai/agents/handler.py:331, :361 and :457 on main).
     """
     respond, _ = _agent_peer()
     with _agents(gateway, respond, model=MODEL) as rig:
         rig.chat()
         posts: Final = {urlsplit(r.target).path.rsplit("/", 1)[-1]: r for r in _all_requests(rig) if r.method == "POST"}
         assert json.loads(posts["runs"].body) == {"assistant_id": AGENT_ID}
-        assert json.loads(posts["threads"].body) == {}
+        assert posts["threads"].body == b""
 
 
 def test_system_messages_are_posted_as_user_messages_and_assistant_turns_are_skipped(gateway: Gateway) -> None:
@@ -243,8 +245,10 @@ def test_a_failed_run_is_a_500_naming_the_run_error(gateway: Gateway) -> None:
 def test_a_refused_thread_creation_keeps_the_service_status(gateway: Gateway) -> None:
     """The service answers 401 to `POST /threads`.
 
-    `_check_response` raises `AzureAIAgentsError` with the upstream status, so the caller must get HTTP 401 and
-    a message containing `Failed to create thread`, and no run must be created.
+    `_check_response` raises `AzureAIAgentsError` with the upstream status (litellm/llms/azure_ai/agents/handler.py:286-292
+    on main), so the caller must get HTTP 401 and no run must be created. The error is mapped to an
+    `AuthenticationError` whose message carries the service's own error body (`bad token`), not the handler's
+    `Failed to create thread` prefix, which round 2 showed is dropped on the way out.
     """
 
     def refuse(request: Request) -> Reply:
@@ -253,7 +257,7 @@ def test_a_refused_thread_creation_keeps_the_service_status(gateway: Gateway) ->
     with _agents(gateway, refuse, model=MODEL) as rig:
         response: Final = rig.chat_body({"messages": [{"role": "user", "content": "x"}], "num_retries": 0})
         assert response.status_code == 401, response.text
-        assert "Failed to create thread" in error_message(response)
+        assert "bad token" in error_message(response)
         assert not any(path.endswith("/runs") for _, path in _calls(_all_requests(rig)))
 
 
