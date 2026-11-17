@@ -316,6 +316,19 @@ class ProxyMissingParamWithoutLoadedModelError(ProxyMissingRequiredParamError):
     pass
 
 
+class ProxyCommaSeparatedModelsStreamError(ProxyException):
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                "Comma-separated models are not supported with stream=true. Send one model per request, "
+                "or set fastest_response=true to stream the first model that answers."
+            ),
+            type="invalid_request_error",
+            param="stream",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class MissingBodyParam:
     name: str
@@ -927,9 +940,10 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         # This ensures batch completion logic is applied even when user_config is set
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
-        else:
-            models: Final = [model.strip() for model in data.pop("model").split(",")]
-            return llm_router.abatch_completion(models=models, **data)
+        if data.get("stream") is True:
+            raise ProxyCommaSeparatedModelsStreamError()
+        models: Final = [model.strip() for model in data.pop("model").split(",")]
+        return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
