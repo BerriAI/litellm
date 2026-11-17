@@ -818,8 +818,8 @@ def image_variation(
 
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
-_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:

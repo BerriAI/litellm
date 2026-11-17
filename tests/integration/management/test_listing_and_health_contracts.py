@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Final
 
+import pytest
 from pydantic import JsonValue
 
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
@@ -55,6 +56,27 @@ def test_budget_duration_schedules_reset_at_the_next_standardized_boundary(gatew
         assert rows[0]["reset_at"] is not None, rows
         expected: Final = get_next_standardized_reset_time("1d", _utc(rows[0]["created_at"]), "UTC")
         assert abs((_utc(rows[0]["reset_at"]) - expected).total_seconds()) <= 3, (rows, expected)
+
+
+@pytest.mark.parametrize("budget_duration", ["1mo", "1month", "1months"])
+def test_one_month_budget_resets_on_the_first_of_next_month_however_the_unit_is_spelled(
+    gateway: Gateway, budget_duration: str
+) -> None:
+    with gateway.scenario() as scenario:
+        budget_id: Final = scenario.budget(max_budget=1200.0, budget_duration=budget_duration)
+        rows: Final = read_rows(
+            'SELECT created_at::text AS created_at, budget_reset_at::text AS reset_at FROM "LiteLLM_BudgetTable" '
+            "WHERE budget_id = %s",
+            (budget_id,),
+        )
+        assert len(rows) == 1, rows
+        created_at: Final = _utc(rows[0]["created_at"])
+        next_month: Final = (
+            datetime(created_at.year + 1, 1, 1, tzinfo=timezone.utc)
+            if created_at.month == 12
+            else datetime(created_at.year, created_at.month + 1, 1, tzinfo=timezone.utc)
+        )
+        assert _utc(rows[0]["reset_at"]) == next_month, rows
 
 
 def test_admin_health_counts_every_deployment_and_reports_a_live_one_healthy(gateway: Gateway) -> None:
