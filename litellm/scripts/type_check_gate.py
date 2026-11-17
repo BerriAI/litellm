@@ -36,7 +36,7 @@ same environment so import resolution matches, and litellm/scripts/lint_base_cou
 spares it whenever it can: the per-rule counts are cached under the repo's git
 common dir keyed by merge-base commit, ``pyproject.toml``, ``uv.lock``,
 the Prisma schema, and the dependency-group set, and on a disk-cache miss the
-artifact publish-lint-base-counts.yml uploaded for the merge-base is
+artifact main-lint-base-counts.yml uploaded for the merge-base is
 downloaded through the ``gh`` CLI (``--emit-counts-dir`` is the publisher's
 entry point); any fetch failure falls back silently to the local base pass, so
 the gate never gets worse than it was without CI.

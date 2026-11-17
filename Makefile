@@ -141,7 +141,7 @@ format-check: install-dev
 lint-fetch-base:
 	@$(RESOLVE_BASE)
 
-# Mirror test-linting.yml's python job environment: the proxy-dev group plus a generated
+# Mirror pr-lint.yml's python job environment: the proxy-dev group plus a generated
 # Prisma client, so `basedpyright tests/e2e` resolves the same modules CI does. The
 # basedpyright gate itself no longer measures here (litellm/scripts/type_check_gate.py provisions its
 # own .venv-typecheck). --inexact tops up the venv instead of pruning the proxy extras
@@ -150,7 +150,7 @@ lint-install:
 	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
 	$(UV_RUN) python litellm/scripts/prisma_generate_if_needed.py
 
-# Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
+# Diff-scoped format check, mirroring pr-lint.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
 # format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
 # recursively, so 'litellm/*.py' covers top-level files and nested modules alike,
@@ -214,7 +214,7 @@ lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 	$(UV_RUN) basedpyright tests/e2e tests/e2e_harness
 
 # Type-discipline gate (mutable collections / casts / type guards / kwargs /
-# unexplained suppressions), the test-linting.yml step `make lint` used to omit.
+# unexplained suppressions), the pr-lint.yml step `make lint` used to omit.
 lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python litellm/scripts/type_discipline_gate.py --base "$(BASE_REF)"
 
@@ -235,7 +235,7 @@ lint-format: format-check
 lint-ruff-strict: install-dev
 	$(UV_RUN) python litellm/scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
-# Strict gate, invoked the same way CI does in test-linting.yml so a local pass
+# Strict gate, invoked the same way CI does in pr-lint.yml so a local pass
 # means the CI check will pass too.
 lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python litellm/scripts/ruff_strict_gate.py --base "$(BASE_REF)"
@@ -246,7 +246,7 @@ check-circular-imports: $(LINT_DEP_INSTALL)
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
-# Combined linting, isomorphic to test-linting.yml's python job so a local pass means a
+# Combined linting, isomorphic to pr-lint.yml's python job so a local pass means a
 # green CI lint: it installs the same env (proxy-dev + generated Prisma client) and then
 # runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
 # type-discipline / basedpyright gates as a delta vs the base, then the circular-import
@@ -270,7 +270,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # is staged (warning about changed files left unstaged); with nothing staged it falls
 # back to the working tree's diff against the merge base with the base branch, so a
 # fresh merge commit or an unstaged working tree still gets checked. Mirrors
-# test-linting.yml (Python, UI, and API types), skipping any whose files aren't in scope.
+# pr-lint.yml (Python, UI, and API types), skipping any whose files aren't in scope.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
 check:
 	@$(GATE_SLOT_LOCK) $(MAKE) check-inner

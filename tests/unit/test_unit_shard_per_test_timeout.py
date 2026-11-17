@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-_UNIT_WORKFLOW: Final = _REPO_ROOT / ".github" / "workflows" / "test-unit.yml"
+_UNIT_WORKFLOW: Final = _REPO_ROOT / ".github" / "workflows" / "pr-unit.yml"
 _SHARD_ENV: Final = MappingProxyType({"WORKERS": "2", "RERUNS": "2", "DIST": "loadscope", "TEST_TIMEOUT_SECONDS": "1"})
 _HANG_GUARD_FLAGS: Final = frozenset(("-n", "--dist", "--reruns", "--reruns-delay", "--timeout", "--rerun-except"))
 _HUNG_TEST_MODULE: Final = """

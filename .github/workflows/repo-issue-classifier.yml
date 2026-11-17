@@ -10,7 +10,7 @@ on:
         required: true
   pull_request:
     paths:
-      - .github/workflows/issue_classifier.yml
+      - .github/workflows/repo-issue-classifier.yml
       - .github/prompts/issue-classifier.md
       - .github/prompts/issue-classifier.schema.json
       - .github/issue-labels.json

@@ -72,7 +72,7 @@ jobs:
     needs: create-rc-branch
     permissions:
       contents: read
-    uses: ./.github/workflows/linear-release.yml
+    uses: ./.github/workflows/release-linear.yml
     with:
       rc_version: ${{ needs.create-rc-branch.outputs.version }}
     secrets:

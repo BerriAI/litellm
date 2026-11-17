@@ -9,7 +9,7 @@ on:
       - "tests/benchmarks/**"
       - "pyproject.toml"
       - "uv.lock"
-      - ".github/workflows/codspeed.yml"
+      - ".github/workflows/main-codspeed.yml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/actions/cache-cargo-build/**"
       - ".github/scripts/uv_sync_with_retries.sh"

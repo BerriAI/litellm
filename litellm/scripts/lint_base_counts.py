@@ -10,7 +10,7 @@ higher. There is no committed budget, so a ceiling moves only when the base
 branch does or when someone lowers a cap on it.
 
 The merge-base counts come from, in order, the disk cache under the git common
-dir, the CI artifact publish-lint-base-counts.yml uploads for every push to the
+dir, the CI artifact main-lint-base-counts.yml uploads for every push to the
 default branch, and a scan of the base tree in a temporary worktree. Every
 entry is keyed by the merge-base commit plus the checker's fingerprints (its
 config, its rule logic, its tool version), so counts measured under a different

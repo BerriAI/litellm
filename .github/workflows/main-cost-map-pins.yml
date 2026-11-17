@@ -67,7 +67,7 @@ jobs:
             fi
             [ -z "${rerun_heads[$head_sha]:-}" ] || continue
             rerun_heads[$head_sha]=1
-            if ! runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow cost-map-guard.yml --commit "$head_sha" --limit 100 --json databaseId,createdAt --jq '.[] | "\(.databaseId) \(.createdAt)"')"; then
+            if ! runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow pr-cost-map-guard.yml --commit "$head_sha" --limit 100 --json databaseId,createdAt --jq '.[] | "\(.databaseId) \(.createdAt)"')"; then
               echo "::error::could not list the cost map guard runs of #$number"
               failed=1
               continue

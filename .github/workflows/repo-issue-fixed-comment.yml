@@ -14,7 +14,7 @@ on:
         default: false
   pull_request:
     paths:
-      - .github/workflows/issue_fixed_comment.yml
+      - .github/workflows/repo-issue-fixed-comment.yml
       - litellm/scripts/comment-fixed-issue.ts
       - litellm/scripts/comment-fixed-issue.test.ts
       - litellm/scripts/auto-close-duplicates.ts

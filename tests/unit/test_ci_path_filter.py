@@ -43,7 +43,7 @@ def classify(category: str, changed: list[str]) -> str:
 DOCS = ["README.md", "litellm/anywhere.md"]
 CLIENT = ["litellm/ui/litellm-dashboard/src/App.tsx"]
 BACKEND = ["litellm/main.py"]
-CI = [".github/workflows/test-unit.yml"]
+CI = [".github/workflows/pr-unit.yml"]
 
 
 @pytest.mark.parametrize(
@@ -55,7 +55,7 @@ CI = [".github/workflows/test-unit.yml"]
         ("mcp-dependencies", ["tests/e2e/mcp/datadog_mcp.py"], "run"),
         ("mcp-dependencies", ["litellm/proxy-extras/pyproject.toml"], "run"),
         ("mcp-dependencies", ["litellm/scripts/check_mcp_sdk_install.py"], "run"),
-        ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
+        ("mcp-dependencies", [".github/workflows/merge-mcp-resolution.yml"], "run"),
         ("mcp-dependencies", [".github/scripts/ci/classify_changes.sh"], "run"),
         ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),
         ("mcp-dependencies", DOCS + CLIENT, "skip"),
@@ -123,7 +123,7 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
         ("litellm/caching/redis_cache.py", "run"),
         ("tests/unit/caching/test_redis_cluster_cache.py", "run"),
         ("tests/integration/sdk/test_redis_cluster_iam_auth.py", "run"),
-        (".github/workflows/test-unit.yml", "run"),
+        (".github/workflows/pr-unit.yml", "run"),
         ("tests/integration/run.py", "run"),
         ("uv.lock", "run"),
         (".github/workflows/test-integration.yml", "skip"),

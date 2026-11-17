@@ -78,7 +78,7 @@ def test_integration_groups_require_exclusive_scheduled_github_owner(tmp_path: P
     runner: Final = tmp_path / "tests/integration/run.py"
     runner.write_text(runner.read_text() + f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n")
     workflow.unlink()
-    dedicated: Final = tmp_path / ".github/workflows/image-scan.yml"
+    dedicated: Final = tmp_path / ".github/workflows/main-image-scan.yml"
     dedicated.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
     github_owned, github_findings = coverage._integration_ownership(tmp_path)
     assert github_owned == frozenset({test_path, github_path})
@@ -134,9 +134,9 @@ def test_integration_matrix_accounts_for_default_suites(matrix: object, expected
 @pytest.mark.parametrize(
     ("github_path", "workflow_name", "exit_code"),
     [
-        ("tests/integration/database/image/test_github_contract.py", "image-scan.yml", 0),
-        ("tests/integration/database/image/test_github_contract.py", "test-unit.yml", 1),
-        ("tests/integration/management/test_github_contract.py", "image-scan.yml", 1),
+        ("tests/integration/database/image/test_github_contract.py", "main-image-scan.yml", 0),
+        ("tests/integration/database/image/test_github_contract.py", "pr-unit.yml", 1),
+        ("tests/integration/management/test_github_contract.py", "main-image-scan.yml", 1),
     ],
 )
 def test_census_fails_when_a_github_owned_contract_runs_outside_its_dedicated_workflow(
@@ -160,7 +160,7 @@ def test_an_integration_file_outside_every_group_cannot_run_on_a_github_shard(tm
     (tmp_path / ungrouped).parent.mkdir(parents=True)
     (tmp_path / ungrouped).write_text("def test_probe(): pass\n")
     _, before = coverage._integration_ownership(tmp_path)
-    (tmp_path / ".github/workflows/test-unit.yml").write_text(
+    (tmp_path / ".github/workflows/pr-unit.yml").write_text(
         yaml.safe_dump({"jobs": {"mcp": {"steps": [{"run": f"pytest {ungrouped}"}]}}})
     )
     _, after = coverage._integration_ownership(tmp_path)
@@ -204,7 +204,7 @@ def test_allowlisting_an_unrun_integration_contract_does_not_claim_it_runs(tmp_p
     allowed_paths, allowed_findings = coverage._integration_ownership(tmp_path, allowlist=allowlist)
     assert path not in allowed_paths
     assert allowed_findings == ()
-    (tmp_path / ".github/workflows/test-unit.yml").write_text(
+    (tmp_path / ".github/workflows/pr-unit.yml").write_text(
         yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {path}"}]}}})
     )
     _, wrong_owner = coverage._integration_ownership(tmp_path, allowlist=allowlist)

@@ -14,12 +14,12 @@ outside_cost_map_set=false
 while IFS= read -r file || [ -n "$file" ]; do
   [ -n "$file" ] || continue
   case "$file" in
-    litellm/_redis.py | litellm/_redis_credential_provider.py | litellm/caching/redis_cache.py | litellm/caching/evicted_client_closer.py | tests/unit/test_redis.py | tests/integration/sdk/test_redis_cluster_iam_auth.py | tests/unit/caching/test_redis_connection_pool.py | tests/unit/caching/test_redis_cluster_cache.py | tests/unit/caching/test_evicted_client_closer.py | .github/workflows/test-unit.yml | .github/actions/detect-changes/* | .github/scripts/detect_changes.sh | .github/scripts/ci/classify_changes.sh | tests/integration/run.py | pyproject.toml | uv.lock)
+    litellm/_redis.py | litellm/_redis_credential_provider.py | litellm/caching/redis_cache.py | litellm/caching/evicted_client_closer.py | tests/unit/test_redis.py | tests/integration/sdk/test_redis_cluster_iam_auth.py | tests/unit/caching/test_redis_connection_pool.py | tests/unit/caching/test_redis_cluster_cache.py | tests/unit/caching/test_evicted_client_closer.py | .github/workflows/pr-unit.yml | .github/actions/detect-changes/* | .github/scripts/detect_changes.sh | .github/scripts/ci/classify_changes.sh | tests/integration/run.py | pyproject.toml | uv.lock)
       has_redis_compat=true ;;
   esac
   case "$file" in
     *.md | *.mdx) : ;;
-    pyproject.toml | */pyproject.toml | uv.lock | uv.toml | .python-version | litellm/rust/* | litellm/__init__.py | litellm/proxy/proxy_server.py | litellm/*mcp* | tests/*mcp* | litellm/integrations/arize/* | tests/base_sdk_tests/* | litellm/scripts/check_mcp_sdk_install.py | .github/workflows/test-mcp-dependency-resolution.yml | .github/actions/detect-changes/* | .github/actions/setup-uv-with-retries/* | .github/actions/cache-cargo-build/* | .github/scripts/detect_changes.sh | .github/scripts/uv_sync_with_retries.sh | .github/scripts/ci/classify_changes.sh | tests/unit/test_ci_path_filter.py | tests/unit/test_detect_changes.py)
+    pyproject.toml | */pyproject.toml | uv.lock | uv.toml | .python-version | litellm/rust/* | litellm/__init__.py | litellm/proxy/proxy_server.py | litellm/*mcp* | tests/*mcp* | litellm/integrations/arize/* | tests/base_sdk_tests/* | litellm/scripts/check_mcp_sdk_install.py | .github/workflows/merge-mcp-resolution.yml | .github/actions/detect-changes/* | .github/actions/setup-uv-with-retries/* | .github/actions/cache-cargo-build/* | .github/scripts/detect_changes.sh | .github/scripts/uv_sync_with_retries.sh | .github/scripts/ci/classify_changes.sh | tests/unit/test_ci_path_filter.py | tests/unit/test_detect_changes.py)
       has_mcp_dependencies=true ;;
   esac
   case "$file" in

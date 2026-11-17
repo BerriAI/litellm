@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-_UNIT_WORKFLOW: Final = _REPO_ROOT / ".github" / "workflows" / "test-unit.yml"
+_UNIT_WORKFLOW: Final = _REPO_ROOT / ".github" / "workflows" / "pr-unit.yml"
 _SHARD_ENV: Final = MappingProxyType(
     {"MAX_FAILURES": "10", "RERUNS": "0", "DIST": "loadscope", "TEST_TIMEOUT_SECONDS": "60", "COVERAGE_CORE": "sysmon"}
 )

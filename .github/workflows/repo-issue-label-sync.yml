@@ -1,28 +1,29 @@
-name: Auto-close duplicate issues
+name: Issue label sync
 
 on:
-  schedule:
-    - cron: "0 9 * * *"
+  push:
+    branches: [main]
+    paths:
+      - .github/issue-labels.json
+      - litellm/scripts/sync-issue-labels.ts
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Log which issues would close without closing anything
+        description: Log which labels would be created or recoloured without touching anything
         type: boolean
         default: true
-      grace_period_days:
-        description: Days a duplicate notice must go unanswered before the close
-        type: number
-        default: 3
   pull_request:
     paths:
-      - .github/workflows/auto-close-duplicates.yml
-      - litellm/scripts/auto-close-duplicates.ts
-      - litellm/scripts/auto-close-duplicates.test.ts
+      - .github/workflows/repo-issue-label-sync.yml
+      - .github/issue-labels.json
+      - litellm/scripts/sync-issue-labels.ts
+      - litellm/scripts/sync-issue-labels.test.ts
+      - litellm/scripts/issue-labels.ts
 
 permissions: {}
 
 jobs:
-  sweep-tests:
+  sync-issue-labels-tests:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -39,20 +40,23 @@ jobs:
         with:
           bun-version: "1.4.0"
 
-      - name: Test the sweep
-        run: bun test litellm/scripts/auto-close-duplicates.test.ts
+      - name: Test the sync
+        run: bun test litellm/scripts/sync-issue-labels.test.ts
 
-  sweep:
+  sync-issue-labels:
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-slim
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
     steps:
-      - name: Checkout repository
+      - name: Checkout manifest and script
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
+          sparse-checkout: |
+            .github
+            litellm/scripts
           persist-credentials: false
 
       - name: Setup Bun
@@ -61,9 +65,8 @@ jobs:
           # Exact version, never latest: the next step holds an issues: write token
           bun-version: "1.4.0"
 
-      - name: Close unanswered duplicates, reopen ones the reporter answered
-        run: bun run litellm/scripts/auto-close-duplicates.ts
+      - name: Create or recolour every label in .github/issue-labels.json
+        run: bun run litellm/scripts/sync-issue-labels.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run == true }}
-          GRACE_PERIOD_DAYS: ${{ inputs.grace_period_days }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}

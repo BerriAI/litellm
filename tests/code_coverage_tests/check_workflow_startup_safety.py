@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent.parent
 WORKFLOWS_DIR: Final = REPO_ROOT / ".github" / "workflows"
-UNIT_WORKFLOW_PATH: Final = WORKFLOWS_DIR / "test-unit.yml"
+UNIT_WORKFLOW_PATH: Final = WORKFLOWS_DIR / "pr-unit.yml"
 
 # Runner time the job clock charges but no step owns: job init, the gaps between
 # steps, and post-job cleanup. Without it a job capped at exactly test + setup
