@@ -104,7 +104,7 @@ pub struct BedrockMantleAnthropicMessagesConfig;
 pub const BEDROCK_MANTLE_MESSAGES_CONFIG: BedrockMantleAnthropicMessagesConfig =
     BedrockMantleAnthropicMessagesConfig;
 
-fn first_truthy<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
+fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
     values.into_iter().flatten().find(|value| !value.is_empty())
 }
 
@@ -184,7 +184,7 @@ fn has_route_prefix(model: &str, prefix: &str) -> bool {
 }
 
 fn configured_region(litellm_params: &LitellmParams) -> Option<&str> {
-    first_truthy([litellm_params.aws.aws_region_name.as_deref()])
+    first_non_empty([litellm_params.aws.aws_region_name.as_deref()])
 }
 
 /// Python's `resolve_mantle_region`.
@@ -196,7 +196,7 @@ fn resolve_mantle_region(
     if let Some(region) = configured_region(litellm_params) {
         return validated_region(region.to_string());
     }
-    let base = first_truthy([api_base])
+    let base = first_non_empty([api_base])
         .map(str::to_string)
         .or_else(|| env_value(env_lookup, &[MANTLE_API_BASE_ENV]));
     let host_region = base
@@ -222,7 +222,7 @@ fn dynamic_api_base(
             .or_else(|| env_value(env_lookup, &REGION_ENVS))
             .unwrap_or_else(|| BEDROCK_MANTLE_DEFAULT_REGION.to_string()),
     )?;
-    Ok(first_truthy([api_base])
+    Ok(first_non_empty([api_base])
         .map(str::to_string)
         .or_else(|| env_value(env_lookup, &[MANTLE_API_BASE_ENV]))
         .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws/v1")))
@@ -363,7 +363,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let headers = mantle_headers(headers, litellm_params)?;
-        if let Some(token) = first_truthy([api_key])
+        if let Some(token) = first_non_empty([api_key])
             .map(str::to_string)
             .or_else(|| env_value(env_lookup, &KEY_ENVS))
         {
