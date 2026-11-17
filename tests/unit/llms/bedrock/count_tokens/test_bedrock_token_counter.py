@@ -292,8 +292,11 @@ async def test_claude_runtime_count_carries_the_forced_tool_choice_inference_sen
 
 @pytest.mark.asyncio
 async def test_claude_runtime_count_sends_a_forced_tool_choice_without_tools_so_the_caller_gets_bedrocks_400() -> None:
-    rejected: Final = {"message": "tool_choice.any may only be specified while providing tools"}
-    bedrock: Final = _Bedrock(runtime=(400, rejected), mantle=(400, rejected))
+    rejected: Final = "tool_choice.any may only be specified while providing tools"
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": rejected}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "model does not exist"}}),
+    )
 
     result: Final = await _counter(bedrock).count_tokens(
         model_to_use="anthropic.claude-sonnet-4-6",
@@ -306,6 +309,7 @@ async def test_claude_runtime_count_sends_a_forced_tool_choice_without_tools_so_
 
     assert result is not None
     assert (result.error, result.status_code) == (True, 400)
+    assert rejected in (result.error_message or "")
     assert _invoke_body(bedrock.requests[0])["tool_choice"] == {"type": "any"}
 
 
