@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
@@ -237,9 +238,18 @@ def chat_completion_ends_in_responses_api(
 _USER_TURN_ROLES: Final = frozenset({"user", "tool", "function"})
 
 
+def _with_deployment_base_model(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    deployment_model_info: Final = as_str_mapping(litellm_params.get("model_info"))
+    if litellm_params.get("base_model") or deployment_model_info is None:
+        return litellm_params
+    return {**litellm_params, "base_model": deployment_model_info.get("base_model")}
+
+
 def _uses_gemini_converter(model: str, provider: LlmProviders, litellm_params: Mapping[str, object]) -> bool:
     if provider == LlmProviders.VERTEX_AI:
-        return get_vertex_ai_model_route(model, litellm_params) == VertexAIModelRoute.GEMINI
+        return (
+            get_vertex_ai_model_route(model, _with_deployment_base_model(litellm_params)) == VertexAIModelRoute.GEMINI
+        )
     return isinstance(
         ProviderConfigManager.get_provider_chat_config(model=model, provider=provider), VertexGeminiConfig
     )

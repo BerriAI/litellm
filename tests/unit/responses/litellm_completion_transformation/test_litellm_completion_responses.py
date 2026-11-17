@@ -6724,6 +6724,22 @@ _EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
             id="vertex_ai_endpoint_with_a_gemini_base_model",
         ),
         pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model_in_model_info",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/claude-sonnet-4-5", "model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO],
+            id="vertex_ai_endpoint_base_model_param_wins_over_model_info",
+        ),
+        pytest.param(
             "1234567890",
             "vertex_ai",
             {"role": "user"},
