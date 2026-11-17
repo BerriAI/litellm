@@ -26,7 +26,7 @@ use serde_json::{Map, Value};
 #[cfg(any(test, feature = "test-support"))]
 pub use environment::OnGce;
 pub use environment::{EnvironmentFuture, GoogleEnvironment, SystemGoogleEnvironment};
-pub use failure::{CredentialsFile, GOOGLE_SDK_MISSING, GoogleLoginFailure, PythonException};
+pub use failure::{CredentialsFile, GoogleLoginFailure, PythonException};
 pub use transport::set_certifi_bundle;
 
 use credentials::{Loaded, managed};
