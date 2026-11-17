@@ -760,6 +760,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    request_served_model,
     sanitize_for_log,
 )
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
@@ -16218,11 +16219,32 @@ def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) ->
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
 
 
+def _caller_tag_scope(caller: UserAPIKeyAuth) -> Mapping[str, object]:
+    inherited: Final = LiteLLMProxyRequestSetup.get_inherited_tags(caller)
+    return {"tags": list(inherited), "inherited_tags": inherited} if inherited else {}
+
+
 def _caller_routing_kwargs(caller: UserAPIKeyAuth | None) -> Mapping[str, object]:
     if caller is None:
         return {}
     team_scope: Final = {"user_api_key_team_id": caller.team_id} if caller.team_id else {}
-    return {"metadata": {"user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(caller), **team_scope}}
+    return {
+        "metadata": {
+            "user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(caller),
+            **team_scope,
+            **_caller_tag_scope(caller),
+        }
+    }
+
+
+async def _caller_served_model(model: str, caller: UserAPIKeyAuth | None) -> str:
+    if caller is None:
+        return model
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=caller, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    group_alias: Final = None if settings is None else settings.get("model_group_alias")
+    return request_served_model(model, caller, group_alias, llm_router)
 
 
 def _inference_params(
@@ -16457,8 +16479,9 @@ async def _routed_count_deployment(
     if llm_router is None:
         return None
     try:
+        served: Final = await _caller_served_model(model, caller)
         routed: Final = await llm_router.select(
-            model, {"model": model, **_responses_routing_kwargs(responses_request), **_caller_routing_kwargs(caller)}
+            served, {"model": served, **_responses_routing_kwargs(responses_request), **_caller_routing_kwargs(caller)}
         )
     except Exception:
         verbose_proxy_logger.exception(

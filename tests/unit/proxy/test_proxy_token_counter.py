@@ -203,6 +203,11 @@ def _team_scoped_router() -> Router:
                 "litellm_params": {"model": "groq/team-b-backend", "api_key": "sk-test"},
                 "model_info": {"id": "team-b-deployment", "team_id": "team-b", "team_public_model_name": "team-only-model"},
             },
+            {
+                "model_name": "model_name_team-c_3",
+                "litellm_params": {"model": "groq/team-c-backend", "api_key": "sk-test"},
+                "model_info": {"id": "team-c-deployment", "team_id": "team-c", "team_public_model_name": "shared-model"},
+            },
         ]
     )
 
@@ -212,9 +217,18 @@ def _team_scoped_router() -> Router:
     ("caller", "model", "expected_model_used"),
     [
         (UserAPIKeyAuth(team_id="team-a"), "shared-model", "team-a-backend"),
+        (UserAPIKeyAuth(team_id="team-c"), "shared-model", "team-c-backend"),
         (UserAPIKeyAuth(team_id="team-b"), "team-only-model", "team-b-backend"),
         (UserAPIKeyAuth(team_id="team-b"), "shared-model", "global-backend"),
         (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), "team-only-model", "team-b-backend"),
+        (UserAPIKeyAuth(team_id="team-b", aliases={"opus": "team-only-model"}), "opus", "team-b-backend"),
+        (UserAPIKeyAuth(team_id="team-b", team_model_aliases={"fast": "team-only-model"}), "fast", "team-b-backend"),
+        (
+            UserAPIKeyAuth(team_id="team-b", router_settings={"model_group_alias": {"big": "team-only-model"}}),
+            "big",
+            "team-b-backend",
+        ),
+        (UserAPIKeyAuth(team_id="team-a"), "legacy-name", "team-a-backend"),
         (None, "shared-model", "global-backend"),
     ],
 )
@@ -222,9 +236,53 @@ async def test_count_runs_on_the_deployment_the_callers_team_routes_to(
     monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth | None, model: str, expected_model_used: str
 ):
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _team_scoped_router())
+    monkeypatch.setattr(litellm, "model_alias_map", {"legacy-name": "shared-model"})
 
     response = await count_request_tokens(
         request=TokenCountRequest(model=model, messages=[{"role": "user", "content": "hello"}]), caller=caller
+    )
+
+    assert response.model_used == expected_model_used
+
+
+def _tag_routed_router(tag_routing_prefix: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "tagged-model",
+                "litellm_params": {"model": "groq/default-backend", "api_key": "sk-test", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+            {
+                "model_name": "tagged-model",
+                "litellm_params": {"model": "groq/team-x-backend", "api_key": "sk-test", "tags": ["team-x"]},
+                "model_info": {"id": "team-x-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+        tag_routing_prefix=tag_routing_prefix,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag_routing_prefix", ["", "route:"])
+@pytest.mark.parametrize(
+    ("caller", "expected_model_used"),
+    [
+        (UserAPIKeyAuth(metadata={"tags": ["team-x"]}), "team-x-backend"),
+        (UserAPIKeyAuth(team_id="team-x", team_metadata={"tags": ["team-x"]}), "team-x-backend"),
+        (UserAPIKeyAuth(project_metadata={"tags": ["team-x"]}), "team-x-backend"),
+        (UserAPIKeyAuth(), "default-backend"),
+    ],
+)
+async def test_count_runs_on_the_deployment_the_callers_inherited_tags_route_to(
+    monkeypatch: pytest.MonkeyPatch, tag_routing_prefix: str, caller: UserAPIKeyAuth, expected_model_used: str
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tag_routed_router(tag_routing_prefix))
+
+    response = await count_request_tokens(
+        request=TokenCountRequest(model="tagged-model", messages=[{"role": "user", "content": "hello"}]),
+        caller=caller,
     )
 
     assert response.model_used == expected_model_used
