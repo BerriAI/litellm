@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, PoisonError, RwLock},
+    sync::{Arc, OnceLock, PoisonError, RwLock},
 };
 
 use litellm_http::request::{with_header, without_headers};
@@ -58,6 +58,9 @@ impl BetaPolicy {
 }
 
 pub fn accepted_or_unlisted(betas: BetaSet, provider: BetaProvider) -> BetaSet {
+    if betas.is_empty() {
+        return betas;
+    }
     let loaded = loaded_config();
     betas
         .into_iter()
@@ -107,6 +110,12 @@ impl BetaHeadersConfig {
 }
 
 static LOADED_CONFIG: RwLock<Option<Arc<BetaHeadersConfig>>> = RwLock::new(None);
+static REQUEST_LOAD: OnceLock<fn()> = OnceLock::new();
+
+/// Registers how a filter that runs before the beta map is installed asks the host to load it.
+pub fn on_beta_headers_config_needed(request_load: fn()) {
+    let _ = REQUEST_LOAD.set(request_load);
+}
 
 pub fn install_beta_headers_config(config: BetaHeadersConfig) {
     *LOADED_CONFIG
@@ -115,10 +124,16 @@ pub fn install_beta_headers_config(config: BetaHeadersConfig) {
 }
 
 fn loaded_config() -> Option<Arc<BetaHeadersConfig>> {
-    LOADED_CONFIG
+    let loaded = LOADED_CONFIG
         .read()
         .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+        .clone();
+    if loaded.is_none()
+        && let Some(request_load) = REQUEST_LOAD.get()
+    {
+        request_load();
+    }
+    loaded
 }
 
 /// Python's `filter_and_transform_beta_headers` for one beta: the loaded config's cell, or the
