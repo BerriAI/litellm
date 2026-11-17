@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Final, cast  # noqa: TID251  # narrows the untyped Messages entries to their call shape
 
 import pytest
-from botocore.exceptions import NoCredentialsError, PartialCredentialsError
+from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ProfileNotFound
 from pydantic import TypeAdapter
 
 import litellm
@@ -1117,6 +1117,44 @@ async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
 
     assert type(rust_raised.value) is raised
     assert getattr(rust_raised.value, "status_code", None) == (400 if raised is AwsAuthError else None)
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_aws_credentials")
+async def test_bedrock_invoke_missing_profile_raises_what_python_raises(server: RecordingServer) -> None:
+    unsigned: Final = {"aws_access_key_id": None, "aws_secret_access_key": None, "aws_profile_name": "absent-profile"}
+
+    with pytest.raises(ProfileNotFound) as python_raised:
+        await _python(server, **unsigned)
+    with pytest.raises(ProfileNotFound) as rust_raised:
+        await _rust(server, **unsigned)
+
+    assert rust_raised.value.kwargs == python_raised.value.kwargs == {"profile": "absent-profile"}
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    ("route", "raised"),
+    (
+        pytest.param({}, ValueError, id="bedrock-mantle"),
+        pytest.param({"model": "bedrock/mantle/anthropic.claude-opus-4-8"}, ProfileNotFound, id="mantle-route"),
+    ),
+)
+async def test_bedrock_mantle_missing_profile_raises_what_python_raises(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, route: Mapping[str, object], raised: type[Exception]
+) -> None:
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    unsigned: Final = {"api_key": None, "aws_region_name": "us-east-1", "aws_profile_name": "absent-profile", **route}
+
+    with pytest.raises(raised) as rust_raised:
+        await _mantle(_RUST_ENTRY, server, **unsigned)
+
+    assert type(rust_raised.value) is raised
+    if raised is ProfileNotFound:
+        assert rust_raised.value.kwargs == {"profile": "absent-profile"}
     assert server.requests == []
 
 

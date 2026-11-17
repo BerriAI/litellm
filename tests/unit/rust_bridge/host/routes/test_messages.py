@@ -3308,6 +3308,28 @@ def test_a_bedrock_mantle_route_credential_failure_raises_botocores_error_unwrap
     assert type(mapped) is NoCredentialsError
 
 
+@pytest.mark.parametrize(
+    ("model", "request_provider", "raised"),
+    (
+        pytest.param(_MANTLE_ROUTE, "bedrock", "ProfileNotFound", id="mantle-route"),
+        pytest.param(_BEDROCK_MANTLE, "bedrock_mantle", "ValueError", id="bedrock-mantle"),
+    ),
+)
+def test_a_mantle_missing_profile_raises_what_python_signing_raises(
+    model: str, request_provider: str, raised: str
+) -> None:
+    rust_error: Final = _credential_failure("profile_not_found")
+    rust_error.messages_missing_profile = "absent-profile"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(
+        rust_error, {"model": model, "messages": [], "aws_region_name": "us-east-1"}, request_provider
+    )
+
+    assert type(mapped).__name__ == raised
+    if raised == "ProfileNotFound":
+        assert getattr(mapped, "kwargs", None) == {"profile": "absent-profile"}
+
+
 def _refused(text: str, **markers: object) -> ValueError:
     rust_error: Final = ValueError(text)
     rust_error.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host

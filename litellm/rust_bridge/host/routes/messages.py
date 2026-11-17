@@ -838,11 +838,11 @@ def _complete_url(call: _ProviderCall, request: Mapping[str, object]) -> str:
     )
 
 
-def _signing_failure(kind: str) -> Exception | None:
+def _signing_failure(kind: str, profile: str | None) -> Exception | None:
     """The exception Python's AWS signing raises for a credential failure whose outcome needs no STS,
     IMDS or secret manager call. botocore's environment provider raises `PartialCredentialsError`
     for an access key without its secret, where Rust's default chain finds nothing."""
-    from botocore.exceptions import NoCredentialsError
+    from botocore.exceptions import NoCredentialsError, ProfileNotFound
 
     from litellm.llms.bedrock.base_aws_llm import AwsAuthError
 
@@ -852,6 +852,8 @@ def _signing_failure(kind: str) -> Exception | None:
         return AwsAuthError(status_code=401, message="OIDC token could not be retrieved from secret manager.")
     if kind == "no_credentials" and not os.environ.get("AWS_ACCESS_KEY_ID"):
         return NoCredentialsError()
+    if kind == "profile_not_found":
+        return ProfileNotFound(profile=profile)
     return None
 
 
@@ -888,7 +890,7 @@ def _bedrock_credential_failure(
     kind: Final = getattr(error, "messages_credential_failure", None)
     if not isinstance(kind, str):
         return None
-    known: Final = _signing_failure(kind)
+    known: Final = _signing_failure(kind, optional_str(getattr(error, "messages_missing_profile", None)))
     if request_provider == "bedrock_mantle":
         sts: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
         if sts is not None:
