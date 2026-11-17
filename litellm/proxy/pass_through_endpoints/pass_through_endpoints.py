@@ -354,22 +354,36 @@ def _guardrail_headers_with_room(
     return reduce(_with_header_in_response_limit, guardrail_headers.items(), response_headers)
 
 
+def _without_callback_names(
+    guardrail_headers: Mapping[str, str], callback_headers: Mapping[str, str]
+) -> Mapping[str, str]:
+    """``guardrail_headers`` less any a callback sets under the same name in any case, so the callback's value wins as
+    on the native routes."""
+    callback_names: Final = frozenset(name.lower() for name in callback_headers)
+    return MappingProxyType(
+        {name: value for name, value in guardrail_headers.items() if name.lower() not in callback_names}
+    )
+
+
 def _add_callback_headers(
     response_headers: dict[str, str],  # mutable-ok: adds to the response's headers in place, like the dict's update
     callback_headers: Mapping[str, str],
     own_guardrail_headers: Mapping[str, str],
+    upstream_headers: httpx.Headers,
 ) -> None:
-    """Add a callback's headers to ``response_headers``, less a guardrail header this proxy set, ``own_guardrail_headers``,
-    that they then leave no room for. The upstream's guardrail headers are kept as they came."""
-    guardrail_headers: Final = {
-        name: value
-        for name, value in own_guardrail_headers.items()
-        if response_headers.get(name) == value and name not in callback_headers
+    """Add a callback's headers to ``response_headers``, which already carry this proxy's guardrail headers,
+    ``own_guardrail_headers``. A callback's header of the same name wins, and one of this proxy's that the callback's
+    headers leave no room for gives way to the upstream's header of that name, as it came."""
+    own_headers: Final = {
+        name: value for name, value in own_guardrail_headers.items() if response_headers.get(name) == value
     }
-    for name in guardrail_headers:
+    for name in own_headers:
         response_headers.pop(name)
+    response_headers.update({name: upstream_headers[name] for name in own_headers if name in upstream_headers})
     response_headers.update(callback_headers)
-    response_headers.update(_guardrail_headers_with_room(guardrail_headers, response_headers))
+    response_headers.update(
+        _guardrail_headers_with_room(_without_callback_names(own_headers, callback_headers), response_headers)
+    )
 
 
 def _recorded_guardrail_headers(
@@ -694,6 +708,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         custom_headers: Mapping[str, str] | None = None,
         guardrail_request_data: Sequence[object] = (),
         earlier_guardrail_headers: Mapping[str, str] = MappingProxyType({}),
+        callback_headers: Mapping[str, str] = MappingProxyType({}),
     ) -> dict:
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.
@@ -713,10 +728,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return_headers: Final = {key: value for key, value in headers.items() if key.lower() not in excluded_headers}
         if litellm_call_id:
             return_headers["x-litellm-call-id"] = litellm_call_id
-        if custom_headers:
+        added_headers: Final = {**(custom_headers or {}), **callback_headers}
+        if added_headers:
             # Ensure custom headers don't override actual upstream response headers or let framework defaults (like content-length: 0) interfere.
             sanitized_custom_headers: Final = {
-                key: value for key, value in custom_headers.items() if key.lower() not in excluded_headers
+                key: value for key, value in added_headers.items() if key.lower() not in excluded_headers
             }
             return_headers.update(sanitized_custom_headers)
         guardrail_headers: Final = _guardrail_response_headers(*guardrail_request_data)
@@ -725,7 +741,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             (header for header in earlier_guardrail_headers.items() if header[0] not in guardrail_headers),
             guardrail_headers,
         )
-        return_headers.update(_guardrail_headers_with_room(combined_guardrail_headers, return_headers))
+        return_headers.update(
+            _guardrail_headers_with_room(
+                _without_callback_names(combined_guardrail_headers, callback_headers), return_headers
+            )
+        )
 
         return return_headers
 
@@ -2441,7 +2461,7 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _add_callback_headers(_response_headers, callback_headers, streamed_guardrail_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
+                _add_callback_headers(_response_headers, callback_headers, streamed_guardrail_headers, response.headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
@@ -2547,7 +2567,12 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _add_callback_headers(_response_headers, callback_headers, detected_stream_guardrail_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
+                _add_callback_headers(
+                    _response_headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
+                    callback_headers,
+                    detected_stream_guardrail_headers,
+                    response.headers,
+                )
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
@@ -2598,8 +2623,6 @@ async def pass_through_request(
                 response=response,
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
-            if relay_callback_headers:
-                relay_custom_headers.update(relay_callback_headers)
 
             return StreamingResponse(
                 _relay_passthrough_response_bytes(
@@ -2615,6 +2638,7 @@ async def pass_through_request(
                 headers=HttpPassThroughEndpointHelpers.get_response_headers(
                     headers=response.headers,
                     custom_headers=relay_custom_headers,
+                    callback_headers=relay_callback_headers or {},
                     guardrail_request_data=(_parsed_body, kwargs),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
                 ),
             )
@@ -2795,12 +2819,11 @@ async def pass_through_request(
             response=response,
             request_headers=dict(redact_credential_headers(request.headers)),
         )
-        if callback_headers:
-            custom_headers.update(callback_headers)
 
         response_headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
             headers=response.headers,
             custom_headers=custom_headers,
+            callback_headers=callback_headers or {},
             earlier_guardrail_headers=upstream_guardrail_headers,
             guardrail_request_data=(_parsed_body, kwargs, post_call_guardrail_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
         )

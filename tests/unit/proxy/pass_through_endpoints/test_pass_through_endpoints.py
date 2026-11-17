@@ -14312,23 +14312,117 @@ class TestGuardrailResponseHeaders:
     def test_upstream_guardrail_headers_survive_a_callback_header_when_the_proxy_recorded_nothing(self):
         headers: Final = self._upstream_with_guardrail_headers()
 
-        _add_callback_headers(headers, {"x-callback": "c"}, {})
+        _add_callback_headers(headers, {"x-callback": "c"}, {}, httpx.Headers(self._upstream_with_guardrail_headers()))
 
         assert headers == {**self._upstream_with_guardrail_headers(), "x-callback": "c"}
 
     def test_the_proxys_guardrail_header_gives_way_to_a_callback_header_with_no_room(self):
         headers: Final = {"x-litellm-applied-guardrails": "guard", "x-upstream": "o" * 15_000}
 
-        _add_callback_headers(headers, {"x-callback": "c" * 300}, {"x-litellm-applied-guardrails": "guard"})
+        _add_callback_headers(
+            headers,
+            {"x-callback": "c" * 300},
+            {"x-litellm-applied-guardrails": "guard"},
+            httpx.Headers({"x-upstream": "o" * 15_000}),
+        )
 
         assert headers == {"x-upstream": "o" * 15_000, "x-callback": "c" * 300}
+
+    def test_the_upstreams_guardrail_header_comes_back_when_a_callback_leaves_the_proxys_no_room(self):
+        upstream: Final = {"x-litellm-applied-guardrails": "inner-guard", "x-upstream": "o" * 15_000}
+        headers: Final = {**upstream, "x-litellm-applied-guardrails": "guard"}
+
+        _add_callback_headers(
+            headers, {"x-callback": "c" * 300}, {"x-litellm-applied-guardrails": "guard"}, httpx.Headers(upstream)
+        )
+
+        assert headers == {**upstream, "x-callback": "c" * 300}
+
+    @pytest.mark.parametrize("name", ["x-litellm-applied-guardrails", "X-LiteLLM-Applied-Guardrails"])
+    def test_a_streamed_callback_header_wins_over_the_proxys_of_the_same_name(self, name: str):
+        headers: Final = {"x-litellm-applied-guardrails": "guard"}
+
+        _add_callback_headers(
+            headers, {name: "from-callback"}, {"x-litellm-applied-guardrails": "guard"}, httpx.Headers()
+        )
+
+        assert headers == {name: "from-callback"}
 
     def test_the_proxys_guardrail_header_stays_beside_a_callback_header_with_room(self):
         headers: Final = {"x-litellm-applied-guardrails": "guard", "x-upstream": "o"}
 
-        _add_callback_headers(headers, {"x-callback": "c"}, {"x-litellm-applied-guardrails": "guard"})
+        _add_callback_headers(
+            headers, {"x-callback": "c"}, {"x-litellm-applied-guardrails": "guard"}, httpx.Headers({"x-upstream": "o"})
+        )
 
         assert headers == {"x-litellm-applied-guardrails": "guard", "x-upstream": "o", "x-callback": "c"}
+
+    @staticmethod
+    async def _pass_through_response_headers(content_type: str, callback_headers: dict[str, str]) -> Headers:
+        recorded_body: Final = {"model": "gpt-4o", "metadata": {"applied_guardrails": ["rec-pre"]}}
+        proxy_logging: Final = MagicMock()
+        proxy_logging.pre_call_hook = AsyncMock(return_value=recorded_body)
+        proxy_logging.post_call_success_hook = AsyncMock(return_value={"id": "chatcmpl-1"})
+        proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=callback_headers)
+        upstream: Final = httpx.Response(
+            status_code=200,
+            headers={"content-type": content_type},
+            content=b'{"id":"chatcmpl-1"}',
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+        request: Final = MagicMock()
+        request.method = "POST"
+        request.query_params = {}
+        request.headers = MagicMock()
+        request.headers.copy.return_value = {}
+        module: Final = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    f"{module}.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler",
+                    new_callable=AsyncMock,
+                    return_value=upstream,
+                )
+            )
+            stack.enter_context(patch(f"{module}._is_streaming_response", return_value=False))
+            stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging))
+            stack.enter_context(
+                patch(
+                    f"{module}.pass_through_endpoint_logging", MagicMock(pass_through_async_success_handler=AsyncMock())
+                )
+            )
+            stack.enter_context(
+                patch(f"{module}.read_request_body", new_callable=AsyncMock, return_value={"model": "gpt-4o"})
+            )
+            stack.enter_context(patch(f"{module}.safe_get_request_headers", return_value={}))
+            response: Final = await pass_through_request(
+                request=request,
+                target="https://api.openai.com/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                stream=False,
+            )
+        return Headers(raw=response.raw_headers)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content_type", ["application/json", "application/octet-stream"], ids=["buffered", "relayed"]
+    )
+    @pytest.mark.parametrize(
+        ("callback_headers", "expected"),
+        [
+            ({"x-other": "1"}, ["rec-pre"]),
+            ({"x-litellm-applied-guardrails": "from-callback"}, ["from-callback"]),
+            ({"X-LiteLLM-Applied-Guardrails": "from-callback"}, ["from-callback"]),
+        ],
+        ids=["other-header", "same-name", "same-name-mixed-case"],
+    )
+    async def test_a_callback_header_wins_over_the_proxys_of_the_same_name(
+        self, content_type: str, callback_headers: dict[str, str], expected: list[str]
+    ):
+        headers: Final = await self._pass_through_response_headers(content_type, callback_headers)
+
+        assert headers.getlist("x-litellm-applied-guardrails") == expected
 
     def test_guardrail_header_past_the_size_budget_is_left_out(self):
         names: Final = [f"g{index}" for index in range(2_000)]
