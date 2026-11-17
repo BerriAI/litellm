@@ -20,8 +20,11 @@ _CONFIGS: Final[Mapping[str, type[SharedModelConfig]]] = MappingProxyType(
         AnthropicModelOnAnthropicProvider.inference_provider: AnthropicModelOnAnthropicProvider,
     }
 )
+_FIELDS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {provider: frozenset(config.model_fields) for provider, config in _CONFIGS.items()}
+)
 _COST_MAP_FIELDS: Final = frozenset((ModelInfo.__required_keys__ | ModelInfo.__optional_keys__) - {"key"}).union(
-    *(config.model_fields for config in _CONFIGS.values())
+    *_FIELDS.values()
 )
 
 _ROW: Final = TypeAdapter(Mapping[str, object])
@@ -76,12 +79,9 @@ def typed_model_config(
 ) -> SharedModelConfig:
     config: Final = _CONFIGS[custom_llm_provider]
     row: Final = {**_catalog_row(model, custom_llm_provider), **(model_info or {})}
+    fields: Final = _FIELDS[custom_llm_provider]
     unused: Final = tuple(
-        sorted(
-            key
-            for key, value in row.items()
-            if value is not None and key not in config.model_fields and _is_cost_map_field(key)
-        )
+        sorted(key for key, value in row.items() if value is not None and key not in fields and _is_cost_map_field(key))
     )
     if unused:
         _warn_once("%s: model=%s sets %s, which this provider does not use", config.__name__, model, unused)
@@ -112,8 +112,9 @@ def resolved_model_config(
         if model_info is None
         else model_info
     )
+    fields: Final = _FIELDS[custom_llm_provider]
     unbilled: Final = tuple(
-        sorted(key for key, value in row.items() if key not in config.model_fields and _is_unbilled_price(key, value))
+        sorted(key for key, value in row.items() if key not in fields and _is_unbilled_price(key, value))
     )
     if unbilled:
         _warn_once("%s: model=%s sets %s, which this provider does not bill", config.__name__, model, unbilled)
@@ -122,5 +123,4 @@ def resolved_model_config(
 
 def billed_fields(custom_llm_provider: str | None) -> frozenset[str] | None:
     """The fields the provider's config bills, or ``None`` for a provider without a typed config."""
-    config: Final = _CONFIGS.get(custom_llm_provider or "")
-    return None if config is None else frozenset(config.model_fields)
+    return _FIELDS.get(custom_llm_provider or "")
