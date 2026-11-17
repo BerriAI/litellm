@@ -12467,9 +12467,16 @@ GPT_4O_MINI_TTS_SPEECH: Final = CostTrackingTestCase(
     model="gpt-4o-mini-tts",
     endpoint="/v1/audio/speech",
     request={"input": "The pricing harness says hello.", "voice": "alloy", "response_format": "mp3"},
-    response=BinaryResponse(content_type="audio/mpeg", length=2048),
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'data: {"type":"speech.audio.delta","audio":"c2NyaXB0ZWQgYXVkaW8="}',
+            'data: {"type":"speech.audio.done","usage":{"input_tokens":6,"output_tokens":50,"total_tokens":56}}',
+            "data: [DONE]",
+        ),
+    ),
     expected=ExactExpected(
-        spend=3.66e-06, input_cost=3.66e-06, output_cost=0.0, prompt_tokens=0, completion_tokens=0
+        spend=0.00060366, input_cost=3.66e-06, output_cost=0.0006, prompt_tokens=6, completion_tokens=50
     ),
 )
 
