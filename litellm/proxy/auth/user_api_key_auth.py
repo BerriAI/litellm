@@ -1885,18 +1885,17 @@ async def _reject_from_headers_before_reading_body(
     if not isinstance(limiter, ParallelRequestLimiterHook):
         return
     team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
+    team_limits: Final = {"team_rpm_limit": None, "team_tpm_limit": None} if team_fields is None else team_fields
     rate_limited: Final = cached_key.model_copy(
         update={
-            **(team_fields or {}),
+            **team_limits,
             "api_key": cached_key.api_key or hashed_token,
             "parent_otel_span": parent_otel_span,
             "request_route": normalize_request_route(route),
         }
     )
     try:
-        await raise_if_over_limit_before_body(
-            limiter, rate_limited, frozenset({"team"}) if team_fields is None else frozenset()
-        )
+        await raise_if_over_limit_before_body(limiter, rate_limited)
     except HTTPException as rejection:
         failure_data: Final = dict(await _preflight_failure_request_data(request, route, rate_limited))
         transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig

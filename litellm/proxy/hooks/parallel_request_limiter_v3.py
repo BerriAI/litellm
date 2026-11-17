@@ -2156,15 +2156,12 @@ async def run_scoped(
 
 
 async def raise_if_over_limit_before_body(
-    limiter: ParallelRequestLimiterHook,
-    user_api_key_dict: UserAPIKeyAuth,
-    unverified_descriptor_keys: frozenset[str] = frozenset(),
+    limiter: ParallelRequestLimiterHook, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
     """Refuse a request from its headers alone once a limit that needs no body is exhausted.
 
     Counters are only read, never incremented, so an admitted request is still charged by
     ``async_pre_call_hook`` after its body is parsed. Limits that need the model are not checked here.
-    A scope in ``unverified_descriptor_keys`` never refuses here, and no longer hides another exhausted scope.
     """
     scoped: Final = await run_scoped(
         limiter,
@@ -2174,15 +2171,8 @@ async def raise_if_over_limit_before_body(
         {"kind": "check", "read_only": True, "skip_tpm_check": limiter.tpm_reservation_enabled},
     )
     response: Final = _native_reply(scoped.reply)
-    refusing: Final = [
-        status for status in response["statuses"] if status["descriptor_key"] not in unverified_descriptor_keys
-    ]
-    if any(status["code"] == "OVER_LIMIT" for status in refusing):
-        handle_rate_limit_error(
-            limiter,
-            response=RateLimitResponse(overall_code="OVER_LIMIT", statuses=refusing),
-            descriptors=scoped.descriptors,
-        )
+    if response["overall_code"] == "OVER_LIMIT":
+        handle_rate_limit_error(limiter, response=response, descriptors=scoped.descriptors)
 
 
 async def caller_model_rate_limit_response(

@@ -12273,6 +12273,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
         pytest.param({"team_member_rpm_limit": 1}, "team_member", id="team-member-limit"),
         pytest.param({"organization_rpm_limit": 1}, "organization", id="organization-limit"),
         pytest.param({"end_user_rpm_limit": 1}, "end_user", id="end-user-limit"),
+        pytest.param({"max_parallel_requests": 1}, "api_key", id="key-parallel-limit"),
         pytest.param({}, None, id="only-the-stale-team-limit"),
     ],
 )
