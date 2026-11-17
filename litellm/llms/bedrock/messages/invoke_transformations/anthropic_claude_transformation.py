@@ -23,6 +23,7 @@ from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    carries_signed_compaction_block,
     validated_object_mapping,
 )
 from litellm.llms.anthropic.messages.native.transformation import (
@@ -82,6 +83,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -571,6 +573,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             "edits": retained_edits,
         }
 
+    @staticmethod
+    def _add_compaction_beta_for_bedrock_invoke(
+        anthropic_messages_request: Mapping[str, object],
+        beta_set: set[str],  # mutable-ok: the caller's beta set is grown in place, like the sibling helpers
+    ) -> None:
+        """``compaction`` and an adopted signed block both need the compact-2026-09-04 beta on Bedrock.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+        """
+        messages: Final = _MESSAGE_LIST.validate_python(anthropic_messages_request.get("messages") or ())
+        if isinstance(anthropic_messages_request.get("compaction"), dict) or carries_signed_compaction_block(messages):
+            beta_set.add("compact-2026-09-04")
+
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         return False
 
@@ -639,6 +654,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
         )
+        self._add_compaction_beta_for_bedrock_invoke(anthropic_messages_request, beta_set)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
@@ -857,6 +873,14 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        if "compaction" in anthropic_messages_request and not (
+            isinstance(anthropic_messages_request["compaction"], dict) and "compact-2026-09-04" in filtered_betas
+        ):
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping `compaction`; compact-2026-09-04 is not served on this route"
+            )
+            del anthropic_messages_request["compaction"]
 
         final_request: Final = OBJECT_MAPPING_ADAPTER.validate_python(anthropic_messages_request)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
         gated: Final = strip_beta_gated_native_request(

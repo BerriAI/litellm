@@ -116,6 +116,7 @@ class PassThroughEndpointLogging:
         self.TRACKED_GEMINI_ROUTES = [
             "generateContent",
             "streamGenerateContent",
+            "batchGenerateContent",
             "predictLongRunning",
         ]
 

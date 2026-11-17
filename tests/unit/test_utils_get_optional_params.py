@@ -18,6 +18,7 @@ from litellm.utils import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_llm import CustomLLM
 
 
 COHERE_CHAT_RESPONSE: Final = {
@@ -2241,3 +2242,28 @@ def test_turning_reasoning_off_for_a_catalog_non_reasoning_model_drops_it_silent
 
     assert "reasoning_effort" not in optional_params
     assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+
+@pytest.fixture
+def custom_provider_named(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> str:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": request.param, "custom_handler": CustomLLM()}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return request.param
+
+
+@pytest.mark.parametrize("custom_provider_named", ["studio"], indirect=True)
+def test_image_params_pass_through_unmapped_for_a_custom_provider(custom_provider_named: str) -> None:
+    assert get_optional_params_image_gen(
+        model="flare-1", custom_llm_provider=custom_provider_named, n=2, size="1024x1536", quality="low", user="u-1"
+    ) == {"n": 2, "size": "1024x1536", "quality": "low", "user": "u-1"}
+
+
+@pytest.mark.parametrize("custom_provider_named", ["vertex_ai"], indirect=True)
+def test_image_params_keep_the_builtin_mapping_when_a_custom_provider_reuses_its_name(
+    custom_provider_named: str,
+) -> None:
+    assert get_optional_params_image_gen(
+        model="imagegeneration", custom_llm_provider=custom_provider_named, n=2, size="1024x1024"
+    ) == {"sampleCount": 2, "aspectRatio": "1:1"}

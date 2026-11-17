@@ -87352,5 +87352,243 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
+    },
+    "fal_ai/minimax/h3-max/recast": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.45,
+        "output_cost_per_second_1080p": 0.45,
+        "output_cost_per_second_768p": 0.3,
+        "source": "https://fal.ai/models/minimax/h3-max/recast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second derived from the 5s and 10s clip prices by resolution ($0.50/$1.00 at 540p, $1.00/$2.00 at 720p, $2.00/$4.00 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_720p": 0.2,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second derived from the 5s clip prices by resolution ($0.15 at 540p, $0.30 at 720p, $1.20 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR ($0.60 at 720p, $2.40 at 1080p per 5s) and HDR+EXR ($0.90, $3.60) are not modeled"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.24,
+        "output_cost_per_second_720p": 0.06,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/reframe": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per started source second by resolution; output_cost_per_second is the default resolution 540p rate ($0.06), which has no tier field"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.36,
+        "output_cost_per_second_720p": 0.12,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/reframe",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second derived from the 5s and 10s clip prices by resolution ($0.72/$1.44 at 540p, $1.08/$2.16 at 720p, $2.16/$4.32 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR and HDR+EXR prices are not modeled"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.144,
+        "output_cost_per_second_1080p": 0.432,
+        "output_cost_per_second_720p": 0.216,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "gemini/gemini-4-hydrogen": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost_batches": 3.75e-08,
+        "cache_read_input_token_cost_flex": 3.75e-08,
+        "cache_read_input_token_cost_priority": 1.35e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_flex": 7.5e-07,
+        "input_cost_per_token_priority": 2.7e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 7.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "output_cost_per_token_batches": 3.75e-06,
+        "output_cost_per_token_flex": 3.75e-06,
+        "output_cost_per_token_priority": 1.35e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "rpm": 2000.0,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
+        "source": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": true,
+        "supports_continuation": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
+        "tpm": 800000.0,
+        "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/gemini-4-hydrogen": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost_batches": 3.75e-08,
+        "cache_read_input_token_cost_priority": 1.35e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_audio_token": 1.5e-06,
+        "input_cost_per_audio_token_batches": 7.5e-07,
+        "input_cost_per_audio_token_priority": 2.7e-06,
+        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_priority": 2.7e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 7.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "output_cost_per_token_batches": 3.75e-06,
+        "output_cost_per_token_priority": 1.35e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "regional_endpoint_uplift_multiplier": 1.1,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.014,
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": true,
+        "supports_continuation": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
+        "web_search_billing_unit": "per_query"
     }
 }

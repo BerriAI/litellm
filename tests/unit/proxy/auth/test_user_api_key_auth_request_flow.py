@@ -98,6 +98,8 @@ from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests._master_key import MASTER_KEY
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.utils import InternalUsageCache
 
 
 class _RoutingRequest:
@@ -13775,3 +13777,282 @@ def test_should_skip_budget_checks_spares_only_zero_spend_mcp_discovery(
     from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
 
     assert _should_skip_budget_checks(request_data=request_data, route=route, request=None, llm_router=None) is expected
+
+
+def _request_whose_body_must_not_be_read(
+    api_key: str, method: str = "POST", path: str = "/v1/chat/completions", declared_bytes: int = 8388608
+) -> Request:
+    async def receive() -> dict[str, object]:
+        raise AssertionError("the body was read before the request was refused")
+
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [
+                (b"authorization", f"Bearer {api_key}".encode()),
+                (b"content-length", str(declared_bytes).encode()),
+            ],
+        },
+        receive=receive,
+    )
+
+
+async def _refusal_before_body(
+    cached_key: UserAPIKeyAuth, api_key: str, limiter: PROXY_MaxParallelRequestsHandler_v3 | None
+) -> ProxyException:
+    from litellm.proxy.utils import hash_token
+
+    user_api_key_cache: Final = DualCache()
+    await cache_key_object(
+        hashed_token=hash_token(api_key),
+        user_api_key_obj=cached_key,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.get_proxy_hook.return_value = limiter
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", None),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        pytest.raises(ProxyException) as exc,
+    ):
+        await user_api_key_auth(request=_request_whose_body_must_not_be_read(api_key), api_key=f"Bearer {api_key}")
+    proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+    return exc.value
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> None:
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-flooding-key"
+    cached_key: Final = UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-5.6"])
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    await limiter.async_pre_call_hook(
+        UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
+        DualCache(),
+        {"model": "gpt-5.6", "messages": []},
+        "acompletion",
+    )
+
+    refusal: Final = await _refusal_before_body(cached_key, api_key, limiter)
+
+    assert refusal.code == "429", refusal.message
+    assert refusal.headers["rate_limit_type"] == "requests"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method, path, declared_bytes, refused",
+    [
+        ("GET", "/v1/models", 0, False),
+        ("GET", "/models", 8388608, False),
+        ("GET", "/v1/mcp/tools", 0, False),
+        ("GET", "/vector_store/list", 0, False),
+        ("POST", "/utils/token_counter", 8388608, False),
+        ("POST", "/v1beta/models/gemini-3-pro:countTokens", 8388608, False),
+        ("GET", "/v1/batches", 8388608, True),
+    ],
+)
+async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_metered_route_declares_one(
+    method: str, path: str, declared_bytes: int, refused: bool
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _reject_from_headers_before_reading_body
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-exhausted-key"
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    await limiter.async_pre_call_hook(
+        UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
+        DualCache(),
+        {"model": "gpt-5.6", "messages": []},
+        "acompletion",
+    )
+    user_api_key_cache: Final = DualCache()
+    await cache_key_object(
+        hashed_token=hash_token(api_key),
+        user_api_key_obj=UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-5.6"]),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.get_proxy_hook.return_value = limiter
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+    ):
+        outcome: Final = await asyncio.gather(
+            _reject_from_headers_before_reading_body(
+                request=_request_whose_body_must_not_be_read(api_key, method, path, declared_bytes),
+                api_key=f"Bearer {api_key}",
+                custom_litellm_key_header=None,
+                route=path,
+            ),
+            return_exceptions=True,
+        )
+
+    assert (outcome[0] is None, getattr(outcome[0], "code", None) == "429") == (not refused, refused)
+
+
+@pytest.mark.asyncio
+async def test_blocked_cached_key_is_refused_before_the_body_is_read() -> None:
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-blocked-key"
+    cached_key: Final = UserAPIKeyAuth(token=hash_token(api_key), blocked=True, models=["gpt-5.6"])
+
+    refusal: Final = await _refusal_before_body(cached_key, api_key, None)
+
+    assert refusal.code == "401", refusal.message
+    assert "Key is blocked" in refusal.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_mode", ("small-json", "large-unread", "stalled", "laya", "bespoke"))
+@pytest.mark.parametrize("blocked", (True, False), ids=("blocked", "rate-limited"))
+async def test_preflight_rejection_preserves_failure_logging_context(body_mode: str, blocked: bool) -> None:
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-preflight-logging"
+    cache: Final = DualCache()
+    identity: Final = UserAPIKeyAuth(
+        token=hash_token(api_key),
+        blocked=blocked,
+        rpm_limit=1,
+        metadata={
+            "logging": [{"callback_name": "langfuse", "callback_type": "success_and_failure", "callback_vars": {}}]
+        },
+    )
+    await cache_key_object(
+        hashed_token=hash_token(api_key),
+        user_api_key_obj=identity,
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    if not blocked:
+        await limiter.async_pre_call_hook(
+            UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
+            DualCache(),
+            {"model": "requested-model", "messages": []},
+            "acompletion",
+        )
+    body: Final = json.dumps(
+        {
+            "model": "requested-model",
+            "metadata": {
+                "tags": ["caller-tag"],
+                "session_id": "caller-session",
+                "trace_user_id": "caller-user",
+            },
+            "failure_callback": ["untrusted-callback"],
+        }
+    ).encode()
+
+    upload: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+    upload.put_nowait({"type": "http.request", "body": b"{", "more_body": True})
+
+    async def receive() -> dict[str, object]:
+        assert body_mode in ("small-json", "stalled"), "large refused bodies must not be read"
+        if body_mode == "stalled":
+            return await upload.get()
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/{body_mode}/v1/systemone" if body_mode in ("laya", "bespoke") else "/v1/chat/completions",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (
+                    b"content-length",
+                    str(len(body) if body_mode == "small-json" else 2 if body_mode == "stalled" else 8388608).encode(),
+                ),
+                (b"x-litellm-call-id", b"caller-call-id"),
+            ],
+        },
+        receive=receive,
+    )
+    logging_obj: Final = MagicMock(post_call_failure_hook=AsyncMock(return_value=None))
+    logging_obj.get_proxy_hook.return_value = limiter
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", None),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", logging_obj),
+        pytest.raises(ProxyException) as failure,
+    ):
+        await asyncio.wait_for(user_api_key_auth(request=request, api_key=f"Bearer {api_key}"), timeout=3)
+    assert failure.value.code == ("401" if blocked else "429")
+    logging_obj.post_call_failure_hook.assert_awaited_once()
+    data: Final = logging_obj.post_call_failure_hook.call_args.kwargs["request_data"]
+    assert data["litellm_call_id"] == "caller-call-id"
+    assert data["failure_callback"] == ["langfuse"]
+    if body_mode not in ("laya", "bespoke"):
+        assert data["call_type"] == "acompletion"
+    if body_mode == "small-json":
+        assert data["model"] == "requested-model"
+        assert data["metadata"]["tags"] == ["caller-tag"]
+        assert data["metadata"]["session_id"] == "caller-session"
+        assert data["metadata"]["trace_user_id"] == "caller-user"
+    else:
+        assert "model" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers,body,reads",
+    (
+        ((), b"{}", 0),
+        (((b"content-length", b"2"), (b"transfer-encoding", b"chunked")), b"{}", 0),
+        (((b"content-length", b"2"), (b"content-type", b"text/plain")), b"{}", 0),
+        (((b"content-length", b"bad"),), b"{}", 0),
+        (((b"content-length", b"10"),), b"{invalid", 1),
+        (((b"content-length", b"2"),), b"[]", 1),
+        (((b"content-length", b"2"),), b"x" * (64 * 1024 + 1), 1),
+    ),
+    ids=("no-length", "chunked", "not-json", "invalid-length", "invalid-json", "not-object", "actual-over-cap"),
+)
+async def test_preflight_logging_drops_unsafe_or_unparsable_bodies(
+    headers: tuple[tuple[bytes, bytes], ...], body: bytes, reads: int
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _small_preflight_failure_json
+
+    receive: Final = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": body,
+            "more_body": len(body) > 64 * 1024,
+        }
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [
+                *headers,
+                *(
+                    ()
+                    if any(name == b"content-type" for name, _ in headers)
+                    else ((b"content-type", b"application/json"),)
+                ),
+            ],
+        },
+        receive=receive,
+    )
+    assert await _small_preflight_failure_json(request) == {}
+    assert receive.await_count == reads
