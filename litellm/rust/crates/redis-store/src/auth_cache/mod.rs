@@ -42,6 +42,7 @@ pub struct AuthCache {
     objects: DualCache<Value>,
     redis: Arc<RemoteSlot>,
     settings: Mutex<Settings>,
+    now: Clock,
 }
 
 impl AuthCache {
@@ -57,6 +58,7 @@ impl AuthCache {
             objects: partition(),
             redis,
             settings: Mutex::new(settings),
+            now,
         }
     }
 
@@ -78,6 +80,14 @@ impl AuthCache {
 
     pub fn get_local(&self, key: &str) -> Result<Option<Value>, Error> {
         Ok(self.partition(key).memory().get(key)?)
+    }
+
+    pub fn local_ttl(&self, key: &str) -> Result<Option<Duration>, Error> {
+        Ok(self
+            .partition(key)
+            .memory()
+            .expires_at(key)?
+            .map(|expiry| expiry.saturating_sub((self.now)())))
     }
 
     /// A memory write with `ttl`, or `default_in_memory_ttl` when it names none.
@@ -375,4 +385,43 @@ impl AuthCache {
 
 fn new_generation() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case(0, Some(10))]
+    #[case(4, Some(6))]
+    #[case(11, None)]
+    fn local_model_ttl_never_outlives_the_serialized_policy(
+        #[case] elapsed: u64,
+        #[case] remaining: Option<u64>,
+    ) {
+        let seconds = Arc::new(AtomicU64::new(1000));
+        let clock: Clock = {
+            let seconds = seconds.clone();
+            Arc::new(move || Duration::from_secs(seconds.load(Ordering::Relaxed)))
+        };
+        let cache = AuthCache::with_clock(None, Settings::default(), clock);
+        cache
+            .set_local(
+                "policy",
+                Value::from("cached"),
+                Some(Duration::from_secs(10)),
+            )
+            .unwrap();
+        seconds.store(1000 + elapsed, Ordering::Relaxed);
+        assert_eq!(
+            cache.local_ttl("policy").unwrap(),
+            remaining.map(Duration::from_secs)
+        );
+        cache.delete_local("policy").unwrap();
+        assert_eq!(cache.local_ttl("policy").unwrap(), None);
+    }
 }

@@ -46,6 +46,37 @@ from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
+@pytest.mark.asyncio
+async def test_warm_member_policy_is_the_same_frozen_object_not_a_decoded_copy() -> None:
+    cache: Final = UserApiKeyCache()
+    prisma: Final = _Prisma(_MemberTable({"member-1": _row()}), _OrganizationTable(()))
+    first: Final = await get_customer_hierarchy("member-1", prisma, cache, NOW)  # pyright: ignore[reportArgumentType]  # database boundary fixture
+    second: Final = await get_customer_hierarchy("member-1", prisma, cache, NOW)  # pyright: ignore[reportArgumentType]  # database boundary fixture
+    assert first is not None
+    assert second is first
+    assert cache.get_local("customer_member_id:member-1") is first
+
+
+@pytest.mark.asyncio
+async def test_eviction_discards_the_frozen_policy_before_reloading() -> None:
+    cache: Final = UserApiKeyCache()
+    prisma: Final = _Prisma(_MemberTable({"member-1": _row()}), _OrganizationTable(()))
+    first: Final = await get_customer_hierarchy("member-1", prisma, cache, NOW)  # pyright: ignore[reportArgumentType]  # database boundary fixture
+    cache.delete_local("customer_member_id:member-1")
+    second: Final = await get_customer_hierarchy("member-1", prisma, cache, NOW)  # pyright: ignore[reportArgumentType]  # database boundary fixture
+    assert second == first
+    assert second is not first
+
+
+def test_team_selection_does_not_copy_a_serialized_frozen_policy() -> None:
+    team: Final = CustomerScopeAuth(key="customer_team", entity_id="team")
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="org", customer_team_id="team", scopes=(team,), team_scopes=(team,)
+    )
+    restored: Final = CustomerHierarchyAuth.model_validate_json(hierarchy.model_dump_json())
+    assert select_customer_team(restored, "team") is restored
+
+
 @pytest.fixture(autouse=True)
 def customer_spend_store(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server

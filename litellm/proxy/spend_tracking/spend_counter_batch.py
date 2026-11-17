@@ -1,7 +1,7 @@
 """One Redis MGET per phase (admission, reservation, post-call) for the spend counters it reads, not one GET each."""
 
 import asyncio
-from collections.abc import Awaitable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
@@ -46,9 +46,22 @@ class SpendCounterBatch:
     flush hook declares whatever is bound but unread, so whichever pre-call read the request awaits first (the
     armed cooldown read, or this batch's own) carries the spend counters in the same round trip."""
 
-    __slots__ = ("_fetched", "_inflight", "_keys", "_loaded", "_lock", "_open", "_request", "_store")
+    __slots__ = (
+        "_fetched",
+        "_inflight",
+        "_keys",
+        "_keys_provider",
+        "_loaded",
+        "_lock",
+        "_open",
+        "_provided",
+        "_request",
+        "_store",
+    )
 
-    def __init__(self, store: SpendCounterStore) -> None:
+    def __init__(
+        self, store: SpendCounterStore, counter_keys_provider: Callable[[], frozenset[str]] | None = None
+    ) -> None:
         self._store: Final = store
         self._lock: Final = asyncio.Lock()
         self._open = True
@@ -57,6 +70,8 @@ class SpendCounterBatch:
         self._loaded: Mapping[str, float | None] = _NO_VALUES
         self._inflight: Final[list[_InflightRead]] = []  # mutable-ok: drained by _load
         self._request: Final[RequestRedisBatches | None] = active_request_redis_batches()
+        self._keys_provider = counter_keys_provider
+        self._provided = False
         if self._request is not None:
             self._request.add_pre_call_flush_hook(self._declare_pending)
 
@@ -70,11 +85,21 @@ class SpendCounterBatch:
 
     def bind(self, counter_keys: frozenset[str]) -> None:
         if self._open:
+            if counter_keys and not self._provided and self._keys_provider is not None:
+                provider: Final = self._keys_provider
+                self._keys_provider = None
+                self._provided = True
+                self._keys = self._keys | provider()
             self._keys = self._keys | counter_keys
+
+    def provide_counter_keys(self, provider: Callable[[], frozenset[str]]) -> None:
+        if self._keys_provider is None and not self._provided:
+            self._keys_provider = provider
 
     def close(self) -> None:
         """Later reads go to Redis directly; call before any read-then-write on the counters."""
         self._open = False
+        self._keys_provider = None
 
     async def read(self, counter_key: str) -> tuple[float | None, bool] | None:
         """(value, authoritative) for a bound counter, None when the caller must read Redis itself."""
@@ -84,6 +109,13 @@ class SpendCounterBatch:
         if counter_key not in loaded:
             return None
         return loaded[counter_key], True
+
+    async def read_many(self, counter_keys: frozenset[str]) -> Mapping[str, float | None]:
+        bound: Final = counter_keys & self._keys if self._open else frozenset()
+        if not bound:
+            return _NO_VALUES
+        loaded: Final = await self._load()
+        return MappingProxyType({key: loaded[key] for key in bound if key in loaded})
 
     def record(self, counter_key: str, value: float) -> None:
         """A write returned the counter's new value; later reads in this scope see it instead of the MGET value."""
@@ -152,21 +184,29 @@ class spend_counter_batch_scope:
     """Reads inside the scope share one MGET for the keys bound here or by ``bind_*`` calls inside it.
     Opened inside a scope whose batch is still open, it binds into that batch so both phases share the MGET."""
 
-    __slots__ = ("_counter_keys", "_store", "_token")
+    __slots__ = ("_counter_keys", "_keys_provider", "_store", "_token")
 
-    def __init__(self, store: SpendCounterStore, counter_keys: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        store: SpendCounterStore,
+        counter_keys: frozenset[str] = frozenset(),
+        counter_keys_provider: Callable[[], frozenset[str]] | None = None,
+    ) -> None:
         self._store: Final = store
         self._counter_keys: Final = counter_keys
         self._token: Token[SpendCounterBatch | None] | None = None
+        self._keys_provider: Final = counter_keys_provider
 
     def __enter__(self) -> None:
         if not self._store.has_redis:
             return
         outer: Final = _active_batch.get()
         if outer is not None and outer.is_open:
+            if self._keys_provider is not None:
+                outer.bind(self._keys_provider())
             outer.bind(self._counter_keys)
             return
-        batch: Final = SpendCounterBatch(self._store)
+        batch: Final = SpendCounterBatch(self._store, self._keys_provider)
         batch.bind(self._counter_keys)
         self._token = _active_batch.set(batch)
 
@@ -262,6 +302,12 @@ def bind_spend_counter_keys(counter_keys: frozenset[str]) -> None:
     batch.bind(counter_keys)
 
 
+def provide_spend_counter_keys(provider: Callable[[], frozenset[str]]) -> None:
+    batch: Final = _active_batch.get()
+    if batch is not None and batch.is_open:
+        batch.provide_counter_keys(provider)
+
+
 def record_spend_counter_value(counter_key: str, value: float) -> None:
     batch: Final = _active_batch.get()
     if batch is None:
@@ -283,3 +329,11 @@ async def read_batched_spend_counter(counter_key: str) -> tuple[float | None, bo
         return None
     batch.bind(frozenset((counter_key,)))
     return await batch.read(counter_key)
+
+
+async def read_batched_spend_counters(counter_keys: frozenset[str]) -> Mapping[str, float | None]:
+    batch: Final = _active_batch.get()
+    if batch is None:
+        return _NO_VALUES
+    batch.bind(counter_keys)
+    return await batch.read_many(counter_keys)

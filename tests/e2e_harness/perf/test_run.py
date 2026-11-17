@@ -6,8 +6,43 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from setup.run import run_until
-from setup.wire import WireRecord
+from cases.small_bodies_5rps import CASE as BASELINE
+from cases.small_bodies_customer_5rps import CASE as CUSTOMER
+from setup.plan import build_plan
+from setup.provision import CaseSetup
+from setup.run import run_until, wire_request
+from setup.wire import CustomerHeaders, TokenSource, WireRecord, WireRequest
+
+
+def test_customer_case_preserves_baseline_ceilings_and_transmits_all_headers_on_every_endpoint() -> None:
+    customer: Final = CustomerHeaders(organization="org", team="team", member="member")
+    setup: Final = CaseSetup(
+        marker="run",
+        team_ids={},
+        key_bearers={key.name: "key" for key in CUSTOMER.virtual_keys},
+        token_sources={
+            user.name: TokenSource(
+                token_url="http://idp.invalid/token", client_id="perf", username=user.name, password="unused"
+            )
+            for user in CUSTOMER.users
+        },
+        user_ids={},
+        customer_headers=customer,
+    )
+    assert CUSTOMER.limits == BASELINE.limits
+    assert CUSTOMER.traffic == BASELINE.traffic
+    assert CUSTOMER.customer_hierarchy
+    plan: Final = build_plan(CUSTOMER)
+    requests: Final = tuple(wire_request(item, setup) for item in plan)
+    assert {item.endpoint for item in requests} == {"chat_completions", "responses", "messages"}
+    assert all(
+        WireRequest.model_validate_json(item.model_dump_json()).customer_headers == customer for item in requests
+    )
+    assert dict(customer.headers()) == {
+        "x-litellm-customer-org-alias": "org",
+        "x-litellm-customer-team-id": "team",
+        "x-litellm-customer-member-id": "member",
+    }
 
 
 def record(seq: int = 0, *, started_at: float = 100) -> WireRecord:

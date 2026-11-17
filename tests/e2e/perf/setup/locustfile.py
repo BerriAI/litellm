@@ -259,7 +259,11 @@ class PlanUser(FastHttpUser):
         response: FastResponse | None = None
         identifier: str | None = None  # rebind-ok: the ID arrives in a JSON body or the first SSE event
         try:
-            headers: Final = {"Authorization": _authorization(self, item), "Content-Type": "application/json"}
+            headers: Final = {
+                "Authorization": _authorization(self, item),
+                "Content-Type": "application/json",
+                **(item.customer_headers.headers() if item.customer_headers is not None else {}),
+            }
             context: ResponseContextManager
             with self.client.request(  # pyright: ignore[reportUnknownMemberType]
                 "POST",

@@ -140,6 +140,9 @@ class AuthCacheStore:
     def get_local(self, key: str) -> object:
         return self._handle.get_local(key)
 
+    def local_ttl(self, key: str) -> float | None:
+        return self._handle.local_ttl(key)
+
     def set_local(self, key: str, value: object, ttl: float | None) -> None:
         self._handle.set_local(key, value, ttl)
 

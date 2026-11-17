@@ -247,6 +247,14 @@ impl NativeAuthCache {
         Ok(self.0.get_local(key).map_err(kind_error)?.map(PyValue))
     }
 
+    fn local_ttl(&self, key: &str) -> PyResult<Option<f64>> {
+        Ok(self
+            .0
+            .local_ttl(key)
+            .map_err(kind_error)?
+            .map(|ttl| ttl.as_secs_f64()))
+    }
+
     #[pyo3(signature = (key, value, ttl_seconds = None))]
     fn set_local(&self, key: &str, value: PyValue, ttl_seconds: Option<f64>) -> PyResult<()> {
         self.0

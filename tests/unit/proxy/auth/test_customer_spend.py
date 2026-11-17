@@ -5,11 +5,172 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.caching.redis_batch import request_redis_batch_scope
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_budget
 from litellm.proxy.auth.customer_spend import current_customer_spend as read_customer_spend
 from litellm.proxy.auth.customer_spend import customer_spend_counter, settle_customer_spend
+from litellm.proxy.auth.customer_spend_batch import cached_customer_spend_keys
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.spend_tracking.spend_counter_batch import (
+    bind_admission_counter_keys,
+    read_batched_spend_counter,
+    release_spend_counter_batch,
+    spend_counter_batch_scope,
+)
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+def _hierarchy() -> CustomerHierarchyAuth:
+    team: Final = CustomerScopeAuth(key="customer_team", entity_id="team", spend=2, max_budget=5)
+    return CustomerHierarchyAuth(
+        customer_org_id="tenant",
+        customer_team_id="team",
+        customer_member_id="member",
+        scopes=(
+            CustomerScopeAuth(key="customer_org", entity_id="tenant", spend=1, max_budget=5),
+            team,
+            CustomerScopeAuth(key="customer_member", entity_id="member", spend=3, max_budget=5),
+        ),
+        team_scopes=(team,),
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_customer_headers_and_key_share_one_admission_mget() -> None:
+    hierarchy: Final = _hierarchy()
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_frozen_model("customer_member_id:member", hierarchy, 60)
+    handle: Final = FakeSpendCounters(
+        redis={"spend:key:hashed": 1, **{customer_spend_counter(scope): scope.spend for scope in hierarchy.scopes}}
+    )
+    store: Final = handle.store()
+
+    async def read(counter: str, spend: float, maximum: float | None) -> float:
+        reading: Final = await read_batched_spend_counter(counter)
+        assert reading is not None and reading[0] is not None
+        return reading[0]
+
+    def customer_keys() -> frozenset[str]:
+        return cached_customer_spend_keys(
+            {
+                "x-litellm-customer-org-alias": "tenant",
+                "x-litellm-customer-team-id": "team",
+                "x-litellm-customer-member-id": "member",
+            },
+            cache,
+        )
+
+    with spend_counter_batch_scope(store, counter_keys_provider=customer_keys):
+        bind_admission_counter_keys(UserAPIKeyAuth(token="hashed"), end_user_id=None)
+        assert await read_batched_spend_counter("spend:key:hashed") == (1, True)
+        current: Final = await read_customer_spend(hierarchy, read)
+    assert current is hierarchy
+    assert len(handle.commands) == 1
+    assert handle.commands[0].split()[0] == "MGET"
+    assert frozenset(handle.commands[0].split()[1:]) == frozenset(
+        {"spend:key:hashed", *(customer_spend_counter(scope) for scope in hierarchy.scopes)}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", (False, True))
+async def test_customer_settlement_shares_seed_read_and_native_pipeline_with_key(missing: bool) -> None:
+    hierarchy: Final = _hierarchy()
+    handle: Final = FakeSpendCounters(
+        redis={
+            "spend:key:hashed": 1,
+            **{
+                customer_spend_counter(scope): scope.spend
+                for scope in hierarchy.scopes
+                if not missing or scope.key != "customer_member"
+            },
+        }
+    )
+    store: Final = handle.store()
+    keys: Final = frozenset({"spend:key:hashed", *(customer_spend_counter(scope) for scope in hierarchy.scopes)})
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):
+        with spend_counter_batch_scope(store, counter_keys=keys):
+            await settle_customer_spend(
+                {"user_api_key_customer_hierarchy": hierarchy.model_dump(mode="json")}, 0.5, store
+            )
+            assert await read_batched_spend_counter("spend:key:hashed") == (1, True)
+            _ = store.increment_many_post_call((("spend:key:hashed", 0.5),))
+        assert len(handle.post_call) == 2
+        assert handle.post_call[0][0] is handle.post_call[1][0]
+        assert handle.post_call[0][1] == tuple((customer_spend_counter(scope), 0.5) for scope in hierarchy.scopes)
+        handle.settle_post_call()
+    assert sum(command.startswith("MGET ") for command in handle.commands) == 1
+    assert not any(command.startswith(("GET ", "PIPELINE ")) for command in handle.commands)
+    assert sum(command.startswith("SETNX ") for command in handle.commands) == int(missing)
+    assert handle.redis == {
+        "spend:key:hashed": 1.5,
+        **{customer_spend_counter(scope): scope.spend + 0.5 for scope in hierarchy.scopes},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True))
+async def test_customer_settlement_reads_directly_when_the_batch_is_unavailable_or_closed(closed: bool) -> None:
+    hierarchy: Final = _hierarchy()
+    handle: Final = FakeSpendCounters(
+        redis={customer_spend_counter(scope): scope.spend for scope in hierarchy.scopes[:-1]}, batch_reads=False
+    )
+    with spend_counter_batch_scope(handle.store()):
+        if closed:
+            release_spend_counter_batch()
+        await settle_customer_spend(
+            {"user_api_key_customer_hierarchy": hierarchy.model_dump(mode="json")}, 0.5, handle.store()
+        )
+    assert frozenset(command for command in handle.commands if command.startswith("GET ")) == frozenset(
+        f"GET {customer_spend_counter(scope)}" for scope in hierarchy.scopes
+    )
+    assert sum(command.startswith("SETNX ") for command in handle.commands) == 1
+    assert handle.redis == {customer_spend_counter(scope): scope.spend + 0.5 for scope in hierarchy.scopes}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", ("customer_org", "customer_team", "customer_member"))
+async def test_shared_admission_read_preserves_the_customer_budget_error(blocked: str) -> None:
+    hierarchy: Final = _hierarchy()
+    handle: Final = FakeSpendCounters(
+        redis={customer_spend_counter(scope): 6 if scope.key == blocked else scope.spend for scope in hierarchy.scopes}
+    )
+
+    async def read(counter: str, spend: float, maximum: float | None) -> float:
+        reading: Final = await read_batched_spend_counter(counter)
+        assert reading is not None and reading[0] is not None
+        return reading[0]
+
+    with spend_counter_batch_scope(handle.store()):
+        current: Final = await read_customer_spend(hierarchy, read)
+    with pytest.raises(litellm.BudgetExceededError) as error:
+        check_customer_hierarchy_budget(current)
+    assert error.value.entity_type == blocked
+    assert (
+        error.value.entity_id
+        == {"customer_org": "tenant", "customer_team": "team", "customer_member": "member"}[blocked]
+    )
+    assert error.value.current_cost == 6
+    assert error.value.max_budget == 5
+
+
+@pytest.mark.parametrize("headers", (None, {}, {"x-litellm-customer-member-id": "unknown"}))
+def test_unresolved_customer_headers_do_not_speculatively_load_policies(headers: dict[str, str] | None) -> None:
+    assert cached_customer_spend_keys(headers, UserApiKeyCache()) == frozenset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reading", (0.0, 1.0, float("nan")))
+async def test_unusable_or_lower_live_readings_do_not_discard_the_policy_spend_floor(reading: float) -> None:
+    hierarchy: Final = _hierarchy()
+
+    async def read(counter: str, spend: float, maximum: float | None) -> float:
+        return reading
+
+    assert await read_customer_spend(hierarchy, read) is hierarchy
 
 
 async def current_customer_spend(hierarchy, store, prisma=None):
