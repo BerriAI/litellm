@@ -5267,8 +5267,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         from litellm.types.router import RouterErrors
 
-        litellm_params: Final = _failure_callback_mapping(self._model_call_details_view.get("litellm_params"))
-        metadata: Final = _failure_callback_mapping(litellm_params.get("metadata"))
+        litellm_params: Final[dict] = self.model_call_details.get("litellm_params") or {}
+        metadata: Final = litellm_params.get("metadata") or {}
 
         ## BASE CASE ## check if rate limit error for model group size 1
         is_base_case = False
@@ -5287,7 +5287,7 @@ class Logging(LiteLLMLoggingBaseClass):
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.log_model_group_rate_limit_error(
                     exception=exception,
-                    original_model_group=model_group if isinstance(model_group, str) else None,
+                    original_model_group=model_group,
                     kwargs=self.model_call_details,
                 )
 

@@ -1,6 +1,7 @@
+import asyncio
 import json
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -14,6 +15,72 @@ from integration._support.client import Gateway, eventually
 from integration._support.otlp_sink import Span, SpanSinks, recorded_spans
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
+
+import litellm
+from litellm import utils as litellm_utils
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class _RateLimitRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.groups: list[object] = []
+        self.done = asyncio.Event()
+
+    async def log_model_group_rate_limit_error(
+        self, exception: Exception, original_model_group: object, kwargs: Mapping[str, object]
+    ) -> None:
+        self.groups.append(original_model_group)
+        self.done.set()
+
+
+def _rate_limited(request: Request) -> Reply:
+    assert request.method == "POST"
+    assert request.target == "/v1/chat/completions"
+    return Reply(
+        status=429,
+        body=b'{"error":{"message":"rate limit","type":"rate_limit_error","code":"rate_limit_exceeded"}}',
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra_metadata", "error_type", "provider_requests"),
+    [({}, litellm.RateLimitError, 1), ({7: "caller value"}, litellm.APIConnectionError, 0)],
+)
+async def test_public_completion_preserves_model_group_for_rate_limit_hook(
+    monkeypatch: pytest.MonkeyPatch,
+    extra_metadata: Mapping[object, object],
+    error_type: type[Exception],
+    provider_requests: int,
+) -> None:
+    recorder: Final = _RateLimitRecorder()
+    for registry in (
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_input_callback",
+    ):
+        monkeypatch.setattr(litellm, registry, [])
+    monkeypatch.setattr(litellm_utils, "callback_list", [])
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    with wire_server(_rate_limited) as upstream:
+        with pytest.raises(error_type):
+            await litellm.acompletion(
+                model="openai/gpt-4o-mini",
+                messages=[{"role": "user", "content": "rate limit callback"}],
+                metadata={"model_group": 123, "model_group_size": 1, **extra_metadata},
+                api_base=f"{upstream.url}/v1",
+                api_key="synthetic-local-key",
+                max_retries=0,
+                num_retries=0,
+            )
+        await asyncio.wait_for(recorder.done.wait(), timeout=10)
+        assert len(upstream.drain()) == provider_requests
+    assert recorder.logs_every_failed_attempt is False
+    assert recorder.groups == [123]
 
 
 def _unavailable(request: Request, *, message: str = "primary region unavailable") -> Reply:

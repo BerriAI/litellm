@@ -189,6 +189,41 @@ class _EveryFailureAttemptRecorder(_FailureAttemptRecorder):
     logs_every_failed_attempt: ClassVar[bool] = True
 
 
+class _RateLimitGroupRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.groups: list[object] = []
+
+    async def log_model_group_rate_limit_error(
+        self, exception: Exception, original_model_group: object, kwargs: Mapping[str, object]
+    ) -> None:
+        self.groups.append(original_model_group)
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_hook_preserves_metadata_with_non_string_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder: Final = _RateLimitGroupRecorder()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="rate-limit-group",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {"model_group": 123, "model_group_size": 1, 7: "caller value"}
+    }
+
+    await logging_obj.special_failure_handlers(
+        litellm.RateLimitError("rate limit", model="gpt-4o-mini", llm_provider="openai")
+    )
+
+    assert recorder.groups == [123]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("dynamic", [True, False])
 @pytest.mark.parametrize("omit_start_time", [False, True])
@@ -286,7 +321,10 @@ async def test_invalid_retry_metadata_never_escapes_failure_handler(
     logging_obj.model_call_details["litellm_params"] = retry_params
     logging_obj.model_call_details["current_attempt_api_call_start_time"] = start + datetime.timedelta(seconds=1)
 
-    await logging_obj.async_failure_handler(error, "trace", start, start + datetime.timedelta(seconds=2))
+    if isinstance(retry_params, dict) and isinstance(retry_params.get("metadata"), dict):
+        await logging_obj.async_failure_handler(error, "trace", start, start + datetime.timedelta(seconds=2))
+    else:
+        await logging_obj._log_failed_attempt(error, "trace", start, start + datetime.timedelta(seconds=2))
 
     assert len(telemetry.payloads) == 2
     assert all(payload["status"] == "failure" for payload in telemetry.payloads)
