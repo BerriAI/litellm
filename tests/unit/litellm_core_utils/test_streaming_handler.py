@@ -1899,6 +1899,7 @@ async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
     )
     post_finish_chunks: Final = collected_chunks[finish_index + 1 :]
     assert all(getattr(chunk, "usage", None) is not None for chunk in post_finish_chunks), post_finish_chunks
+    assert len(post_finish_chunks) == (1 if stream_options and stream_options.get("include_usage") else 0)
     assert [chunk.usage.cost for chunk in post_finish_chunks[-1:]] == (
         [0.0000088] if stream_options and stream_options.get("include_usage") else []
     )
@@ -1908,6 +1909,57 @@ async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
     rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
     assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (14, 2, 0.0000088)
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("iteration", ["sync", "async", "async_over_sync_stream"])
+@pytest.mark.parametrize("stream_options", [ChatCompletionStreamOptionsParam(include_usage=False), None])
+async def test_stream_without_provider_usage_rebuilds_the_token_estimate(
+    iteration: Literal["sync", "async", "async_over_sync_stream"],
+    stream_options: ChatCompletionStreamOptionsParam | None,
+):
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-no-usage",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-no-usage",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(chunks)
+            if iteration == "async_over_sync_stream"
+            else ModelResponseListIterator(model_responses=list(chunks))
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="no-usage-call",
+            function_id="no-usage-fn",
+        ),
+        stream_options=stream_options,
+    )
+
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks, messages=messages).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens) == (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
 
 _POST_FINISH_TRAILER_PAYLOADS: Final[tuple[tuple[StreamingChoices, Callable[[StreamingChoices], object]], ...]] = (
     (

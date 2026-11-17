@@ -22,7 +22,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_param
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -41,6 +41,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    UnreportedUsage,
     Usage,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -1831,13 +1832,39 @@ class CustomStreamWrapper:
                 response.hidden_params["additional_headers"] = {}
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
+    def _set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+        reported_usage: Final = _reported_total_usage(chunks=self.chunks)
+        set_hidden_param(
+            chunk,
+            "usage",
+            UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            if reported_usage is None
+            else reported_usage,
+        )
+        self._last_returned_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
+            dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
+        )
+
+    def _record_and_strip_usage_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
+        self.chunks.append(chunk.model_copy())
+        dumped_chunk: Final = MappingProxyType[str, object](chunk.model_dump())
+        usage_free_chunk: Final = self.model_response_creator(
+            chunk={key: value for key, value in dumped_chunk.items() if key != "usage"},
+            hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
+                Mapping[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
+            ),
+        )
+        return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
+
+    def _returned_sync_stream_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
+        if getattr(chunk, "usage", None) is None:
+            self.chunks.append(chunk)
+            return chunk
+        return self._record_and_strip_usage_chunk(chunk)
+
     def _maybe_set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
         if self.sent_last_chunk is True and not self.send_stream_usage:
-            chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
-                dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
-            )
-            chunk_hidden_params["usage"] = calculate_total_usage(chunks=self.chunks)
-            self._last_returned_hidden_params = chunk_hidden_params
+            self._set_final_chunk_usage(chunk)
 
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
@@ -2016,9 +2043,8 @@ class CustomStreamWrapper:
                 # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                     self.chunks.append(processed_chunk)
-                if not self.send_stream_usage:  # add usage as hidden param
-                    usage = calculate_total_usage(chunks=self.chunks)
-                    processed_chunk.hidden_params["usage"] = usage
+                if not self.send_stream_usage:
+                    self._set_final_chunk_usage(processed_chunk)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2163,16 +2189,10 @@ class CustomStreamWrapper:
                             if isinstance(choice, StreamingChoices):
                                 self.response_uptil_now += choice.delta.get("content", "") or ""
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
-                        # RETURN RESULT
-                        self.chunks.append(processed_chunk)
-                        if (
-                            not processed_chunk.choices
-                            and not self.send_stream_usage
-                            and getattr(processed_chunk, "usage", None) is not None
-                        ):
+                        if (returned_chunk := self._returned_sync_stream_chunk(processed_chunk)) is None:
                             continue
-                        self._maybe_set_final_chunk_usage(processed_chunk)
-                        return processed_chunk
+                        self._maybe_set_final_chunk_usage(returned_chunk)
+                        return returned_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
@@ -2297,11 +2317,7 @@ class CustomStreamWrapper:
             if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                 self.chunks.append(processed_chunk)
             if not self.send_stream_usage:
-                usage: Final = calculate_total_usage(chunks=self.chunks)
-                processed_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
-                    dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
-                )
-                processed_chunk_hidden_params["usage"] = usage
+                self._set_final_chunk_usage(processed_chunk)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2536,7 +2552,13 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
-def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
+def _reported_total_usage(chunks: Sequence[ModelResponse]) -> Usage | None:
+    if not any("usage" in chunk and chunk["usage"] is not None for chunk in chunks):
+        return None
+    return calculate_total_usage(chunks=chunks)
+
+
+def calculate_total_usage(chunks: Sequence[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         attach_cache_creation_token_details,
