@@ -15703,3 +15703,35 @@ def test_root_metadata_owned_by_a_resolved_oauth2_server_never_lists_the_gateway
     assert JWT_BEARER_GRANT_TYPE not in document["grant_types_supported"]
     assert document["grant_types_supported"] == ["authorization_code", "refresh_token"]
     assert document["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
+
+
+@pytest.mark.asyncio
+async def test_jwks_publishes_the_signed_identity_key_without_a_signer_guardrail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import jwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer import mcp_jwt_signer
+    from litellm.proxy.mcp_server.discoverable_endpoints import jwks_json
+
+    pem: Final = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+    monkeypatch.setenv("MCP_JWT_SIGNING_KEY", pem)
+    monkeypatch.setattr(mcp_jwt_signer, "_mcp_jwt_signer_instance", None)
+    signer: Final = mcp_jwt_signer.get_identity_signer()
+    assert signer is not None
+    token: Final = signer.sign_identity(UserAPIKeyAuth(user_id="u-1"), audience="https://reports.example/mcp")
+
+    response: Final = await jwks_json(MagicMock(spec=Request))
+
+    keys: Final = json.loads(bytes(response.body))["keys"]
+    public_key: Final = RSAAlgorithm.from_jwk(json.dumps(keys[0]))
+    claims: Final = jwt.decode(token, public_key, algorithms=["RS256"], audience="https://reports.example/mcp")
+    assert claims["sub"] == "u-1"

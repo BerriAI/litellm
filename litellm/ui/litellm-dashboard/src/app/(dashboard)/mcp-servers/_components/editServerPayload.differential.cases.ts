@@ -89,6 +89,7 @@ const AUTH_TYPES = [
   "aws_sigv4",
   "true_passthrough",
   "oauth_delegate",
+  "signed_identity",
 ] as const;
 
 export const CASES: readonly DifferentialCase[] = [

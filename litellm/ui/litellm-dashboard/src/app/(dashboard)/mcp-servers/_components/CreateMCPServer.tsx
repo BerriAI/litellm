@@ -43,6 +43,7 @@ import AwsSigV4Fields from "./AwsSigV4Fields";
 import OpenApiByokFields from "./OpenApiByokFields";
 import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
+import SignedIdentityHint from "./SignedIdentityHint";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import IdJagFormFields from "./IdJagFormFields";
@@ -898,6 +899,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         </MountedFormField>
 
                         <TruePassthroughWarning authType={authType} />
+                        <SignedIdentityHint authType={authType} serverUrl={formValues.url as string | undefined} />
 
                         <PassthroughAuthorizeSection
                           authType={authType}

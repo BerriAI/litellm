@@ -717,3 +717,29 @@ def test_a_customer_request_with_only_known_fields_is_accepted(
     request_type: type[BaseModel], body: dict[str, object]
 ) -> None:
     assert request_type.model_validate(body).model_dump(exclude_unset=True) == body
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize(("signing_key", "accepted"), [(None, False), ("pem", True)], ids=["no-key", "key"])
+def test_a_signed_identity_server_needs_a_signing_key(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest],
+    signing_key: str | None,
+    accepted: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if signing_key is None:
+        monkeypatch.delenv("MCP_JWT_SIGNING_KEY", raising=False)
+    else:
+        monkeypatch.setenv("MCP_JWT_SIGNING_KEY", signing_key)
+    payload: Final = {
+        "server_id": "reports",
+        "transport": "http",
+        "url": "https://reports.example/mcp",
+        "auth_type": "signed_identity",
+    }
+
+    if accepted:
+        assert request_model.model_validate(payload).auth_type == "signed_identity"
+    else:
+        with pytest.raises(ValidationError, match="MCP_JWT_SIGNING_KEY"):
+            request_model.model_validate(payload)

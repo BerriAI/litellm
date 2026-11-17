@@ -38405,7 +38405,8 @@
                     "oauth2_token_exchange",
                     "oauth2_id_jag",
                     "true_passthrough",
-                    "oauth_delegate"
+                    "oauth_delegate",
+                    "signed_identity"
                   ],
                   "type": "string"
                 },
@@ -40207,7 +40208,8 @@
                     "oauth2_token_exchange",
                     "oauth2_id_jag",
                     "true_passthrough",
-                    "oauth_delegate"
+                    "oauth_delegate",
+                    "signed_identity"
                   ],
                   "type": "string"
                 },
@@ -41241,7 +41243,8 @@
                     "oauth2_token_exchange",
                     "oauth2_id_jag",
                     "true_passthrough",
-                    "oauth_delegate"
+                    "oauth_delegate",
+                    "signed_identity"
                   ],
                   "type": "string"
                 },
@@ -43406,7 +43409,8 @@
                     "oauth2_token_exchange",
                     "oauth2_id_jag",
                     "true_passthrough",
-                    "oauth_delegate"
+                    "oauth_delegate",
+                    "signed_identity"
                   ],
                   "type": "string"
                 },
@@ -45284,7 +45288,8 @@
                     "oauth2_token_exchange",
                     "oauth2_id_jag",
                     "true_passthrough",
-                    "oauth_delegate"
+                    "oauth_delegate",
+                    "signed_identity"
                   ],
                   "type": "string"
                 },
@@ -45839,7 +45844,8 @@
                     "oauth2_token_exchange",
                     "oauth2_id_jag",
                     "true_passthrough",
-                    "oauth_delegate"
+                    "oauth_delegate",
+                    "signed_identity"
                   ],
                   "type": "string"
                 },
@@ -48748,7 +48754,8 @@
                     "oauth2_token_exchange",
                     "oauth2_id_jag",
                     "true_passthrough",
-                    "oauth_delegate"
+                    "oauth_delegate",
+                    "signed_identity"
                   ],
                   "type": "string"
                 },

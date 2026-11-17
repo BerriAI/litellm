@@ -22,7 +22,7 @@ def count_tool_upstream(
             return httpx2.Response(202)
         results: Final[Mapping[str, Mapping[str, object]]] = {
             "initialize": {
-                "protocolVersion": payload["params"].get("protocolVersion"),
+                "protocolVersion": payload.get("params", {}).get("protocolVersion"),
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "count", "version": "1"},
             },

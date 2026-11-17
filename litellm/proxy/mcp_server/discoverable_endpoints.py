@@ -3462,10 +3462,10 @@ async def openid_configuration(request: Request):
     # the signing keys and verify liteLLM-issued tokens.
     try:
         from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
-            get_mcp_jwt_signer,
+            get_published_signer,
         )
 
-        signer: Final = get_mcp_jwt_signer()
+        signer: Final = get_published_signer()
         if signer is not None:
             request_base_url: Final = get_request_base_url(request)
             if isinstance(response, dict):
@@ -3492,10 +3492,10 @@ async def jwks_json(request: Request):
     """
     try:
         from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
-            get_mcp_jwt_signer,
+            get_published_signer,
         )
 
-        signer: Final = get_mcp_jwt_signer()
+        signer: Final = get_published_signer()
         if signer is not None:
             return JSONResponse(
                 content=signer.get_jwks(),

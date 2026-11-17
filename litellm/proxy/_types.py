@@ -1386,6 +1386,17 @@ def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
     )
 
 
+def reject_signed_identity_without_key(values: object, server: str | None = None) -> None:
+    if not isinstance(values, Mapping) or values.get("auth_type") != MCPAuth.signed_identity:
+        return
+    if not os.environ.get("MCP_JWT_SIGNING_KEY"):
+        raise ValueError(
+            f"{f'Invalid config for MCP server {server!r}: ' if server else ''}auth_type signed_identity needs "
+            "MCP_JWT_SIGNING_KEY set on the proxy, so every worker signs with the same key and MCP servers can "
+            "verify it at /.well-known/jwks.json."
+        )
+
+
 def _per_server_oauth_discovery_error() -> ValueError:
     return ValueError(
         "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
@@ -1546,6 +1557,12 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=True)
         return values
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_signed_identity_key(cls, values: object) -> object:
+        reject_signed_identity_without_key(values)
+        return values
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1634,6 +1651,12 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_per_server_oauth_discovery_auth_type(cls, values: object) -> object:
         _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=False)
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_signed_identity_key(cls, values: object) -> object:
+        reject_signed_identity_without_key(values)
         return values
 
 

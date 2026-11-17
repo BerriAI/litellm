@@ -6901,6 +6901,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    user_email=None,
                     organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
@@ -6944,6 +6945,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    user_email=None,
                     organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
@@ -7061,7 +7063,9 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             self._patch_user_reload(
-                return_value=MagicMock(user_id="offboarded-user", organization_id=None, metadata={"scim_active": False})
+                return_value=MagicMock(
+                    user_id="offboarded-user", user_email=None, organization_id=None, metadata={"scim_active": False}
+                )
             ),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
@@ -8607,10 +8611,13 @@ class TestGatewaySessionAdmission:
 
     @staticmethod
     @contextlib.contextmanager
-    def _patch_user_reload(*, user_id, active=True, organization_id=None, tpm_limit=None, rpm_limit=None):
+    def _patch_user_reload(
+        *, user_id, active=True, organization_id=None, tpm_limit=None, rpm_limit=None, user_email=None
+    ):
         get_user_object = AsyncMock(
             return_value=MagicMock(
                 user_id=user_id,
+                user_email=user_email,
                 organization_id=organization_id,
                 metadata={"scim_active": active} if not active else {"scim_active": True},
                 user_role=None,
@@ -8663,6 +8670,19 @@ class TestGatewaySessionAdmission:
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(token))
         assert auth_result.user_tpm_limit == 1000
         assert auth_result.user_rpm_limit == 50
+
+    async def test_session_admission_carries_the_users_email(self):
+        token = self._access_token(user_id="sso-user-9")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="sso-user-9", user_email="maria@example.com"),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert auth_result.user_email == "maria@example.com"
 
     async def test_valid_session_admits_under_live_user_at_aggregate_scope(self):
         token = self._access_token(user_id="sso-user-42")
@@ -10939,6 +10959,7 @@ class TestScopedSessionAdmission:
         get_user_object = AsyncMock(
             return_value=MagicMock(
                 user_id="scoped-user",
+                user_email=None,
                 organization_id=None,
                 metadata={"scim_active": True},
                 user_role=None,

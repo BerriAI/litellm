@@ -51,6 +51,7 @@ class MCPAuth(str, enum.Enum):
     oauth2_id_jag = "oauth2_id_jag"
     true_passthrough = "true_passthrough"
     oauth_delegate = "oauth_delegate"
+    signed_identity = "signed_identity"
 
 
 # RFC 8693 default subject_token_type. A NULL column / omitted config key means
@@ -96,6 +97,7 @@ MCPAuthType = (
         MCPAuth.oauth2_id_jag,
         MCPAuth.true_passthrough,
         MCPAuth.oauth_delegate,
+        MCPAuth.signed_identity,
     ]
     | None
 )

@@ -69,6 +69,7 @@ your own RSA keypair. If unset, an RSA-2048 keypair is auto-generated at startup
 """
 
 import base64
+import functools
 import hashlib
 import os
 import re
@@ -142,6 +143,28 @@ _JWKS_CACHE_TTL: Final = 3600  # 1 hour
 def get_mcp_jwt_signer() -> Optional["MCPJWTSigner"]:
     """Return the active MCPJWTSigner singleton, or None if not initialized."""
     return _mcp_jwt_signer_instance
+
+
+def get_identity_signer() -> Optional["MCPJWTSigner"]:
+    """The signer for ``signed_identity`` servers, or None when MCP_JWT_SIGNING_KEY is unset.
+
+    A per-process generated key would differ across workers, so this auth type never falls back to one.
+    """
+    key_material: Final = os.environ.get(MCPJWTSigner.SIGNING_KEY_ENV)
+    return _identity_signer_for(key_material) if key_material else None
+
+
+@functools.cache
+def _identity_signer_for(key_material: str) -> "MCPJWTSigner":
+    return MCPJWTSigner(
+        guardrail_name="signed_identity",
+        end_user_claim_sources=["litellm:email", "litellm:user_id"],
+        register_for_discovery=False,
+    )
+
+
+def get_published_signer() -> Optional["MCPJWTSigner"]:
+    return _mcp_jwt_signer_instance or get_identity_signer()
 
 
 def _load_private_key_from_env(env_var: str) -> RSAPrivateKey:
@@ -286,6 +309,7 @@ class MCPJWTSigner(CustomGuardrail):
         debug_headers: bool = False,
         # FR-10: Configurable scopes
         allowed_scopes: list[str] | None = None,
+        register_for_discovery: bool = True,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         options: Final[_CustomGuardrailOptions] = {
@@ -358,15 +382,15 @@ class MCPJWTSigner(CustomGuardrail):
         # --- FR-10: Configurable scopes ---
         self.allowed_scopes: list[str] | None = allowed_scopes
 
-        # Register singleton for JWKS/OIDC discovery endpoints.
-        global _mcp_jwt_signer_instance
-        if _mcp_jwt_signer_instance is not None:
-            verbose_proxy_logger.warning(
-                "MCPJWTSigner: replacing existing singleton — previously issued tokens "
-                "signed with the old key will fail JWKS verification. "
-                "Avoid configuring multiple mcp_jwt_signer guardrails."
-            )
-        _mcp_jwt_signer_instance = self
+        if register_for_discovery:
+            global _mcp_jwt_signer_instance
+            if _mcp_jwt_signer_instance is not None:
+                verbose_proxy_logger.warning(
+                    "MCPJWTSigner: replacing existing singleton — previously issued tokens "
+                    "signed with the old key will fail JWKS verification. "
+                    "Avoid configuring multiple mcp_jwt_signer guardrails."
+                )
+            _mcp_jwt_signer_instance = self
 
         verbose_proxy_logger.info(
             "MCPJWTSigner initialized: issuer=%s audience=%s ttl=%ds kid=%s verify=%s channel_token=%s debug=%s",
@@ -754,6 +778,15 @@ class MCPJWTSigner(CustomGuardrail):
         claims = self._apply_claim_operations(claims)
 
         return claims
+
+    def sign_identity(self, user_api_key_dict: UserAPIKeyAuth, audience: str) -> str:
+        claims: Final = {
+            **self._build_claims(  # pyright: ignore[reportUnknownMemberType]  # takes the guardrail's untyped hook dict
+                user_api_key_dict, {}, user_api_key_dict.jwt_claims
+            ),
+            "aud": audience,
+        }
+        return jwt.encode(claims, self._private_key, algorithm=self.ALGORITHM, headers={"kid": self._kid})
 
     def _build_channel_token_claims(
         self,

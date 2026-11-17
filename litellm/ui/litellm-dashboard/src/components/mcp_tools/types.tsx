@@ -47,6 +47,7 @@ export const AUTH_TYPE = {
   AWS_SIGV4: "aws_sigv4",
   TRUE_PASSTHROUGH: "true_passthrough",
   OAUTH_DELEGATE: "oauth_delegate",
+  SIGNED_IDENTITY: "signed_identity",
 };
 
 export const AUTH_TYPE_ITEMS: { value: string; label: ParseKeys }[] = [
@@ -62,6 +63,7 @@ export const AUTH_TYPE_ITEMS: { value: string; label: ParseKeys }[] = [
   { value: AUTH_TYPE.AWS_SIGV4, label: "mcpTools.authTypes.awsSigv4" },
   { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "mcpTools.authTypes.truePassthrough" },
   { value: AUTH_TYPE.OAUTH_DELEGATE, label: "mcpTools.authTypes.oauthDelegate" },
+  { value: AUTH_TYPE.SIGNED_IDENTITY, label: "mcpTools.authTypes.signedIdentity" },
 ];
 
 // The two client-forwarded token modes: the caller supplies the upstream Authorization (forwarded

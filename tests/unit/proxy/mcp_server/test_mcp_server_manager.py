@@ -2081,6 +2081,27 @@ class TestMCPServerManager:
         assert "dcr_bridge is only supported" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(("signing_key", "loads"), [(None, False), ("pem", True)], ids=["no-key", "key"])
+    async def test_load_servers_from_config_needs_a_signing_key_for_signed_identity(
+        self, signing_key, loads, monkeypatch
+    ):
+        if signing_key is None:
+            monkeypatch.delenv("MCP_JWT_SIGNING_KEY", raising=False)
+        else:
+            monkeypatch.setenv("MCP_JWT_SIGNING_KEY", signing_key)
+        manager = MCPServerManager()
+        config = {
+            "reports": {"url": "https://reports.example/mcp", "transport": "http", "auth_type": "signed_identity"}
+        }
+
+        if loads:
+            await manager.load_servers_from_config(config)
+            assert [s.auth_type for s in manager.config_mcp_servers.values()] == [MCPAuth.signed_identity]
+        else:
+            with pytest.raises(ValueError, match="reports.*MCP_JWT_SIGNING_KEY"):
+                await manager.load_servers_from_config(config)
+
+    @pytest.mark.asyncio
     async def test_load_servers_from_config_rejects_non_boolean_dcr_bridge(self):
         manager = MCPServerManager()
 
