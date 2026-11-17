@@ -10,6 +10,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 SARVAM_MODELS: Final = (
     "sarvam/sarvam-105b",
@@ -20,6 +21,18 @@ SARVAM_MODELS: Final = (
     "sarvam/deepseekv4.1-flash-1017",
     "sarvam/deepseekv4.1-flash-1017-interactive",
 )
+
+
+def _sarvam_response(model: str, cached_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=1000,
+            completion_tokens=5,
+            total_tokens=1005,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
 
 
 def test_sarvam_provider_resolution() -> None:
@@ -83,31 +96,31 @@ def test_sarvam_chat_completion_request() -> None:
     assert route.call_count == 1
     assert str(request.url) == "https://api.sarvam.ai/v2/chat/completions"
     assert request.headers["authorization"] == "Bearer sarvam-test-key"
-    # LiteLLM maps max_completion_tokens to max_tokens for OpenAI-compatible providers.
-    assert body.get("max_completion_tokens", body.get("max_tokens")) == 200
+    assert body == {
+        "model": "sarvam-105b",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "max_tokens": 200,
+    }
     assert response.choices[0].message.content == "Hello"
 
 
-def test_sarvam_responses_request() -> None:
+def test_sarvam_responses_request_is_bridged_to_chat_completions() -> None:
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.sarvam.ai/v2/responses").respond(
+        route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(
             200,
             json={
-                "id": "resp_sarvam",
-                "object": "response",
-                "created_at": 1,
+                "id": "chatcmpl_sarvam_bridge",
+                "object": "chat.completion",
+                "created": 1,
                 "model": "sarvam-105b",
-                "status": "completed",
-                "output": [
+                "choices": [
                     {
-                        "id": "msg_sarvam",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
                     }
                 ],
-                "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+                "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
             },
         )
         response: Final = litellm.responses(
@@ -118,58 +131,22 @@ def test_sarvam_responses_request() -> None:
 
     request: Final = route.calls.last.request
     assert route.call_count == 1
-    assert str(request.url) == "https://api.sarvam.ai/v2/responses"
     assert request.headers["authorization"] == "Bearer sarvam-test-key"
+    assert json.loads(request.content) == {
+        "model": "sarvam-105b",
+        "messages": [{"role": "user", "content": "Say hello"}],
+    }
     assert response.output_text == "Hello"
-
-
-def test_sarvam_responses_forces_store_false() -> None:
-    with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.sarvam.ai/v2/responses").respond(
-            200,
-            json={
-                "id": "resp_sarvam_store",
-                "object": "response",
-                "created_at": 1,
-                "model": "sarvam-105b",
-                "status": "completed",
-                "output": [
-                    {
-                        "id": "msg_sarvam_store",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
-                    }
-                ],
-                "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
-            },
-        )
-        litellm.responses(
-            model="sarvam/sarvam-105b",
-            input="Say hello",
-            api_key="sarvam-test-key",
-            store=True,
-        )
-
-    body: Final = json.loads(route.calls.last.request.content)
-    assert body["store"] is False
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
 class TestSarvamCostMap:
     @pytest.mark.parametrize("model", SARVAM_MODELS)
-    def test_model_registered(self, model: str) -> None:
-        assert model in litellm.model_cost
+    def test_cached_prompt_tokens_cost_less_than_uncached(self, model: str) -> None:
+        uncached_cost: Final = litellm.completion_cost(completion_response=_sarvam_response(model, cached_tokens=0))
+        cached_cost: Final = litellm.completion_cost(completion_response=_sarvam_response(model, cached_tokens=800))
 
-        entry: Final = litellm.model_cost[model]
-        assert entry["litellm_provider"] == "sarvam"
-        assert entry["mode"] == "chat"
-
-    @pytest.mark.parametrize("model", SARVAM_MODELS)
-    def test_cached_input_cost_is_set(self, model: str) -> None:
-        entry: Final = litellm.model_cost[model]
-        assert entry["cache_read_input_token_cost"] > 0
+        assert 0 < cached_cost < uncached_cost
 
     def test_cached_tokens_bill_at_the_cached_rate(self) -> None:
         cached_tokens: Final = 800
