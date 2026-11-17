@@ -6,14 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.constants import FAILED_PROMPT_TOKEN_ESTIMATE_KEY, KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
 )
@@ -181,6 +181,8 @@ HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE: Final = "http.response.status_code"
 HTTP_ROUTE_ATTRIBUTE: Final = "http.route"
 URL_PATH_ATTRIBUTE: Final = "url.path"
 PREPROCESSING_DURATION_MS_ATTRIBUTE: Final = "litellm.preprocessing.duration_ms"
+USAGE_PROVIDER_STATUS_ATTRIBUTE: Final = "litellm.usage.provider_status"
+ESTIMATED_INPUT_TOKENS_ATTRIBUTE: Final = "litellm.usage.estimated_input_tokens"
 TEAM_METADATA_ATTRIBUTE: Final = "litellm.team.metadata"
 MODEL_GROUP_ATTRIBUTE: Final = "litellm.model_group"
 PROVIDER_MODEL_ATTRIBUTE: Final = "litellm.provider.model"
@@ -455,6 +457,8 @@ class OpenTelemetryConfig:
 
 
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
+    wants_failed_prompt_token_estimate: ClassVar[bool] = True
+
     def __init__(
         self,
         config: OpenTelemetryConfig | None = None,
@@ -2240,6 +2244,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Always create if no parent span exists (backward compatibility)
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
         should_create_primary_span: Final = parent_otel_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
+        failure_kwargs: Final = _JSON_OBJECT.validate_python(kwargs)
 
         span = None
         if should_create_primary_span:
@@ -2254,6 +2259,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span_kwargs["kind"] = self.span_kind.CLIENT
             span = otel_tracer.start_span(**span_kwargs)
             self.set_attributes(span, kwargs, response_obj)
+            self._set_failure_usage_attributes(span, failure_kwargs)
 
             # Record exception information using OTEL standard method
             span_error_message: Final = self._record_exception_on_span(span=span, kwargs=kwargs)
@@ -2267,6 +2273,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Note: parent_otel_span is guaranteed to be not None here
             if parent_otel_span is not None and parent_otel_span.is_recording():
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
+                self._set_failure_usage_attributes(parent_otel_span, failure_kwargs)
                 parent_error_message: Final = self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
                 parent_otel_span.set_status(Status(StatusCode.ERROR, parent_error_message))
 
@@ -2285,6 +2292,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
         ):
             parent_otel_span.end(end_time=self._to_ns(end_time))
+
+    def _set_failure_usage_attributes(self, span: Span, kwargs: Mapping[str, object]) -> None:
+        if FAILED_PROMPT_TOKEN_ESTIMATE_KEY not in kwargs:
+            return
+        self.safe_set_attribute(span=span, key=USAGE_PROVIDER_STATUS_ATTRIBUTE, value="unknown")
+        estimate: Final = kwargs[FAILED_PROMPT_TOKEN_ESTIMATE_KEY]
+        if isinstance(estimate, int):
+            self.safe_set_attribute(span=span, key=ESTIMATED_INPUT_TOKENS_ATTRIBUTE, value=estimate)
 
     def _record_exception_on_span(self, span: Span, kwargs: _FailureKwargsView) -> str | None:
         """

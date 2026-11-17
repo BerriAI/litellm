@@ -54,6 +54,11 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
             error_type=ProxyErrorTypes.auth_error,
             route="/chat/completions",
         ),
+        "auth_short_circuit_on_queued_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=Exception("auth"),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/queue/chat/completions",
+        ),
         "guardrail_raised_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
             original_exception=GuardrailRaisedException(guardrail_name="g", message="blocked"),
             route="/chat/completions",
@@ -64,6 +69,7 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
         "non_llm_route": False,
         "http_on_llm_route": True,
         "auth_short_circuit": True,
+        "auth_short_circuit_on_queued_route": True,
         "guardrail_raised_on_llm_route": True,
     }
 

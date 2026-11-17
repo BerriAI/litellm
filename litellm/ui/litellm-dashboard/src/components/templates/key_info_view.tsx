@@ -10,6 +10,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
 import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,12 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
 import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import {
+  budgetAlertEmailsFromRows,
+  budgetAlertEmailsMetadata,
+  budgetAlertEmailsRowsCanShow,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+} from "../key_team_helpers/budgetAlertEmails";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
@@ -219,6 +226,15 @@ export default function KeyInfoView({
     );
   }
 
+  const memberKeyEditContext = {
+    userRole: userRole || "",
+    userId: userID || "",
+    keyUserId: currentKeyData.user_id,
+    keyTeamId: currentKeyData.team_id,
+    teamMembers: teamsData?.find((team) => team.team_id === currentKeyData.team_id)?.members_with_roles,
+  };
+  const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
+
   const handleKeyUpdate = async (formValues: Record<string, any>, dirtyFields: readonly string[] = []) => {
     try {
       if (!accessToken) return;
@@ -334,6 +350,12 @@ export default function KeyInfoView({
       formValues.tpd_limit = mapEmptyStringToNull(formValues.tpd_limit);
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
+      const budgetAlertRowEntries = dirtyFields.includes(KEY_MAX_BUDGET_ALERT_EMAILS_KEY)
+        ? budgetAlertEmailsFromRows(formValues.max_budget_alert_emails ?? [])
+        : budgetAlertEmailsRowsCanShow(currentKeyData.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+      const budgetAlertEmailsWithBoxEntries = (boxMetadata: unknown) =>
+        budgetAlertEmailsMetadata(budgetAlertRowEntries, KEY_MAX_BUDGET_ALERT_EMAILS_KEY, boxMetadata);
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
@@ -342,9 +364,12 @@ export default function KeyInfoView({
           if ("tags" in parsedMetadata) {
             delete parsedMetadata["tags"];
           }
+          const budgetAlertEmails = budgetAlertEmailsWithBoxEntries(parsedMetadata);
+          delete parsedMetadata[KEY_MAX_BUDGET_ALERT_EMAILS_KEY];
           formValues.metadata = {
             ...parsedMetadata,
             ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
+            ...budgetAlertEmails,
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
             ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
               ? { logging: formValues.logging_settings }
@@ -362,10 +387,11 @@ export default function KeyInfoView({
         }
       } else {
         const baseMetadata = formValues.metadata || {};
-        const { tags: _omitTags, ...rest } = baseMetadata;
+        const { tags: _omitTags, [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _boxAlertEmails, ...rest } = baseMetadata;
         formValues.metadata = {
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
+          ...budgetAlertEmailsWithBoxEntries(baseMetadata),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
             ? { logging: formValues.logging_settings }
@@ -383,6 +409,7 @@ export default function KeyInfoView({
         delete formValues.tags;
       }
       delete formValues.logging_settings;
+      delete formValues.max_budget_alert_emails;
 
       // Normalize any legacy word-form budget_duration to the canonical API format
       if (formValues.budget_duration) {
@@ -395,14 +422,6 @@ export default function KeyInfoView({
         formValues.budget_duration = wordToCanonical[formValues.budget_duration] ?? formValues.budget_duration;
       }
 
-      const memberKeyEditContext = {
-        userRole: userRole || "",
-        userId: userID || "",
-        keyUserId: currentKeyData.user_id,
-        keyTeamId: currentKeyData.team_id,
-        teamMembers: teamsData?.find((team) => team.team_id === currentKeyData.team_id)?.members_with_roles,
-      };
-      const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
       if (editingMemberKeyAsTeamAdmin) {
         const trimmed = teamAdminMemberKeyPayload(formValues, dirtyFields);
         if (trimmed.kind === "blocked") {
@@ -501,14 +520,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.timestamp", { date: dateStr, time: timeStr });
   };
 
-  const canModifyKey =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
-    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+  const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
@@ -1010,6 +1022,7 @@ export default function KeyInfoView({
                   userID={userID}
                   userRole={userRole}
                   premiumUser={premiumUser}
+                  editingMemberKeyAsTeamAdmin={editingMemberKeyAsTeamAdmin}
                 />
               ) : (
                 <div className="space-y-4">

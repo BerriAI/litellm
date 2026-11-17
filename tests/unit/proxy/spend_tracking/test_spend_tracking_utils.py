@@ -70,6 +70,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
@@ -86,6 +87,78 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingVectorStoreRequest,
 )
+
+
+@pytest.mark.parametrize("bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("call_type", ("acompletion", "aresponses", "anthropic_messages"))
+@pytest.mark.parametrize("failed", (False, True))
+def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: str, failed: bool) -> None:
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="customer-org-1",
+        customer_org_alias="Customer org display",
+        customer_team_id="customer-team-1",
+        customer_team_alias="Customer team display",
+        customer_member_id="customer-member-1",
+        customer_member_alias="Customer member display",
+        scopes=(),
+    )
+    auth: Final = UserAPIKeyAuth(customer_hierarchy=hierarchy)
+    stamped: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(auth)
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "test-model",
+            "call_type": call_type,
+            "litellm_params": {bucket: {**stamped, "status": "failure" if failed else "success"}},
+        },
+        response_obj=ValueError("request denied") if failed else {},
+        start_time=now,
+        end_time=now,
+    )
+    stored: Final = TypeAdapter(Mapping[str, object]).validate_json(payload["metadata"])
+    expected: Final = {
+        "user_api_key_customer_org_id": "customer-org-1",
+        "user_api_key_customer_org_alias": "Customer org display",
+        "user_api_key_customer_team_id": "customer-team-1",
+        "user_api_key_customer_team_alias": "Customer team display",
+        "user_api_key_customer_member_id": "customer-member-1",
+        "user_api_key_customer_member_alias": "Customer member display",
+    }
+    assert {key: stored.get(key) for key in expected} == expected
+    assert stored["status"] == ("failure" if failed else "success")
+
+
+@pytest.mark.parametrize("hierarchy", (None, CustomerHierarchyAuth(customer_org_id="customer-org-only", scopes=())))
+def test_spend_log_customer_identity_without_a_customer_member(hierarchy: CustomerHierarchyAuth | None) -> None:
+    metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        UserAPIKeyAuth(customer_hierarchy=hierarchy)
+    )
+    stored: Final = _get_spend_logs_metadata({**metadata})
+    assert stored.get("user_api_key_customer_org_id") == (hierarchy.customer_org_id if hierarchy else None)
+    assert stored.get("user_api_key_customer_member_id") is None
+    assert stored.get("user_api_key_customer_team_id") is None
+    assert stored.get("user_api_key_customer_org_alias") is None
+
+
+@pytest.mark.parametrize("value", (None, 42, {"invalid": True}, " "))
+def test_spend_log_omits_invalid_customer_identity(value: object) -> None:
+    stored: Final = _get_spend_logs_metadata({"user_api_key_customer_org_id": value})
+    assert stored.get("user_api_key_customer_org_id") is None
+
+
+@pytest.mark.parametrize("metadata", (None, {}, {"user_api_key_user_id": "user"}))
+def test_spend_log_without_customer_identity_preserves_legacy_metadata(metadata: dict[str, str] | None) -> None:
+    fields: Final = frozenset(
+        (
+            "user_api_key_customer_org_id",
+            "user_api_key_customer_org_alias",
+            "user_api_key_customer_team_id",
+            "user_api_key_customer_team_alias",
+            "user_api_key_customer_member_id",
+            "user_api_key_customer_member_alias",
+        )
+    )
+    assert fields.isdisjoint(_get_spend_logs_metadata(metadata))
 
 
 def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
@@ -1618,13 +1691,17 @@ def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store
 _GITHUB_TOKEN: Final = "ghp_" + "a1B2c3D4e5" * 3 + "F6g7H8"
 
 
-@pytest.mark.parametrize("prefix,serialized", (("\u2022", True), ("\u00e9", True), ("\U0001f600", True), ("\u2022", False)))
+@pytest.mark.parametrize(
+    "prefix,serialized", (("\u2022", True), ("\u00e9", True), ("\U0001f600", True), ("\u2022", False))
+)
 def test_payload_masks_tokens_after_json_unicode_escapes(
     monkeypatch: pytest.MonkeyPatch, prefix: str, serialized: bool
 ) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": True}
+    )
     raw: Final = prefix + "ghp_" + "A" * 36
     content: Final = json.dumps({"stdout": raw}) if serialized else raw
     messages: Final = [{"role": "tool", "content": content}]
@@ -1653,7 +1730,9 @@ def test_payload_masks_tokens_after_json_unicode_escapes(
 def test_payload_masks_tokens_joined_by_null_byte_removal(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": True}
+    )
     secret: Final = "ghp_\x00" + "A" * 36
     messages: Final = [{"role": "tool", "content": secret}]
     compaction: Final = {"type": "compaction", "content": secret}
@@ -1683,17 +1762,30 @@ def test_payload_masks_tokens_joined_by_null_byte_removal(monkeypatch: pytest.Mo
     assert compaction == {"type": "compaction", "content": secret}
 
 
+def test_spend_log_token_redaction_config_is_opt_in() -> None:
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    assert ConfigGeneralSettings.model_validate({}).redact_tokens_in_spend_logs is False
+    assert (
+        ConfigGeneralSettings.model_validate({"redact_tokens_in_spend_logs": True}).redact_tokens_in_spend_logs is True
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redact", (None, False, True))
+@pytest.mark.parametrize("store_prompts", (False, True))
 async def test_token_redaction_thread_and_inline_payloads_match(
-    monkeypatch: pytest.MonkeyPatch, redact: bool | None
+    monkeypatch: pytest.MonkeyPatch, redact: bool | None, store_prompts: bool
 ) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(
         proxy_server,
         "general_settings",
-        {"store_prompts_in_spend_logs": True, **({"redact_tokens_in_spend_logs": redact} if redact is not None else {})},
+        {
+            "store_prompts_in_spend_logs": store_prompts,
+            **({"redact_tokens_in_spend_logs": redact} if redact is not None else {}),
+        },
     )
     loop_thread: Final = threading.get_ident()
     monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
@@ -1722,11 +1814,12 @@ async def test_token_redaction_thread_and_inline_payloads_match(
     expected: Final = get_logging_payload(deepcopy(original), response, now, now)
 
     assert payload == expected
-    assert redact is False or kwargs == original
-    assert (len(worker_threads) == 1) is (redact is not False)
+    assert redact is not True or kwargs == original
+    assert (len(worker_threads) == 1) is (redact is True)
     assert all(thread_id != loop_thread for thread_id in worker_threads)
-    stored: Final = json.loads(payload["proxy_server_request"])["messages"][0]["content"]
-    assert stored == ("TOKEN=REDACTED_BY_LITELM ordinary tool output" if redact is not False else text)
+    stored: Final = json.loads(payload["proxy_server_request"])
+    expected_text: Final = "TOKEN=REDACTED_BY_LITELM ordinary tool output" if redact is True else text
+    assert stored == ({"messages": [{"role": "tool", "content": expected_text}]} if store_prompts else {})
     assert body["messages"][0]["content"] == text
 
 
@@ -1750,7 +1843,9 @@ def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(
 ) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": True}
+    )
     tool_output: Final = json.dumps({"stdout": f"export TOKEN={secret}\ndone"})
     request_body: Final = {
         "model": "claude-sonnet-5-5",
@@ -1763,9 +1858,10 @@ def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(
 
     assert secret not in stored
     assert secret[:12] not in stored
-    assert "export TOKEN=REDACTED_BY_LITELM" in json.loads(json.loads(stored)["messages"][0]["content"][0]["content"])[
-        "stdout"
-    ]
+    assert (
+        "export TOKEN=REDACTED_BY_LITELM"
+        in json.loads(json.loads(stored)["messages"][0]["content"][0]["content"])["stdout"]
+    )
 
 
 def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1780,7 +1876,12 @@ def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch: pyte
             "response": {
                 "content": [
                     {"type": "text", "text": "Cloning now"},
-                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"cmd": f"git clone https://{_GITHUB_TOKEN}@github.com/o/r"}},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "bash",
+                        "input": {"cmd": f"git clone https://{_GITHUB_TOKEN}@github.com/o/r"},
+                    },
                 ]
             }
         },
@@ -1795,10 +1896,12 @@ def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch: pyte
 def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {"redact_tokens_in_spend_logs": True})
     long_text: Final = f"{_GITHUB_TOKEN} " + "x" * 10_000
 
-    stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": long_text}, max_string_length_prompt_in_db=200)
+    stored: Final = _sanitize_request_body_for_spend_logs_payload(
+        {"text": long_text}, max_string_length_prompt_in_db=200
+    )
 
     assert stored["text"].startswith("REDACTED_BY_LITELM x")
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["text"]
@@ -1816,7 +1919,7 @@ def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(mon
 def test_stored_request_keeps_text_that_only_resembles_credentials(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {"redact_tokens_in_spend_logs": True})
     stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": text}, max_string_length_prompt_in_db=10_000)
 
     assert stored["text"] == text
@@ -7568,6 +7671,12 @@ def test_spend_logs_payload(model_id: str | None):
     expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
         "is_silent_experiment",
         "upstream_provider",
+        "user_api_key_customer_org_id",
+        "user_api_key_customer_org_alias",
+        "user_api_key_customer_team_id",
+        "user_api_key_customer_team_alias",
+        "user_api_key_customer_member_id",
+        "user_api_key_customer_member_alias",
     }
 
     assert "metadata" in payload

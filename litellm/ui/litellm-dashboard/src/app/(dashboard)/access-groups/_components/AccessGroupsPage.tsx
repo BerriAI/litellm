@@ -24,6 +24,7 @@ function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
     mcpServerIds: r.access_mcp_server_ids,
     agentIds: r.access_agent_ids,
     skillNames: r.access_skill_names ?? [],
+    vectorStoreIds: r.access_vector_store_ids ?? [],
     keyIds: r.assigned_key_ids,
     teamIds: r.assigned_team_ids,
     createdAt: r.created_at,

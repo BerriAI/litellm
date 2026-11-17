@@ -17,6 +17,7 @@ import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useMode
 
 const editViewMocks = vi.hoisted(() => ({
   onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
+  editingMemberKeyAsTeamAdmin: undefined as boolean | undefined,
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), usePathname: () => "/ui/alerts" }));
@@ -26,8 +27,15 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 }));
 
 vi.mock("./key_edit_view", () => ({
-  KeyEditView: ({ onSubmit }: { onSubmit: (v: Record<string, any>) => Promise<void> }) => {
+  KeyEditView: ({
+    onSubmit,
+    editingMemberKeyAsTeamAdmin,
+  }: {
+    onSubmit: (v: Record<string, any>) => Promise<void>;
+    editingMemberKeyAsTeamAdmin?: boolean;
+  }) => {
     editViewMocks.onSubmit = onSubmit;
+    editViewMocks.editingMemberKeyAsTeamAdmin = editingMemberKeyAsTeamAdmin;
     return <div data-testid="key-edit-view-stub" />;
   },
 }));
@@ -90,6 +98,8 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 
 vi.mock("../networking", () => ({
   serverRootPath: "",
+  getProxyBaseUrl: vi.fn(() => ""),
+  getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   regenerateKeyCall: vi.fn().mockResolvedValue({ key: "sk-regenerated", token: "regenerated-token" }),
@@ -892,7 +902,9 @@ describe("KeyInfoView", () => {
 
       await renderAndOpenSettingsTab({ ...MOCK_KEY_DATA, user_id: "someone-else-id" });
 
-      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByTestId("key-edit-view-stub")).toBeInTheDocument();
+      expect(editViewMocks.editingMemberKeyAsTeamAdmin).toBe(false);
     });
 
     it("should show the Edit Settings button when the user is the key owner", async () => {
@@ -961,7 +973,9 @@ describe("KeyInfoView", () => {
 
       await renderAndOpenSettingsTab({ ...MOCK_KEY_DATA, team_id: teamId, user_id: "other-user-id" });
 
-      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByTestId("key-edit-view-stub")).toBeInTheDocument();
+      expect(editViewMocks.editingMemberKeyAsTeamAdmin).toBe(true);
     });
   });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Combobox,
@@ -22,10 +22,12 @@ export interface MultiSelectOption {
   value: string;
   description?: string;
   disabled?: boolean;
+  icon?: ReactNode;
 }
 
 interface MultiSelectProps {
   id?: string;
+  "aria-describedby"?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -46,16 +48,15 @@ const splitOnCommas = (raw: string): string[] =>
 
 const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
-  return (
-    !normalizedQuery ||
-    option.label.toLowerCase().includes(normalizedQuery) ||
-    option.value.toLowerCase().includes(normalizedQuery) ||
-    (option.description?.toLowerCase().includes(normalizedQuery) ?? false)
-  );
+  if (!normalizedQuery) return true;
+  if (option.label.toLowerCase().includes(normalizedQuery)) return true;
+  if (option.value.toLowerCase().includes(normalizedQuery)) return true;
+  return option.description?.toLowerCase().includes(normalizedQuery) ?? false;
 };
 
 export function MultiSelect({
   id,
+  "aria-describedby": describedBy,
   options,
   value = [],
   onValueChange,
@@ -119,11 +120,17 @@ export function MultiSelect({
             <>
               {selected.map((option) => (
                 <ComboboxChip key={option.value} aria-label={option.label}>
+                  {option.icon && (
+                    <span aria-hidden="true" className="shrink-0">
+                      {option.icon}
+                    </span>
+                  )}
                   {option.label}
                 </ComboboxChip>
               ))}
               <ComboboxChipsInput
                 id={id}
+                aria-describedby={describedBy}
                 placeholder={loading ? t("shared.multiSelect.loading") : placeholder}
                 className="min-w-24"
                 aria-label={placeholder || undefined}
@@ -140,11 +147,18 @@ export function MultiSelect({
         <ComboboxList>
           {(option: MultiSelectOption) => (
             <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
-              <span className="min-w-0">
-                <span className="block truncate">{option.label}</span>
-                {option.description && (
-                  <span className="block truncate text-xs text-muted-foreground">{option.description}</span>
+              <span className="flex min-w-0 items-center gap-2">
+                {option.icon && (
+                  <span aria-hidden="true" className="shrink-0">
+                    {option.icon}
+                  </span>
                 )}
+                <span className="min-w-0">
+                  <span className="block truncate">{option.label}</span>
+                  {option.description && (
+                    <span className="block truncate text-xs text-muted-foreground">{option.description}</span>
+                  )}
+                </span>
               </span>
             </ComboboxItem>
           )}

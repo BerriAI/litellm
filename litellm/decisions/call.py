@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -6,8 +7,8 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
-from pydantic_core import to_jsonable_python
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails, InitErrorDetails, to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
@@ -61,6 +62,7 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsVideo,
     OpenAIDecisionInput,
+    OpenAIDecisionInputMessage,
     OpenAIDecisionPromptCacheOptions,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
@@ -88,6 +90,21 @@ _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
+
+
+def _without_surrounding_whitespace(value: str) -> str:
+    return value.strip(" \t")
+
+
+_HeaderName: TypeAlias = Annotated[str, Field(pattern=r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")]
+_HeaderValue: TypeAlias = Annotated[
+    str, Field(pattern=r"^[\t\x20-\x7e]*$"), AfterValidator(_without_surrounding_whitespace)
+]
+_EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(
+    Mapping[_HeaderName, _HeaderValue] | None,
+    config=ConfigDict(title="extra_headers", hide_input_in_errors=True),
+)
+_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_HeaderName, _HeaderValue])
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
@@ -104,6 +121,7 @@ _ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, Decisions
     tuple[DecisionsAssetReference, DecisionsAsset]
 )
 _ASSET_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_HEADER_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -440,6 +458,10 @@ def _unsupported_params(
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not support.box_questions
     refuses_audio: Final = bool(ir_request.audio) and not support.audio
     refuses_videos: Final = bool(ir_request.videos) and not support.videos
+    refuses_developer_and_system_messages: Final = (
+        _has_developer_or_system_message(ir_request.input)
+        and not provider_config.supports_developer_and_system_messages
+    )
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -447,6 +469,7 @@ def _unsupported_params(
         *(("box questions",) if refuses_box_questions else ()),
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
+        *(("developer and system messages",) if refuses_developer_and_system_messages else ()),
     )
 
 
@@ -458,18 +481,35 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
     return not isinstance(question, DecisionsIRBoxQuestion)
 
 
+def _is_user_message(message: OpenAIDecisionInputMessage) -> bool:
+    return message.role == "user"
+
+
+def _has_developer_or_system_message(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return isinstance(decision_input, DecisionsIRMessages) and not all(map(_is_user_message, decision_input.messages))
+
+
+def _supported_messages(
+    decision_input: DecisionsIRState | DecisionsIRMessages, provider_config: BaseDecisionsConfig
+) -> DecisionsIRState | DecisionsIRMessages:
+    if provider_config.supports_developer_and_system_messages or isinstance(decision_input, DecisionsIRState):
+        return decision_input
+    return DecisionsIRMessages(messages=tuple(filter(_is_user_message, decision_input.messages)))
+
+
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
     headers: Mapping[str, str],
     support: _ResolvedSupport,
 ) -> DecisionsIRRequest:
+    supported_input: Final = _supported_messages(ir_request.input, provider_config)
     return replace(
         ir_request,
         input=(
-            ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
-            else with_images_where(ir_request.input, _no_image)
+            supported_input
+            if provider_config.supports_images_in(supported_input, headers)
+            else with_images_where(supported_input, _no_image)
         ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
@@ -516,8 +556,58 @@ def _provider_ir_request(
     return supported
 
 
+def _valid_header(entry: tuple[object, object]) -> tuple[str, str] | None:
+    try:
+        return _HEADER_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _header_entries(extra_headers: object) -> Mapping[object, object]:
+    try:
+        return _HEADER_ENTRIES_ADAPTER.validate_python(extra_headers)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+_HEADER_LABEL_END: Final = re.compile(r"[\s:]")
+
+
+def _header_label(name: str | int) -> str:
+    return _HEADER_LABEL_END.split(str(name), maxsplit=1)[0]
+
+
+def _without_full_header_name(detail: ErrorDetails) -> InitErrorDetails:
+    loc: Final = detail["loc"]
+    return InitErrorDetails(
+        type=detail["type"],
+        loc=(_header_label(loc[0]), *loc[1:]) if loc else loc,
+        input=None,
+        ctx=detail.get("ctx", {}),
+    )
+
+
+def _strict_extra_headers(extra_headers: object) -> Mapping[str, str]:
+    try:
+        return _EXTRA_HEADERS_ADAPTER.validate_python(extra_headers) or MappingProxyType({})
+    except ValidationError as error:
+        raise ValidationError.from_exception_data(
+            error.title, [_without_full_header_name(detail) for detail in error.errors()], hide_input=True
+        ) from None
+
+
+def _request_extra_headers(extra_headers: object, drops_params: bool) -> Mapping[str, str]:
+    if not extra_headers:
+        return MappingProxyType({})
+    if not drops_params:
+        return _strict_extra_headers(extra_headers)
+    return MappingProxyType(
+        dict(header for header in map(_valid_header, _header_entries(extra_headers).items()) if header is not None)
+    )
+
+
 def decisions_outbound_headers(
-    extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
+    extra_headers: object, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
@@ -525,7 +615,7 @@ def decisions_outbound_headers(
         ),
         custom_llm_provider=custom_llm_provider,
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    return MappingProxyType({**_request_extra_headers(extra_headers, _drops_params(kwargs)), **forwarded})
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])

@@ -516,7 +516,7 @@ class OpenAIDecisionCacheWriteTokensDetails(LiteLLMPydanticObjectBase):
     ttl_30m_tokens: int = 0
     ttl_12h_tokens: int = 0
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class OpenAIDecisionInputTokensDetails(LiteLLMPydanticObjectBase):

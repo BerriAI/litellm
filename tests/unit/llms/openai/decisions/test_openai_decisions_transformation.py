@@ -80,6 +80,14 @@ _USAGE_WITH_WRITE_LIFETIMES: Final[Mapping[str, object]] = {
         "cache_write_tokens_details": {"ttl_30m_tokens": 16, "ttl_12h_tokens": 48},
     },
 }
+_USAGE_WITH_AN_UNKNOWN_WRITE_LIFETIME: Final[Mapping[str, object]] = {
+    **_USAGE,
+    "input_tokens_details": {
+        "cached_tokens": 256,
+        "cache_write_tokens": 64,
+        "cache_write_tokens_details": {"ttl_30m_tokens": 16, "ttl_12h_tokens": 40, "ttl_7d_tokens": 8},
+    },
+}
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
     "model": "gpt-6-luna",
     "answers": [
@@ -112,7 +120,11 @@ def test_an_openai_request_reaches_openai_unchanged() -> None:
     }
 
 
-@pytest.mark.parametrize("usage", (_USAGE, _USAGE_WITH_WRITE_LIFETIMES), ids=("no_write_lifetimes", "write_lifetimes"))
+@pytest.mark.parametrize(
+    "usage",
+    (_USAGE, _USAGE_WITH_WRITE_LIFETIMES, _USAGE_WITH_AN_UNKNOWN_WRITE_LIFETIME),
+    ids=("no_write_lifetimes", "write_lifetimes", "unknown_write_lifetime"),
+)
 def test_an_openai_response_reaches_the_caller_unchanged(usage: Mapping[str, object]) -> None:
     ir: Final = _openai_ir(_OPENAI_REQUEST)
     payload: Final = {**_OPENAI_RESPONSE, "usage": usage}

@@ -1058,6 +1058,7 @@ _CACHED_POLICY_MESSAGE: Final[Mapping[str, object]] = {
         {"type": "input_text", "text": _CACHE_POLICY, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}
     ],
 }
+_CACHED_POLICY_USER_MESSAGE: Final[Mapping[str, object]] = {**_CACHED_POLICY_MESSAGE, "role": "user"}
 _IMAGE_TEXT_MESSAGE: Final[Mapping[str, object]] = {"type": "message", "role": "user", "content": _IMAGE_TEXT}
 _PREDICATE: Final[Mapping[str, object]] = {
     "type": "predicate",
@@ -1119,7 +1120,7 @@ def test_prompt_cache_controls_are_ignored_by_a_deployment_without_prompt_cache(
         "/v1/decisions",
         json={
             "model": "decider",
-            "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "input": [_CACHED_POLICY_USER_MESSAGE, _IMAGE_TEXT_MESSAGE],
             "questions": [_PREDICATE],
             "prompt_cache_key": "defect-review",
             "prompt_cache_options": {"mode": "explicit", "ttl": ttl},
@@ -1134,9 +1135,26 @@ def test_prompt_cache_controls_are_ignored_by_a_deployment_without_prompt_cache(
     }
 
 
+def test_developer_messages_are_refused_by_a_deployment_without_them(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key"})
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={"model": "decider", "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE], "questions": [_PREDICATE]},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "developer and system messages" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
 _MALFORMED_BREAKPOINT_MESSAGE: Final[Mapping[str, object]] = {
     "type": "message",
-    "role": "developer",
+    "role": "user",
     "content": [
         {
             "type": "input_text",
@@ -2032,3 +2050,102 @@ def test_proxy_routes_ollama_decisions_with_optional_authentication(
         else [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
     )
     assert response.json()["answers"] == expected
+
+
+def test_proxy_decisions_dispatches_vercel_ai_gateway_deployment(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gateway-decider",
+                "litellm_params": {"model": "vercel_ai_gateway/openai/gpt-6-luna-decisions"},
+                "model_info": {"mode": "evaluation"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    upstream: Final = respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "openai/gpt-6-luna-decisions",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "gateway-decider",
+            "input": "The package arrived broken.",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
+    assert upstream.called
+    assert str(upstream.calls.last.request.url) == "https://ai-gateway.vercel.sh/v1/decisions"
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer gateway-key"
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "openai/gpt-6-luna-decisions",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+    gateway_cost: Final = litellm.model_cost["vercel_ai_gateway/openai/gpt-6-luna-decisions"]
+    expected_cost: Final = _INPUT_TOKENS * float(gateway_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        gateway_cost["output_cost_per_token"]
+    )
+    assert expected_cost > 0
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("gateway_cost", ("0.00005722", "0"), ids=("paid_call", "free_call"))
+def test_proxy_decisions_report_the_billed_gateway_charge_in_the_header_and_body(
+    gateway_cost: str,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    monkeypatch.setattr(litellm, "cost_margin_config", {"vercel_ai_gateway": 0.5})
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gateway-decider",
+                "litellm_params": {"model": "vercel_ai_gateway/example/unpriced-decider"},
+                "model_info": {"mode": "evaluation"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "example/unpriced-decider",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+            "provider_metadata": {"gateway": {"cost": gateway_cost}},
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "gateway-decider",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(response.json()["usage"]["cost"])
+    assert response.json()["usage"]["cost"] == pytest.approx(float(gateway_cost))

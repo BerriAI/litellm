@@ -153,6 +153,19 @@ impl Observations {
         }
         Ok(events)
     }
+
+    pub fn raw_heads(&self) -> Vec<litellm_host::interceptors::RawResponse> {
+        self.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                litellm_host::lifecycle::CallEvent::Execution(
+                    litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+                ) => Some(raw.clone()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl litellm_host::lifecycle::CallObserver for CallEvents {

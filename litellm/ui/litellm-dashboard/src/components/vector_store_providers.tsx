@@ -57,7 +57,7 @@ export interface VectorStoreFieldConfig {
   placeholder?: string;
   placeholderKey?: ParseKeys;
   required: boolean;
-  type?: "text" | "password" | "select";
+  type?: "text" | "password" | "select" | "boolean";
   options?: { value: string; label: string }[];
   initialValue?: string;
 }
@@ -359,6 +359,21 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       placeholder: "my-knn-index",
       required: false,
       type: "text",
+    },
+    {
+      name: "opensearch_search_pipeline",
+      label: "vectorStores.providerFields.labels.searchPipelineOptional",
+      tooltip: "vectorStores.providerFields.tooltips.opensearch.searchPipeline",
+      placeholder: "my-hybrid-search-pipeline",
+      required: false,
+      type: "text",
+    },
+    {
+      name: "opensearch_hybrid_search",
+      label: "vectorStores.providerFields.labels.hybridSearch",
+      tooltip: "vectorStores.providerFields.tooltips.opensearch.hybridSearch",
+      required: false,
+      type: "boolean",
     },
   ],
   s3_vectors: [

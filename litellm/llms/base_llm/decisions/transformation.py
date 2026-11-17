@@ -582,6 +582,13 @@ def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     return is_decisions_model_mode(model_mode)
 
 
+def usage_reported_cost(response: DecisionsIRResponse) -> float | None:
+    cost: Final = response.usage.extra.get("cost") if response.usage is not None else None
+    if not isinstance(cost, (int, float)):
+        return None
+    return float(cost)
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionsInputLimits:
     max_request_tokens: int | None = None
@@ -595,6 +602,7 @@ class BaseDecisionsConfig(ABC):
     api_key_required: bool = True
     supports_safety_identifier: bool = False
     supports_prompt_cache: bool = False
+    supports_developer_and_system_messages: bool = False
     supports_images: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None
