@@ -9,6 +9,7 @@ use litellm_db::{Endpoint, PoolLimits, Pools, SslMode};
 use litellm_gateway::{AppState, RedisClients, Resources};
 use litellm_gateway_inference::{Error, Gateway};
 use litellm_http::ClientVariant;
+use litellm_license::Entitlements;
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::{fixture, rstest};
@@ -48,6 +49,7 @@ fn without_stores(inference: Arc<Gateway>) -> AppState {
         inference,
         redis: RedisClients::default(),
         database: None,
+        entitlements: Arc::new(Entitlements::Community),
     }
 }
 
