@@ -719,7 +719,7 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     model: Final = _provider_model(error, request, request_provider)
     if isinstance(provider_rejection, str):
         # Python's handler logs the route model before its provider config's transform refuses the call.
-        _log_resolved_call(request, request_provider)
+        _log_resolved_call(request, request_provider, optional_str(getattr(error, "messages_logged_model", None)))
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         rejection: Final = _provider_rejection(
             provider_rejection,
@@ -1108,7 +1108,7 @@ def _provider_model(error: Exception, request: Mapping[str, object], request_pro
 
 def _log_resolved_call(request: Mapping[str, object], request_provider: str, model: str | None = None) -> None:
     """Tells the logger the resolved call, as Python's handler does before its provider config
-    transforms the request."""
+    transforms the request: under `model` when Rust names it, else the request's own."""
     logger: Final = request.get("litellm_logging_obj")
     if not isinstance(logger, LiteLLMLoggingObj):
         return
@@ -1248,7 +1248,7 @@ def map_failure(
             status_code=500,
             message=str(error),
             llm_provider=request_provider,
-            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+            model=_provider_model(error, request, request_provider),
         )
     if getattr(error, "messages_missing_credential", False):
         return _raised_like_python(

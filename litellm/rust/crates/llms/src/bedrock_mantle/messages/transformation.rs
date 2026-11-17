@@ -176,6 +176,21 @@ pub fn mantle_capability_lookup(provider: &str, model: &str) -> Option<MantleCap
     }
 }
 
+/// The model Python's handler logs a `bedrock_mantle/` or `bedrock/mantle/` call under before the
+/// Mantle config transforms the request: `get_llm_provider`'s model, which drops a `bedrock_mantle/`
+/// region prefix but keeps a `mantle/` segment. `None` on every other route.
+pub fn mantle_logged_model(provider: &str, model: &str) -> Option<String> {
+    let lookup = mantle_capability_lookup(provider, model)?;
+    let routed = model
+        .strip_prefix(lookup.provider)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(model);
+    Some(match lookup.provider {
+        BEDROCK_MANTLE => BEDROCK_MANTLE_MESSAGES_CONFIG.logged_model(routed),
+        _ => routed.to_string(),
+    })
+}
+
 /// Python's `BedrockModelInfo._model_has_route_prefix`.
 fn has_route_prefix(model: &str, prefix: &str) -> bool {
     model.starts_with(prefix) || model.contains(&format!("/{prefix}"))
@@ -458,6 +473,42 @@ mod tests {
                 model: model.to_string(),
             })
         );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(
+        "bedrock_mantle",
+        "bedrock_mantle/anthropic.claude-sonnet-5-5",
+        Some("anthropic.claude-sonnet-5-5")
+    )]
+    #[case::bedrock_mantle_region_prefix(
+        "bedrock_mantle",
+        "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        Some("anthropic.claude-sonnet-5-5")
+    )]
+    #[case::bedrock_mantle_keeps_the_mantle_segment(
+        "bedrock_mantle",
+        "bedrock_mantle/us-west-2/mantle/anthropic.claude-sonnet-5-5",
+        Some("mantle/anthropic.claude-sonnet-5-5")
+    )]
+    #[case::bedrock_mantle_unprefixed(
+        "bedrock_mantle",
+        "us-west-2/anthropic.claude-sonnet-5-5",
+        Some("anthropic.claude-sonnet-5-5")
+    )]
+    #[case::bedrock_mantle_route(
+        "bedrock",
+        "bedrock/mantle/anthropic.claude-sonnet-5-5",
+        Some("mantle/anthropic.claude-sonnet-5-5")
+    )]
+    #[case::invoke("bedrock", "bedrock/us.anthropic.claude-sonnet-5-5", None)]
+    #[case::other_provider("anthropic", "mantle/claude-sonnet-5-5", None)]
+    fn the_logged_model_is_the_one_python_resolves(
+        #[case] provider: &str,
+        #[case] model: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(mantle_logged_model(provider, model).as_deref(), expected);
     }
 
     fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {

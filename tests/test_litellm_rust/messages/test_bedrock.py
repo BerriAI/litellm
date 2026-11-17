@@ -1030,6 +1030,94 @@ async def test_bedrock_mantle_refuses_a_usage_that_is_not_an_object(
     assert_served_natively(server)
 
 
+_REFUSED_MODELS: Final = (
+    # (model, the model Python main's handler logs, the model its Bedrock invoke transform names)
+    pytest.param(
+        "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5",
+        "anthropic.claude-sonnet-5",
+        "anthropic.claude-sonnet-5",
+        id="region-prefix",
+    ),
+    pytest.param(
+        "bedrock_mantle/us-west-2/mantle/anthropic.claude-sonnet-5",
+        "mantle/anthropic.claude-sonnet-5",
+        "anthropic.claude-sonnet-5",
+        id="region-prefix-mantle-segment",
+    ),
+    pytest.param(
+        "bedrock/mantle/anthropic.claude-opus-4-8",
+        "mantle/anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-4-8",
+        id="mantle-route",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "logged_model", "raised_model"), _REFUSED_MODELS)
+async def test_bedrock_mantle_refusal_logs_and_names_the_model_python_does(
+    server: RecordingServer, model: str, logged_model: str, raised_model: str
+) -> None:
+    recorder: Final = _Recorder()
+    refused: Final = {"model": model, "tools": [{"type": "web_search_20250305", "name": "web_search"}]}
+
+    with rebound(litellm, "callbacks", [recorder]), pytest.raises(litellm.BadRequestError) as raised:
+        await _mantle(_RUST_ENTRY, server, **refused)
+    await recorder.wait_for(1)
+
+    assert type(raised.value) is litellm.BadRequestError
+    assert raised.value.model == raised_model  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert raised.value.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    [(kind, logged)] = recorder.logged
+    assert (kind, logged["model"]) == ("failure", logged_model)
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "logged_model", "raised_model"),
+    (
+        # (model, the model Python main's failure log names once the call was sent, the model Rust raises)
+        pytest.param(
+            "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5",
+            "anthropic.claude-sonnet-5",
+            "anthropic.claude-sonnet-5",
+            id="region-prefix",
+        ),
+        pytest.param(
+            "bedrock_mantle/us-west-2/mantle/anthropic.claude-sonnet-5",
+            "anthropic.claude-sonnet-5",
+            "anthropic.claude-sonnet-5",
+            id="region-prefix-mantle-segment",
+        ),
+        pytest.param(
+            "bedrock/mantle/anthropic.claude-opus-4-8",
+            "bedrock/anthropic.claude-opus-4-8",
+            "anthropic.claude-opus-4-8",
+            id="mantle-route",
+        ),
+    ),
+)
+async def test_bedrock_mantle_unbillable_usage_names_the_model_it_sent(
+    server: RecordingServer, model: str, logged_model: str, raised_model: str
+) -> None:
+    server.default_response = ResponseSpec(body={**MESSAGES_RESPONSE, "usage": [1]})
+    recorder: Final = _Recorder()
+
+    with rebound(litellm, "callbacks", [recorder]), pytest.raises(litellm.APIError) as raised:
+        await _mantle(_RUST_ENTRY, server, model=model, api_key=None, **AWS)
+    await recorder.wait_for(1)
+
+    # Python main raises a bare TypeError here; Rust raises an APIError naming the model it sent.
+    assert type(raised.value) is litellm.APIError
+    assert raised.value.status_code == 500
+    assert raised.value.model == raised_model  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert raised.value.llm_provider == model.split("/")[0]  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    [(kind, logged)] = recorder.logged
+    assert (kind, logged["model"]) == ("failure", logged_model)
+    assert_served_natively(server)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", (MANTLE_MODEL, "bedrock/mantle/anthropic.claude-opus-4-8"))
 async def test_bedrock_mantle_logs_the_tools_rust_shaped_and_leaves_the_callers_alone(

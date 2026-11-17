@@ -25,7 +25,7 @@ use litellm_llms::{
     },
     base_llm::messages::context::MessagesModelCapabilities,
     bedrock::chat::invoke_handler::BedrockStreamRaise,
-    bedrock_mantle::messages::transformation::mantle_capability_lookup,
+    bedrock_mantle::messages::transformation::{mantle_capability_lookup, mantle_logged_model},
 };
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
@@ -154,6 +154,8 @@ pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.mess
 const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
 /// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
 const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
+/// The model Python's handler logs a Mantle call under before the config transforms the request.
+const MESSAGES_LOGGED_MODEL: &str = "messages_logged_model";
 /// The provider litellm's error names when it is not the route's: none for a call refused while
 /// resolving its provider, as Python's `get_llm_provider` raises it.
 const MESSAGES_PROVIDER: &str = "messages_provider";
@@ -827,14 +829,20 @@ impl MessagesPythonHost {
         )
     }
 
-    fn mantle_model(&self, py: Python<'_>) -> PyResult<Option<String>> {
+    fn mantle_models(&self, py: Python<'_>) -> PyResult<Option<MantleModels>> {
         let Some(model) = self.view.request(py)?.get_item("model")? else {
             return Ok(None);
         };
         let Ok(model) = model.extract::<String>() else {
             return Ok(None);
         };
-        Ok(mantle_capability_lookup(&self.provider(py), &model).map(|lookup| lookup.model))
+        let provider = self.provider(py);
+        Ok(mantle_capability_lookup(&provider, &model)
+            .zip(mantle_logged_model(&provider, &model))
+            .map(|(lookup, logged)| MantleModels {
+                sent: lookup.model,
+                logged,
+            }))
     }
 
     fn provider(&self, py: Python<'_>) -> String {
@@ -971,9 +979,10 @@ impl MessagesPythonHost {
                 if let Some(model) = self.view.request(py)?.get_item("model")? {
                     value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
                 }
-            } else if let Some(model) = self.mantle_model(py)? {
+            } else if let Some(models) = self.mantle_models(py)? {
                 let value = native.value(py);
-                value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                value.setattr(MESSAGES_PROVIDER_MODEL, models.sent)?;
+                value.setattr(MESSAGES_LOGGED_MODEL, models.logged)?;
                 // The Mantle routes map a credential Rust could not acquire from a fixed class
                 // list, never by running Python's signing again.
                 if value
@@ -986,6 +995,13 @@ impl MessagesPythonHost {
             Ok(self.map_failure(py, native))
         })
     }
+}
+
+/// The models a Mantle route's errors name: the one Python's handler logs the call under before
+/// its config transforms the request, and the model id that transform sends.
+struct MantleModels {
+    logged: String,
+    sent: String,
 }
 
 /// Whether Rust refused the call where Python's `get_llm_provider` refuses it, before any provider
