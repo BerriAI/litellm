@@ -2,7 +2,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: () => ({ data: { "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" } } }),
 }));
 
-import { openAutoRouterAdvanced, selectAutoRouterOption } from "../../../tests/autoRouterSetup";
+import {
+  openAutoRouterAdvanced,
+  selectAutoRouterOption,
+  withSettledRouterAvailability,
+} from "../../../tests/autoRouterSetup";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -88,17 +92,6 @@ const renderModal = (props: Partial<React.ComponentProps<typeof EditAutoRouterMo
 const savedConfig = () => {
   const [, payload] = modelPatchUpdateCall.mock.calls.at(-1) ?? [];
   return payload?.litellm_params?.complexity_router_config;
-};
-
-const renderWithSettledAvailability = async (renderModal: () => unknown) => {
-  vi.useFakeTimers();
-  try {
-    renderModal();
-    await act(() => vi.advanceTimersByTimeAsync(300));
-    await act(() => vi.runOnlyPendingTimersAsync());
-  } finally {
-    vi.useRealTimers();
-  }
 };
 
 describe("EditAutoRouterModal keyword matching", () => {
@@ -219,6 +212,41 @@ describe("EditAutoRouterModal keyword matching", () => {
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
     if (raw === "") expect(savedConfig()).not.toHaveProperty("heuristic_v2_success_threshold");
     else expect(savedConfig().heuristic_v2_success_threshold).toBe(0);
+  });
+
+  it("saves custom tiers after an invalid conversation limit becomes hidden", async () => {
+    testQueryClient.clear();
+    vi.mocked(apiClient.post).mockResolvedValue({ allowances: [], error: null });
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            classifier_type: "heuristic_first",
+            heuristic_first_max_tier: "SIMPLE",
+            classifier_llm_config: { model: "gpt-4o-mini" },
+            heuristic_first_max_context_tokens: 8000,
+          },
+        },
+      },
+    });
+    openAutoRouterAdvanced("Classification Method");
+    fireEvent.change(screen.getByRole("textbox", { name: "Max conversation tokens before judge" }), {
+      target: { value: "invalid" },
+    });
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Edit tiers" }));
+    await withSettledRouterAvailability(() => {
+      fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
+    });
+    expect(screen.queryByRole("textbox", { name: "Max conversation tokens before judge" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig().classifier_type).toBe("llm");
+    expect(savedConfig()).not.toHaveProperty("heuristic_first_max_context_tokens");
   });
 
   it("saves a legacy heuristic-first router with a v2 chain and an edited success threshold", async () => {
@@ -1470,7 +1498,7 @@ describe("EditAutoRouterModal prompt compression", () => {
     { auto_router_model_compression: "model-compressor" },
   ])("should preserve the exact stored compression fields through an untouched save: %j", async (stored) => {
     const user = userEvent.setup();
-    await renderWithSettledAvailability(() => renderWithStoredCompression(stored));
+    await withSettledRouterAvailability(() => renderWithStoredCompression(stored));
 
     await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
     await user.click(await screen.findByRole("button", { name: /save changes/i }));
@@ -1547,7 +1575,7 @@ describe("EditAutoRouterModal classifier vision", () => {
 
   it("hydrates and keeps a stored vision setting through an untouched save", async () => {
     const user = userEvent.setup();
-    await renderWithSettledAvailability(renderModal);
+    await withSettledRouterAvailability(renderModal);
 
     openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeChecked();

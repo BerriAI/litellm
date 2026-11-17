@@ -1019,7 +1019,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Resolve or dismiss matching open alerts
+         * @description Update all matching open saved alerts, including unloaded pages. Only gateway admins can write.
+         */
+        patch: operations["update_open_alerts_alerts_patch"];
         trace?: never;
     };
     "/alerts/monitoring": {
@@ -2205,7 +2209,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
-        post: operations["new_budget_endpoint_budget_new_post"];
+        post: operations["new_budget_budget_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2265,7 +2269,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
-        post: operations["update_budget_endpoint_budget_update_post"];
+        post: operations["update_budget_budget_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6205,6 +6209,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/reference_exchange_rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Exchange Rates
+         * @description ECB euro foreign exchange reference rates as USD per unit of each currency, with USD at 1. They estimate a USD
+         *     total in another currency for display and are not settlement quotes. Refreshes from the ECB feed when due.
+         */
+        get: operations["reference_exchange_rates_get_reference_exchange_rates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -8620,6 +8645,8 @@ export interface paths {
          *         - key: str - The key identifier (token) to update
          *         - budget_id: Optional[str] - Budget ID associated with the key
          *         - max_budget: Optional[float] - Max budget for key
+         *         - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+         *         - user_id: Optional[str] - Owner user ID, or null to remove the owner
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
@@ -9683,7 +9710,7 @@ export interface paths {
         };
         /**
          * List Customer Members
-         * @description List customer members with page-number pagination and resolved budgets. Proxy admins only.
+         * @description List customer members with page-number pagination and resolved budgets. search filters by customer member ID or alias before paginating. Proxy admins only.
          */
         get: operations["list_customer_members_management_v1_customer_members_get"];
         put?: never;
@@ -9761,7 +9788,7 @@ export interface paths {
         head?: never;
         /**
          * Update Customer Member
-         * @description Update a customer member and its budgets. Proxy admins only.
+         * @description Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the same organization, with the first team as default. Identity, budget counters and historical usage are retained. Historical usage stays attributed to the original team. Proxy admins only.
          */
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
@@ -9934,8 +9961,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Portal Limits
-         * @description Get customer portal free-tier limits and current capacity. Proxy admins only.
+         * Get Customer Management Limits
+         * @description Get Customer Management free-tier limits and current capacity. Proxy admins only.
          */
         get: operations["get_customer_portal_limits_management_v1_customer_portal_limits_get"];
         put?: never;
@@ -18844,7 +18871,10 @@ export interface paths {
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
-         *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - langfuse_span_scope: For langfuse_otel, "full" sends the whole request trace,
+         *           "llm_only" sends only model-call spans.
+         *           Omitted follows LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE (default "full"), also configurable as
+         *           callback_settings.otel.langfuse_destination_span_scope.
          *         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
          *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
          *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
@@ -27695,7 +27725,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * Id
              * @description Opaque alert ID, also used as a pagination cursor.
@@ -27711,7 +27741,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27721,9 +27751,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -27747,6 +27776,28 @@ export interface components {
              * @description Inclusive start of the observed window, normalized to UTC milliseconds.
              */
             window_start: string;
+        };
+        /** AlertBulkResult */
+        AlertBulkResult: {
+            /**
+             * Updated
+             * @description Number of open saved alerts changed.
+             */
+            updated: number;
+        };
+        /** AlertBulkUpdate */
+        AlertBulkUpdate: {
+            /**
+             * Status
+             * @description Status to apply to every matching open saved alert.
+             * @enum {string}
+             */
+            status: "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Only update this category, or all saved alerts if omitted.
+             */
+            type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
         };
         /** AlertHistoryPoint */
         AlertHistoryPoint: {
@@ -27790,6 +27841,28 @@ export interface components {
              * @default true
              */
             model_deprecations_enabled: boolean;
+            /**
+             * @description Effective built-in thresholds. Only Enterprise admins can edit them.
+             * @default {
+             *       "latency": {
+             *         "minimum_increase": 500,
+             *         "multiplier": 3
+             *       },
+             *       "reliability": {
+             *         "minimum_increase": 0.02,
+             *         "multiplier": 3
+             *       },
+             *       "spend": {
+             *         "minimum_increase": 50,
+             *         "multiplier": 3
+             *       },
+             *       "traffic": {
+             *         "minimum_increase": 1000,
+             *         "multiplier": 10
+             *       }
+             *     }
+             */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /** AlertMonitoringUpdate */
         AlertMonitoringUpdate: {
@@ -27798,6 +27871,24 @@ export interface components {
              * @description Enable or disable performance monitoring for this gateway.
              */
             enabled: boolean;
+        };
+        /** AlertThreshold */
+        AlertThreshold: {
+            /**
+             * Minimum Increase
+             * @description Minimum absolute increase above the baseline, in the metric's unit.
+             */
+            minimum_increase: number;
+            /**
+             * Multiplier
+             * @description Minimum multiple of the baseline.
+             */
+            multiplier: number;
+        };
+        /** AlertThresholdsUpdate */
+        AlertThresholdsUpdate: {
+            /** @description Replace the built-in performance thresholds. Enterprise only. */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /**
          * AlertType
@@ -27826,7 +27917,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * History
              * @description Current Usage values for the seven baseline days and observed day. Null if unavailable.
@@ -27852,7 +27943,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27862,9 +27953,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -30171,6 +30261,8 @@ export interface components {
          * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Key */
@@ -30182,6 +30274,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * BulkUpdateKeyResponse
@@ -32140,6 +32234,11 @@ export interface components {
              * @description for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)
              */
             infer_model_from_keys?: boolean | null;
+            /**
+             * Key Expiry Alert Days
+             * @description Email a key's owner once when the key has this many days or fewer left before it expires. Applies to every key with an expiry date and an owner email, including existing keys. A key's metadata.key_expiry_alert_days overrides it. Off unless set.
+             */
+            key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
             /**
@@ -34432,7 +34531,7 @@ export interface components {
          * EmailEvent
          * @enum {string}
          */
-        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
+        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Virtual Key Expiring" | "Soft Budget Crossed" | "Max Budget Alert";
         /** EmailEventSettings */
         EmailEventSettings: {
             /** Enabled */
@@ -40885,6 +40984,11 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /**
+             * Parent Team Ids
+             * @description Replace the member's teams within its existing organization. First team is the default. Omit to keep current teams. Member identity, budgets and historical usage are retained.
+             */
+            parent_team_ids?: string[];
         };
         /** MemberUpsert */
         MemberUpsert: {
@@ -43758,6 +43862,41 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** PerformanceAlertThresholds */
+        PerformanceAlertThresholds: {
+            /**
+             * @description Average response-time increase in milliseconds over the previous seven-day weighted average.
+             * @default {
+             *       "minimum_increase": 500,
+             *       "multiplier": 3
+             *     }
+             */
+            latency: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Error-rate increase as a fraction, e.g. 0.02 is two percentage points.
+             * @default {
+             *       "minimum_increase": 0.02,
+             *       "multiplier": 3
+             *     }
+             */
+            reliability: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Spend increase in USD over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 50,
+             *       "multiplier": 3
+             *     }
+             */
+            spend: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Request increase over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 1000,
+             *       "multiplier": 10
+             *     }
+             */
+            traffic: components["schemas"]["AlertThreshold"];
+        };
         /**
          * PiiAction
          * @enum {string}
@@ -44667,6 +44806,46 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCacheEvidence */
+        PromptCacheEvidence: {
+            /**
+             * Config Fingerprint
+             * @description Cache-relevant deployment settings.
+             */
+            config_fingerprint: string;
+            /**
+             * Consecutive Misses
+             * @description Observed requests that reported no cache read or write, not necessarily consecutive.
+             */
+            consecutive_misses: number;
+            /**
+             * Prefix Fingerprint
+             * @description Keyed hash of the cached prefix.
+             */
+            prefix_fingerprint: string;
+            /**
+             * Proven Write Tokens
+             * @description Tokens the proving cache write stored.
+             */
+            proven_write_tokens: number;
+            /**
+             * Provider
+             * @description Provider that served the requests.
+             * @constant
+             */
+            provider: "anthropic";
+            /**
+             * Provider Model
+             * @description Model the provider served.
+             */
+            provider_model: string;
+            /**
+             * Ttl Seconds
+             * @description Cache lifetime of the prefix's breakpoint.
+             * @constant
+             */
+            ttl_seconds: 300;
+        };
         /** PromptCacheOptions */
         PromptCacheOptions: {
             /** Comparison Response Id */
@@ -45164,6 +45343,23 @@ export interface components {
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
         };
+        /** ReferenceExchangeRates */
+        ReferenceExchangeRates: {
+            /**
+             * Rate Date
+             * Format: date
+             */
+            rate_date: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "ecb";
+            /** Usd Per Unit */
+            usd_per_unit: {
+                [key: string]: number;
+            };
+        };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
             /** Access Group Ids */
@@ -45656,6 +45852,11 @@ export interface components {
              * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
              */
             fallback_tier?: string | null;
+            /**
+             * Heuristic First Max Context Tokens
+             * @description Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. Unset preserves the local shortcut. Existing session and user-turn pins still take precedence.
+             */
+            heuristic_first_max_context_tokens?: number | null;
             /**
              * Heuristic First Max Tier
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', the predicted tier must meet its success threshold. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
@@ -56277,7 +56478,7 @@ export interface operations {
                 /** @description next_cursor from the preceding page. */
                 cursor?: string | null;
                 /** @description Alert category, or all performance alerts. */
-                type?: ("spend" | "traffic" | "latency" | "reliability" | "model_deprecation") | "performance" | null;
+                type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
             };
             header?: never;
             path?: never;
@@ -56292,6 +56493,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertViewPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_open_alerts_alerts_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertBulkUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertBulkResult"];
                 };
             };
             /** @description Validation Error */
@@ -56334,7 +56568,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"];
+                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"] | components["schemas"]["AlertThresholdsUpdate"];
             };
         };
         responses: {
@@ -58508,7 +58742,7 @@ export interface operations {
             };
         };
     };
-    new_budget_endpoint_budget_new_post: {
+    new_budget_budget_new_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -58572,7 +58806,7 @@ export interface operations {
             };
         };
     };
-    update_budget_endpoint_budget_update_post: {
+    update_budget_budget_update_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -65036,6 +65270,33 @@ export interface operations {
             };
         };
     };
+    reference_exchange_rates_get_reference_exchange_rates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceExchangeRates"];
+                };
+            };
+            /** @description No ECB reference rate published in the last 7 days is available */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_sso_settings_get_sso_settings_get: {
         parameters: {
             query?: never;
@@ -68931,6 +69192,10 @@ export interface operations {
                 page_size?: number;
                 parent_team_id?: string | null;
                 parent_org_id?: string | null;
+                /** @description Case-insensitive substring of the customer member ID or alias */
+                search?: string;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -69595,6 +69860,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 parent_org_id?: string | null;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -78988,7 +79255,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -79110,7 +79377,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -83453,7 +83720,7 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
-                /** @description Include the caller's current admin MCP route permissions */
+                /** @description Include the caller's current admin MCP route permissions. An admin caller with no user_id gets empty keys and teams */
                 admin_mcp?: boolean;
                 /** @description Admin MCP tool to authorize for this caller */
                 mcp_tool?: string | null;

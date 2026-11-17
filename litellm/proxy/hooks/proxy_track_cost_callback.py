@@ -74,6 +74,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
 from litellm.proxy.utils import (
     FAILURE_ROW_ALREADY_WRITTEN,
     FAILURE_ROW_ALREADY_WRITTEN_KEY,
+    GUARDRAIL_ENDPOINT_FAILURE,
+    GUARDRAIL_ENDPOINT_FAILURE_KEY,
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     BilledFailedAttempt,
@@ -503,6 +505,7 @@ class _ProxyDBLogger(CustomLogger):
             or RouteChecks.runs_inference_checks(request_route)
             or RouteChecks.is_info_route(route=request_route)
             or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
+            or request_fields.get(GUARDRAIL_ENDPOINT_FAILURE_KEY) is GUARDRAIL_ENDPOINT_FAILURE
         )
         if (
             request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN
