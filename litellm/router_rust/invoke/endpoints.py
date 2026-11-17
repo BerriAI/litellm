@@ -955,7 +955,11 @@ def _resolve_deployment_cache_policy(
     if raw_response_cache is None:
         raw_response_cache = litellm_params.get("response_cache")
 
-    cache_cfg: dict[str, object] = {}
+    deployment_fine_grained: Final[dict[str, object]] = {
+        **deployment_cache_params,
+        **deployment_cache_info,
+    }
+
     if raw_response_cache is None:
         info_cache: object = model_info.get("cache")
         params_cache: object = litellm_params.get("cache")
@@ -963,15 +967,14 @@ def _resolve_deployment_cache_policy(
             raw_response_cache = info_cache
         elif isinstance(params_cache, bool):
             raw_response_cache = params_cache
-        else:
-            cache_cfg = as_dict(info_cache) or as_dict(params_cache)
-            if "enabled" in cache_cfg:
-                raw_response_cache = cache_cfg["enabled"]
-            elif cache_cfg.get("no-cache") is True and cache_cfg.get("no-store") is True:
-                raw_response_cache = False
+        elif "enabled" in deployment_fine_grained:
+            raw_response_cache = deployment_fine_grained["enabled"]
+        elif deployment_fine_grained.get("no-cache") is True and deployment_fine_grained.get("no-store") is True:
+            raw_response_cache = False
     elif isinstance(raw_response_cache, Mapping):
-        cache_cfg = as_dict(raw_response_cache)
-        raw_response_cache = cache_cfg.get("enabled")
+        cache_mapping = as_dict(raw_response_cache)
+        deployment_fine_grained.update(cache_mapping)
+        raw_response_cache = cache_mapping.get("enabled")
 
     response_cache: bool | None = _normalize_cache_bool(raw_response_cache)
 
@@ -979,7 +982,7 @@ def _resolve_deployment_cache_policy(
     if raw_cache_ttl is None:
         raw_cache_ttl = litellm_params.get("cache_ttl")
     if raw_cache_ttl is None:
-        raw_cache_ttl = cache_cfg.get("ttl")
+        raw_cache_ttl = deployment_fine_grained.get("ttl")
     cache_ttl: int | float | None = _normalize_cache_ttl(raw_cache_ttl)
 
     if cache_ttl is not None and cache_ttl <= 0:
@@ -998,23 +1001,16 @@ def _resolve_deployment_cache_policy(
         kwargs["caching"] = True
 
     # Enforce deployment-level fine-grained restrictions regardless of whether
-    # response_cache was explicitly supplied.  cache_cfg is only populated when
-    # raw_response_cache was None or a Mapping, so when response_cache is a plain
-    # bool (e.g. True) the cache_cfg branch is skipped — meaning model_info.cache
-    # flags like {"no-store": true} would be ignored.  Instead, always read the
-    # deployment's fine-grained flags from deployment_cache_info / deployment_cache_params
-    # and force them onto kwargs["cache"] so client values cannot override admin policy.
-    deployment_fine_grained: dict[str, object] = {}
-    deployment_fine_grained.update(deployment_cache_params)
-    deployment_fine_grained.update(deployment_cache_info)
-
+    # response_cache was explicitly supplied.
     fine_grained_cache: Final = as_dict(kwargs.get("cache"))
-    if deployment_fine_grained.get("no-cache") is True or cache_cfg.get("no-cache") is True:
+    if deployment_fine_grained.get("no-cache") is True:
         fine_grained_cache["no-cache"] = True
-    if deployment_fine_grained.get("no-store") is True or cache_cfg.get("no-store") is True:
+    if deployment_fine_grained.get("no-store") is True:
         fine_grained_cache["no-store"] = True
+
+    request_has_ttl = "ttl" in existing_request_cache or "s-maxage" in existing_request_cache
     if cache_ttl is not None and cache_ttl > 0:
-        if "ttl" not in fine_grained_cache:
+        if not request_has_ttl:
             fine_grained_cache["ttl"] = cache_ttl
 
     if fine_grained_cache or isinstance(kwargs.get("cache"), dict):
@@ -1100,6 +1096,7 @@ def attempt_call(
                 **data,
                 **named,
                 "voice": data.get("voice") if voice is None else voice,
+                "caching": caching,
                 "client": model_client(core, plan, deployment, kwargs),
                 **kwargs,
             }
@@ -1671,7 +1668,27 @@ class RustEndpoints:
     @staticmethod
     def prepare_host(config: "RouterConfig", host: "PythonHost") -> None:
         """`cache_responses` sets the process cache, unless one is set already (the proxy's)."""
-        if not config.get("cache_responses") or host.global_cache() is not None:
+        if host.global_cache() is not None:
+            return
+
+        has_per_model_cache = False
+        raw_model_list = config.get("model_list")
+        if isinstance(raw_model_list, Sequence):
+            for model_entry in raw_model_list:
+                if isinstance(model_entry, Mapping):
+                    info = as_dict(model_entry.get("model_info"))
+                    params = as_dict(model_entry.get("litellm_params"))
+                    if info.get("response_cache") is True or params.get("response_cache") is True:
+                        has_per_model_cache = True
+                        break
+                    if as_dict(info.get("cache")).get("enabled") is True:
+                        has_per_model_cache = True
+                        break
+                    if as_dict(params.get("cache")).get("enabled") is True:
+                        has_per_model_cache = True
+                        break
+
+        if not (config.get("cache_responses") or has_per_model_cache):
             return
         from litellm.caching.caching import Cache
 

@@ -662,3 +662,75 @@ async def test_prompt_route_without_explicit_policy_does_not_block_target_cache_
         _, call_kwargs = core.drive.call_args[0][:2]
         # caching must NOT be set to False on the routed request so a target with response_cache=True can enable it
         assert "caching" not in call_kwargs or call_kwargs["caching"] is not False
+
+
+def test_model_cache_ttl_overrides_router_default_ttl():
+    """Model endpoint cache_ttl overrides the router-wide default TTL."""
+    deployment = {
+        "model_name": "model-with-ttl",
+        "litellm_params": {"model": "openai/gpt-4o"},
+        "model_info": {"response_cache": True, "cache_ttl": 60},
+    }
+    default_litellm_params = {"cache": {"ttl": 300}}
+    kwargs: dict[str, object] = {}
+    caching = _resolve_deployment_cache_policy(
+        deployment, global_caching=True, kwargs=kwargs, default_litellm_params=default_litellm_params
+    )
+    assert caching is True
+    assert kwargs["cache"]["ttl"] == 60
+
+
+def test_cache_cfg_ttl_zero_disables_caching_even_when_response_cache_true():
+    """Deployment with cache.ttl=0 disables caching even if response_cache is explicitly True."""
+    deployment = {
+        "model_name": "model-with-ttl-in-cache",
+        "litellm_params": {"model": "openai/gpt-4o", "cache": {"ttl": 0}},
+        "model_info": {"response_cache": True},
+    }
+    kwargs: dict[str, object] = {}
+    caching = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs)
+    assert caching is False
+    assert kwargs["cache"]["no-cache"] is True
+    assert kwargs["cache"]["no-store"] is True
+
+
+def test_router_prepares_cache_when_model_has_response_cache_true():
+    """Router prepares host cache when model_list has response_cache=True even if cache_responses is omitted."""
+    model_list = [
+        {
+            "model_name": "gpt-4-cached",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"response_cache": True},
+        }
+    ]
+    router = Router(model_list=model_list)
+    try:
+        assert router._core._host.global_cache() is not None
+    finally:
+        router.retire()
+
+
+def test_attempt_call_speech_attaches_caching():
+    """Speech calls in attempt_call attach the resolved caching boolean to final kwargs."""
+    from litellm.router_rust.invoke.endpoints import PLANS, attempt_call
+
+    core = MagicMock()
+    core.shaping.cache_responses = True
+    core.shaping.default_litellm_params = {}
+    core.router_usage = None
+
+    deployment = {
+        "model_name": "tts-model",
+        "litellm_params": {"model": "openai/tts-1"},
+        "model_info": {"response_cache": False},
+    }
+
+    call = attempt_call(
+        core,
+        PLANS["aspeech"],
+        {"input": "hello"},
+        deployment,
+        group="tts-model",
+        requested="tts-model",
+    )
+    assert call.kwargs["caching"] is False
