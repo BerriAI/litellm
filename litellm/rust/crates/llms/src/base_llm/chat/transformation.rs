@@ -45,11 +45,7 @@ pub trait BaseConfig: Sync {
         _model: &str,
         params: Map<String, Value>,
     ) -> Result<Map<String, Value>, Decline> {
-        map_openai_param_names(
-            self.supported_openai_param_mappings(),
-            self.config_params(),
-            params,
-        )
+        map_openai_param_names(self.supported_openai_param_mappings(), params)
     }
 
     fn get_complete_url(
@@ -116,7 +112,6 @@ pub trait BaseConfig: Sync {
 
 pub fn map_openai_param_names(
     supported: &'static [(&'static str, &'static str)],
-    config: &'static [&'static str],
     params: Map<String, Value>,
 ) -> Result<Map<String, Value>, Decline> {
     let superseded = superseded_openai_names(supported, &params);
@@ -124,7 +119,7 @@ pub fn map_openai_param_names(
         .into_iter()
         .filter(|(name, value)| !value.is_null() && !superseded.contains(&name.as_str()))
         .map(|(name, value)| {
-            provider_param_name(supported, config, name)
+            provider_param_name(supported, name)
                 .map(|provider_name| (provider_name, value))
                 .ok_or(Decline::new(UNRECOGNIZED_PARAM))
         })
@@ -156,10 +151,9 @@ fn superseded_openai_names(
 
 fn provider_param_name(
     supported: &'static [(&'static str, &'static str)],
-    config: &'static [&'static str],
     name: String,
 ) -> Option<String> {
-    if name == STREAM_PARAM || config.contains(&name.as_str()) {
+    if name == STREAM_PARAM {
         return Some(name);
     }
     supported

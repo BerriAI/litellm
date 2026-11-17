@@ -159,11 +159,7 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         params: Map<String, Value>,
     ) -> Result<Map<String, Value>, Decline> {
-        map_openai_param_names(
-            SUPPORTED_PARAMS,
-            self.config_params(),
-            map_openai_stop(params, stop_sequences),
-        )
+        map_openai_param_names(SUPPORTED_PARAMS, map_openai_stop(params, stop_sequences))
     }
 
     fn get_complete_url(

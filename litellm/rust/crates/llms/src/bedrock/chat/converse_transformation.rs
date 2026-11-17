@@ -128,11 +128,7 @@ impl BaseConfig for AmazonConverseConfig {
         {
             return Err(Decline::new("model-specific max_tokens or stop rules"));
         }
-        map_openai_param_names(
-            SUPPORTED_PARAMS,
-            CONFIG_PARAMS,
-            map_openai_stop(params, stop_sequences),
-        )
+        map_openai_param_names(SUPPORTED_PARAMS, map_openai_stop(params, stop_sequences))
     }
 
     fn get_complete_url(
@@ -481,11 +477,7 @@ mod tests {
         json!({"temperature": 0.2, "topP": 0.9})
     )]
     #[case::null_is_unset(CLAUDE, json!({"max_tokens": null}), json!({}))]
-    #[case::stream_and_config_keep_their_names(
-        CLAUDE,
-        json!({"stream": false, "aws_region_name": "eu-west-1"}),
-        json!({"stream": false, "aws_region_name": "eu-west-1"})
-    )]
+    #[case::stream_keeps_its_name(CLAUDE, json!({"stream": false}), json!({"stream": false}))]
     #[case::gpt_oss_has_no_model_rules(
         "openai.gpt-oss-120b-1:0",
         json!({"max_tokens": 16}),
@@ -532,6 +524,8 @@ mod tests {
 
     #[rstest]
     #[case::unknown(json!({"top_k": 40}))]
+    #[case::endpoint_override(json!({"aws_bedrock_runtime_endpoint": "https://example.com"}))]
+    #[case::identity_selector(json!({"aws_role_name": "arn:aws:iam::123456789012:role/other"}))]
     fn declines_an_openai_param_it_has_no_converse_name_for(#[case] openai: Value) {
         assert_eq!(
             map(CLAUDE, openai),

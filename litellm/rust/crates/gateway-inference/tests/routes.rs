@@ -103,6 +103,35 @@ async fn chat_maps_openai_params_for_a_bedrock_deployment() {
 
 #[rstest]
 #[tokio::test]
+async fn chat_refuses_a_caller_supplied_bedrock_endpoint() {
+    let upstream = MockServer::start().await;
+    let caller_host = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&caller_host)
+        .await;
+    let response = support::post(
+        support::app("bedrock/us-east-1/anthropic.claude-v2", &upstream.uri()),
+        "/v1/chat/completions",
+        json!({
+            "model": "public/model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+            "aws_bedrock_runtime_endpoint": caller_host.uri()
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 501);
+}
+
+#[rstest]
+#[tokio::test]
 async fn chat_answers_a_claude_thinking_response_with_its_reasoning() {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
