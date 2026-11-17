@@ -124,6 +124,34 @@ def test_chat_latest_aliases_take_the_gpt5_request_shape(custom_llm_provider: st
     assert params["tool_choice"] == "auto"
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "row_key"),
+    [
+        ("openai", "chat-latest", "chat-latest"),
+        ("azure", "gpt-chat-latest", "azure/gpt-chat-latest"),
+        ("azure_ai", "gpt-chat-latest", "azure_ai/gpt-chat-latest"),
+    ],
+)
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_chat_latest_forwards_only_the_effort_levels_its_row_lists(
+    custom_llm_provider: str, model: str, row_key: str, level: str
+):
+    if level in litellm.model_cost[row_key]["reasoning_effort_levels"]:
+        kept: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, reasoning_effort=level, drop_params=False
+        )
+        assert kept["reasoning_effort"] == level
+        return
+    dropped: Final = litellm.get_optional_params(
+        model=model, custom_llm_provider=custom_llm_provider, reasoning_effort=level, drop_params=True
+    )
+    assert "reasoning_effort" not in dropped
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, reasoning_effort=level, drop_params=False
+        )
+
+
 # GPT-5-Codex specific tests
 def test_gpt5_codex_model_detection(gpt5_config: OpenAIGPT5Config):
     """Test that GPT-5-Codex models are correctly detected as GPT-5 models."""
