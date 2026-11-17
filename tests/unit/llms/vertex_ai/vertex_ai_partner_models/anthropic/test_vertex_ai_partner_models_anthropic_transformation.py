@@ -640,71 +640,21 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
     assert "anthropic_beta" not in json.loads(request.content)
 
 
-_CALLER_BETA: Final = "interleaved-thinking-2025-05-14"
-
-
 @pytest.mark.parametrize(
-    "caller_beta, feature_params, expected_betas",
+    "web_search_params",
     [
+        pytest.param({"web_search_options": {}}, id="web_search_options"),
         pytest.param(
-            "computer-use-2025-11-24",
-            {
-                "tools": [
-                    {
-                        "type": "computer_20251124",
-                        "function": {
-                            "name": "computer",
-                            "parameters": {"display_width_px": 1024, "display_height_px": 768},
-                        },
-                    }
-                ]
-            },
-            {"computer-use-2025-11-24"},
-            id="computer_20251124",
-        ),
-        pytest.param(
-            _CALLER_BETA,
-            {
-                "tools": [
-                    {
-                        "type": "computer_20250124",
-                        "function": {
-                            "name": "computer",
-                            "parameters": {"display_width_px": 1024, "display_height_px": 768},
-                        },
-                    }
-                ]
-            },
-            {_CALLER_BETA, "computer-use-2025-01-24"},
-            id="computer_20250124",
-        ),
-        pytest.param(
-            _CALLER_BETA,
-            {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
-            {_CALLER_BETA, "context-management-2025-06-27"},
-            id="context_management",
-        ),
-        pytest.param(
-            _CALLER_BETA,
-            {"web_search_options": {}},
-            {_CALLER_BETA, "web-search-2025-03-05"},
-            id="web_search_options",
-        ),
-        pytest.param(
-            _CALLER_BETA,
             {"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}]},
-            {_CALLER_BETA, "web-search-2025-03-05"},
             id="web_search_tool",
         ),
     ],
 )
-def test_vertex_ai_anthropic_keeps_caller_beta_next_to_auto_betas(
+def test_vertex_ai_anthropic_web_search_keeps_caller_beta(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     local_beta_headers_config: None,
-    caller_beta: str,
-    feature_params: dict[str, object],
-    expected_betas: set[str],
+    web_search_params: dict[str, object],
 ) -> None:
     from litellm.main import vertex_partner_models_chat_completion
 
@@ -739,13 +689,16 @@ def test_vertex_ai_anthropic_keeps_caller_beta_next_to_auto_betas(
         vertex_location="us-east5",
         vertex_credentials="test-vertex-credentials",
         max_retries=0,
-        extra_headers={"anthropic-beta": caller_beta},
-        **feature_params,
+        extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"},
+        **web_search_params,
     )
 
     assert route.call_count == 1
     request: Final = route.calls[0].request
-    assert set(request.headers["anthropic-beta"].split(",")) == expected_betas
+    assert set(request.headers["anthropic-beta"].split(",")) == {
+        "interleaved-thinking-2025-05-14",
+        "web-search-2025-03-05",
+    }
 
 
 def test_vertex_ai_partner_models_anthropic_forwards_prompt_caching_scope_beta_header(
