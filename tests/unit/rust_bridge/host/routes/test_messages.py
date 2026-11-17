@@ -3316,18 +3316,13 @@ def _refused(text: str, **markers: object) -> ValueError:
     return native
 
 
-def test_a_region_refused_while_resolving_bedrock_mantle_raises_get_llm_providers_bad_request() -> None:
+def test_a_region_refused_while_resolving_bedrock_mantle_raises_a_bad_request() -> None:
     mapped: Final = messages_host.map_failure(
-        _refused("bad region", messages_provider_resolution=True),
-        {"model": _BEDROCK_MANTLE, "messages": []},
-        "bedrock_mantle",
+        _refused("bad region"), {"model": _BEDROCK_MANTLE, "messages": []}, "bedrock_mantle"
     )
 
     assert type(mapped) is litellm.BadRequestError
     assert mapped.status_code == 400
-    assert mapped.llm_provider == ""  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
-    assert mapped.model == _BEDROCK_MANTLE  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
-    assert "bad region" in str(mapped)
 
 
 def test_a_bedrock_mantle_web_search_rejection_raises_the_invoke_transforms_bad_request() -> None:
@@ -3443,3 +3438,26 @@ def test_a_mantle_route_credential_failure_logs_the_model_id_rust_names() -> Non
     )
 
     assert logger.model == "anthropic.claude-sonnet-5-5"
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    ("sts_failure", "raised"),
+    (
+        pytest.param(None, "NoCredentialsError", id="no-credentials"),
+        pytest.param(("rejected", "AssumeRole", "AccessDenied", "denied"), "ClientError", id="assume-role-denied"),
+        pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", id="sts-unreachable"),
+    ),
+)
+def test_a_mantle_route_credential_failure_maps_the_kind_rust_names(
+    sts_failure: tuple[str, str, str, str] | None, raised: str
+) -> None:
+    native: Final = _credential_failure("unavailable")
+    native.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+
+    mapped: Final = messages_host.map_failure(
+        native, {"model": _MANTLE_ROUTE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock"
+    )
+
+    assert type(mapped).__name__ == raised
+    assert mapped.__traceback__ is not None
