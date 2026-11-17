@@ -6,6 +6,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use parking_lot::Mutex;
+
 use bytes::Bytes;
 use litellm_host::protocol::Reply;
 use litellm_host_python::{
@@ -230,6 +232,43 @@ fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
                 .extract()
         })
         .map(Vec::as_slice)
+}
+
+/// Installs the beta map once Python has loaded it. Loading starts only when a filter has a beta
+/// to filter, off the calling thread, so a call that sends no beta never fetches the remote map.
+fn install_loaded_beta_headers_config(py: Python<'_>) -> PyResult<()> {
+    static INSTALLED: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
+    litellm_llms::anthropic::beta_headers::on_beta_headers_config_needed(
+        request_beta_headers_config,
+    );
+    let loaded = py
+        .import(ROUTE_HOST_MODULE)?
+        .getattr("loaded_beta_headers_config")?
+        .call0()?;
+    if loaded.is_none() {
+        return Ok(());
+    }
+    if INSTALLED
+        .lock()
+        .as_ref()
+        .is_some_and(|source| source.bind(py).is(&loaded))
+    {
+        return Ok(());
+    }
+    litellm_llms::anthropic::beta_headers::install_beta_headers_config(from_py(&loaded)?);
+    *INSTALLED.lock() = Some(loaded.unbind());
+    Ok(())
+}
+
+fn request_beta_headers_config() {
+    Python::attach(|py| {
+        if let Err(error) = py
+            .import(ROUTE_HOST_MODULE)
+            .and_then(|module| module.call_method0("load_beta_headers_config_in_background"))
+        {
+            error.write_unraisable(py, None);
+        }
+    });
 }
 
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -626,6 +665,7 @@ impl MessagesPythonHost {
             .getattr("filters_beta_headers")?
             .call1((&model, custom_llm_provider.as_deref(), api_base.as_deref()))?
             .extract()?;
+        install_loaded_beta_headers_config(py)?;
         let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),
             None => self.merged_headers(py, arguments, filters_beta)?,

@@ -24,6 +24,7 @@ serde_json.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tower = { version = "0.5", default-features = false, features = ["timeout"] }
 tracing.workspace = true
 url.workspace = true
 veil.workspace = true

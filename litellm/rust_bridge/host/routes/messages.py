@@ -24,6 +24,7 @@ from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
@@ -171,6 +172,7 @@ class MessagesSettings:
     ascii_request_headers: bool = True
     detached_drain_timeout: float | None = None
     detached_drain_limit: int | None = None
+    connect_retry: bool = False
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -1246,6 +1248,14 @@ def filters_beta_headers(model: str, custom_llm_provider: str | None, api_base: 
     return config is not None and config.should_filter_anthropic_beta_headers()
 
 
+def loaded_beta_headers_config() -> Mapping[str, object] | None:
+    return anthropic_beta_headers_manager.loaded_beta_headers_config()
+
+
+def load_beta_headers_config_in_background() -> None:
+    anthropic_beta_headers_manager.load_beta_headers_config_in_background()
+
+
 def record_guardrail(public: Mapping[str, object], request: Mapping[str, object]) -> None:
     logger: Final = _logger(request)
     if logger is not None:
@@ -1313,6 +1323,7 @@ def settings(
         joined_reads=aiohttp,
         detached_drain_timeout=ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS if asynchronous else None,
         detached_drain_limit=ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS if asynchronous else None,
+        connect_retry=asynchronous,
     )
     if request is None:
         return asdict(configured)
@@ -1773,12 +1784,26 @@ def _readable_port(parts: SplitResult) -> bool:
 
 def _sent_api_base(request: Mapping[str, object]) -> tuple[object, _SecretsRead]:
     """The base Python's URL builder reads, and the secrets read to find it: azure_ai falls back to
-    `AZURE_API_BASE`, read once, which the native route then reuses."""
+    `AZURE_API_BASE` and anthropic to `ANTHROPIC_API_BASE` then `ANTHROPIC_BASE_URL`, each read
+    once, which the native route then reuses."""
     api_base: Final = request.get("api_base")
-    if api_base or "model" not in request or _resolved_provider(request) != "azure_ai":
+    if api_base or "model" not in request:
+        return api_base, []
+    provider: Final = _resolved_provider(request)
+    if provider == "anthropic":
+        return _anthropic_environment_base()
+    if provider != "azure_ai":
         return api_base, []
     environment: Final = get_secret_str("AZURE_API_BASE")
     return environment, [("AZURE_API_BASE", environment)]
+
+
+def _anthropic_environment_base() -> tuple[str | None, _SecretsRead]:
+    api_base: Final = get_secret_str("ANTHROPIC_API_BASE")
+    if api_base:
+        return api_base, [("ANTHROPIC_API_BASE", api_base)]
+    base_url: Final = get_secret_str("ANTHROPIC_BASE_URL")
+    return base_url, [("ANTHROPIC_API_BASE", api_base), ("ANTHROPIC_BASE_URL", base_url)]
 
 
 def transport_handler(request: Mapping[str, object]) -> tuple[AsyncHTTPHandler | None, _SecretsRead]:
@@ -1892,7 +1917,7 @@ def map_transport_failure(error: Exception, request: Mapping[str, object], reque
     return error
 
 
-_AGENTIC_UNSENT_PARAMS: Final = frozenset({"model", "messages", "max_tokens"})
+_AGENTIC_UNSENT_PARAMS: Final = frozenset({"model", "messages", "max_tokens", "system"})
 _HANDLER_POPPED: Final = frozenset(
     {"is_async", "_litellm_messages_presanitized", "_skip_mcp_handler", "cache_control_injection_points"}
 )
@@ -1938,7 +1963,11 @@ class _AgenticCall:
 def _agentic_params(
     sent: Mapping[str, object], requested: Mapping[str, object], request: Mapping[str, object]
 ) -> dict[str, object]:  # mutable-ok: the handler's agentic hooks take a params dict
-    params: Final = {name: value for name, value in sent.items() if name not in _AGENTIC_UNSENT_PARAMS}
+    requested_system: Final = requested.get("system")
+    params: Final = {
+        **{name: value for name, value in sent.items() if name not in _AGENTIC_UNSENT_PARAMS},
+        **({"system": requested_system} if "system" in sent and requested_system is not None else {}),
+    }
     if "tools" not in params:
         return params
     caller_tools: Final = request.get("tools")

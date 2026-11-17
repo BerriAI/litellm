@@ -5602,6 +5602,7 @@ def _map_params_with_provider_config(
     model_info: Mapping[str, object] | None,
     reasoning_drop_logger: WarningLogger,
     base_model: str | None,
+    allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
@@ -5612,6 +5613,7 @@ def _map_params_with_provider_config(
             declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             reasoning_drop_logger=reasoning_drop_logger,
             base_model=base_model,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     if isinstance(provider_config, (litellm.ChatGPTConfig, litellm.GithubCopilotConfig)):
         return provider_config.map_openai_params(
@@ -6289,6 +6291,7 @@ def get_optional_params(
             model_info=model_info,
             reasoning_drop_logger=_litellm_reasoning_drop_logger,
             base_model=base_model,
+            allowed_openai_params=allowed_openai_params,
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
@@ -7339,6 +7342,8 @@ def get_model_info_helper(
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_prompt_cache_breakpoint=None,
+                supports_openai_prompt_cache_breakpoint=None,
+                supports_bedrock_converse_cache_point=None,
                 supports_thinking_cache_preservation=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
@@ -7671,6 +7676,10 @@ def get_model_info_helper(
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
+                supports_openai_prompt_cache_breakpoint=_model_info.get(
+                    "supports_openai_prompt_cache_breakpoint", None
+                ),
+                supports_bedrock_converse_cache_point=_model_info.get("supports_bedrock_converse_cache_point", None),
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),

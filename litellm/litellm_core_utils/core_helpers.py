@@ -6,6 +6,7 @@ import math
 import re
 import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -189,6 +190,23 @@ def attribute_or_none(source: object, name: str) -> object:
 
 
 _Shape: Final = TypeVar("_Shape")
+
+
+@dataclass(frozen=True, slots=True)
+class FinishEvidence:
+    """Finish reasons a stream received from the provider. ``unindexed`` is a received reason whose
+    choice the stream could not tell, so it is only evidence for a single-choice response."""
+
+    by_choice: Mapping[int, str]
+    unindexed: str | None
+
+
+NO_FINISH_EVIDENCE: Final = FinishEvidence(by_choice=MappingProxyType({}), unindexed=None)
+
+
+def finish_evidence_of(stream: object) -> FinishEvidence:
+    evidence: Final[object] = getattr(stream, "finish_evidence", None)
+    return evidence if isinstance(evidence, FinishEvidence) else NO_FINISH_EVIDENCE
 
 
 def has_attributes(

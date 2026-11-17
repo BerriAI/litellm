@@ -235,6 +235,24 @@ def test_latest_release_info_read_open_to_non_admin_roles(role):  # test-quality
     )
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_reference_exchange_rates_read_open_to_non_admin_roles(role: str) -> None:  # test-quality-ok: allowed path returns None, not raising is the observable
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role),
+        _user_role=role,
+        route="/get/reference_exchange_rates",
+        request=MagicMock(spec=Request),
+        valid_token=UserAPIKeyAuth(user_id="test_user", user_role=role),
+        request_data={},
+    )
+
+
 def test_user_banner_update_rejected_for_non_admin():
     """Publishing the banner stays admin-only at the route layer."""
     user_obj = LiteLLM_UserTable(

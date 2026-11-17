@@ -27,6 +27,7 @@ from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -637,6 +638,10 @@ async def get_authorized_credentials_for_model(
         model_id=model_id,
         operation_context=operation_context,
     )
+
+
+def batch_row_model_for_deployment(deployment_model: str, custom_llm_provider: str) -> str:
+    return get_llm_provider(model=deployment_model, custom_llm_provider=custom_llm_provider)[0]
 
 
 def deployment_drop_params(

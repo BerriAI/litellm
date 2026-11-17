@@ -478,6 +478,17 @@ def match_known_server_prefix(name: str, known_prefixes: Iterable[str]) -> tuple
     return None
 
 
+_STRING_KEYED_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def string_field(value: object, key: str) -> str | None:
+    try:
+        field: Final = _STRING_KEYED_OBJECT.validate_python(value).get(key)
+    except ValueError:
+        return None
+    return field if isinstance(field, str) else None
+
+
 def strip_known_server_prefix(name: str, server: _McpServerLike | None) -> str:
     """Strip ``server``'s registered prefix from a prefixed tool/resource name.
 

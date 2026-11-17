@@ -378,6 +378,19 @@ def _reserved_window(
     return next((w for w in response.get("reservation_windows", frozenset()) if w[0] == counter), None)
 
 
+def _without_counter(descriptor: RateLimitDescriptor, counter: RateLimitStatus) -> RateLimitDescriptor:
+    if (descriptor["key"], descriptor["value"]) != (counter["descriptor_key"], counter.get("descriptor_value")):
+        return descriptor
+    limits: Final = descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
+    return RateLimitDescriptor(
+        key=descriptor["key"],
+        value=descriptor["value"],
+        rate_limit={**limits, "tokens_per_unit": None}
+        if counter["rate_limit_type"] == "tokens"
+        else {**limits, "requests_per_unit": None},
+    )
+
+
 def _get_priority_settings() -> "PriorityReservationSettings":
     """
     Get the priority reservation settings, guaranteed to be non-None.
@@ -1393,17 +1406,35 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if tightest_held is not None:
             self._cap_admitted_output(tightest_held[1], tightest_held[2], data, call_type)
         if priority_descriptors and not should_enforce_priority:
-            priority_tracking_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=list(priority_descriptors),
-                increments=[per_request_increment for _ in priority_descriptors],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
             get_or_create_request_stash().rate_limit_response = RateLimitResponse(
                 overall_code=atomic_response["overall_code"],
-                statuses=atomic_response["statuses"] + priority_tracking_response["statuses"],
+                statuses=[
+                    *atomic_response["statuses"],
+                    *await self._track_priority_usage(priority_descriptors, user_api_key_dict),
+                ],
             )
         else:
             get_or_create_request_stash().rate_limit_response = atomic_response
+
+    async def _track_priority_usage(
+        self, descriptors: Sequence[RateLimitDescriptor], user_api_key_dict: UserAPIKeyAuth
+    ) -> tuple[RateLimitStatus, ...]:
+        """Count one request against each tracked priority counter. The atomic call writes nothing once any counter
+        is full, so a full counter is reported as it stands and the rest are counted without it."""
+        tracked: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
+            descriptors=list(descriptors),
+            increments=[{"requests": 1, "tokens": 0} for _ in descriptors],
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        full: Final = next((status for status in tracked["statuses"] if status["code"] == "OVER_LIMIT"), None)
+        if full is None:
+            return tuple(tracked["statuses"])
+        return (
+            full,
+            *await self._track_priority_usage(
+                tuple(_without_counter(descriptor, full) for descriptor in descriptors), user_api_key_dict
+            ),
+        )
 
     def _cap_admitted_output(
         self,
