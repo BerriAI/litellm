@@ -175,3 +175,18 @@ def test_vispark_endpoint_matrix_matches_between_root_and_backup():
 
     assert backup_entry == root_entry
     assert root_entry["endpoints"]["chat_completions"] is True
+
+
+@pytest.mark.parametrize("text_completion", (False, True))
+def test_vispark_missing_key_rejects_before_openai_fallback(monkeypatch: pytest.MonkeyPatch, text_completion: bool):
+    monkeypatch.delenv("VISPARK_LAB_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__regex=r"https://api\.lab\.vispark\.in/v1/.*").respond(200, json=_CHAT_COMPLETION)
+        if text_completion:
+            with pytest.raises(litellm.AuthenticationError, match="VISPARK_LAB_API_KEY"):
+                litellm.text_completion(model="vispark/vision-small", prompt="Hello")
+        else:
+            with pytest.raises(litellm.AuthenticationError, match="VISPARK_LAB_API_KEY"):
+                litellm.completion(model="vispark/vision-medium", messages=[{"role": "user", "content": "Hello"}])
+    assert route.call_count == 0
