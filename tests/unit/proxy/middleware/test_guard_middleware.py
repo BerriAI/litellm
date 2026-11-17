@@ -20,6 +20,7 @@ from starlette.testclient import TestClient
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.guard_middleware import (
     GuardMiddleware,
+    _ip_lists_permit,
     _networks,
     _resolve_client,
     guard_enabled,
@@ -632,3 +633,183 @@ async def test_resolve_client_matches_guard_core(peer, lines, depth):
     scope: Final = {"type": "http", "path": "/x", "headers": raw, "client": (peer, 50000)}
     resolved: Final = _resolve_client(scope, _networks(trusted), depth)
     assert str(resolved) == expected
+
+
+def _probe_scope(path, peer="203.0.113.7", root_path=""):
+    return {"type": "http", "path": path, "root_path": root_path, "client": (peer, 50000), "headers": []}
+
+
+async def _run_probe(scope):
+    """Returns (reached_app, reached_guard)."""
+    reached: Final = []
+    guarded: Final = []
+
+    async def app(scope, receive, send):
+        reached.append(True)
+
+    async def guard_asgi(scope, receive, send):
+        guarded.append(True)
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def send(message):
+        return None
+
+    middleware: Final = GuardMiddleware(app)
+    middleware._guard_asgi = guard_asgi
+    await middleware(scope, receive, send)
+    return bool(reached), bool(guarded)
+
+
+_LIST_PARITY_CASES: Final = [
+    pytest.param("203.0.113.7", "", "203.0.113.7", id="blocklist-only-hit"),
+    pytest.param("203.0.113.7", "", "198.51.100.9", id="blocklist-only-miss"),
+    pytest.param("", "203.0.113.7", "203.0.113.7", id="allowlist-only-hit"),
+    pytest.param("", "203.0.113.7", "198.51.100.9", id="allowlist-only-miss"),
+    pytest.param("203.0.113.7", "203.0.113.0/24", "203.0.113.7", id="both-client-in-both"),
+    pytest.param("198.51.100.9", "203.0.113.0/24", "203.0.113.7", id="both-client-only-in-allowlist"),
+    pytest.param("203.0.113.7", "198.51.100.0/24", "203.0.113.7", id="both-client-only-in-blocklist"),
+    pytest.param("198.51.100.9", "192.0.2.0/24", "203.0.113.7", id="both-client-in-neither"),
+    pytest.param("::ffff:203.0.113.7", "", "203.0.113.7", id="mapped-blocklist-entry"),
+    pytest.param("", "::ffff:203.0.113.7", "203.0.113.7", id="mapped-allowlist-entry"),
+    pytest.param("::ffff:203.0.113.7", "", "::ffff:203.0.113.7", id="mapped-blocklist-entry-mapped-peer"),
+    pytest.param("", "::ffff:203.0.113.7", "::ffff:203.0.113.7", id="mapped-allowlist-entry-mapped-peer"),
+    pytest.param("203.0.113.0/24", "", "::ffff:203.0.113.7", id="cidr-blocklist-mapped-peer"),
+    pytest.param("", "203.0.113.0/24", "203.0.113.7", id="cidr-allowlist"),
+    pytest.param("2001:db8::/32", "", "2001:db8::1", id="ipv6-cidr-blocklist"),
+    pytest.param("2001:db8::1", "", "2001:db8::1", id="ipv6-entry-blocklist"),
+    pytest.param("", "2001:db8::1", "2001:db8::2", id="ipv6-entry-allowlist-miss"),
+    pytest.param("::ffff:0:0/96", "", "203.0.113.7", id="mapped-range-blocklist-ipv4-peer"),
+    pytest.param("", "::ffff:0:0/96", "203.0.113.7", id="mapped-range-allowlist-ipv4-peer"),
+    pytest.param("::ffff:0:0/96", "", "::ffff:203.0.113.7", id="mapped-range-blocklist-mapped-peer"),
+]
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("blocked", "allowed", "peer"), _LIST_PARITY_CASES)
+async def test_ip_list_decision_matches_guard_core(monkeypatch, blocked, allowed, peer):
+    """The wrapper admits and refuses exactly the clients guard-core's own
+    IP-list check does for the same lists."""
+    from types import SimpleNamespace
+
+    from guard_core._utils.access_control import check_ip_access
+    from guard_core._utils.ip_extraction import _canonicalize_ip
+
+    config: Final = SimpleNamespace(
+        whitelist=[allowed] if allowed else None,
+        blacklist=[blocked] if blocked else [],
+        blocked_countries=frozenset(),
+        whitelist_countries=frozenset(),
+        block_cloud_providers=None,
+    )
+    expected: Final = (await check_ip_access(_canonicalize_ip(peer), config)).allowed
+    monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", blocked)
+    monkeypatch.setenv("LITELLM_GUARD_ALLOWED_IPS", allowed)
+    assert _ip_lists_permit(_probe_scope("/x", peer=peer)) is expected
+
+
+_LIST_ENTRY_CASES: Final = [
+    pytest.param("203.0.113.7", id="ipv4"),
+    pytest.param("2001:db8::1", id="ipv6"),
+    pytest.param("::ffff:203.0.113.7", id="ipv4-mapped"),
+    pytest.param("203.0.113.0/24", id="ipv4-cidr"),
+    pytest.param("203.0.113.7/24", id="ipv4-cidr-host-bits"),
+    pytest.param("2001:db8::/32", id="ipv6-cidr"),
+    pytest.param("10.0.0.0/33", id="cidr-bad-prefix"),
+    pytest.param("[2001:db8::1]", id="bracketed"),
+    pytest.param("fe80::1%eth0", id="zone-id"),
+    pytest.param("unix", id="unix"),
+    pytest.param("unix:/var/run/proxy.sock", id="unix-socket-path"),
+    pytest.param("203.0.113.7:80", id="with-port"),
+    pytest.param("203.0.113.*", id="wildcard"),
+    pytest.param("garbage", id="garbage"),
+    pytest.param("not-a-cidr", id="not-a-cidr"),
+    pytest.param("198.51.100.9, garbage", id="one-bad-among-good"),
+    pytest.param(" , ", id="empty-after-strip"),
+]
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+@pytest.mark.parametrize(
+    ("variable", "field"),
+    [
+        pytest.param("LITELLM_GUARD_BLOCKED_IPS", "blacklist", id="blocked"),
+        pytest.param("LITELLM_GUARD_ALLOWED_IPS", "whitelist", id="allowed"),
+        pytest.param("LITELLM_GUARD_TRUSTED_PROXIES", "trusted_proxies", id="trusted"),
+    ],
+)
+@pytest.mark.parametrize("value", _LIST_ENTRY_CASES)
+def test_ip_list_validation_matches_guard_core(monkeypatch, variable, field, value):
+    """A list entry the wrapper refuses is one SecurityConfig refuses, and the
+    reverse, for each of the three lists."""
+    from guard import SecurityConfig
+
+    from litellm.proxy.middleware.guard_middleware import _csv
+
+    try:
+        SecurityConfig(**{field: _csv(value)})
+        guard_refuses = False
+    except ValueError:
+        guard_refuses = True
+    monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", "192.0.2.1")
+    monkeypatch.setenv(variable, value)
+    try:
+        _ip_lists_permit(_probe_scope("/x"))
+        wrapper_refuses = False
+    except ValueError:
+        wrapper_refuses = True
+    assert wrapper_refuses is guard_refuses
+
+
+@pytest.mark.parametrize("depth", [0, -1, -2])
+def test_resolve_client_refuses_depth_below_one(depth):
+    with pytest.raises(ValueError, match="trusted_proxy_depth must be at least 1"):
+        _resolve_client(_probe_scope("/x", peer="10.1.1.1"), _networks(("10.0.0.0/8",)), depth)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", ["0", "-1", "-2"])
+async def test_probe_with_depth_below_one_is_refused(monkeypatch, depth):
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_ALLOWED_IPS", "198.51.100.0/24")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "10.0.0.0/8")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", depth)
+    scope: Final = _probe_scope("/health/readiness", peer="10.1.1.1")
+    scope["headers"] = [(b"x-forwarded-for", b"198.51.100.9, 203.0.113.7")]
+    with pytest.raises(ValueError, match="trusted_proxy_depth must be at least 1"):
+        await _run_probe(scope)
+
+
+@pytest.mark.asyncio
+async def test_websocket_with_depth_below_one_does_not_reach_the_app(monkeypatch):
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_ALLOWED_IPS", "198.51.100.0/24")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXIES", "10.0.0.0/8")
+    monkeypatch.setenv("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", "0")
+    with pytest.raises(ValueError, match="trusted_proxy_depth must be at least 1"):
+        await _run_websocket(_ws_scope("10.1.1.1", "198.51.100.9, 203.0.113.7"))
+
+
+@pytest.mark.asyncio
+async def test_probe_with_only_invalid_allowlist_entries_does_not_reach_the_app(monkeypatch):
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_ALLOWED_IPS", "not-a-cidr")
+    with pytest.raises(ValueError, match=r"LITELLM_GUARD_ALLOWED_IPS.*not-a-cidr"):
+        await _run_probe(_probe_scope("/health/readiness"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "root_path", "bypasses_guard"),
+    [
+        pytest.param("/litellm/health/readiness", "/litellm", True, id="path-includes-root-path"),
+        pytest.param("/health/readiness", "/litellm", True, id="path-without-root-path"),
+        pytest.param("/litellm/health/readiness/details", "/litellm", False, id="details-goes-to-guard"),
+    ],
+)
+async def test_probe_bypass_follows_the_route_path_under_a_root_path(monkeypatch, path, root_path, bypasses_guard):
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    reached, guarded = await _run_probe(_probe_scope(path, root_path=root_path))
+    assert (reached, guarded) == (bypasses_guard, not bypasses_guard)

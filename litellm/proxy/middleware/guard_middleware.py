@@ -44,13 +44,16 @@ Design constraints honored here:
   (IPs or CIDRs) on the handshake, resolving the client the way guard does
   (socket peer; ``X-Forwarded-For`` only from ``LITELLM_GUARD_TRUSTED_PROXIES``,
   at ``LITELLM_GUARD_TRUSTED_PROXY_DEPTH``) and closing with 1008 before
-  accept on a miss. WebSocket scopes still get no rate limiting, no auto-ban
-  and no payload inspection, and those routes still go through key auth.
+  accept on a miss. The lists follow guard's rules (the allowlist alone when
+  set, IPv4-mapped entries read as IPv4), and an invalid entry or a depth
+  below 1 raises ``ValueError`` instead of being ignored. WebSocket scopes
+  still get no rate limiting, no auto-ban and no payload inspection, and
+  those routes still go through key auth.
 - Only the unauthenticated k8s probes (``/health/liveliness``,
   ``/health/liveness``, ``/health/readiness``) bypass guard by default, matched
-  by exact path, with the IP lists still enforced as guard does on its own
-  exclusions. ``LITELLM_GUARD_EXCLUDED_PATHS`` replaces that default and is
-  handed to guard, which matches each entry as a subtree.
+  by exact path under the root path, with the IP lists still enforced as guard
+  does on its own exclusions. ``LITELLM_GUARD_EXCLUDED_PATHS`` replaces that
+  default and is handed to guard, which matches each entry as a subtree.
 - Rejections guard itself builds use guard's response shapes; the one
   rejection this wrapper builds (guard unavailable) uses litellm's
   OpenAI-error JSON shape (the ``AdmissionControlMiddleware`` model), so
@@ -67,6 +70,7 @@ from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter
 from starlette.responses import JSONResponse
+from starlette.routing import get_route_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -159,6 +163,30 @@ def _networks(entries: Sequence[str]) -> tuple[IPNetwork, ...]:
     return tuple(network for network in map(_parse_network, entries) if network is not None)
 
 
+def _validated_entries(variable: str, *, allow_unix: bool = False) -> tuple[str, ...]:
+    """guard-core's ``_validate_ip_or_cidr_list``: an entry with a "/" is a
+    network, any other an address, and anything else is refused (``unix``
+    stays valid for the trusted proxies)."""
+    entries: Final = _csv(_env_str(variable))
+    for entry in entries:
+        if allow_unix and entry == "unix":
+            continue
+        try:
+            ip_network(entry, strict=False) if "/" in entry else ip_address(entry)
+        except ValueError:
+            raise ValueError(f"{variable}: invalid IP or CIDR entry {entry!r}") from None
+    return entries
+
+
+def _listed(client: IPAddress, entries: Sequence[str]) -> bool:
+    """guard-core's ``_ip_in_list``: a "/" entry matches by network, any other
+    entry by canonical address (``::ffff:1.2.3.4`` is ``1.2.3.4``)."""
+    return any(
+        client in ip_network(entry, strict=False) if "/" in entry else client == _canonical(ip_address(entry))
+        for entry in entries
+    )
+
+
 def _in_any(address: IPAddress, networks: Sequence[IPNetwork]) -> bool:
     return any(address in network for network in networks)
 
@@ -189,6 +217,8 @@ def _resolve_client(scope: Scope, trusted: Sequence[IPNetwork], depth: int) -> I
     peer, unless the peer is a trusted proxy, in which case the
     ``X-Forwarded-For`` entry ``depth`` from the right (the rightmost
     untrusted entry when proxies to its right are not all listed)."""
+    if depth < 1:
+        raise ValueError("trusted_proxy_depth must be at least 1")
     peer_text, forwarded_for = _peer_and_forwarded_for(scope)
     peer_address: Final = _parse_ip(peer_text) if peer_text is not None else None
     if peer_address is None:
@@ -211,18 +241,19 @@ def _resolve_client(scope: Scope, trusted: Sequence[IPNetwork], depth: int) -> I
 def _ip_lists_permit(scope: Scope) -> bool:
     """Enforce LITELLM_GUARD_BLOCKED_IPS and LITELLM_GUARD_ALLOWED_IPS (IPs or
     CIDRs) outside guard's pipeline: on WebSocket handshakes (guard only
-    screens HTTP scopes) and on the exact-path probes. Rate limits, bans and
-    payload inspection do not apply to either."""
-    blocked: Final = _networks(_csv(_env_str("LITELLM_GUARD_BLOCKED_IPS")))
-    allowed: Final = _networks(_csv(_env_str("LITELLM_GUARD_ALLOWED_IPS")))
+    screens HTTP scopes) and on the exact-path probes. The rules are guard's:
+    the allowlist alone when it is set, the blocklist otherwise, and an invalid
+    entry or a proxy depth below 1 is refused with a ``ValueError`` as guard's
+    config refuses it. Rate limits, bans and payload inspection do not apply
+    to either."""
+    blocked: Final = _validated_entries("LITELLM_GUARD_BLOCKED_IPS")
+    allowed: Final = _validated_entries("LITELLM_GUARD_ALLOWED_IPS")
+    trusted: Final = _validated_entries("LITELLM_GUARD_TRUSTED_PROXIES", allow_unix=True)
     if not blocked and not allowed:
         return True
-    trusted: Final = _networks(_csv(_env_str("LITELLM_GUARD_TRUSTED_PROXIES")))
-    client: Final = _resolve_client(scope, trusted, _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1))
-    permitted: Final = not (
-        (client is not None and _in_any(client, blocked))
-        or (allowed and (client is None or not _in_any(client, allowed)))
-    )
+    client: Final = _resolve_client(scope, _networks(trusted), _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1))
+    listed: Final = client is not None and _listed(client, allowed or blocked)
+    permitted: Final = listed if allowed else not listed
     if not permitted and _env_bool("LITELLM_GUARD_PASSIVE_MODE"):
         verbose_proxy_logger.warning(
             "guard passive mode: client %s would be rejected by the guard IP lists (WebSocket handshake or health probe)",
@@ -233,9 +264,10 @@ def _ip_lists_permit(scope: Scope) -> bool:
 
 
 def _is_default_probe(scope: Scope) -> bool:
-    """Exact probe path, and only while the operator has not replaced the
-    exclusions with ``LITELLM_GUARD_EXCLUDED_PATHS``."""
-    return scope["path"] in DEFAULT_EXCLUDED_PATHS and not _csv(_env_str(GUARD_EXCLUDED_PATHS_ENV))
+    """Exact probe path under the root path (the route path guard matches on),
+    and only while the operator has not replaced the exclusions with
+    ``LITELLM_GUARD_EXCLUDED_PATHS``."""
+    return get_route_path(scope) in DEFAULT_EXCLUDED_PATHS and not _csv(_env_str(GUARD_EXCLUDED_PATHS_ENV))
 
 
 def guard_enabled() -> bool:
