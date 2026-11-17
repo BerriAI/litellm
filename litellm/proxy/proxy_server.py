@@ -436,6 +436,7 @@ from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandl
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.llms.xai.common_utils import xai_served_model
 from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
@@ -16162,11 +16163,15 @@ def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
     )
 
 
-def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
+def _token_count_settings_model(
+    deployment: _TokenCountDeployment, request_model: str, xai_model: str | None
+) -> tuple[str, str | None]:
     params: Final = deployment.get("litellm_params", {})
     base_model: Final = _deployment_base_model(deployment)
     if base_model is not None:
         return base_model, None
+    if xai_model is not None:
+        return xai_model, None
     model: Final = _non_empty_str(params.get("model"))
     if model is None:
         return request_model, None
@@ -16379,6 +16384,11 @@ def _deployment_served_model(
     model, provider = resolved
     served_by: Final = "xai" if _is_xai_api_base(_deployment_api_base(deployment, responses_request)) else provider
     return f"{served_by}/{model}"
+
+
+def _xai_count_model(served_model: str | None) -> str | None:
+    served_by, _, model = (served_model or "").partition("/")
+    return f"xai/{xai_served_model(model)}" if served_by == "xai" else None
 
 
 def _is_xai_api_base(api_base: str | None) -> bool:
@@ -16606,7 +16616,11 @@ async def _count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
-    cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
+    served_model: Final = _deployment_served_model(deployment_view, request.model, responses_request)
+    xai_model: Final = _xai_count_model(served_model)
+    cost_map_row: Final = await asyncify(cost_map_entry)(
+        *_token_count_settings_model(deployment_view, request.model, xai_model)
+    )
     settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
         default=cost_map_row,
@@ -16816,7 +16830,7 @@ async def _count_request_tokens(
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
     openai_model: Final = deployment_openai_model(deployment_view)
-    template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
+    template_model: Final = openai_model or _deployment_base_model(deployment_view) or xai_model or model_to_use
     tool_section: Final = chat_template_tool_section(template_model)
     count_policy: Final = _count_drop_policy(deployment_view, {**request_litellm_params, **(responses_request or {})})
     counted_tool_choice: Final = (
@@ -16824,9 +16838,7 @@ async def _count_request_tokens(
         if counted_messages is not None
         and isinstance(request.tool_choice, (str, Mapping))
         and "tool_choice" not in count_policy.additional_drop_params
-        and not _xai_tool_choice_off_xai(
-            template_model, tool_section, _deployment_served_model(deployment_view, request.model, responses_request)
-        )
+        and not _xai_tool_choice_off_xai(template_model, tool_section, served_model)
         else None
     )
     counted_tools: Final = (

@@ -26,6 +26,33 @@ def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:
     return cost_in_usd_ticks / USD_TICKS_PER_DOLLAR
 
 
+_SERVED_AS_GROK_4_3: Final = frozenset(
+    {
+        "grok-4-1-fast-reasoning",
+        "grok-4-1-fast-reasoning-latest",
+        "grok-4-1-fast-non-reasoning",
+        "grok-4-1-fast",
+        "grok-4-fast-reasoning",
+        "grok-4-fast-non-reasoning",
+        "grok-4-fast",
+        "grok-4-0709",
+        "grok-4",
+        "grok-3",
+        "grok-3-latest",
+        "grok-3-fast",
+        "grok-3-mini",
+        "grok-3-mini-fast",
+        "grok-4.3-latest",
+    }
+)
+
+
+def xai_served_model(model: str) -> str:
+    """The model xAI answers a request for `model` with, grok-4.3 for its alias and the names it retired:
+    https://docs.x.ai/developers/migration/may-15-retirement"""
+    return "grok-4.3" if model in _SERVED_AS_GROK_4_3 else model
+
+
 class XAIModelInfo(BaseLLMModelInfo):
     def get_provider_info(
         self,

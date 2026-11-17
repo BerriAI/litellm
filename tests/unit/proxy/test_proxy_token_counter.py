@@ -3172,6 +3172,36 @@ async def test_a_custom_deployment_name_counts_like_the_base_model_it_names(
     )
 
 
+# xAI answers these retired names and its grok-4.3-latest alias with grok-4.3
+# (https://docs.x.ai/developers/migration/may-15-retirement), and POST /v1/chat/completions billed 205 prompt tokens
+# for grok-4-1-fast-reasoning, grok-4.3-latest and grok-4.3 alike on 2026-11-17
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "other_name",
+    [
+        {"model": "xai/grok-4-1-fast-reasoning"},
+        {"model": "xai/grok-4-fast-non-reasoning"},
+        {"model": "xai/grok-3"},
+        {"model": "xai/grok-4.3-latest"},
+        {"model": "openai/grok-4-0709", "api_base": "https://api.x.ai/v1"},
+    ],
+    ids=["grok-4-1", "grok-4-fast", "grok-3", "grok-4.3-latest", "openai-compatible"],
+)
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS])
+@pytest.mark.parametrize("responses", [False, True])
+async def test_an_xai_deployment_on_another_name_xai_serves_grok_4_3_for_counts_like_grok_4_3(
+    monkeypatch: pytest.MonkeyPatch, other_name: dict[str, object], tools: tuple[dict[str, object], ...], responses: bool
+):
+    renamed: Final = _single_deployment_router({"api_base": _NATIVE_RESPONSES_BASE[_XAI_GROK_4_3], **other_name}, {})
+    served: Final = _single_deployment_router(
+        {"model": _XAI_GROK_4_3, "api_base": _NATIVE_RESPONSES_BASE[_XAI_GROK_4_3]}, {}
+    )
+
+    assert await _count_with_router(monkeypatch, renamed, tools, responses) == await _count_with_router(
+        monkeypatch, served, tools, responses
+    )
+
+
 # usage.input_tokens that POST /v1/responses billed through Azure AI Foundry grok-4-1-fast-reasoning on 2026-10-29 for
 # the input "What is the weather in Paris?" with these function tools, strict left unset or sent as false or null,
 # the same on the .services.ai.azure.com and .openai.azure.com hosts
