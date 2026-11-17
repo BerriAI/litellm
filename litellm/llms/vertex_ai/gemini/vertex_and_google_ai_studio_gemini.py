@@ -264,12 +264,20 @@ def _served_model_name(model_version: object) -> str | None:
     return model_version.split("@", 1)[0]
 
 
-def _requests_audio_mime_type(request_body: Mapping[str, object]) -> bool:
-    match request_body.get("generationConfig"):
-        case {"responseFormat": {"audio": {"mimeType": str() | int()} | {"mime_type": str() | int()}}}:
-            return True
-        case {"response_format": {"audio": {"mimeType": str() | int()} | {"mime_type": str() | int()}}}:
-            return True
+def requests_audio_mime_type(request_body: Mapping[str, object]) -> bool:
+    match request_body.get("generationConfig", request_body.get("generation_config")):
+        case {
+            "responseFormat": {
+                "audio": {"mimeType": str() | int() as mime_type} | {"mime_type": str() | int() as mime_type}
+            }
+        }:
+            return bool(mime_type)
+        case {
+            "response_format": {
+                "audio": {"mimeType": str() | int() as mime_type} | {"mime_type": str() | int() as mime_type}
+            }
+        }:
+            return bool(mime_type)
         case _:
             return False
 
@@ -3350,9 +3358,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model=model,
             logging_obj=logging_obj,
             raw_response=raw_response,
-            keeps_requested_audio_format=_requests_audio_mime_type(
+            keeps_requested_audio_format=requests_audio_mime_type(
                 cast(Mapping[str, object], request_data)  # cast-ok: untyped shared signature
             ),
+        )
+
+    def transform_pass_through_response(
+        self, model: str, raw_response: httpx.Response, logging_obj: LoggingClass
+    ) -> ModelResponse:
+        logging_obj.post_call(
+            input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            api_key="",
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": {}},
+        )
+        return self._transform_google_generate_content_to_openai_model_response(
+            completion_response=parse_body(raw_response),
+            model_response=ModelResponse(),
+            model=model,
+            logging_obj=logging_obj,
+            raw_response=raw_response,
+            keeps_requested_audio_format=True,
         )
 
     def _transform_google_generate_content_to_openai_model_response(
@@ -4236,7 +4262,7 @@ def _transform_long_decode_hops(
         model=model,
         logging_obj=logging_obj,
         raw_response=first_response,
-        keeps_requested_audio_format=_requests_audio_mime_type(request_body),
+        keeps_requested_audio_format=requests_audio_mime_type(request_body),
     )
     merged_usage: Final = getattr(merged, "usage", None)
     if not isinstance(merged_usage, Usage):
@@ -4269,6 +4295,7 @@ class ModelResponseIterator:
         response_headers: dict[str, str] | None = None,
         response: httpx.Response | None = None,
         resume: StreamResume | None = None,
+        returns_provider_audio: bool = False,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
@@ -4289,8 +4316,8 @@ class ModelResponseIterator:
         self.has_seen_tool_calls: bool = False
         self._resume = resume
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
-        self._keeps_requested_audio_format: Final = resume is not None and _requests_audio_mime_type(
-            resume.request_body
+        self._keeps_requested_audio_format: Final = returns_provider_audio or (
+            resume is not None and requests_audio_mime_type(resume.request_body)
         )
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
