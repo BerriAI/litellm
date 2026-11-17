@@ -679,13 +679,6 @@ _INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str])
-_PYTHON_LOGIN_FAILURES: Final[Mapping[str, _ERROR_CLASS]] = MappingProxyType(
-    {
-        "ValueError": ValueError,
-        "TypeError": TypeError,
-        "OSError": OSError,
-    }
-)
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
     Callable[[object], object], handler.validate_anthropic_api_metadata
 )
@@ -909,6 +902,26 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
     return None
 
 
+@functools.cache
+def _google_login_failure_classes() -> Mapping[str, _ERROR_CLASS]:
+    """The classes a Vertex AI login Rust could not complete may raise, by the name Rust gives."""
+    from google.auth import exceptions as google_exceptions
+
+    return MappingProxyType(
+        {
+            "ValueError": ValueError,
+            "OSError": OSError,
+            "google.auth.exceptions.DefaultCredentialsError": google_exceptions.DefaultCredentialsError,
+            "google.auth.exceptions.MalformedError": google_exceptions.MalformedError,
+            "google.auth.exceptions.InvalidValue": google_exceptions.InvalidValue,
+            "google.auth.exceptions.InvalidResource": google_exceptions.InvalidResource,
+            "google.auth.exceptions.RefreshError": google_exceptions.RefreshError,
+            "google.auth.exceptions.TransportError": google_exceptions.TransportError,
+            "google.auth.exceptions.OAuthError": google_exceptions.OAuthError,
+        }
+    )
+
+
 def _google_login_failure(error: Exception) -> Exception | None:
     """The exception Python's `VertexBase.load_auth` raises for a Vertex AI login Rust could not
     complete, from the class and text Rust names."""
@@ -916,15 +929,8 @@ def _google_login_failure(error: Exception) -> Exception | None:
         name, message = _GOOGLE_LOGIN_FAILURE.validate_python(getattr(error, "messages_google_login_failure", None))
     except ValidationError:
         return None
-    python_class: Final = _PYTHON_LOGIN_FAILURES.get(name)
-    if python_class is not None:
-        return python_class(message)
-    from google.auth import exceptions as google_exceptions
-
-    google_exception: Final = getattr(google_exceptions, name.removeprefix("google.auth.exceptions."), None)
-    if not isinstance(google_exception, type) or not issubclass(google_exception, Exception):
-        return None
-    return google_exception(message)
+    login_failure: Final = _google_login_failure_classes().get(name)
+    return None if login_failure is None else login_failure(message)
 
 
 def _sent_base(

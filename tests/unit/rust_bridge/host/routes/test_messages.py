@@ -3222,7 +3222,6 @@ def _vertex_logger() -> Logging:
     ("name", "error_class"),
     [
         ("ValueError", ValueError),
-        ("TypeError", TypeError),
         ("OSError", OSError),
         ("google.auth.exceptions.DefaultCredentialsError", google_auth.DefaultCredentialsError),
         ("google.auth.exceptions.InvalidResource", google_auth.InvalidResource),
@@ -3272,6 +3271,20 @@ def test_a_google_login_failure_outside_vertex_ai_keeps_the_rust_mapping() -> No
     )
 
     assert not isinstance(mapped, ValueError)
+
+
+@pytest.mark.parametrize(
+    "name", ["TypeError", "google.auth.exceptions.GoogleAuthError", "google.auth.exceptions.__class__", "SystemExit"]
+)
+def test_a_vertex_login_failure_class_outside_the_allowlist_keeps_the_rust_mapping(name: str) -> None:
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure(name, "Could not resolve project_id"),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": _vertex_logger()},
+        "vertex_ai",
+    )
+
+    assert not isinstance(mapped, TypeError | google_auth.GoogleAuthError | SystemExit)
+    assert str(mapped) != "Could not resolve project_id"
 
 
 @pytest.mark.parametrize(
