@@ -1,4 +1,5 @@
 mod auth;
+mod environment;
 mod error;
 mod mcp;
 mod model;
@@ -15,6 +16,7 @@ pub use auth::{
     LitellmRole, OneOrMany, RbacRole, RoleMapping, RolePermissions, RoutingPath, ScopeMapping,
     UnregisteredJwtClientBehavior,
 };
+pub use environment::Environment;
 pub use error::Error;
 pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
