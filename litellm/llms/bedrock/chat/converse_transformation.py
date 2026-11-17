@@ -2533,7 +2533,7 @@ class AmazonConverseConfig(BaseConfig):
                 self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
 
         config_block_entries: Final = tuple(
-            (config_name, config_class, inference_params.pop(config_name, None))
+            (config_name, config_class, _JSON_VALUE.validate_python(inference_params.pop(config_name, None)))
             for config_name, config_class in self.get_config_blocks().items()
         )
 
@@ -2551,7 +2551,7 @@ class AmazonConverseConfig(BaseConfig):
             if config_value is None:
                 continue
             if not isinstance(config_value, Mapping):
-                raise _bad_request(f"{config_name} must be a JSON object, got {config_value.__class__.__name__}")
+                raise _bad_request(f"{config_name} must be a JSON object, got {type(config_value).__name__}")
             data[config_name] = config_class(**config_value)
 
         # Tool Config
