@@ -8470,6 +8470,19 @@ GPT_5_6_CHAT_REQUEST_TO_EMBEDDING_ENTRY: Final = CostTrackingTestCase(
 
 
 # gpt-6.1-sol
+_PROVIDER_CACHEABLE_PROMPT: Final = (
+    "The pricing harness keeps one stable instruction block so the provider can cache it. " * 220
+)
+_GPT_6_PROMPT_CACHE_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "messages": [
+        {"role": "system", "content": _PROVIDER_CACHEABLE_PROMPT},
+        {"role": "user", "content": "Reply with OK."},
+    ],
+    "reasoning_effort": "low",
+    "stream": False,
+}
+
 GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
     name="gpt-6.1-sol-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -8511,31 +8524,7 @@ GPT_6_1_SOL_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6.1-sol-cache_read",
         "model": "gpt-6.1-sol",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -8585,31 +8574,7 @@ GPT_6_LUNA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6-luna-cache_read",
         "model": "gpt-6-luna",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "a880e9da100c summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -8659,31 +8624,7 @@ GPT_6_ASTRA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6-astra-cache_read",
         "model": "gpt-6-astra",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "d45eefac915d summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -12089,11 +12030,6 @@ GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM: Final = (
     )
 )
 
-_PROVIDER_CACHEABLE_PROMPT: Final = (
-    "The pricing harness keeps one stable instruction block so the provider can cache it. " * 220
-)
-
-
 def _gpt_6_on_model(base: CostTrackingTestCase, model: str, shape: str, expected: ExactExpected) -> CostTrackingTestCase:
     response: Final = (
         _stream_for_model(base.response, model)
@@ -12148,19 +12084,15 @@ def _gpt_6_tool_call_served_by_responses_api(model: str, expected: ExactExpected
     )
 
 
-_GPT_6_PROMPT_CACHE_REQUEST: Final[Mapping[str, JsonValue]] = {
-    "model": "$MODEL",
-    "messages": [
-        {"role": "system", "content": _PROVIDER_CACHEABLE_PROMPT},
-        {"role": "user", "content": "Reply with OK."},
-    ],
-    "reasoning_effort": "low",
-    "stream": False,
-}
 _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST: Final[Mapping[str, JsonValue]] = {
     "model": "$MODEL",
     "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
     "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    "reasoning": {"effort": "low"},
+}
+_GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
     "reasoning": {"effort": "low"},
 }
 _GPT_6_RESPONSES_WEB_SEARCH_REQUEST: Final[Mapping[str, JsonValue]] = {
@@ -12380,6 +12312,46 @@ GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
     {"input_tokens": 8657, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 77, "output_tokens_details": {"reasoning_tokens": 36}, "total_tokens": 8734},
     ExactExpected(spend=0.0204604225, input_cost=0.0100638725, output_cost=0.00039655, prompt_tokens=8657, completion_tokens=77, tool_usage_cost=0.01, cache_creation_cost=0.0057358125),
 )
+GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-luna",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00041855, input_cost=0.00041605, output_cost=2.5e-06, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.00041575),
+)
+GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3328, "input_tokens_details": {"cache_write_tokens": 3325, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3325}, "cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00921635, input_cost=0.00915035, output_cost=6.6e-05, prompt_tokens=3328, completion_tokens=6, cache_creation_cost=0.00914375),
+)
+GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6-astra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3327, "input_tokens_details": {"cache_write_tokens": 3324, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3324}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3332},
+    ExactExpected(spend=0.050196, input_cost=0.049896, output_cost=0.0003, prompt_tokens=3327, completion_tokens=5, cache_creation_cost=0.04986),
+)
+GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6.1-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.008371, input_cost=0.008321, output_cost=5e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.008315),
+)
+GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    "gpt-6.1-terra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.004311065, input_cost=0.004285315, output_cost=2.575e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.004282225),
+)
 TEXT_EMBEDDING_3_LARGE_DIMENSIONS: Final = CostTrackingTestCase(
     name="text-embedding-3-large-dimensions",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -12502,6 +12474,11 @@ GPT_4O_MINI_TTS_SPEECH: Final = CostTrackingTestCase(
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
     GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
     GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
     GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
@@ -12790,6 +12767,11 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 )
 
 BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
     GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
     GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
     GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
