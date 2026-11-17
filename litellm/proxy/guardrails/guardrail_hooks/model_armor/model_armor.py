@@ -1,7 +1,6 @@
 import contextlib
-import difflib
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Generator, Iterable, Mapping, Sequence
 from enum import Enum, auto
 from itertools import chain, repeat
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, runtime_checkable
@@ -73,10 +72,18 @@ _RESPONSE_JSON: Final = TypeAdapter(object)
 _FILTER_RESULT_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
-def _changed_line_indexes(original: Sequence[str], redacted: Sequence[str]) -> Generator[int, None, None]:
-    for tag, start, end, _, _ in difflib.SequenceMatcher(None, original, redacted, autojunk=False).get_opcodes():
-        if tag != "equal":
-            yield from range(start, end)
+def _first_difference(original: Iterable[str], redacted: Iterable[str], default: int) -> int:
+    return next((index for index, (line, other) in enumerate(zip(original, redacted)) if line != other), default)
+
+
+def _changed_line_indexes(original: Sequence[str], redacted: Sequence[str]) -> Iterable[int]:
+    if len(original) == len(redacted):
+        return (index for index, (line, other) in enumerate(zip(original, redacted)) if line != other)
+    prefix: Final = _first_difference(original, redacted, min(len(original), len(redacted)))
+    suffix: Final = _first_difference(
+        reversed(original[prefix:]), reversed(redacted[prefix:]), min(len(original), len(redacted)) - prefix
+    )
+    return range(prefix, len(original) - suffix)
 
 
 def _texts_changed_by(texts: Sequence[str], redacted: str) -> frozenset[str]:

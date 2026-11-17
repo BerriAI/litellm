@@ -5884,8 +5884,29 @@ async def test_apply_guardrail_blocks_when_a_redaction_spans_text_blocks_and_no_
 
     assert blocked.value.status_code == 400
     assert "1111" not in str(blocked.value.detail)
+    assert _scanned_texts(guardrail)[1:] == ["card 4111 1111", "1111 1111"]
     entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_flagged"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_rescans_only_the_span_a_line_merging_redaction_changed():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("head\ncard [REDACTED] end\ntail"),
+            {"sanitizationResult": {}},
+            {"sanitizationResult": {}},
+        ]
+    )
+
+    with pytest.raises(HTTPException):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["head", "card 4111", "1111 end", "tail"]},
+            request_data={"metadata": {}},
+            input_type="response",
+        )
+
+    assert _scanned_texts(guardrail)[1:] == ["card 4111", "1111 end"]
 
 
 @pytest.mark.asyncio
