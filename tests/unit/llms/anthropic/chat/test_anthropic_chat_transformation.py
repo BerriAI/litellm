@@ -11732,3 +11732,48 @@ def test_get_supported_params_reports_sampling_params_only_when_the_request_keep
 
     assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
     assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)
+
+
+def test_transform_request_keeps_code_execution_tool_for_lone_container_upload():
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-sonnet-4-5-20250929",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this file?"},
+                    {"type": "file", "file": {"file_id": "file_123"}},
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert result["messages"][0]["content"][1] == {"type": "container_upload", "file_id": "file_123"}
+    assert result["tools"] == [{"name": "code_execution", "type": "code_execution_20250522"}]
+
+
+def test_transform_request_keeps_lone_code_execution_tool_with_main_litellm_params_shape():
+    """Junction: main now threads model_info through transform_request. A request
+    with no user tools and only a file_id must still send the auto-added
+    code_execution tool, not drop it as the old len(tools) > 1 gate did."""
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-sonnet-4-5-20250929",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this file?"},
+                    {"type": "file", "file": {"file_id": "file_123"}},
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params={"drop_params": True, "model_info": {"id": "deployment-1"}},
+        headers={},
+    )
+    assert result["messages"][0]["content"][1] == {"type": "container_upload", "file_id": "file_123"}
+    assert result["tools"] == [{"name": "code_execution", "type": "code_execution_20250522"}]
