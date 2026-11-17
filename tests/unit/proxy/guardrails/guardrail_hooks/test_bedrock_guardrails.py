@@ -21,8 +21,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.exceptions import ModifyResponseException, logged_class_name
-from litellm.integrations.prometheus import PrometheusLogger
+from litellm.exceptions import ModifyResponseException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
@@ -8294,5 +8293,4 @@ async def test_a_failed_bedrock_call_keeps_reporting_as_http_exception_to_metric
     with pytest.raises(HTTPException) as raised:
         await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
-    assert logged_class_name(raised.value) == "HTTPException"
-    assert PrometheusLogger._get_exception_class_name(raised.value) == "HTTPException"
+    assert type(raised.value) is HTTPException

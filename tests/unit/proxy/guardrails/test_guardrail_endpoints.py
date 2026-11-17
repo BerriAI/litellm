@@ -4515,6 +4515,26 @@ async def test_apply_guardrail_stores_the_image_in_the_spend_log_request(mocker:
     assert json.loads(stored_request)["images"] == [_PNG]
 
 
+@pytest.mark.asyncio
+async def test_apply_guardrail_keeps_the_image_out_of_the_spend_log_when_message_logging_is_off(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(litellm, "turn_off_message_logging", True)
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_BLOCKED,), {"images": [_PNG]})
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True})
+    spend_row: Final = call.spend_rows[0]
+
+    stored_request: Final = get_logging_payload(
+        kwargs=spend_row["kwargs"],
+        response_obj=spend_row["completion_response"],
+        start_time=spend_row["start_time"],
+        end_time=spend_row["end_time"],
+    )["proxy_server_request"]
+
+    assert call.response.status_code == 400
+    assert _PNG_BASE64[:64] not in stored_request
+
+
 @pytest.mark.parametrize(
     ("body", "reason"),
     [

@@ -161,11 +161,6 @@ _CONTENT_TYPE_TO_QUALIFIER: Final[dict[str, BedrockGuardrailQualifier]] = {
 _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
 
 
-class BedrockGuardrailAPIError(HTTPException):
-    logged_error_class: Final = "HTTPException"
-    prometheus_exception_class_name: Final = "HTTPException"
-
-
 class QualifiedTextBlock(NamedTuple):
     """A piece of message text paired with its Bedrock grounding qualifier (if any)."""
 
@@ -1373,7 +1368,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             httpx_response.status_code,
             httpx_response.text,
         )
-        raise BedrockGuardrailAPIError(status_code=status_code, detail=detail_message)
+        raise HTTPException(status_code=status_code, detail=detail_message)
 
     def _log_apply_guardrail_attempt(
         self,
@@ -1892,7 +1887,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
                             event_type=event_type,
                         )
-                    raise BedrockGuardrailAPIError(status_code=status_code, detail=detail_message) from e
+                    raise HTTPException(status_code=status_code, detail=detail_message) from e
                 except HTTPException:
                     raise
             # Endpoint down, timeout, or other HTTP/network errors

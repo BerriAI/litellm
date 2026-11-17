@@ -11,7 +11,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
-    BedrockGuardrailAPIError,
     bedrock_error_type,
     overrides_bedrock_call,
 )
@@ -72,8 +71,8 @@ async def _image_scan_failure(
             source="OUTPUT" if is_response else "INPUT",
             event_type=GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
         )
-    except BedrockGuardrailAPIError as error:
-        if error.status_code != 400:
+    except HTTPException as error:
+        if error.status_code != 400 or isinstance(error.detail, dict):
             raise
         return ImageNotScanned(f"Guardrail '{name}' could not evaluate the image: {error.detail}")
     error_type: Final = bedrock_error_type(answer)
