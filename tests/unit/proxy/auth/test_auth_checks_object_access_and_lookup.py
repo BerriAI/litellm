@@ -18,13 +18,27 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 from fastapi import Request, status
+from prisma.errors import DataError
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import (
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
+    PROXY_DB_LOOKUP_MAX_CONCURRENCY,
+    REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+    TAG_REGISTRY_MAX_SIZE,
+)
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     CallInfo,
-    Litellm_EntityType,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
@@ -34,63 +48,49 @@ from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
-    SSOUserDefinedValues,
     UserAPIKeyAuth,
     WebhookEvent,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.types.agents import AgentCaller
+from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth.auth_checks import (
     LITELLM_SESSION_TOKEN_PREFIX,
-    ExperimentalUIJWTToken,
-    _cache_management_object,
-    can_object_call_model,
-    _can_object_call_vector_stores,
-    _check_agent_access_group_model_access,
-    agent_model_grants,
-    check_end_user_budget,
-    _check_team_member_budget,
-    personal_key_owner_teams,
-    personal_key_owner_teams_with_status,
-    fetch_key_object_from_db_with_reconnect,
-    _get_fuzzy_user_object,
     CallerTeamLoader,
     CallerUserLoader,
+    ExperimentalUIJWTToken,
+    _cache_management_object,
+    _can_object_call_vector_stores,
+    _check_agent_access_group_model_access,
+    _check_agent_caller_model_access,
+    _check_team_member_budget,
+    _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
     _tag_max_budget_check,
-    team_max_budget_check,
-    team_member_max_budget_alert_check,
-    virtual_key_max_budget_alert_check,
-    _check_agent_caller_model_access,
-    virtual_key_max_budget_check,
-    virtual_key_soft_budget_check,
+    agent_model_grants,
+    can_object_call_model,
+    check_end_user_budget,
     common_checks,
+    fetch_key_object_from_db_with_reconnect,
     get_key_object,
     get_user_object,
+    read_email_verified,
     invalidate_team_member_spend_state,
+    personal_key_owner_teams_with_status,
     request_skips_budget_checks,
     route_skips_budget_checks,
+    team_max_budget_check,
+    team_member_max_budget_alert_check,
     vector_store_access_check,
-)
-from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
-from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-from litellm.constants import (
-    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-    END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
-    LITELLM_PROXY_MASTER_KEY_ALIAS,
-    PROXY_DB_LOOKUP_MAX_CONCURRENCY,
-    REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
-    TAG_REGISTRY_MAX_SIZE,
+    virtual_key_max_budget_alert_check,
+    virtual_key_max_budget_check,
+    virtual_key_soft_budget_check,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_headers_or_pass_through_endpoints
-from litellm.proxy.utils import ProxyLogging
-from litellm.proxy import proxy_server
+from litellm.proxy.auth.user_api_key_auth import pass_through_key
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from prisma.errors import DataError
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
@@ -102,9 +102,12 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
 )
 from litellm.utils import get_utc_datetime
-from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
@@ -321,13 +324,11 @@ async def test_session_token_survives_langfuse_basic_auth_parsing(valid_sso_user
     request = MagicMock()
     request.headers = {}
 
-    api_key = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/api/public/ingestion",
-        pass_through_endpoints=[
-            {"path": "/api/public/ingestion", "target": "https://example.com", "custom_auth_parser": "langfuse"}
-        ],
-        api_key=f"Basic {basic_credentials}",
+    api_key = pass_through_key(
+        request,
+        "/api/public/ingestion",
+        [{"path": "/api/public/ingestion", "target": "https://example.com", "custom_auth_parser": "langfuse"}],
+        f"Basic {basic_credentials}",
     )
 
     assert api_key == session_token
@@ -1070,6 +1071,49 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
         assert "budget_reset_at" not in creation_args
 
 
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_starts_each_default_window_with_its_own_reset(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {
+            "budget_limits": [
+                {"budget_duration": "1h", "max_budget": 5.0},
+                {"budget_duration": "30d", "max_budget": 100.0},
+            ]
+        },
+    )
+    prisma_client: Final = MagicMock()
+    prisma_client.db = AsyncMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    resets_before_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
+
+    try:
+        await get_user_object(
+            user_id="jwt_upsert_windows",
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+    except Exception as e:
+        print(e)
+
+    resets_after_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
+    windows: Final = json.loads(prisma_client.db.litellm_usertable.create.call_args[1]["data"]["budget_limits"])
+    assert [window["budget_duration"] for window in windows] == ["1h", "30d"]
+    assert all(
+        datetime.fromisoformat(window["reset_at"])
+        in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
+        for window in windows
+    )
+
 def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
@@ -1232,7 +1276,7 @@ async def test_get_user_object_upsert_includes_user_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfills_null_email_from_cache_hit():
+async def test_get_user_object_backfills_null_email_from_cache_hit() -> None:
     """
     Regression (LIT-4710): an existing user row with a null user_email must be
     backfilled from the JWT-provided email even when served from cache, so the
@@ -1246,6 +1290,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(
             user_id="jwt-user-1",
@@ -1347,7 +1392,7 @@ async def test_get_user_object_does_not_overwrite_existing_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfill_race_prefers_db_email():
+async def test_get_user_object_backfill_race_prefers_db_email() -> None:
     """
     LIT-4710 race guard: when the null-guarded update matches 0 rows because a
     concurrent writer already backfilled an email, the cache must be refreshed
@@ -1364,6 +1409,7 @@ async def test_get_user_object_backfill_race_prefers_db_email():
     )
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=winner_row)
 
     result = await get_user_object(
@@ -1384,7 +1430,7 @@ async def test_get_user_object_backfill_race_prefers_db_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfill_caches_persisted_email_not_proposed():
+async def test_get_user_object_backfill_caches_persisted_email_not_proposed() -> None:
     """
     LIT-4710 cache-coherence: even when the null-guarded update succeeds, the
     cache must be refreshed from the row the DB actually holds, not this
@@ -1403,6 +1449,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed():
     )
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=persisted_row)
 
     result = await get_user_object(
@@ -4262,7 +4309,8 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
 
 
 @pytest.mark.asyncio
-async def test_reject_clientside_metadata_tags_enabled_with_tags():
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_reject_clientside_metadata_tags_enabled_with_tags(route):
     """Test that common_checks rejects request when reject_clientside_metadata_tags is True and metadata.tags is present."""
     from fastapi import Request
 
@@ -4290,7 +4338,7 @@ async def test_reject_clientside_metadata_tags_enabled_with_tags():
             end_user_object=None,
             global_proxy_spend=None,
             general_settings=general_settings,
-            route="/chat/completions",
+            route=route,
             llm_router=None,
             proxy_logging_obj=MagicMock(),
             valid_token=valid_token,
@@ -5477,7 +5525,7 @@ async def test_custom_auth_common_checks_opt_in():
     custom_auth_run_common_checks is explicitly set to True in general_settings.
 
     After the centralization refactor, common_checks runs in the
-    ``user_api_key_auth`` wrapper via ``_run_centralized_common_checks``
+    ``user_api_key_auth`` wrapper via ``run_centralized_common_checks``
     (not inside ``_run_post_custom_auth_checks``). The opt-in flag now
     gates the centralized gate for custom-auth deployments, preserving
     the pre-existing RPS guarantee for custom-auth hot paths.
@@ -6078,6 +6126,71 @@ class TestGuardrailModificationCheck:
         """Unparseable strings should not trigger a 403 — they have no keys."""
         self._call({"metadata": "not-json"})
         self._call({"metadata": '"just a string"'})
+
+
+def _member_without_row_prisma(max_budget: float) -> MagicMock:
+    budget_row: Final = MagicMock()
+    budget_row.max_budget = max_budget
+    budget_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": max_budget})
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+    prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    return prisma_client
+
+
+async def _check_member_without_membership_row(prisma_client: MagicMock) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    await _check_team_member_budget(
+        team_object=LiteLLM_TeamTable(team_id="team-1", metadata={"team_member_budget_id": "budget-default"}),
+        user_object=LiteLLM_UserTable(user_id="user-1"),
+        valid_token=UserAPIKeyAuth(token="tok-1", user_id="user-1", team_id="team-1"),
+        prisma_client=prisma_client,
+        user_api_key_cache=DualCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_rejects_member_without_membership_row_with_a_403_naming_member_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis={})
+    prisma_client: Final = _member_without_row_prisma(100.0)
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_member_without_membership_row(prisma_client)
+
+    assert exc_info.value.status_code == 403
+    message: Final = str(exc_info.value.detail)
+    assert "user-1" in message and "team-1" in message and "/team/member_add" in message
+    prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+    assert spend.commands == []
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_off_still_admits_member_without_membership_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as ps
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis={})
+    prisma_client: Final = _member_without_row_prisma(100.0)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+
+    await _check_member_without_membership_row(prisma_client)
+
+    assert spend.commands, "the member budget check must still read the spend counter with the flag off"
 
 
 @pytest.mark.asyncio
@@ -6901,7 +7014,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
     cache.async_delete_cache = AsyncMock()
-    cache.async_delete_cache_pre_call = AsyncMock(return_value=None)  # no request pipeline open
+    cache.declare_delete = MagicMock(return_value=None)
     logging_obj = MagicMock()
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -7219,6 +7332,45 @@ async def test_model_discovery_route_bypasses_user_budget():
     )
 
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "method, route, expect_blocked",
+    [
+        ("GET", "/v1/videos/video_abc", False),
+        ("GET", "/videos/video_abc/content", False),
+        ("POST", "/v1/videos", True),
+        ("POST", "/v1/videos/video_abc/remix", True),
+        ("GET", "/v1/videos", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_exhausted_team_budget_spares_only_video_retrieval(method: str, route: str, expect_blocked: bool) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request: Final = MagicMock()
+    request.method = method
+
+    async def run() -> bool:
+        return await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="test-team", spend=0.4, max_budget=0.3),
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+            request=request,
+        )
+
+    if expect_blocked:
+        with pytest.raises(litellm.BudgetExceededError):
+            await run()
+    else:
+        assert await run() is True
 
 
 @pytest.mark.parametrize("route", ["/health/services", "/auto_router/test_routing"])
@@ -7568,7 +7720,7 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
 
 async def _common_checks_for_over_budget_personal_key(*, model: str) -> bool:
     from litellm import Router
-    from litellm.proxy.auth.auth_checks import is_model_cost_zero, common_checks
+    from litellm.proxy.auth.auth_checks import common_checks, is_model_cost_zero
 
     llm_router: Final = Router(
         model_list=[
@@ -10153,7 +10305,7 @@ def test_model_has_no_cost_mapping_tiered_pricing_only_is_false():
 
 
 async def _run_common_checks(
-    model: Optional[str], llm_router: Optional["Router"], route: str = "/chat/completions"
+    model: str | None, llm_router: Optional["Router"], route: str = "/chat/completions"
 ) -> bool:
     from fastapi import Request
 
@@ -10396,12 +10548,13 @@ async def test_can_key_call_resolved_model_skips_customer_lookup_without_custome
 
 
 @pytest.mark.asyncio
-async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch):
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch, route):
     monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
     router = _router_with_priced_and_unpriced_models()
 
     with pytest.raises(ProxyException) as exc_info:
-        await _run_common_checks(model="unpriced-group", llm_router=router)
+        await _run_common_checks(model="unpriced-group", llm_router=router, route=route)
 
     assert exc_info.value.code == "403"
     assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
@@ -10516,90 +10669,6 @@ def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is
     router = _router_with_a_group_priced_through_model_info()
 
     assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False
-
-
-@pytest.mark.parametrize(
-    "user_route, expected",
-    [
-        ("/internal-models/v1/chat/completions", True),
-        ("/internal-models/newly-registered-model/predict", True),
-        ("/internal-models-other/v1/chat/completions", False),
-        ("/anthropic/v1/messages", False),
-    ],
-)
-def test_team_allowed_routes_wildcard_prefix_matches_unregistered_passthrough_routes(user_route, expected):
-    """A `/prefix/*` entry in `team_allowed_routes` must cover every route under that prefix, so
-    passthrough endpoints registered after the proxy config was written are reachable without an
-    exact-route config change."""
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM,
-            user_route=user_route,
-            litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/*"]),
-        )
-        is expected
-    )
-
-
-def test_team_allowed_routes_exact_route_does_not_become_a_prefix_grant():
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    roles = LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/model-a"])
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-a", litellm_proxy_roles=roles
-        )
-        is True
-    )
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-b", litellm_proxy_roles=roles
-        )
-        is False
-    )
-
-
-def test_admin_allowed_routes_wildcard_prefix_is_honored():
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    roles = LiteLLM_JWTAuth(admin_allowed_routes=["/internal-models/*"])
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/internal-models/anything", litellm_proxy_roles=roles
-        )
-        is True
-    )
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/other/anything", litellm_proxy_roles=roles
-        )
-        is False
-    )
-
-
-def test_team_allowed_routes_named_route_group_still_resolves():
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    roles = LiteLLM_JWTAuth(team_allowed_routes=["openai_routes"])
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM, user_route="/v1/chat/completions", litellm_proxy_roles=roles
-        )
-        is True
-    )
-    assert (
-        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/key/generate", litellm_proxy_roles=roles)
-        is False
-    )
 
 
 @pytest.mark.asyncio
@@ -11067,24 +11136,6 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
 
 
-def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
-    """The RFC 8693 token exchange authorizes the IdP JWT against ``POST /token`` itself, and JWT
-    auth only binds a team from a multi-team claim when that team may call the route, so the
-    default team allowlist has to cover the gateway's token endpoint or the exchange would mint
-    teamless credentials for every ``team_ids_jwt_field`` deployment."""
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    assert allowed_routes_check(
-        user_role=LitellmUserRoles.TEAM, user_route="/token", litellm_proxy_roles=LiteLLM_JWTAuth()
-    )
-    assert not allowed_routes_check(
-        user_role=LitellmUserRoles.TEAM,
-        user_route="/token",
-        litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
-    )
-
-
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True
     assert route_skips_budget_checks(route="/spend/logs") is True
@@ -11092,6 +11143,7 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert RouteChecks.is_llm_api_route(route="/utils/model_info") is True
     assert route_skips_budget_checks(route="/health") is False
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
+    assert route_skips_budget_checks(route="/queue/chat/completions") is False
 
 
 @pytest.mark.parametrize(
@@ -11103,9 +11155,9 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
         ("/v1/chat/completions", None, "free", True),
         ("/v1/chat/completions", None, "paid", False),
         ("/mcp", {"method": "tools/list"}, "paid", True),
-        ("/mcp", {"method": "tools/call"}, "paid", False),
+        ("/mcp", {"method": "tools/call"}, "paid", True),
         ("/mcp", None, "paid", False),
-        ("/mcp/tools/call", {"method": "initialize"}, "paid", False),
+        ("/mcp/tools/call", {"method": "initialize"}, "paid", True),
         ("/health/services", None, "paid", False),
     ],
 )
@@ -11134,6 +11186,34 @@ def test_request_skips_budget_checks_for_non_spending_requests(
     )
     assert (
         request_skips_budget_checks(route=route, model=model, llm_router=router, request_body=request_body) is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "route, http_method, expected",
+    [
+        ("/v1/videos/video_abc", "GET", True),
+        ("/videos/video_abc", "GET", True),
+        ("/v1/videos/video_abc/content", "GET", True),
+        ("/videos/video_abc/content", "GET", True),
+        ("/v1/videos/video_abc", "POST", False),
+        ("/v1/videos/video_abc/content", None, False),
+        ("/v1/videos", "GET", False),
+        ("/v1/videos", "POST", False),
+        ("/v1/videos/video_abc/remix", "POST", False),
+        ("/v1/videos/edits", "POST", False),
+        ("/v1/videos/video_abc/remix", "GET", False),
+        ("/v1/chat/completions", "GET", False),
+    ],
+)
+def test_request_skips_budget_checks_only_for_paid_video_retrieval(
+    route: str, http_method: str | None, expected: bool, free_and_paid_router: litellm.Router
+) -> None:
+    assert (
+        request_skips_budget_checks(
+            route=route, model="paid-model", llm_router=free_and_paid_router, http_method=http_method
+        )
+        is expected
     )
 
 
@@ -11850,7 +11930,9 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     unmapped_request = _client_tag_request(client_tags, baggage=False)
     unmapped = _client_tag_body(client_tags, client_slot)
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(unmapped, route)
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key"))
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key")
+    )
 
     mapped_request = _client_tag_request(client_tags, baggage=baggage)
     mapped = _client_tag_body(client_tags, client_slot)
@@ -11888,3 +11970,525 @@ async def test_baggage_mapping_still_rejects_client_metadata_tags():
     from litellm.utils import get_request_guardrails
 
     assert get_request_guardrails(data) == []
+
+
+
+@pytest.fixture
+def fresh_user_lookups() -> None:
+    auth_checks.last_db_access_time.clear()
+    auth_checks.email_in_use_checked_at.clear()
+
+
+@pytest.fixture
+def fixed_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth_checks, "time", SimpleNamespace(time=lambda: 1_000_000.0, strftime=time.strftime))
+
+
+async def _sign_in(
+    table: UserTable,
+    *,
+    claim_id: str,
+    email: str | None,
+    email_verified: bool | None = None,
+    upsert: bool = False,
+    cache: UserApiKeyCache | None = None,
+) -> LiteLLM_UserTable | None:
+    result: Final = await get_user_object(
+        user_id=claim_id,
+        prisma_client=prisma_over(table),
+        user_api_key_cache=cache or UserApiKeyCache(),
+        user_id_upsert=upsert,
+        sso_user_id=claim_id,
+        user_email=email,
+        email_verified=email_verified,
+    )
+    await asyncio.sleep(0)
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True, False])
+@pytest.mark.parametrize("email", ["owner@example.com", "OWNER@Example.com", "Owner@EXAMPLE.com"])
+async def test_email_never_selects_a_row_linked_to_another_sso_id(email: str, email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+    claim_id: Final = "idp-new"
+
+    with pytest.raises(UserNotFoundError):
+        await _sign_in(table, claim_id=claim_id, email=email, email_verified=email_verified)
+
+    assert table.row("owner").sso_user_id == "idp-owner"
+    assert [r.user_id for r in table.rows] == ["owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_new_row_after_a_refused_email_carries_no_email() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", upsert=True)
+
+    assert user is not None and user.user_id == claim_id
+    assert user.user_email is None
+    assert table.with_email("owner@example.com") == ["owner"]
+    assert table.row("owner").sso_user_id == "idp-owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_new_row_never_fills_in_the_refused_email_on_later_sign_ins() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+    claim_id: Final = "idp-new"
+    cache: Final = UserApiKeyCache()
+
+    users: Final = [
+        await _sign_in(table, claim_id=claim_id, email="owner@example.com", upsert=True, cache=cache) for _ in range(3)
+    ]
+
+    assert [getattr(user, "user_id", None) for user in users] == [claim_id] * 3
+    assert table.with_email("owner@example.com") == ["owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("upsert", [False, True])
+async def test_email_marked_unverified_never_selects_an_unlinked_row(upsert: bool) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+    claim_id: Final = "idp-new"
+
+    if upsert:
+        user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=False, upsert=True)
+        assert user is not None and user.user_id == claim_id and user.user_email is None
+    else:
+        with pytest.raises(UserNotFoundError):
+            await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=False)
+
+    assert table.row("owner").sso_user_id is None
+    assert table.with_email("owner@example.com") == ["owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True])
+async def test_email_links_an_unlinked_row_when_not_marked_unverified(email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="Owner@Example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+    assert table.row("owner").sso_user_id == claim_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True, False])
+async def test_linked_owner_keeps_signing_in_by_sso_id(email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+
+    user: Final = await _sign_in(table, claim_id="idp-owner", email="owner@example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True, False])
+async def test_owner_keeps_signing_in_by_user_id(email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", None))
+
+    user: Final = await _sign_in(table, claim_id="owner", email="owner@example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+    assert user.user_email == "owner@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_new_row_keeps_an_email_no_other_row_holds() -> None:
+    table: Final = UserTable(user_row("someone-else", "other@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="new@example.com", upsert=True)
+
+    assert user is not None and user.user_email == "new@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_null_email_is_not_filled_with_an_email_another_row_holds() -> None:
+    table: Final = UserTable(
+        user_row("owner", "owner@example.com", sso_user_id="idp-owner"),
+        user_row("second", None),
+    )
+
+    user: Final = await _sign_in(table, claim_id="second", email="OWNER@example.com")
+
+    assert user is not None and user.user_id == "second" and user.user_email is None
+    assert table.row("second").user_email is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_cached_row_is_not_filled_with_an_email_another_row_holds() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+
+    user: Final = await _sign_in(table, claim_id="second", email="owner@example.com", cache=cache)
+
+    assert user is not None and user.user_email is None
+    assert table.row("second").user_email is None
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (True, True),
+        (False, False),
+        ("true", True),
+        ("false", False),
+        ("FALSE", False),
+        (" False ", False),
+        ("True", True),
+        ("yes", None),
+        ("", None),
+        (0, None),
+        (1, None),
+        (None, None),
+    ],
+)
+def test_read_email_verified(value: object, expected: bool | None) -> None:
+    assert read_email_verified(value) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True])
+async def test_a_user_the_sign_in_created_stays_with_its_id(email_verified: bool | None) -> None:
+    table: Final = UserTable()
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com", upsert=True)
+
+    later: Final = await _sign_in(
+        table, claim_id="idp-second", email="owner@example.com", email_verified=email_verified, upsert=True
+    )
+
+    assert later is not None and later.user_id == "idp-second"
+    assert table.row("idp-first").sso_user_id == "idp-first"
+    assert table.with_email("owner@example.com") == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_a_user_created_with_an_unverified_email_never_takes_a_later_sign_in() -> None:
+    table: Final = UserTable()
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com", email_verified=False, upsert=True)
+
+    later: Final = await _sign_in(
+        table, claim_id="idp-owner", email="owner@example.com", email_verified=True, upsert=True
+    )
+
+    assert later is not None and later.user_id == "idp-owner"
+    assert table.row("idp-first").sso_user_id == "idp-first"
+    assert table.with_email("owner@example.com") == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_an_existing_user_its_own_id_signs_in_to_stays_with_that_id() -> None:
+    table: Final = UserTable(user_row("idp-first", "owner@example.com"))
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com")
+
+    with pytest.raises(UserNotFoundError):
+        await _sign_in(table, claim_id="idp-second", email="owner@example.com")
+
+    assert table.row("idp-first").sso_user_id == "idp-first"
+    assert [r.user_id for r in table.rows] == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("sso_user_id", [None, "idp-other"])
+async def test_a_user_is_linked_only_to_its_own_id(sso_user_id: str | None) -> None:
+    table: Final = UserTable(user_row("key-owner", "owner@example.com"))
+
+    await get_user_object(
+        user_id="key-owner",
+        prisma_client=prisma_over(table),
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        sso_user_id=sso_user_id,
+    )
+
+    assert table.row("key-owner").sso_user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_opt_out_leaves_an_existing_user_unlinked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable(user_row("idp-first", "owner@example.com"))
+
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com")
+
+    assert table.row("idp-first").sso_user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_opt_out_restores_a_created_user_joining_a_later_sign_in_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable()
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com", upsert=True)
+    assert table.row("idp-first").sso_user_id is None
+
+    later: Final = await _sign_in(table, claim_id="idp-second", email="owner@example.com", upsert=True)
+
+    assert later is not None and later.user_id == "idp-first"
+    assert [r.user_id for r in table.rows] == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize(
+    "owner_sso_user_id, email_verified",
+    [("idp-owner", None), (None, False), ("idp-owner", False)],
+)
+async def test_opt_out_restores_linking_any_row_by_email(
+    monkeypatch: pytest.MonkeyPatch, owner_sso_user_id: str | None, email_verified: bool | None
+) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id=owner_sso_user_id))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+    assert table.row("owner").sso_user_id == claim_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize(
+    "emails", [["owner@example.com"] * 3, ["owner@example.com", "OWNER@example.com", "Owner@Example.COM"]]
+)
+async def test_email_in_use_check_runs_once_per_window_on_cached_sign_ins(emails: list[str], fixed_clock: None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+    table.first_lookups.clear()
+    users: Final = [await _sign_in(table, claim_id="second", email=email, cache=cache) for email in emails]
+
+    assert [getattr(user, "user_email", "missing") for user in users] == [None] * len(emails)
+    assert len(table.first_lookups) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_opt_out_restores_storing_an_email_another_row_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+
+    user: Final = await _sign_in(table, claim_id="second", email="owner@example.com")
+
+    assert user is not None and user.user_email == "owner@example.com"
+    assert table.with_email("owner@example.com") == ["owner", "second"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_email_in_use_check_stays_once_per_window_while_other_users_load(fixed_clock: None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+    table.first_lookups.clear()
+
+    async def sign_in_after_other_users_load(round_number: int) -> LiteLLM_UserTable | None:
+        for i in range(150):
+            auth_checks.last_db_access_time[f"user_id:other-{round_number}-{i}"] = (None, 0.0)
+        return await _sign_in(table, claim_id="second", email="owner@example.com", cache=cache)
+
+    users: Final = [await sign_in_after_other_users_load(round_number) for round_number in range(3)]
+
+    assert [getattr(user, "user_email", "missing") for user in users] == [None] * 3
+    assert len(table.first_lookups) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("other_email", ["ann.lee@example.com", "ann-lee@example.com", "annXlee@example.com"])
+async def test_email_with_an_underscore_matches_only_itself(other_email: str) -> None:
+    table: Final = UserTable(user_row("other", other_email, sso_user_id="idp-other"), user_row("own", None))
+
+    linked: Final = await _sign_in(table, claim_id="idp-new", email="ann_lee@example.com", upsert=True)
+    own: Final = await _sign_in(table, claim_id="own", email="ann_lee@example.com")
+
+    assert linked is not None and linked.user_email == "ann_lee@example.com"
+    assert table.row("other").sso_user_id == "idp-other"
+    assert own is not None and own.user_email is None
+    assert sorted(table.with_email("ann_lee@example.com")) == [linked.user_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email", ["a%b@example.com", "back\\slash@example.com"])
+async def test_email_fallback_finds_an_email_with_a_wildcard_character(email: str) -> None:
+    table: Final = UserTable(user_row("owner", email), user_row("other", "aXb@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email=email.upper())
+
+    assert user is not None and user.user_id == "owner"
+    assert table.row("owner").sso_user_id == claim_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_stale_cached_row_picks_up_the_email_its_own_row_already_holds() -> None:
+    table: Final = UserTable(user_row("own", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="own", email=None, cache=cache)
+    await table.update(where={"user_id": "own"}, data={"user_email": "own@example.com"})
+
+    user: Final = await _sign_in(table, claim_id="own", email="own@example.com", cache=cache)
+
+    assert user is not None and user.user_email == "own@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email", ["%@example.com", "own%@example.com", "_wn@example.com"])
+async def test_email_with_a_wildcard_character_links_no_other_row(email: str) -> None:
+    table: Final = UserTable(user_row("owner", "own@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email=email, upsert=True)
+
+    assert user is not None and user.user_id == claim_id and user.user_email == email
+    assert table.row("owner").sso_user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_concurrent_cached_sign_ins_share_one_email_in_use_check(fixed_clock: None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+    table.first_lookups.clear()
+
+    users: Final = await asyncio.gather(
+        *(_sign_in(table, claim_id="second", email="owner@example.com", cache=cache) for _ in range(8))
+    )
+
+    assert all(user is not None and user.user_email is None for user in users)
+    assert len(table.first_lookups) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_one_rows_skipped_email_does_not_hold_back_another_rows_fill() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None), user_row("third", None))
+    second_cache, third_cache = UserApiKeyCache(), UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=second_cache)
+    await _sign_in(table, claim_id="third", email=None, cache=third_cache)
+    await _sign_in(table, claim_id="second", email="owner@example.com", cache=second_cache)
+    await table.update(where={"user_id": "owner"}, data={"user_email": "moved@example.com"})
+
+    third: Final = await _sign_in(table, claim_id="third", email="owner@example.com", cache=third_cache)
+
+    assert third is not None and third.user_email == "owner@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_a_second_sign_in_id_cannot_take_a_user_the_first_one_linked() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+
+    first: Final = await _sign_in(table, claim_id="idp-first", email="owner@example.com")
+    with pytest.raises(UserNotFoundError):
+        await _sign_in(table, claim_id="idp-second", email="owner@example.com")
+
+    assert first is not None and first.user_id == "owner"
+    assert table.row("owner").sso_user_id == "idp-first"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_email_fallback_skips_a_linked_user_to_reach_an_unlinked_one_with_the_same_email() -> None:
+    table: Final = UserTable(
+        user_row("linked", "owner@example.com", sso_user_id="idp-other"),
+        user_row("unlinked", "OWNER@example.com"),
+    )
+
+    user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com")
+
+    assert user is not None and user.user_id == "unlinked"
+    assert table.row("unlinked").sso_user_id == "idp-new"
+    assert table.row("linked").sso_user_id == "idp-other"
+
+
+class _LinkedMidLookup(UserTable):
+    def __init__(self, winner: str, *rows: LiteLLM_UserTable) -> None:
+        super().__init__(*rows)
+        self.winner = winner
+
+    async def find_first(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
+        found: Final = await super().find_first(where, include)
+        if found is not None and "sso_user_id" in where:
+            await self.update(where={"user_id": found.user_id}, data={"sso_user_id": self.winner})
+        return found
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("winner, resolved", [("idp-other", None), ("idp-new", "owner")])
+async def test_a_sign_in_that_loses_the_link_race_gets_the_user_only_if_its_own_id_won(
+    winner: str, resolved: str | None
+) -> None:
+    table: Final = _LinkedMidLookup(winner, user_row("owner", "owner@example.com"))
+
+    if resolved is None:
+        with pytest.raises(UserNotFoundError):
+            await _sign_in(table, claim_id="idp-new", email="owner@example.com")
+    else:
+        user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com")
+        assert user is not None and user.user_id == resolved
+
+    assert table.row("owner").sso_user_id == winner
+    assert [r.user_id for r in table.rows] == ["owner"]
+
+
+class _StaleFirstSsoLookup(UserTable):
+    def __init__(self, *rows: LiteLLM_UserTable) -> None:
+        super().__init__(*rows)
+        self.stale_reads = 1
+
+    async def find_unique(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
+        if "sso_user_id" in where and self.stale_reads:
+            self.stale_reads -= 1
+            return None
+        return await super().find_unique(where, include)
+
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        from prisma.errors import UniqueViolationError
+
+        if any(r.sso_user_id == data.get("sso_user_id") for r in self.rows):
+            raise UniqueViolationError({"user_facing_error": {"meta": {"target": ["sso_user_id"]}}})
+        return await super().update_many(where, data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("unlinked_twin", [False, True])
+async def test_a_sign_in_that_misses_its_freshly_linked_user_reads_it_again(unlinked_twin: bool) -> None:
+    rows: Final = [user_row("owner", "owner@example.com", sso_user_id="idp-new")]
+    if unlinked_twin:
+        rows.append(user_row("twin", "OWNER@example.com"))
+    table: Final = _StaleFirstSsoLookup(*rows)
+
+    user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com", upsert=True)
+
+    assert user is not None and user.user_id == "owner"
+    assert sorted(r.user_id for r in table.rows) == sorted(r.user_id for r in rows)
+

@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._internal_context import current_service_caller
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
@@ -112,7 +111,6 @@ class _SupportsScriptLoad(Protocol):
 _GENERIC_CALLER_MODULES: Final = frozenset(
     {
         __name__,
-        "litellm.caching.redis_batch",
         "litellm.caching.dual_cache",
         "litellm.caching.caching",
         "litellm.rust_bridge.execution",
@@ -125,8 +123,6 @@ _GENERIC_CALLER_FRAME_NAMES: Final = frozenset(
         "wrapper",
         "_run_under_circuit_breaker",
         "_run_under_circuit_breaker_sync",
-        "run_alone",
-        "_settle_alone",
         "get_cache",
         "set_cache",
         "async_get_cache",
@@ -184,11 +180,9 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
     Get the function names of the nearest meaningful callers of the cache method.
 
     Frames that merely forward the call (this module's circuit-breaker guards, the
-    cache facades, the batch pipeline's retry path, generic cache verbs) are
-    skipped, and the walk stops at the event loop, so the chain names the litellm
-    code that wanted the call. When nothing but forwarding frames is found (the call
-    runs in a task of its own, like a batch op retried on the flush) the chain the
-    declaring code threaded through ``service_caller`` is reported, else ``unknown``.
+    cache facades, generic cache verbs) are skipped, and the walk stops at the event
+    loop, so the chain names the litellm code that wanted the call, or ``unknown``
+    when nothing but forwarding frames is found.
 
     Args:
         num_frames: Number of previous frames to include (default: 2)
@@ -219,9 +213,7 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         )
         function_names: Final = leading_names + further_names
 
-        if function_names:
-            return " <- ".join(function_names)
-        return current_service_caller() or "unknown"
+        return " <- ".join(function_names) if function_names else "unknown"
     except Exception:
         return "unknown"
 

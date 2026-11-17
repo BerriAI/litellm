@@ -11,6 +11,7 @@ request as before."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -39,6 +40,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 pytestmark: Final = pytest.mark.shares_worker_state
 
 MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
+INPUT_COST_PER_TOKEN: Final = 0.001
+OUTPUT_COST_PER_TOKEN: Final = 0.002
 ROUTER_MODEL: Final = "converse-relay"
 EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 SAMPLED: Final = "relay-sampled"
@@ -390,6 +393,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                         "aws_secret_access_key": "synthetic-relay-secret",
                         "aws_region_name": "us-east-1",
                     },
+                    "model_info": {
+                        "input_cost_per_token": INPUT_COST_PER_TOKEN,
+                        "output_cost_per_token": OUTPUT_COST_PER_TOKEN,
+                    },
                 }
             ]
             config_path: Final = directory / "converse-stream-relay.yaml"
@@ -649,6 +656,24 @@ def test_buffered_stream_block_returns_an_error_before_any_frame(rig: Rig) -> No
 def _spend_statuses(call_id: str, at_least: int) -> list[JsonValue]:
     rows: Final = eventually(lambda: _spend_rows(call_id), lambda rows: len(rows) >= at_least, seconds=70)
     return [row["status"] for row in rows]
+
+
+def _logged_spend(call_id: str) -> float:
+    rows: Final = read_rows(
+        'SELECT spend FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
+        "OR metadata->>'litellm_call_id'=%s",
+        (call_id, call_id, call_id),
+    )
+    assert len(rows) == 1 and isinstance(rows[0]["spend"], float), rows
+    return rows[0]["spend"]
+
+
+def _key_spend(key: str) -> float:
+    rows: Final = read_rows(
+        'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashlib.sha256(key.encode()).hexdigest(),)
+    )
+    assert len(rows) == 1 and isinstance(rows[0]["spend"], float), rows
+    return rows[0]["spend"]
 
 
 def _exception(frames: Sequence[Frame]) -> tuple[str, str] | None:
@@ -1001,6 +1026,7 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
         with ThreadPoolExecutor(max_workers=count) as pool:
             return list(zip(markers, pool.map(partial(_stream_with_call_id, rig, OUTAGE), markers)))
 
+    spend_before: Final = _key_spend(rig.keys[OUTAGE])
     rig.outage.set()
     try:
         during: Final = burst(8)
@@ -1013,5 +1039,17 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
     for marker, (status, _, body, _) in after:
         assert status == 200 and _exception(decode(body)) is None, (marker, body)
         assert body == b"".join(rig.scripts[marker].chunks or ()), (marker, decode(body))
-    for marker, (_, _, _, call_id) in (*during, *after):
-        assert _spend_statuses(call_id, 1).count("success") == 1, marker
+    for marker, (_, _, _, call_id) in after:
+        assert _spend_statuses(call_id, 1) == ["success"], marker
+    for marker, (_, _, _, call_id) in during:
+        assert len(_spend_statuses(call_id, 1)) == 1, marker
+    stream_cost: Final = 9 * INPUT_COST_PER_TOKEN + 4 * OUTPUT_COST_PER_TOKEN
+    costs: Final = [_logged_spend(call_id) for _, (_, _, _, call_id) in after]
+    assert costs == [pytest.approx(stream_cost)] * len(after), costs
+    charged: Final = eventually(
+        lambda: _key_spend(rig.keys[OUTAGE]) - spend_before,
+        lambda spend: spend == pytest.approx(len((*during, *after)) * stream_cost),
+        seconds=70,
+        return_last_on_timeout=True,
+    )
+    assert charged == pytest.approx(len((*during, *after)) * stream_cost), charged

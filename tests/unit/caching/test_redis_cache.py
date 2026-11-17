@@ -1595,7 +1595,7 @@ async def test_async_rpush_and_trim_runs_push_and_trim_in_one_transaction(monkey
 def test_call_stack_info_skips_generic_cache_facade_frames():
     """A read through ``DualCache.async_get_cache`` -> ``RedisCache.async_get_cache`` used to
     report ``async_get_cache <- async_get_cache``; the chain names the code that wanted the
-    read, skipping the facade verbs and the batch retry wrappers in between."""
+    read, skipping the facade verbs and the circuit-breaker guard in between."""
     from litellm.caching.redis_cache import _get_call_stack_info
 
     def probe():  # the RedisCache method that sets call_type
@@ -1604,11 +1604,11 @@ def test_call_stack_info_skips_generic_cache_facade_frames():
     def async_get_cache():  # a facade's generic verb
         return probe()
 
-    def run_alone():  # the batch retry wrapper
+    def _run_under_circuit_breaker():  # the breaker guard
         return async_get_cache()
 
     def _retrieve_from_cache():
-        return run_alone()
+        return _run_under_circuit_breaker()
 
     def _async_get_cache():
         return _retrieve_from_cache()
@@ -1630,31 +1630,7 @@ def test_call_stack_info_stops_at_the_event_loop():
     assert asyncio.run(_lookup()) == "_lookup"
 
 
-def test_call_stack_info_reports_the_threaded_caller_when_only_wrappers_are_found():
-    """A batch op retried on the flush runs in a task of its own, so above its wrappers there
-    is only the event loop; the chain is the one its declaring code threaded through
-    ``service_caller``, never the wrapper names (``run_alone <- _settle_alone`` says nothing)."""
-    from litellm._internal_context import service_caller
-    from litellm.caching.redis_cache import _get_call_stack_info
-
-    def probe():
-        return _get_call_stack_info()
-
-    def run_alone():
-        return probe()
-
-    async def _settle_alone():
-        return run_alone()
-
-    async def flush():
-        with service_caller("prefetch_auth_objects <- user_api_key_auth"):
-            task = asyncio.create_task(_settle_alone())
-        return await task
-
-    assert asyncio.run(flush()) == "prefetch_auth_objects <- user_api_key_auth"
-
-
-def test_call_stack_info_is_unknown_when_only_wrappers_are_found_and_nothing_was_threaded():
+def test_call_stack_info_is_unknown_when_only_wrappers_are_found():
     import threading
 
     from litellm.caching.redis_cache import _get_call_stack_info
@@ -1662,14 +1638,14 @@ def test_call_stack_info_is_unknown_when_only_wrappers_are_found_and_nothing_was
     def probe():
         return _get_call_stack_info()
 
-    def run_alone():
+    def wrapper():
         return probe()
 
-    def _settle_alone():
-        return run_alone()
+    def _run_under_circuit_breaker():
+        return wrapper()
 
     seen: list[str] = []
-    worker = threading.Thread(target=lambda: seen.append(_settle_alone()))
+    worker = threading.Thread(target=lambda: seen.append(_run_under_circuit_breaker()))
     worker.start()
     worker.join()
     assert seen == ["unknown"]

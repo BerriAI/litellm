@@ -751,6 +751,7 @@ class ActiveShadowEvalJob(LiteLLMBaseModel):
     models: frozenset[str] = frozenset()
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
+    skip_same_model: bool = False
     shadow_percentage: float
     judge_model: str
     max_turns: int
@@ -802,6 +803,38 @@ def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_gro
     the router's alias map at match time, so a re-pointed alias applies to the next request
     rather than after the jobs cache rolls."""
     return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
+
+
+def _served_group(
+    router: "Router | None",
+    job: "ActiveShadowEvalJob",
+    request_metadata: Mapping[str, object],
+    model_group: str,
+) -> str | None:
+    """The canonical group that answered the caller, or None when the request does not say.
+    A fallback hop restamps model_group with its own target while routed_model keeps the
+    router's first pick, so routed_model is only trusted while model_group is still the
+    router's own name and no hop ran."""
+    if not model_group:
+        return None
+    if model_group != _canonical_group(router, job.router_name):
+        return model_group
+    if request_metadata.get("attempted_fallbacks"):
+        return None
+    routed: Final = _routing_decision(request_metadata).get("routed_model")
+    return _canonical_group(router, routed) if isinstance(routed, str) and routed else None
+
+
+def _baseline_served_it(
+    router: "Router | None",
+    job: "ActiveShadowEvalJob",
+    request_metadata: Mapping[str, object],
+    model_group: str,
+) -> bool:
+    if not job.skip_same_model or job.baseline_model is None:
+        return False
+    served: Final = _served_group(router, job, request_metadata, model_group)
+    return served is not None and served == _canonical_group(router, job.baseline_model)
 
 
 class _ShadowEvalJobRow(Protocol):
@@ -985,6 +1018,9 @@ class ShadowEvalLogger(CustomLogger):
             if not _sample_hits(request_id, job.id, job.shadow_percentage):
                 self._record_funnel(job.id, "not_sampled")
                 continue
+            if _baseline_served_it(router, job, request_metadata, model_group):
+                self._record_funnel(job.id, "same_model")
+                continue
             eligible.append(job)
         return tuple(eligible)
 
@@ -1111,7 +1147,7 @@ class ShadowEvalLogger(CustomLogger):
         decline to spend on an admitted sample (no DB to record into, an over-budget key,
         an unverifiable or exhausted eval budget) count the REQUEST withheld before any
         arm runs, so funnel counters stay per-request and a leg's eligible traffic still
-        reconciles as not_sampled + unjudgeable + shed + withheld + sampled requests,
+        reconciles as not_sampled + same_model + unjudgeable + shed + withheld + sampled requests,
         where each sampled request writes one attempt row per arm. A budget crossed
         mid-loop lets the remaining arms overshoot by one round, the same class of
         overshoot as the samples already in flight when the cap is crossed. The prisma
