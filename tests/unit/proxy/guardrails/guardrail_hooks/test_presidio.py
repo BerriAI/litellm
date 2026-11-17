@@ -5537,3 +5537,42 @@ async def test_logging_hook_masks_standard_logging_object_messages(call_type: st
     assert result_kwargs["messages"][0]["content"] == "TC kimlik no <TR_NATIONAL_ID>"
     assert result_kwargs["standard_logging_object"]["messages"][0]["content"] == "TC kimlik no <TR_NATIONAL_ID>"
     assert raw_messages[0]["content"] == "TC kimlik no 10000000146"
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_masks_anthropic_system_prompt_in_slo() -> None:
+    """
+    Ensure top-level `system` prompt in /v1/messages requests is also redacted
+    before being prepended into `standard_logging_object["messages"]`.
+    """
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={"TR_NATIONAL_ID": PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("10000000146", "<TR_NATIONAL_ID>")
+
+    guardrail.check_pii = mock_check_pii
+
+    raw_messages = [{"role": "user", "content": "Hello"}]
+    test_kwargs = {
+        "system": "System ID 10000000146",
+        "messages": copy.deepcopy(raw_messages),
+        "model": "claude-3-5-sonnet",
+        "standard_logging_object": {
+            "id": "call-sys-1",
+            "call_type": "aanthropic_messages",
+            "messages": [{"role": "system", "content": "System ID 10000000146"}, *copy.deepcopy(raw_messages)],
+        },
+    }
+
+    result_kwargs, _ = await guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result={"type": "message", "content": [{"type": "text", "text": "ok"}]},
+        call_type="aanthropic_messages",
+    )
+
+    assert result_kwargs["system"] == "System ID <TR_NATIONAL_ID>"
+    assert result_kwargs["standard_logging_object"]["messages"][0]["content"] == "System ID <TR_NATIONAL_ID>"

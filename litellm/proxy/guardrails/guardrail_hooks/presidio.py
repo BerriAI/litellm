@@ -1281,6 +1281,27 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
 
+            raw_system = kwargs.get("system")
+            if raw_system is not None:
+                masked_system = copy.deepcopy(raw_system)
+                if isinstance(masked_system, str):
+                    masked_system = await self.check_pii(
+                        text=masked_system,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=kwargs,
+                    )
+                elif isinstance(masked_system, list):
+                    for block in masked_system:
+                        if isinstance(block, dict) and isinstance(block.get("text"), str):
+                            block["text"] = await self.check_pii(
+                                text=block["text"],
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=kwargs,
+                            )
+                kwargs["system"] = masked_system
+
             standard_logging_object: Final = kwargs.get("standard_logging_object")
             if isinstance(standard_logging_object, dict) and "messages" in standard_logging_object:
                 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
