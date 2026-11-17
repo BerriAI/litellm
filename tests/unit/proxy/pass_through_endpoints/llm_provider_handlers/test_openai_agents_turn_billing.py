@@ -750,6 +750,42 @@ async def test_the_polls_send_the_passthrough_key_and_the_callers_openai_scope(
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
 
 
+async def test_a_poll_redirected_off_openai_never_follows_it_with_the_proxys_key(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-agents-turns-poll")
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    clock: Final = _Clock()
+    rows: Final = _SpendRows()
+    elsewhere_url: Final = "https://agents-elsewhere.example/v1/turns"
+    turns_page: Final = {"object": "list", "data": [_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE)]}
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.get(TURNS_URL).respond(307, headers={"location": elsewhere_url})
+        elsewhere: Final = upstream.get(elsewhere_url).respond(json=turns_page)
+        upstream.get(f"{SESSIONS_URL}/{SESSION_ID}").respond(json=_session())
+        upstream.get(SUBAGENTS_URL).respond(json=_page())
+        upstream.get(ROOT_ITEMS_URL).respond(json=_page())
+        upstream.get(f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?order=asc&limit=100").respond(
+            json=_user_messages((USER_TEXT,))
+        )
+        await _relay_call(
+            OpenAIAgentsTurnBiller(get=live_agents_api_get, sleep=clock.sleep, clock=clock),
+            rows,
+            EVENTS_URL,
+            {"events": [INPUT_MESSAGE]},
+            None,
+            "5b7d1e2f-3a4c-4d6e-8f9a-0b1c2d3e4f5a",
+        )
+        row: Final = await rows.only_row()
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    assert not elsewhere.called
+    assert (row["spend"] or 0.0) == 0.0
+
+
 async def _cancelled_sleep(seconds: float) -> None:
     raise asyncio.CancelledError
 
@@ -1239,6 +1275,34 @@ async def test_a_message_merged_into_another_calls_turn_never_takes_a_later_call
     assert first == TURN_USAGE["total_tokens"]
     assert merged == 0
     assert third == SECOND_TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_messages_cannot_be_read_is_never_claimed_by_the_call(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (
+                _turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),
+                _turn("turn_other", CALL_STARTED_AT, "completed", SECOND_TURN_USAGE),
+            ),
+        ),
+        session=_session(),
+        replies={f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_other/items?order=asc&limit=100": (404,)},
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "3c5e7a9c-1e3a-4c5e-9a7c-9e1a3c5e7a01",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
 
 
 @pytest.mark.asyncio

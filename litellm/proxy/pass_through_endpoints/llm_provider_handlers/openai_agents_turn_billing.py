@@ -15,6 +15,7 @@ import openai
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
@@ -333,6 +334,7 @@ class TurnClaims:
         self._local.set_cache(turn_id, owner)
         return owner == claimant
 
+    @with_service_target("openai_agents_turn_claims")
     async def _shared_owner(self, turn_id: str, claimant: str) -> object:
         store: Final = self._shared_store()
         if store is None:
@@ -532,7 +534,9 @@ async def live_agents_api_get(base_url: str, path: str, scope_headers: Mapping[s
         {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
     )
     return await get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint).client.get(
-        f"{base_url}/{path}", headers={**scope_headers, **auth_headers, "openai-beta": "agents=v1"}
+        f"{base_url}/{path}",
+        headers={**scope_headers, **auth_headers, "openai-beta": "agents=v1"},
+        follow_redirects=False,
     )
 
 
@@ -815,7 +819,7 @@ class OpenAIAgentsTurnBiller:
             _MessageItemsPage,
         )
         if isinstance(items, _FetchFailed):
-            return not items.retryable
+            return False
         turn_texts: Final = itertools.chain.from_iterable(item.user_texts for item in items.data)
         return not turn_start.input_texts.isdisjoint(turn_texts)
 
