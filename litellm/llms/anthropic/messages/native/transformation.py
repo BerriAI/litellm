@@ -52,6 +52,7 @@ from ...common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unsignable_thinking_blocks_for_claude,
     tools_without_custom_field,
 )
 from .mid_conversation_system import (
@@ -779,12 +780,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else unstripped_native_request(anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
         )
         log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
+        base_model: Final = getattr(litellm_params, "base_model", None)
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                drop_non_string_tool_result_texts(
-                    _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
-                    getattr(litellm_params, "drop_params", None),
-                )
+            messages=strip_unsignable_thinking_blocks_for_claude(
+                strip_encrypted_reasoning_blocks_from_anthropic_messages(
+                    drop_non_string_tool_result_texts(
+                        _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
+                        getattr(litellm_params, "drop_params", None),
+                    )
+                ),
+                model=model,
+                base_model=base_model if isinstance(base_model, str) else None,
             ),
             max_tokens=max_tokens,
             model=model,

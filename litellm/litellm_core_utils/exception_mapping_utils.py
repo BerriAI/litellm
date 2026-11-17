@@ -517,6 +517,14 @@ def _map_openai_exception(
                 response=response,
                 litellm_debug_info=extra_information,
             )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"{exception_provider} - {message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response if response is not None else _response_or_stub(original_exception, status_code=403),
+                litellm_debug_info=extra_information,
+            )
         elif original_exception.status_code == 404:
             raise NotFoundError(
                 message=f"NotFoundError: {exception_provider} - {message}",
@@ -2279,7 +2287,7 @@ def _map_azure_exception(
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         raise APIConnectionError(
-            message=f"{exception_provider} APIConnectionError - {message}\n{redact_string(traceback.format_exc())}",
+            message=f"{exception_provider} APIConnectionError - {message or type(original_exception).__name__}",
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,

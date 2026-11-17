@@ -113,8 +113,14 @@ fn format_float(value: f64, add_dot_0: bool) -> String {
     if value.is_infinite() {
         return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
     }
-    // Rust's `{:e}` prints the shortest round-trip digits, like CPython's 'r' mode.
-    let scientific = format!("{value:e}");
+    let shortest = format!("{value:e}");
+    let length = shortest
+        .split_once('e')
+        .map_or(shortest.as_str(), |(mantissa, _)| mantissa)
+        .chars()
+        .filter(char::is_ascii_digit)
+        .count();
+    let scientific = format!("{value:.precision$e}", precision = length.saturating_sub(1));
     let (mantissa, exponent) = scientific
         .split_once('e')
         .expect("`{:e}` always prints an exponent");
