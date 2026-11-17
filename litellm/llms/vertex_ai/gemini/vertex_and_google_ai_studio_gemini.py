@@ -2466,7 +2466,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         model_response: ModelResponse,
         completion_response: GenerateContentResponseBody,
-        provider_specific_fields: dict[str, str],
+        provider_specific_fields: Mapping[str, str],
     ) -> ModelResponse:
         chat_completion_message: Final[ChatCompletionResponseMessage] = {
             "role": "assistant",
@@ -2479,7 +2479,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=chat_completion_message,
             logprobs=None,
             enhancements=None,
-            provider_specific_fields=provider_specific_fields,
+            provider_specific_fields=dict(provider_specific_fields),
         )
 
         model_response.choices = [choice]
