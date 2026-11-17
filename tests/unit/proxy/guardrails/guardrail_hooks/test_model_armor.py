@@ -5655,10 +5655,13 @@ async def test_apply_guardrail_withholds_a_response_model_armor_skipped_a_filter
 async def test_apply_guardrail_passes_a_response_model_armor_skipped_a_filter_on_when_not_failing_on_error():
     guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=False)
     inputs = {"texts": ["a very large tool result"]}
+    request_data: Final[dict] = {"metadata": {}}
 
-    result = await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="response")
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
 
     assert result["texts"] == ["a very large tool result"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
 
 
 @pytest.mark.asyncio
@@ -5760,6 +5763,78 @@ async def test_apply_guardrail_does_not_release_masked_text_when_another_filter_
     with pytest.raises(ModelArmorAPIError):
         await guardrail.apply_guardrail(
             inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+
+def _skipped_with_deidentified(sanitized: str) -> dict[str, object]:
+    return _skipped_armor_response(
+        cast(dict[str, object], _deidentified_armor_response(sanitized)["sanitizationResult"])["filterResults"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_a_match_found_while_another_filter_was_skipped_when_not_failing_on_error():
+    guardrail = _post_mcp_call_guardrail(
+        [_skipped_with_deidentified("ssn [REDACTED]"), _skipped_with_deidentified("ssn [REDACTED]")],
+        fail_on_error=False,
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert result["texts"] == ["ssn [REDACTED]"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_the_match_when_another_text_rescan_skipped_a_filter_and_failing_open():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _skipped_with_deidentified("a very large text\nssn [REDACTED]"),
+            _skipped_armor_response(),
+            _deidentified_armor_response("ssn [REDACTED]"),
+        ],
+        fail_on_error=False,
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["a very large text", "ssn 078-05-1120"]},
+        request_data={"metadata": {}},
+        input_type="response",
+    )
+
+    assert result["texts"] == ["a very large text", "ssn [REDACTED]"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_withholds_a_match_found_while_another_filter_was_skipped_when_failing_on_error():
+    guardrail = _post_mcp_call_guardrail(
+        [_skipped_with_deidentified("ssn [REDACTED]"), _deidentified_armor_response("ssn [REDACTED]")],
+        fail_on_error=True,
+    )
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_raises_a_model_armor_error_when_a_text_rescan_skipped_a_filter_and_failing_on_error():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("a very large text\nssn [REDACTED]"),
+            _skipped_armor_response(),
+            _deidentified_armor_response("ssn [REDACTED]"),
+        ],
+        fail_on_error=True,
+    )
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a very large text", "ssn 078-05-1120"]},
+            request_data={"metadata": {}},
+            input_type="response",
         )
 
 

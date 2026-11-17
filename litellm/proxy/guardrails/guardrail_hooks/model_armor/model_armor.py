@@ -1332,6 +1332,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             "user_prompt" if input_type == "request" else "model_response"
         )
         start_time: Final = time.time()
+        fails_open_on_error: Final = not self.optional_params.get("fail_on_error", True)
 
         def fails_open(error: Exception) -> bool:
             error_end_time: Final = time.time()
@@ -1344,20 +1345,19 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 end_time=error_end_time,
                 duration=error_end_time - start_time,
             )
-            return not self.optional_params.get("fail_on_error", True) or self._event_hook_is_event_type(
-                GuardrailEventHooks.logging_only
-            )
+            return fails_open_on_error or self._event_hook_is_event_type(GuardrailEventHooks.logging_only)
 
         fails_on_a_skipped_filter: Final = input_type == "response" and self._event_hook_is_event_type(
             GuardrailEventHooks.post_mcp_call
         )
 
-        async def scanned(text: str) -> _ModelArmorResponse:
+        async def scanned(text: str, *, rescan: bool = False) -> _ModelArmorResponse:
             scan: Final = await self.make_model_armor_request(content=text, source=source, request_data=request_data)
             if (
                 fails_on_a_skipped_filter
                 and self._skipped_a_filter(scan)
                 and not self._should_block_content(scan, allow_sanitization=True)
+                and not (fails_open_on_error and (rescan or self._has_deidentify_match(scan)))
             ):
                 verbose_proxy_logger.error("Model Armor skipped a filter, so the content was not fully scanned")
                 raise ModelArmorAPIError("Model Armor skipped a filter, so the content was not fully scanned")
@@ -1411,7 +1411,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
         async def sanitized(text: str) -> str:
-            text_response: Final = await scanned(text)
+            text_response: Final = await scanned(text, rescan=True)
             if self._should_block_content(text_response, allow_sanitization=True):
                 raise blocked_after_rescan(text_response)
             return self._get_sanitized_content(text_response) or text
