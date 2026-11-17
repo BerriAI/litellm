@@ -49,12 +49,14 @@ use crate::{
 /// Forwarding it would send `top_k` to a model that removed sampling params and
 /// take a 400 after the call, where Python drops it and succeeds.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("max_tokens", "max_tokens"),
-    ("max_completion_tokens", "max_tokens"),
+    (MAX_TOKENS, MAX_TOKENS),
+    ("max_completion_tokens", MAX_TOKENS),
     ("temperature", "temperature"),
     ("top_p", "top_p"),
     ("stop", STOP_SEQUENCES),
 ];
+
+const MAX_TOKENS: &str = "max_tokens";
 
 const STOP_SEQUENCES: &str = "stop_sequences";
 
@@ -159,7 +161,12 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         params: Map<String, Value>,
     ) -> Result<Map<String, Value>, Decline> {
-        map_openai_param_names(SUPPORTED_PARAMS, map_openai_stop(params, stop_sequences))
+        map_openai_param_names(
+            SUPPORTED_PARAMS,
+            self.caller_config_params(),
+            map_openai_stop(params, stop_sequences),
+        )
+        .map(round_max_tokens)
     }
 
     fn get_complete_url(
@@ -287,6 +294,19 @@ impl BaseConfig for AnthropicConfig {
                     .then_some(Decline::new("conversation does not open on a user turn"))
             })
     }
+}
+
+fn round_max_tokens(params: Map<String, Value>) -> Map<String, Value> {
+    params
+        .into_iter()
+        .map(|(name, value)| {
+            let rounded = (name == MAX_TOKENS)
+                .then(|| value.as_f64().filter(|_| value.is_f64()))
+                .flatten()
+                .map(|limit| json!((limit.round_ties_even() as i64).max(1)));
+            (name, rounded.unwrap_or(value))
+        })
+        .collect()
 }
 
 fn stop_sequences(stop: Value) -> Option<Value> {
@@ -537,12 +557,25 @@ mod tests {
         json!({"stop_sequences": ["5"]})
     )]
     #[case::malformed_stop_reaches_anthropic(json!({"stop": 5}), json!({"stop_sequences": 5}))]
+    #[case::anthropic_stop_wins_when_sent_first(
+        json!({"stop_sequences": ["b"], "stop": "a"}),
+        json!({"stop_sequences": ["b"]})
+    )]
+    #[case::anthropic_stop_wins_when_sent_last(
+        json!({"stop": "a", "stop_sequences": ["b"]}),
+        json!({"stop_sequences": ["b"]})
+    )]
+    #[case::fractional_limit_rounds_half_to_even(json!({"max_tokens": 10.5}), json!({"max_tokens": 10}))]
+    #[case::fractional_limit_rounds_up(json!({"max_completion_tokens": 11.5}), json!({"max_tokens": 12}))]
+    #[case::fractional_limit_has_a_floor_of_one(json!({"max_tokens": 0.2}), json!({"max_tokens": 1}))]
+    #[case::whole_float_limit_becomes_an_integer(json!({"max_tokens": 16.0}), json!({"max_tokens": 16}))]
     fn maps_openai_params_to_anthropic_names(#[case] openai: Value, #[case] anthropic: Value) {
         assert_eq!(map(openai), Ok(params(anthropic)));
     }
 
     #[rstest]
     #[case::unknown(json!({"top_k": 40}))]
+    #[case::bedrock_region(json!({"aws_region_name": "us-west-2"}))]
     fn declines_an_openai_param_it_has_no_anthropic_name_for(#[case] openai: Value) {
         assert_eq!(
             map(openai),

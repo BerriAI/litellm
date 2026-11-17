@@ -45,7 +45,11 @@ pub trait BaseConfig: Sync {
         _model: &str,
         params: Map<String, Value>,
     ) -> Result<Map<String, Value>, Decline> {
-        map_openai_param_names(self.supported_openai_param_mappings(), params)
+        map_openai_param_names(
+            self.supported_openai_param_mappings(),
+            self.caller_config_params(),
+            params,
+        )
     }
 
     fn get_complete_url(
@@ -96,6 +100,10 @@ pub trait BaseConfig: Sync {
         &[]
     }
 
+    fn caller_config_params(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
@@ -112,14 +120,19 @@ pub trait BaseConfig: Sync {
 
 pub fn map_openai_param_names(
     supported: &'static [(&'static str, &'static str)],
+    caller_config: &'static [&'static str],
     params: Map<String, Value>,
 ) -> Result<Map<String, Value>, Decline> {
     let superseded = superseded_openai_names(supported, &params);
-    params
+    let (openai_named, provider_named): (Vec<_>, Vec<_>) = params
         .into_iter()
         .filter(|(name, value)| !value.is_null() && !superseded.contains(&name.as_str()))
+        .partition(|(name, _)| supported.iter().any(|(openai_name, _)| openai_name == name));
+    openai_named
+        .into_iter()
+        .chain(provider_named)
         .map(|(name, value)| {
-            provider_param_name(supported, name)
+            provider_param_name(supported, caller_config, name)
                 .map(|provider_name| (provider_name, value))
                 .ok_or(Decline::new(UNRECOGNIZED_PARAM))
         })
@@ -151,9 +164,10 @@ fn superseded_openai_names(
 
 fn provider_param_name(
     supported: &'static [(&'static str, &'static str)],
+    caller_config: &'static [&'static str],
     name: String,
 ) -> Option<String> {
-    if name == STREAM_PARAM {
+    if name == STREAM_PARAM || caller_config.contains(&name.as_str()) {
         return Some(name);
     }
     supported

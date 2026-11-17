@@ -75,6 +75,13 @@ const CONFIG_PARAMS: &[&str] = &[
     AWS_BEDROCK_RUNTIME_ENDPOINT,
 ];
 
+const CALLER_CONFIG_PARAMS: &[&str] = &[
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+];
+
 enum ConverseStopReason {
     Value(String),
     Unknown(String),
@@ -128,7 +135,11 @@ impl BaseConfig for AmazonConverseConfig {
         {
             return Err(Decline::new("model-specific max_tokens or stop rules"));
         }
-        map_openai_param_names(SUPPORTED_PARAMS, map_openai_stop(params, stop_sequences))
+        map_openai_param_names(
+            SUPPORTED_PARAMS,
+            CALLER_CONFIG_PARAMS,
+            map_openai_stop(params, stop_sequences),
+        )
     }
 
     fn get_complete_url(
@@ -287,6 +298,10 @@ impl BaseConfig for AmazonConverseConfig {
 
     fn config_params(&self) -> &'static [&'static str] {
         CONFIG_PARAMS
+    }
+
+    fn caller_config_params(&self) -> &'static [&'static str] {
+        CALLER_CONFIG_PARAMS
     }
 
     fn unsupported_reason(
@@ -499,6 +514,31 @@ mod tests {
         json!({"maxTokens": 16, "stopSequences": ["5"]})
     )]
     #[case::rule_family_with_null_params("xai.grok-4-6", json!({"max_tokens": null}), json!({}))]
+    #[case::converse_max_tokens_wins_when_sent_first(
+        CLAUDE,
+        json!({"maxTokens": 32, "max_tokens": 16}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::converse_max_tokens_wins_when_sent_last(
+        CLAUDE,
+        json!({"max_tokens": 16, "maxTokens": 32}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::converse_stop_wins_when_sent_first(
+        CLAUDE,
+        json!({"stopSequences": ["b"], "stop": "a"}),
+        json!({"stopSequences": ["b"]})
+    )]
+    #[case::converse_stop_wins_when_sent_last(
+        CLAUDE,
+        json!({"stop": "a", "stopSequences": ["b"]}),
+        json!({"stopSequences": ["b"]})
+    )]
+    #[case::caller_region_and_keys(
+        CLAUDE,
+        json!({"aws_region_name": "us-west-2", "aws_access_key_id": "AKIA", "aws_secret_access_key": "s", "aws_session_token": "t"}),
+        json!({"aws_region_name": "us-west-2", "aws_access_key_id": "AKIA", "aws_secret_access_key": "s", "aws_session_token": "t"})
+    )]
     fn maps_openai_params_to_converse_names(
         #[case] model: &str,
         #[case] openai: Value,
@@ -526,6 +566,8 @@ mod tests {
     #[case::unknown(json!({"top_k": 40}))]
     #[case::endpoint_override(json!({"aws_bedrock_runtime_endpoint": "https://example.com"}))]
     #[case::identity_selector(json!({"aws_role_name": "arn:aws:iam::123456789012:role/other"}))]
+    #[case::named_profile(json!({"aws_profile_name": "other"}))]
+    #[case::sts_endpoint(json!({"aws_sts_endpoint": "https://example.com"}))]
     fn declines_an_openai_param_it_has_no_converse_name_for(#[case] openai: Value) {
         assert_eq!(
             map(CLAUDE, openai),

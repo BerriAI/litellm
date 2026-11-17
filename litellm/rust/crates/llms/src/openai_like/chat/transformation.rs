@@ -244,6 +244,10 @@ impl BaseConfig for OpenAILikeChatConfig {
     fn config_params(&self) -> &'static [&'static str] {
         CONFIG_PARAMS
     }
+
+    fn caller_config_params(&self) -> &'static [&'static str] {
+        CONFIG_PARAMS
+    }
 }
 
 /// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
@@ -419,6 +423,17 @@ mod tests {
         );
         assert_eq!(body["max_tokens"], json!(12));
         assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[rstest]
+    fn keeps_call_configuration_a_caller_sends() {
+        let config =
+            json!({"custom_endpoint": true, "extra_headers": {"x": "y"}, "max_retries": 2});
+        assert_eq!(
+            OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
+                .map_openai_params("my-model", params(config.clone())),
+            Ok(params(config))
+        );
     }
 
     #[rstest]
