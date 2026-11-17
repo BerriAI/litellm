@@ -6758,6 +6758,10 @@ class _SupportsModelDump(Protocol):
     def model_dump(self) -> dict[str, object]: ...
 
 
+class _SupportsKeyedGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 class _StructuredMessagesSource(Protocol):
     def get_structured_messages(self, data: dict[str, object], /) -> Sequence[object] | None: ...
 
@@ -6770,7 +6774,7 @@ def _instantiate_structured_message_sources(
 
 def resolve_structured_messages(
     messages: list[dict[str, object]] | None,
-    request_kwargs: dict[str, Any],
+    request_kwargs: dict[str, object],
 ) -> list[dict[str, object]] | None:
     """
     Normalize a request's messages to OpenAI-spec chat-completions shape,
@@ -6795,8 +6799,10 @@ def resolve_structured_messages(
     call_type: CallTypes | None = None
 
     # 1. Try route-based inference from proxy metadata
-    route: Final = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
-    if route:
+    route: Final = require_attributes(request_kwargs.get("litellm_metadata", {}), _SupportsKeyedGet, "get").get(
+        "user_api_key_request_route"
+    )
+    if isinstance(route, str) and route:
         call_types_list: Final = get_call_types_for_route(route)
         if call_types_list:
             for ct in call_types_list:

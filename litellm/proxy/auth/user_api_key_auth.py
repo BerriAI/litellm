@@ -1799,8 +1799,9 @@ def _team_fields_newer_than_key(key: UserAPIKeyAuth, team: LiteLLM_TeamTableCach
     if team.last_refreshed_at <= key.last_refreshed_at:
         return MappingProxyType({})
     key_fields: Final = type(key).model_fields
+    team_fields: Final[Mapping[str, object]] = MappingProxyType(team.__dict__)
     return MappingProxyType(
-        {f"team_{name}": value for name, value in team.__dict__.items() if f"team_{name}" in key_fields}
+        {f"team_{name}": value for name, value in team_fields.items() if f"team_{name}" in key_fields}
     )
 
 

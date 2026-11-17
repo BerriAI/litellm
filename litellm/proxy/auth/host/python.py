@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -116,6 +117,7 @@ if TYPE_CHECKING:
 JWKS_FETCH_ATTEMPTS: Final = 3
 JWKS_FETCH_RETRY_BACKOFF_SECONDS: Final = 0.25
 OIDC_DISCOVERY_PATH: Final = ".well-known/openid-configuration"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AgentLookup(Protocol):
@@ -506,7 +508,7 @@ class PythonAuthHost:
             what: Final = "OIDC discovery endpoint" if discovery else "JWKS endpoint"
             raise Exception(f"JWT Auth: {what} {url} returned status {response.status_code}: {response.text}")
         try:
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         except Exception as e:
             if discovery:
                 raise Exception(f"JWT Auth: Failed to parse OIDC discovery document at {url}: {e}")
@@ -522,14 +524,14 @@ class PythonAuthHost:
             )
             if response.status_code != 200:
                 raise Exception(f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}")
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         except Exception as e:
             verbose_proxy_logger.error("Error fetching OIDC UserInfo: %s", e)
             raise Exception(f"Failed to fetch OIDC UserInfo: {e}")
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def cached_json(self, key: str) -> object:
-        return await self.user_api_key_cache.async_get_cache(key)
+        return _DECODED_JSON.validate_python(await self.user_api_key_cache.async_get_cache(key))
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def cache_json(self, key: str, value: object, ttl_seconds: float) -> None:

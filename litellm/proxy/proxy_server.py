@@ -18094,7 +18094,7 @@ async def _find_model_by_id(
     llm_router: Router | None,
     prisma_client: PrismaClient | None,
     proxy_config: "ProxyConfig",
-) -> tuple[Sequence[dict[str, Any]], int | None]:
+) -> tuple[Sequence[dict[str, object]], int | None]:
     """Find a model by its ID and optionally filter by search term."""
     found_model = None
 

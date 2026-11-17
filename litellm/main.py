@@ -236,9 +236,11 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
+    KeywordArguments,
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
+    has_attributes,
     normalize_drop_params,
     safe_deep_copy,
     without,
@@ -9767,11 +9769,20 @@ def print_verbose(print_statement: object):
         pass
 
 
+def _completion_config_args(config_args: object) -> KeywordArguments:
+    if has_attributes(config_args, KeywordArguments, "keys"):
+        return config_args
+    raise TypeError(
+        f"{completion.__module__}.{completion.__qualname__}() argument after ** must be a mapping, "
+        f"not {type(config_args).__name__}"
+    )
+
+
 def config_completion(**kwargs):
     if litellm.config_path is not None:
         config_args: Final = read_config_args(litellm.config_path)
         # overwrite any args passed in with config args
-        return completion(**kwargs, **config_args)
+        return completion(**kwargs, **_ForwardedCompletionParams(**_completion_config_args(config_args)))
     else:
         raise ValueError(
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"

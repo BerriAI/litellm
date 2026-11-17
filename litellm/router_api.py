@@ -37,7 +37,7 @@ import hashlib
 import inspect
 import json
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -1454,6 +1454,16 @@ _COPIED_SETTING_FIELDS: Final = (
 )
 
 
+class _SettingsHost(Protocol):
+    def _core_get_settings(self) -> Mapping[str, object]: ...
+
+    def _core_get_allowed_fails_from_policy(self, exception: Exception) -> int | None: ...
+
+    def _core_get_available_guardrail(self, name: str) -> "GuardrailTypedDict": ...
+
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object: ...
+
+
 @dataclass(frozen=True)
 class RouterSettings:
     """
@@ -1496,7 +1506,7 @@ class RouterSettings:
     search_tools: "list[SearchToolTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     guardrail_list: "list[GuardrailTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     cache_responses: bool | None = None
-    _router: "Router | None" = field(default=None, repr=False, compare=False)
+    _router: _SettingsHost | None = field(default=None, repr=False, compare=False)
     _unset: frozenset[str] = field(default=frozenset(), repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1513,7 +1523,7 @@ class RouterSettings:
         # Each value is the Router's own ``_core_<field>`` attribute, typed as the field (or None when unset).
         return cls(**values, _router=router, _unset=unset)  # pyright: ignore[reportArgumentType]  # see above
 
-    def _owner(self, member: str) -> "Router":
+    def _owner(self, member: str) -> _SettingsHost:
         if self._router is None:
             raise AttributeError(f"'NoneType' object has no attribute {member!r}")
         return self._router
@@ -1750,7 +1760,23 @@ class RoutingObservers:
     slack_alerting_logger: "SlackAlerting | None" = None
 
 
-def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
+class _ChangeHost(Protocol):
+    @property
+    def _registry_version(self) -> int: ...
+
+    @property
+    def _core_update_settings(self) -> Callable[..., None]: ...
+
+    def _core_upsert_deployment(self, deployment: "Deployment") -> "Deployment | None": ...
+
+    def _core_delete_deployment(self, id: str) -> "Deployment | None": ...
+
+    def _core_update_redis_cache(self, cache: "RedisCache") -> None: ...
+
+    async def _core_arefresh_model_info(self, client: "AsyncHTTPHandler | None") -> None: ...
+
+
+def apply_changes(router: _ChangeHost, changes: ChangeSet) -> ApplyResult:
     if changes.refresh_model_info:
         raise TypeError("ChangeSet(refresh_model_info=True) needs aapply()")
     unknown: Final = sorted(set(changes.assign) - {*SETTING_FIELDS, *PLAIN_SETTING_ATTRIBUTES, *ASSIGNABLE_ALIASES})
@@ -1771,7 +1797,7 @@ def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     return ApplyResult(version=router._registry_version, upserted=upserted, deleted=deleted)
 
 
-async def aapply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
+async def aapply_changes(router: _ChangeHost, changes: ChangeSet) -> ApplyResult:
     refresh: Final = changes.refresh_model_info
     result: Final = apply_changes(
         router,

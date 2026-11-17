@@ -841,6 +841,10 @@ class _ClosesAsync(Protocol):
     def aclose(self) -> Awaitable[object]: ...
 
 
+class _DeferredLoggingSlot(Protocol):
+    enqueue_deferred_logging: Callable[[], None] | None
+
+
 def serialize_http_exception_detail(
     detail: object,
 ) -> tuple[str, dict | None]:
@@ -4954,7 +4958,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _flush_deferred_async_logging(
-        logging_obj: Any,
+        logging_obj: object,
         exception_raised: bool,
     ) -> None:
         """
@@ -4978,7 +4982,9 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
-        _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
+        if not has_attributes(logging_obj, _DeferredLoggingSlot, "enqueue_deferred_logging"):
+            return
+        _enqueue_fn: Final = logging_obj.enqueue_deferred_logging
         if _enqueue_fn is None:
             return
         logging_obj.enqueue_deferred_logging = None

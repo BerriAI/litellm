@@ -1491,9 +1491,9 @@ def function_setup(
         ):
             messages = None
             if len(args) > 1:
-                messages = args[1]
+                messages = _OPAQUE_VALUE.validate_python(args[1])
             elif kwargs.get("messages", None):
-                messages = kwargs["messages"]
+                messages = _OPAQUE_VALUE.validate_python(kwargs["messages"])
             ### PRE-CALL RULES ###
             Rules: Final = litellm_utils.Rules
             if (
@@ -8777,13 +8777,13 @@ async def async_mock_completion_streaming_obj(
 
 
 ########## Reading Config File ############################
-def read_config_args(config_path) -> dict:
+def read_config_args(config_path) -> object:
     try:
         import os
 
         os.getcwd()
         with open(config_path, "r") as config_file:
-            config: Final = json.load(config_file)
+            config: Final = _OPAQUE_VALUE.validate_python(json.load(config_file))
 
         # read keys/ values from config file and return them
         return config
@@ -12040,6 +12040,12 @@ def get_requester_metadata(metadata: Mapping[str, object]):
     return None
 
 
+def _callable_endpoint(endpoint: object) -> Callable[..., object]:
+    if callable(endpoint):
+        return endpoint
+    raise TypeError(f"'{type(endpoint).__name__}' object is not callable")
+
+
 def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
     """
     Return the json str of the request
@@ -12062,12 +12068,12 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
         raw_request_only=True,
     )
 
-    llm_api_endpoint: Final = getattr(litellm, endpoint.value)
+    llm_api_endpoint: Final = _OPAQUE_VALUE.validate_python(getattr(litellm, endpoint.value))
 
     received_exception = ""
 
     try:
-        llm_api_endpoint(
+        _callable_endpoint(llm_api_endpoint)(
             **kwargs,
             litellm_logging_obj=litellm_logging_obj,
             api_key="my-fake-api-key",

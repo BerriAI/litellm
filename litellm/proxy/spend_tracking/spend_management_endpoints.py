@@ -3250,15 +3250,15 @@ async def _ui_session_grouped_spend_logs(
 
 
 class RequestResponsePayload(NamedTuple):
-    messages: str | list | dict | None
-    response: str | list | dict | None
-    proxy_server_request: str | dict | None
+    messages: object
+    response: object
+    proxy_server_request: object
 
 
 _EMPTY_SPEND_LOG_VALUES: Final = frozenset({"", "{}", "[]", "null"})
 
 
-def _spend_log_field_has_content(value: str | list | dict | None) -> bool:
+def _spend_log_field_has_content(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, str):
@@ -3290,10 +3290,11 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 
 
 def _cold_storage_object_key_from_metadata(
-    metadata: str | Mapping[str, object] | None,
+    metadata: object,
 ) -> str | None:
     if not isinstance(metadata, str):
-        return _cold_storage_object_key(metadata if isinstance(metadata, dict) else None)
+        mapping: Final = as_str_mapping(metadata)
+        return _cold_storage_object_key(mapping if isinstance(mapping, dict) else None)
     try:
         decoded: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(metadata)))
     except (json.JSONDecodeError, TypeError):
@@ -3307,7 +3308,7 @@ def _cold_storage_object_key(metadata: Mapping[str, object] | None) -> str | Non
 
 
 async def _resolve_request_response_payload(
-    row: Mapping[str, Any],
+    row: Mapping[str, object],
     cold_storage_handler: "ColdStorageHandler",
 ) -> RequestResponsePayload:
     """

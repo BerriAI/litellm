@@ -51,7 +51,8 @@ _NOT_LOADED: Final = object()
 
 
 def _cached(namespace: str, name: str) -> object:
-    return vars(sys.modules[namespace]).get(name, _NOT_LOADED)
+    namespace_attributes: Final[Mapping[str, object]] = MappingProxyType(vars(sys.modules[namespace]))
+    return namespace_attributes.get(name, _NOT_LOADED)
 
 
 def _cache(namespace: str, name: str, value: object) -> object:
@@ -73,7 +74,8 @@ def _instance_of(class_name: str) -> Callable[[], object]:
     def create() -> object:
         cls: Final = resolve_lazy_attribute("litellm", class_name)
         assert isinstance(cls, type)
-        return cls()
+        klass: Final[type[object]] = cls
+        return klass()
 
     return create
 

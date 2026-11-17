@@ -65,7 +65,9 @@ def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistant
     raw_arguments: Final[object] = function.get("arguments")
     try:
         parsed: Final[object] = (
-            parse_tool_call_arguments(raw_arguments, tool_name=name, context="Ollama chat request")
+            _DECODED_JSON.validate_python(
+                parse_tool_call_arguments(raw_arguments, tool_name=name, context="Ollama chat request")
+            )
             if isinstance(raw_arguments, str) or raw_arguments is None
             else raw_arguments
         )

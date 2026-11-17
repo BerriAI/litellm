@@ -296,6 +296,15 @@ class _SpendBatch(Protocol):
     @property
     def litellm_modelaccessgroupbudgettable(self) -> BatchTable: ...
 
+    @property
+    def litellm_customerorganizationtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customerteamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customermembertable(self) -> BatchTable: ...
+
 
 _EntitySpendTable: TypeAlias = Literal[
     "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
@@ -398,7 +407,7 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
 class _CustomerHierarchyLevel:
     transactions: _SpendTableName
     table: str
-    prisma_table: str
+    batch_table: Callable[[_SpendBatch], BatchTable]
     id_column: str
 
 
@@ -406,16 +415,19 @@ _CUSTOMER_HIERARCHY_LEVELS: Final = (
     _CustomerHierarchyLevel(
         "customer_org_list_transactions",
         "LiteLLM_CustomerOrganizationTable",
-        "litellm_customerorganizationtable",
+        lambda batcher: batcher.litellm_customerorganizationtable,
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
-        "customer_team_list_transactions", "LiteLLM_CustomerTeamTable", "litellm_customerteamtable", "customer_team_id"
+        "customer_team_list_transactions",
+        "LiteLLM_CustomerTeamTable",
+        lambda batcher: batcher.litellm_customerteamtable,
+        "customer_team_id",
     ),
     _CustomerHierarchyLevel(
         "customer_member_list_transactions",
         "LiteLLM_CustomerMemberTable",
-        "litellm_customermembertable",
+        lambda batcher: batcher.litellm_customermembertable,
         "customer_member_id",
     ),
 )
@@ -2897,7 +2909,7 @@ class DBSpendUpdateWriter:
                 tx.batch_() as batcher,
             ):
                 for entity_id, response_cost in sorted(transactions.items()):
-                    getattr(batcher, level.prisma_table).update_many(
+                    level.batch_table(batcher).update_many(
                         where={level.id_column: entity_id},
                         data={"spend": {"increment": response_cost}},
                     )

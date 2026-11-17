@@ -893,11 +893,9 @@ class ProxyInitializationHelpers:
         from gunicorn.config import Config as GunicornConfig
 
         config: Final = GunicornConfig()
-        keepalive: Final[object] = config.keepalive
-        forwarded_allow_ips: Final[object] = config.forwarded_allow_ips
         return (
-            TypeAdapter(int).validate_python(keepalive),
-            ",".join(TypeAdapter(list[str]).validate_python(forwarded_allow_ips)),
+            TypeAdapter(int).validate_python(config.keepalive),
+            ",".join(TypeAdapter(list[str]).validate_python(config.forwarded_allow_ips)),
         )
 
     @staticmethod
@@ -1417,7 +1415,7 @@ def run_server(
     prometheus_metrics_port: int | None,
     control_plane: bool,
 ):
-    dependencies: Final = ctx.obj if isinstance(ctx.obj, CliDependencies) else CliDependencies()
+    dependencies: Final = ctx.find_object(CliDependencies) or CliDependencies()
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator

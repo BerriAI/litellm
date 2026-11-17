@@ -5013,7 +5013,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if delivers_final_stream_log:
                         await openMeterLogger.async_log_success_event(
                             kwargs=self.model_call_details,
-                            response_obj=self.model_call_details["async_complete_streaming_response"],
+                            response_obj=self._model_call_details_view["async_complete_streaming_response"],
                             start_time=start_time,
                             end_time=end_time,
                         )
@@ -5085,7 +5085,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if delivers_final_stream_log:
                         await customLogger.async_log_event(
                             kwargs=self.model_call_details,
-                            response_obj=self.model_call_details["async_complete_streaming_response"],
+                            response_obj=self._model_call_details_view["async_complete_streaming_response"],
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
@@ -5109,7 +5109,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         print_verbose("DynamoDB Logger: Got Stream Event - Completed Stream Response")
                         await dynamoLogger.async_log_event(
                             kwargs=self.model_call_details,
-                            response_obj=self.model_call_details["async_complete_streaming_response"],
+                            response_obj=self._model_call_details_view["async_complete_streaming_response"],
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,

@@ -78,7 +78,11 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     runs_its_own_chat_completion_loop,
     with_caller_tool_choice,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    require_attributes,
+    set_provider_response_headers_in_hidden_params,
+)
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
@@ -306,6 +310,10 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _HttpMethodName(Protocol):
+    def lower(self) -> str: ...
 
 
 class _RealtimeClientWebSocket(Protocol):
@@ -4599,7 +4607,10 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                batch_response = getattr(sync_httpx_client, transformed_request["method"].lower())(
+                batch_method: Final = require_attributes(
+                    _DECODED_JSON.validate_python(transformed_request["method"]), _HttpMethodName, "lower"
+                ).lower()
+                batch_response = getattr(sync_httpx_client, batch_method)(
                     url=transformed_request["url"],
                     headers=transformed_request["headers"],
                     data=transformed_request["data"],
@@ -4687,7 +4698,9 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                method: Final = transformed_request["method"].lower()
+                method: Final = require_attributes(
+                    _DECODED_JSON.validate_python(transformed_request["method"]), _HttpMethodName, "lower"
+                ).lower()
                 request_kwargs: Final = {
                     "url": transformed_request["url"],
                     "headers": transformed_request["headers"],
