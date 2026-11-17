@@ -1,6 +1,7 @@
 import json
 import os
 from copy import deepcopy
+from typing import Final
 from unittest.mock import AsyncMock
 
 import httpx
@@ -260,9 +261,9 @@ class TestAliceCredentialStripping:
         assert request_data["secret_fields"] == {"raw_headers": {}}
 
 
-_PROMPT = "summarize the attached report"
-_IMAGE = "data:image/png;base64,aGVsbG8="
-_TOOLS = [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}]
+_PROMPT: Final = "summarize the attached report"
+_IMAGE: Final = "data:image/png;base64,aGVsbG8="
+_TOOLS: Final = [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}]
 
 
 def _conversation() -> list[dict[str, object]]:
@@ -276,7 +277,7 @@ def _conversation() -> list[dict[str, object]]:
 
 
 def _request_data(messages: list[dict[str, object]]) -> dict[str, object]:
-    snapshot: dict[str, object] = {"url": "/v1/chat/completions", "body": {"messages": messages}}
+    snapshot: Final[dict[str, object]] = {"url": "/v1/chat/completions", "body": {"messages": messages}}
     snapshot["body"]["proxy_server_request"] = snapshot
     return {
         "model": "gpt-4o",
@@ -291,10 +292,10 @@ class TestAliceRequestDataCopies:
 
     @pytest.mark.asyncio
     async def test_each_message_and_image_crosses_once_per_inputs_slot(self):
-        guardrail = _guardrail()
+        guardrail: Final = _guardrail()
         guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
-        messages = _conversation()
-        request_data = _request_data(messages)
+        messages: Final = _conversation()
+        request_data: Final = _request_data(messages)
 
         await guardrail.apply_guardrail(
             inputs={"texts": [_PROMPT], "images": [_IMAGE], "structured_messages": messages},
@@ -302,8 +303,8 @@ class TestAliceRequestDataCopies:
             input_type="request",
         )
 
-        body = guardrail.async_handler.post.call_args.kwargs["json"]
-        serialized = json.dumps(body)
+        body: Final = guardrail.async_handler.post.call_args.kwargs["json"]
+        serialized: Final = json.dumps(body)
         assert serialized.count(_PROMPT) == 2
         assert serialized.count(_IMAGE) == 2
         assert body["inputs"]["structured_messages"] == messages
@@ -314,29 +315,29 @@ class TestAliceRequestDataCopies:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("structured", [{}, {"structured_messages": []}], ids=["absent", "empty"])
     async def test_keeps_messages_when_structured_messages_are_empty(self, structured: dict[str, object]):
-        guardrail = _guardrail()
+        guardrail: Final = _guardrail()
         guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
-        messages = _conversation()
+        messages: Final = _conversation()
 
         await guardrail.apply_guardrail(
             inputs={"texts": ["the summary"], **structured}, request_data=_request_data(messages), input_type="response"
         )
 
-        sent_request_data = guardrail.async_handler.post.call_args.kwargs["json"]["request_data"]
+        sent_request_data: Final = guardrail.async_handler.post.call_args.kwargs["json"]["request_data"]
         assert sent_request_data["messages"] == messages
         assert "proxy_server_request" not in sent_request_data
         assert json.dumps(sent_request_data).count(_PROMPT) == 1
 
     @pytest.mark.asyncio
     async def test_keeps_request_tools_and_omits_only_at_the_root(self):
-        guardrail = _guardrail()
+        guardrail: Final = _guardrail()
         guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
-        request_data = {
+        request_data: Final = {
             "model": "gpt-4o",
             "tools": _TOOLS,
             "litellm_metadata": {"messages": "nested", "proxy_server_request": "nested"},
         }
-        sent = deepcopy(request_data)
+        sent: Final = deepcopy(request_data)
 
         await guardrail.apply_guardrail(
             inputs={"texts": [_PROMPT], "structured_messages": _conversation(), "tools": _TOOLS},
@@ -348,10 +349,10 @@ class TestAliceRequestDataCopies:
 
     @pytest.mark.asyncio
     async def test_a_cycle_back_to_request_data_does_not_resend_the_omitted_copies(self):
-        guardrail = _guardrail()
+        guardrail: Final = _guardrail()
         guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
-        messages = _conversation()
-        request_data = _request_data(messages)
+        messages: Final = _conversation()
+        request_data: Final = _request_data(messages)
         request_data["metadata"]["request"] = request_data
 
         await guardrail.apply_guardrail(
@@ -360,7 +361,7 @@ class TestAliceRequestDataCopies:
             input_type="request",
         )
 
-        body = guardrail.async_handler.post.call_args.kwargs["json"]
+        body: Final = guardrail.async_handler.post.call_args.kwargs["json"]
         assert json.dumps(body).count(_PROMPT) == 2
         assert body["request_data"]["metadata"] == {"user_api_key_alias": "payments-bot", "request": None}
 
