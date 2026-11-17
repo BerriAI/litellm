@@ -1333,8 +1333,11 @@ def _replica_that_missed_a_publish(
 
 
 @pytest.mark.asyncio
-async def test_make_agent_public_keeps_an_agent_another_replica_published(monkeypatch: pytest.MonkeyPatch) -> None:
-    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+@pytest.mark.parametrize("stored", [["agent-1"], ["agent-1", 7]], ids=["agent-listed", "a-number-listed"])
+async def test_make_agent_public_keeps_an_agent_another_replica_published(
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int]
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=stored)
 
     response: Final = await agent_endpoints.make_agent_public(agent_id="agent-2", user_api_key_dict=_PROXY_ADMIN)
 
@@ -1513,15 +1516,17 @@ async def test_make_agents_public_applies_only_the_modal_change_to_the_stored_li
         (["agent-1", "agent-gone"], ["agent-1"], ["agent-1", "agent-2"], ["agent-1", "agent-2"]),
         (["agent-1", "agent-gone"], ["agent-gone"], ["agent-gone", "agent-2"], ["agent-1", "agent-2"]),
         (["agent-db-only"], [], ["agent-1"], ["agent-db-only", "agent-1"]),
+        (["agent-1", 7], ["agent-1"], ["agent-1", "agent-2"], ["agent-1", "agent-2"]),
     ],
     ids=[
         "drops-a-deleted-agent-the-modal-never-showed",
         "drops-a-deleted-agent-a-stale-modal-still-ticked",
         "keeps-an-agent-this-worker-has-not-loaded",
+        "drops-a-number-listed",
     ],
 )
 async def test_make_agents_public_drops_only_agents_that_no_longer_exist(
-    monkeypatch: pytest.MonkeyPatch, stored: list[str], previous: list[str], requested: list[str], expected: list[str]
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int], previous: list[str], requested: list[str], expected: list[str]
 ) -> None:
     import litellm
 
@@ -1636,12 +1641,15 @@ def _deletable_agent_one(monkeypatch: pytest.MonkeyPatch, rows: ConfigRows, regi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored", [["agent-1", "agent-2"], ["agent-1", 7, "agent-2"]], ids=["agents-listed", "a-number-listed"]
+)
 async def test_delete_agent_unpublishes_it_so_a_new_agent_reusing_its_id_starts_private(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int]
 ) -> None:
     import litellm
 
-    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1", "agent-2"])
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=stored)
     _ = _deletable_agent_one(monkeypatch, rows, registry)
 
     response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)

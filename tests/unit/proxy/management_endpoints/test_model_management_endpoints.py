@@ -2334,8 +2334,9 @@ async def test_update_useful_links_that_change_nothing_create_no_settings_row(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [["gpt-a", "gpt-b"], ["gpt-a", 7, "gpt-b"]], ids=["groups-listed", "a-number-listed"])
 async def test_update_public_model_groups_from_the_modal_keeps_a_group_another_admin_published(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int]
 ) -> None:
     import litellm
     from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -2344,7 +2345,7 @@ async def test_update_public_model_groups_from_the_modal_keeps_a_group_another_a
     )
     from litellm.proxy.proxy_server import ProxyConfig
 
-    rows: Final = ConfigRows({"litellm_settings": {"public_model_groups": ["gpt-a", "gpt-b"]}})
+    rows: Final = ConfigRows({"litellm_settings": {"public_model_groups": stored}})
     monkeypatch.setattr(litellm, "public_model_groups", [])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)

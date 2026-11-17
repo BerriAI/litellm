@@ -353,6 +353,7 @@ async def test_mcp_publication_from_the_modal_keeps_a_server_another_admin_publi
         (["server-db-only"], [], ["server-3"], ["server-db-only", "server-3"]),
         ([], [], ["server-db-only"], ["server-db-only"]),
         (["server-1", "server-rejected"], ["server-1"], ["server-1"], ["server-1"]),
+        (["server-1", 7], ["server-1"], ["server-1", "server-3"], ["server-1", "server-3"]),
     ],
     ids=[
         "drops-a-deleted-server-the-modal-never-showed",
@@ -360,10 +361,11 @@ async def test_mcp_publication_from_the_modal_keeps_a_server_another_admin_publi
         "keeps-a-server-this-worker-has-not-loaded",
         "publishes-a-server-this-worker-has-not-loaded",
         "drops-a-server-an-admin-rejected",
+        "drops-a-number-listed",
     ],
 )
 async def test_mcp_publication_from_the_modal_drops_only_servers_that_no_longer_exist(
-    monkeypatch: pytest.MonkeyPatch, stored: list[str], previous: list[str], requested: list[str], expected: list[str]
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int], previous: list[str], requested: list[str], expected: list[str]
 ) -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 

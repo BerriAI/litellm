@@ -5934,12 +5934,12 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
-_STRING_LIST: Final = TypeAdapter(list[str])
 _CONFIG_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def _listed_items(section: Mapping[str, JsonValue], key: str) -> tuple[str, ...]:
-    return tuple(_STRING_LIST.validate_python(section.get(key) or []))
+    listed: Final = section.get(key)
+    return tuple(item for item in listed if isinstance(item, str)) if isinstance(listed, list) else ()
 
 
 def _with_list_item(
