@@ -11715,16 +11715,16 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
 @pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
 def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
-    local_model_cost_map, model: str
+    local_model_cost_map: None, model: str
 ):
     """What get_supported_openai_params says about temperature/top_p must match what
-    map_openai_params does with them under drop_params, so a caller that pre-flights
-    from the list is never told a param is fine that the request path then drops."""
+    map_openai_params keeps for a value the model accepts. A model that removed sampling
+    params still accepts temperature=1 and no top_p, so that is the pair checked."""
     config = AnthropicConfig()
 
     supported = config.get_supported_openai_params(model=model)
     sent = config.map_openai_params(
-        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        non_default_params={"temperature": 1, "top_p": 0.5},
         optional_params={},
         model=model,
         drop_params=True,
@@ -11732,3 +11732,36 @@ def test_get_supported_params_reports_sampling_params_only_when_the_request_keep
 
     assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
     assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)
+
+
+_FIXED_SAMPLING_ROUTES: Final = (
+    "claude-sonnet-5-5",
+    "anthropic/claude-opus-4-8",
+    "vertex_ai/claude-sonnet-5-5",
+    "azure_ai/claude-opus-4-8",
+)
+
+
+def _mock_completion(model: str, temperature: float) -> ModelResponse:
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=temperature,
+        mock_response="ok",
+        api_key="sk-test",
+    )
+    assert isinstance(response, ModelResponse)
+    return response
+
+
+@pytest.mark.parametrize("model", _FIXED_SAMPLING_ROUTES)
+def test_completion_accepts_temperature_one_on_models_that_removed_sampling_params(
+    local_model_cost_map: None, model: str
+) -> None:
+    assert _mock_completion(model, temperature=1).choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize("model", _FIXED_SAMPLING_ROUTES)
+def test_completion_refuses_other_temperatures_naming_the_one_accepted_value(local_model_cost_map, model: str) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="Only temperature=1 is supported"):
+        _mock_completion(model, temperature=0.5)
