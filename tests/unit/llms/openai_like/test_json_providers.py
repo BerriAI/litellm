@@ -418,6 +418,132 @@ def test_json_text_completion_provider_without_its_key_fails_before_sending_the_
     assert route.call_count == 0
 
 
+_HEADER_AUTH: Final = {"Authorization": "Bearer sk-header"}
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "some-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+}
+
+
+def _complete_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import litellm
+
+    return litellm.completion(model="parasail/some-model", messages=[{"role": "user", "content": "hi"}], **header_kwargs)
+
+
+def _text_complete_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import litellm
+
+    return litellm.text_completion(model="chutes/some-model", prompt="hi", **header_kwargs)
+
+
+def _generate_image_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import litellm
+
+    return litellm.image_generation(model="parasail/some-model", prompt="a red square", **header_kwargs)
+
+
+def _create_realtime_client_secret_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import asyncio
+
+    import litellm
+
+    return asyncio.run(litellm.acreate_realtime_client_secret(model="parasail/some-model", **header_kwargs))
+
+
+def _create_realtime_transcription_session_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import asyncio
+
+    import litellm
+
+    return asyncio.run(litellm.acreate_realtime_transcription_session(model="parasail/some-model", **header_kwargs))
+
+
+@pytest.mark.parametrize(
+    ("call", "header_param"),
+    (
+        (_complete_with_headers, "extra_headers"),
+        (_complete_with_headers, "headers"),
+        (_text_complete_with_headers, "extra_headers"),
+        (_generate_image_with_headers, "headers"),
+        (_create_realtime_client_secret_with_headers, "extra_headers"),
+        (_create_realtime_transcription_session_with_headers, "extra_headers"),
+    ),
+    ids=(
+        "chat-extra_headers",
+        "chat-headers",
+        "text_completion",
+        "image",
+        "realtime_client_secret",
+        "realtime_transcription_session",
+    ),
+)
+def test_json_provider_without_its_key_sends_the_callers_authorization_header(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[..., object], header_param: str
+):
+    import respx
+
+    import litellm
+
+    monkeypatch.delenv("PARASAIL_API_KEY", raising=False)
+    monkeypatch.delenv("CHUTES_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock() as upstream:
+        route: Final = upstream.route().respond(200, json=_CHAT_COMPLETION)
+        call(**{header_param: _HEADER_AUTH})
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-header"
+
+
+def _transcribe_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import litellm
+
+    return litellm.transcription(model="parasail/some-model", file=("clip.wav", b"RIFF0000WAVE"), **header_kwargs)
+
+
+def _speak_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import litellm
+
+    return litellm.speech(model="parasail/some-model", input="hi", voice="alloy", **header_kwargs)
+
+
+def _moderate_with_headers(**header_kwargs: dict[str, str]) -> object:
+    import asyncio
+
+    import litellm
+
+    return asyncio.run(litellm.amoderation(model="parasail/some-model", input="hi", **header_kwargs))
+
+
+@pytest.mark.parametrize(
+    "call",
+    (_transcribe_with_headers, _speak_with_headers, _moderate_with_headers),
+    ids=("transcription", "speech", "moderation"),
+)
+def test_json_provider_header_the_route_never_forwards_does_not_replace_its_key(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[..., object]
+):
+    import respx
+
+    import litellm
+
+    monkeypatch.delenv("PARASAIL_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-canary")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route().respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="PARASAIL_API_KEY"):
+            call(extra_headers=_HEADER_AUTH, headers=_HEADER_AUTH)
+
+    assert route.call_count == 0
+
+
 def test_json_provider_moderation_sends_its_own_env_key(monkeypatch: pytest.MonkeyPatch):
     import asyncio
 

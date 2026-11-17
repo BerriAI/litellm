@@ -573,6 +573,7 @@ def image_generation(
                     model,
                     api_key or dynamic_api_key,
                     isinstance(client, openai.OpenAI | openai.AsyncOpenAI),
+                    _OBJECT_DICT_ADAPTER.validate_python(headers),
                 )
             ) is not None:
                 raise missing_key_error

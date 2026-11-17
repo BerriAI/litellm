@@ -352,8 +352,9 @@ async def acreate_realtime_client_secret(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    caller_extra_headers: Final = as_str_mapping(kwargs.get("extra_headers"))
     if missing_key_error := missing_json_provider_key_error(
-        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False
+        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False, caller_extra_headers
     ):
         raise missing_key_error
     provider_config, resolved_api_base, resolved_api_key = _get_realtime_http_provider_config(
@@ -366,7 +367,7 @@ async def acreate_realtime_client_secret(
         provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers=caller_extra_headers,
     )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
@@ -542,8 +543,9 @@ async def acreate_realtime_transcription_session(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    caller_extra_headers: Final = as_str_mapping(kwargs.get("extra_headers"))
     if missing_key_error := missing_json_provider_key_error(
-        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False
+        custom_llm_provider, model_name, dynamic_api_key or litellm_params.api_key, False, caller_extra_headers
     ):
         raise missing_key_error
     (
@@ -560,7 +562,7 @@ async def acreate_realtime_transcription_session(
         provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers=caller_extra_headers,
     )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,

@@ -69,3 +69,38 @@ async def test_async_audio_transcriptions_records_provider_response_headers():
         )
 
     _assert_headers_recorded(response, logging_obj)
+
+
+def _silent_wav(seconds: int) -> bytes:
+    import io
+    import wave
+
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\x00\x00" * 8000 * seconds)
+    return buffer.getvalue()
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ("groq/whisper-large-v3-turbo", "resetdata/openai/whisper-large-v3-turbo"))
+def test_openai_compatible_transcription_is_billed_from_its_providers_cost_row(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    import respx
+
+    import litellm
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setenv("RESETDATA_API_KEY", "rd-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock() as upstream:
+        upstream.route().respond(200, json={"text": "four score"})
+        response = litellm.transcription(model=model, file=("clip.wav", _silent_wav(seconds=2)))
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        2 * litellm.model_cost[model]["input_cost_per_second"]
+    )

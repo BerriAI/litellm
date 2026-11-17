@@ -49175,6 +49175,16 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "resetdata/openai/whisper-large-v3-turbo": {
+        "input_cost_per_second": 3.378e-06,
+        "litellm_provider": "resetdata",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.resetdata.ai/guides/audio/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "resetdata/qwen/qwen3-coder-30b-a3b-instruct": {
         "input_cost_per_token": 7.061e-08,
         "litellm_provider": "resetdata",

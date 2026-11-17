@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import httpx
@@ -59,13 +60,21 @@ class OpenAILikeBase:
         return api_base, headers
 
 
+def _sets_authorization(headers: Mapping[str, object] | None) -> bool:
+    return headers is not None and any(name.lower() == "authorization" for name in headers)
+
+
 def missing_json_provider_key_error(
-    custom_llm_provider: str | None, model: str, api_key: str | None, uses_openai_client: bool
+    custom_llm_provider: str | None,
+    model: str,
+    api_key: str | None,
+    uses_openai_client: bool,
+    forwarded_headers: Mapping[str, object] | None = None,
 ) -> AuthenticationError | None:
     json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
     if json_provider is None or uses_openai_client:
         return None
-    if api_key or litellm.api_key:
+    if api_key or litellm.api_key or _sets_authorization(forwarded_headers):
         return None
     return AuthenticationError(
         message=f"Set {json_provider.api_key_env} or pass api_key",

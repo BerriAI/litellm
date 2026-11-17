@@ -2802,6 +2802,7 @@ def _missing_provider_key_error(ctx: CompletionDispatchContext) -> Authenticatio
         ctx.model,
         ctx.api_key,
         isinstance(_dispatch_client_openai(ctx), openai.OpenAI | openai.AsyncOpenAI),
+        _FORWARDED_HEADERS_ADAPTER.validate_python(ctx.headers or litellm.headers),
     )
 
 
@@ -2880,7 +2881,7 @@ def _complete_custom_openai(
         if is_app_session:
             headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
-    request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
+    request_headers: Final = headers
     outbound_headers: Final = (
         request_headers
         if provider_config is None
@@ -4406,6 +4407,7 @@ _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_FORWARDED_HEADERS_ADAPTER: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None)
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
@@ -8912,6 +8914,7 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
+            custom_llm_provider=custom_llm_provider,
         )
     elif custom_llm_provider == "nvidia_riva":
         # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
