@@ -107,12 +107,18 @@ async def _validate_targets(targets: Sequence[EvalTarget], settings: _Settings) 
 
 def _prepare_workspace(task: EvalTask, directory: Path) -> None:
     if task.workspace is not None:
+        source: Final = Path(task.workspace)
+        if source.is_symlink():
+            raise ValueError("task workspace root must not be a symbolic link")
         shutil.copytree(
-            task.workspace,
+            source,
             directory,
+            symlinks=True,
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns(".git"),
         )
+        if any(path.is_symlink() for path in directory.rglob("*")):
+            raise ValueError("task workspace must not contain symbolic links")
     for name, content in task.files.items():
         destination = directory / name
         if not destination.resolve().is_relative_to(directory.resolve()):

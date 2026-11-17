@@ -160,6 +160,48 @@ async def test_should_copy_each_workspace_and_run_setup_and_checks_in_the_same_s
     assert all(box.close_count == 1 and not Path(box.workdir).exists() for box in factory.boxes)
 
 
+@pytest.mark.parametrize("link_kind", ("file", "directory", "relative", "broken", "root", "cycle"))
+async def test_should_reject_workspace_symbolic_links_before_creating_a_sandbox(tmp_path: Path, link_kind: str) -> None:
+    host: Final = tmp_path / "host"
+    host.mkdir()
+    host_file: Final = host / "record.txt"
+    host_file.write_text("host data")
+    original: Final = tmp_path / "project"
+    original.mkdir()
+    (original / "notes.txt").write_text("task data")
+    workspace: Final = tmp_path / "workspace" if link_kind == "root" else original
+
+    if link_kind == "root":
+        workspace.symlink_to(original, target_is_directory=True)
+    elif link_kind == "directory":
+        (original / "linked").symlink_to(host, target_is_directory=True)
+    elif link_kind == "relative":
+        (original / "linked").symlink_to("notes.txt")
+    elif link_kind == "broken":
+        (original / "linked").symlink_to(host / "missing.txt")
+    elif link_kind == "cycle":
+        (original / "linked").symlink_to(".", target_is_directory=True)
+    else:
+        (original / "linked").symlink_to(host_file)
+
+    factory: Final = RecordingFactory()
+    task: Final = EvalTask(
+        "linked-workspace",
+        "Complete the task",
+        check=PredicateCheck(_passes),
+        workspace=workspace,
+        files={"linked/record.txt": "overlay"} if link_kind == "directory" else {},
+    )
+    report: Final = await aagent_eval((task,), (_target(),), sandbox=factory)
+
+    assert report.runs[0].status is EvalStatus.ERROR
+    assert report.runs[0].result is None
+    assert "symbolic link" in report.runs[0].detail.lower()
+    assert factory.boxes == ()
+    assert host_file.read_text() == "host data"
+    assert (original / "notes.txt").read_text() == "task data"
+
+
 async def test_should_preserve_failed_and_error_rows_and_finish_the_other_tasks() -> None:
     async def command(box: RecordingSandbox, cmd: Sequence[str]) -> CompletedRun:
         return CompletedRun(stdout="", stderr="setup rejected", exit_code=2)
