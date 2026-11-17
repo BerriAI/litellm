@@ -150,13 +150,15 @@ def anthropic_content_delta_detector() -> Callable[[object], bool]:
     def has_content_delta(chunk: object) -> bool:
         nonlocal pending
         if not isinstance(chunk, (bytes, bytearray)):
-            pending = b""
+            pending = b""  # rebind-ok: a non-byte chunk ends any split line
             return is_anthropic_content_delta_chunk(chunk)
         window: Final = pending + bytes(chunk)
         if is_anthropic_content_delta_chunk(window):
             return True
         last_line: Final = window.rpartition(b"\n")[2]
-        pending = last_line if len(last_line) <= len(_CONTENT_DELTA_EVENT_LINE) + 1 else _NOT_A_LINE_START
+        pending = (  # rebind-ok: carry this chunk's unterminated line
+            last_line if len(last_line) <= len(_CONTENT_DELTA_EVENT_LINE) + 1 else _NOT_A_LINE_START
+        )
         return False
 
     return has_content_delta

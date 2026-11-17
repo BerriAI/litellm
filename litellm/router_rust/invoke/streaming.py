@@ -296,6 +296,17 @@ def _record_now(recording: Callable[[], object]) -> None:
 _ItemT: Final = TypeVar("_ItemT")
 
 
+async def _anext_before(
+    items: AsyncIterator[_ItemT], deadline: float, expired: Callable[[], MidStreamFallbackError]
+) -> _ItemT:
+    """``items``' next item, or the router's expiry once ``deadline`` passes first. Any other error,
+    a provider's own ``TimeoutError`` included, propagates unchanged."""
+    scope: Final = anyio.CancelScope(deadline=deadline)
+    with scope:
+        return await items.__anext__()
+    raise expired()
+
+
 async def _until_first_output(
     items: AsyncIterator[_ItemT],
     deadline: float,
@@ -303,18 +314,12 @@ async def _until_first_output(
     expired: Callable[[], MidStreamFallbackError],
 ) -> AsyncGenerator[_ItemT, None]:
     while True:
-        remaining: float = deadline - anyio.current_time()
-        if remaining <= 0:
+        if deadline - anyio.current_time() <= 0:
             raise expired()
         try:
-            with anyio.fail_after(remaining) as scope:
-                item: _ItemT = await items.__anext__()
+            item: _ItemT = await _anext_before(items, deadline, expired)
         except StopAsyncIteration:
             return
-        except TimeoutError as error:
-            if not scope.cancelled_caught:
-                raise
-            raise expired() from error
         yield item
         if has_output(item):
             async for following in items:
@@ -2060,13 +2065,11 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         ) -> _FirstChunk[AsyncIterator[object]]:
             try:
                 if needs_fetch:
-                    try:
-                        with anyio.fail_after(max(0.0, chat_deadline - anyio.current_time())) as scope:
-                            await stream.fetch_stream()
-                    except TimeoutError as error:
-                        if not scope.cancelled_caught:
-                            raise
-                        raise _mid_stream_retry_trigger(expired()) from error
+                    fetch_scope: Final = anyio.CancelScope(deadline=chat_deadline)
+                    with fetch_scope:
+                        await stream.fetch_stream()
+                    if fetch_scope.cancelled_caught:
+                        raise _mid_stream_retry_trigger(expired())
                 return await _aread_first_chunk(stream, chat_deadline, expired)
             except BaseException:
                 with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):

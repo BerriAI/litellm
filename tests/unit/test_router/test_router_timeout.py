@@ -963,6 +963,7 @@ async def test_provider_timeout_before_output_is_not_caller_ttft_expiry(
         "stream_ttft_timeout": 10,
         "client_side_stream_ttft_timeout": True,
     }
+
     async def drain() -> None:
         if endpoint == "responses":
             responses_stream: Final = await router.aresponses(input="hi", **kwargs)
@@ -975,6 +976,7 @@ async def test_provider_timeout_before_output_is_not_caller_ttft_expiry(
         else:
             chat_stream: Final = await router.acompletion(messages=[{"role": "user", "content": "hi"}], **kwargs)
             _ = tuple([chunk async for chunk in chat_stream])
+
     with pytest.raises((TimeoutError, litellm.APIConnectionError, litellm.Timeout)) as caught:
         await drain()
     assert not is_stream_ttft_expiry(caught.value)
@@ -1195,9 +1197,7 @@ async def test_stream_ttft_messages_split_delta_disarms_deadline(
     ttft_httpx_transport: None,
 ) -> None:
     start: Final = _ttft_anthropic_frame("message_start", message={"id": "msg-ttft"})
-    delta: Final = _ttft_anthropic_frame(
-        "content_block_delta", index=0, delta={"type": "text_delta", "text": "answer"}
-    )
+    delta: Final = _ttft_anthropic_frame("content_block_delta", index=0, delta={"type": "text_delta", "text": "answer"})
     stop: Final = _ttft_anthropic_frame("message_stop")
     respx_mock.post("https://ttft.invalid/v1/messages").respond(
         200,
