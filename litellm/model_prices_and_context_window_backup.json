@@ -70478,6 +70478,44 @@
             "/v1/images/edits"
         ]
     },
+    "azure_ai/MAI-Image-2.7": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3.4e-05,
+        "source": "https://vercel.com/ai-gateway/models/mai-image-2.7",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "azure_ai/MAI-Image-2.7-Flash": {
+        "input_cost_per_image_token": 2.5e-06,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 1e-05,
+        "source": "https://vercel.com/ai-gateway/models/mai-image-2.7-flash",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
     "azure_ai/FW-DeepSeek-V4.1-Flash": {
         "cache_read_input_token_cost": 8e-09,
         "input_cost_per_token": 3.75e-07,
