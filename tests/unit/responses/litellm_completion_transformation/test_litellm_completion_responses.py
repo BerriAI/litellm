@@ -44,6 +44,68 @@ from litellm.types.utils import (
 
 
 class TestLiteLLMCompletionResponsesConfig:
+    @pytest.mark.parametrize("part_type", ["input_image", "input_file"])
+    @pytest.mark.parametrize(
+        ("key", "media_format", "expected_format"),
+        [("key", "image/png", "png"), ("key.jpeg", "image/png", "png"), ("key.png", None, "png")],
+    )
+    def test_explicit_responses_media_format_reaches_the_converse_s3_image(
+        self, part_type: str, key: str, media_format: str | None, expected_format: str
+    ) -> None:
+        uri: Final = f"s3://bucket/{key}"
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": part_type,
+                            "image_url" if part_type == "input_image" else "file_id": uri,
+                            **({"format": media_format} if media_format is not None else {}),
+                        }
+                    ],
+                }
+            ],
+            responses_api_request={},
+        )
+        request: Final = litellm.AmazonConverseConfig()._transform_request(
+            model="us.amazon.nova-2-lite-v1:0",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert request["messages"] == [
+            {
+                "role": "user",
+                "content": [{"image": {"format": expected_format, "source": {"s3Location": {"uri": uri}}}}],
+            }
+        ]
+
+    @pytest.mark.parametrize("part_type", ["input_image", "input_file"])
+    def test_extensionless_responses_s3_media_without_format_is_a_bad_request(self, part_type: str) -> None:
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": part_type, "image_url" if part_type == "input_image" else "file_id": "s3://bucket/key"}
+                    ],
+                }
+            ],
+            responses_api_request={},
+        )
+
+        with pytest.raises(litellm.BadRequestError, match="Cannot tell the media type"):
+            litellm.AmazonConverseConfig()._transform_request(
+                model="us.amazon.nova-2-lite-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
     def test_transform_input_file_item_to_file_item_with_file_id(self):
         """Test transformation of input_file item with file_id to Chat Completion file format"""
         # Setup
@@ -262,6 +324,81 @@ class TestLiteLLMCompletionResponsesConfig:
         assert result["image_url"]["detail"] == "auto"
         assert "extra_field" not in result
         assert "another_field" not in result
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": "111122223333"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "detail": "auto",
+                        "bucket_owner": "111122223333",
+                    },
+                },
+                id="input-image",
+            ),
+            pytest.param(
+                {"type": "input_file", "file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                {
+                    "type": "file",
+                    "file": {"file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                },
+                id="input-file",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": 111122223333},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "detail": "auto", "bucket_owner": 111122223333},
+                },
+                id="input-image-owner-left-for-bedrock-to-check",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": ""},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "detail": "auto", "bucket_owner": ""},
+                },
+                id="input-image-empty-owner-left-for-bedrock-to-check",
+            ),
+        ],
+    )
+    def test_transform_input_media_item_keeps_bucket_owner(self, item: Mapping[str, object], expected: object):
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item]) == [
+            expected
+        ]
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param(
+                {"type": "input_image", "image_url": "data:image/png;base64,AA", "bucket_owner": "111122223333"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA", "detail": "auto"}},
+                id="data-url-image",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "https://example.test/cat.png", "bucket_owner": 111122223333},
+                {"type": "image_url", "image_url": {"url": "https://example.test/cat.png", "detail": "auto"}},
+                id="https-image-with-an-int-owner",
+            ),
+            pytest.param(
+                {
+                    "type": "input_file",
+                    "file_data": "data:application/pdf;base64,AA",
+                    "bucket_owner": ["111122223333"],
+                },
+                {"type": "file", "file": {"file_data": "data:application/pdf;base64,AA"}},
+                id="data-url-file-with-a-list-owner",
+            ),
+        ],
+    )
+    def test_transform_input_media_item_drops_bucket_owner_off_s3(self, item: Mapping[str, object], expected: object):
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item]) == [
+            expected
+        ]
 
     def test_transform_chat_completion_response_with_reasoning_content(self):
         """Test that reasoning content is preserved in the full transformation pipeline"""
