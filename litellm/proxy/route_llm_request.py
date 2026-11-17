@@ -320,8 +320,10 @@ class ProxyCommaSeparatedModelsStreamError(ProxyException):
     def __init__(self) -> None:
         super().__init__(
             message=(
-                "Comma-separated models are not supported with stream=true. Send one model per request, "
-                "or set fastest_response=true to stream the first model that answers."
+                "Comma-separated models send the request to every listed model and cannot stream. "
+                "To stream, send one model name. To spread traffic or fail over across models, put them behind "
+                "one model group or fallbacks (https://docs.litellm.ai/docs/proxy/reliability). "
+                "To race the listed models and stream the first answer, set fastest_response=true."
             ),
             type="invalid_request_error",
             param="stream",
