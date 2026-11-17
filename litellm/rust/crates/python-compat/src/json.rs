@@ -22,19 +22,6 @@ pub fn dumps(value: &Value) -> Result<String, Error> {
     Ok(out)
 }
 
-/// `type(json.loads(text)).__name__` for a JSON value, the name Python's `TypeError` messages use.
-pub fn type_name(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "NoneType",
-        serde_json::Value::Bool(_) => "bool",
-        serde_json::Value::Number(number) if number.is_f64() => "float",
-        serde_json::Value::Number(_) => "int",
-        serde_json::Value::String(_) => "str",
-        serde_json::Value::Array(_) => "list",
-        serde_json::Value::Object(_) => "dict",
-    }
-}
-
 /// The Python value `json.loads` returns for a JSON document.
 pub fn from_json(value: serde_json::Value) -> Value {
     match value {
