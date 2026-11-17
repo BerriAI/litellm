@@ -60,11 +60,6 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
     member: selected.member?.customer_member_id ?? null,
   };
   const budgetSettingsHref = `${customerHierarchyHref("manage", budgetScope)}&tab=settings`;
-  const kindLabel = {
-    organization: t("customerPortal.hierarchy.organization"),
-    team: t("customerPortal.hierarchy.team"),
-    member: t("customerPortal.hierarchy.member"),
-  }[entity.kind];
   return (
     <header>
       <nav
@@ -72,42 +67,35 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
         className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
       >
         <a href={customersHref} className="hover:text-foreground">
-          {t("customerPortal.entities.organizations")}
+          {t("customerPortal.analytics.allCustomers")}
         </a>
-        <ChevronRight aria-hidden="true" className="size-3" />
-        <button
-          type="button"
-          onClick={hierarchy.openOrganization}
-          className="hover:text-foreground"
-          aria-current={!team ? "page" : undefined}
-        >
-          {selected.organization.alias || selected.organization.customer_org_id}
-        </button>
-        {team && (
+        {(team || selected.member) && (
+          <>
+            <ChevronRight aria-hidden="true" className="size-3" />
+            <button type="button" onClick={hierarchy.openOrganization} className="hover:text-foreground">
+              {selected.organization.alias || selected.organization.customer_org_id}
+            </button>
+          </>
+        )}
+        {selected.member && team && (
           <>
             <ChevronRight aria-hidden="true" className="size-3" />
             <button
               type="button"
               onClick={() => hierarchy.openTeam(team.customer_team_id)}
               className="hover:text-foreground"
-              aria-current={!selected.member ? "page" : undefined}
             >
               {team.alias || team.customer_team_id}
             </button>
           </>
         )}
-        {selected.member && (
-          <>
-            <ChevronRight aria-hidden="true" className="size-3" />
-            <span aria-current="page">{selected.member.alias || selected.member.customer_member_id}</span>
-          </>
-        )}
       </nav>
       <div className="flex flex-wrap items-start justify-between gap-6">
         <div className="min-w-0 flex-1 basis-72">
-          <p className="mb-1 text-xs text-muted-foreground">{kindLabel}</p>
-          <h1 className="text-2xl font-semibold tracking-tight">{label}</h1>
-          <p className="mt-3 font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
+          <h1 className="break-words text-2xl font-semibold tracking-tight">{label}</h1>
+          {label !== customerEntityId(entity) && (
+            <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
+          )}
         </div>
         <div className="w-full sm:w-72">
           <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
@@ -236,7 +224,8 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
                 <TableCell>
                   <button
                     type="button"
-                    className="text-xs text-muted-foreground hover:text-primary"
+                    className="block max-w-40 truncate text-xs text-muted-foreground hover:text-primary"
+                    title={row.parentTeamId ?? undefined}
                     onClick={row.openParentTeam}
                   >
                     {row.parentTeamId}
@@ -346,17 +335,18 @@ function HierarchyChildTable(props: ScopeProps) {
   const childLabel = childTab === "teams" ? t("customerPortal.hierarchy.teams") : t("customerPortal.hierarchy.members");
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <h2 className="text-base font-medium tracking-tight">{childLabel}</h2>
-        <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        {childTab === "members" && (
+          <CustomerMemberSearch
+            key={props.selected.team?.customer_team_id ?? ""}
+            value={hierarchy.memberSearch}
+            onSearch={hierarchy.setMemberSearch}
+          />
+        )}
+        <div className="ml-auto">
+          <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
+        </div>
       </div>
-      {childTab === "members" && (
-        <CustomerMemberSearch
-          key={props.selected.team?.customer_team_id ?? ""}
-          value={hierarchy.memberSearch}
-          onSearch={hierarchy.setMemberSearch}
-        />
-      )}
       <HierarchyChildRows {...props} childLabel={childLabel} showTeam={showTeam} />
     </>
   );
@@ -416,7 +406,7 @@ export default function CustomerHierarchyManager() {
 
   return (
     <main
-      className="mx-auto w-full max-w-[1600px] space-y-7 px-5 py-6 sm:px-8"
+      className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6"
       aria-label={t("customerPortal.hierarchy.title")}
     >
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />

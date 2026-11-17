@@ -92,16 +92,10 @@ function CustomerOrganizations() {
   };
 
   return (
-    <div className="w-full space-y-5 px-6 py-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="min-w-0 text-lg font-semibold tracking-tight">{t("customerPortal.list.title")}</h1>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" /> {t("customerPortal.list.create")}
-        </Button>
-      </div>
+    <div className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
       <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
           <AdvancedDatePicker
             value={dateValue}
             onValueChange={onDateChange}
@@ -139,14 +133,19 @@ function CustomerOrganizations() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-pressed={sorting[0]?.id === "created_at" && sorting[0].desc}
-            onClick={() => onSortingChange([CUSTOMER_ORGANIZATION_TABLE.defaultSort])}
-          >
-            {t("customerPortal.list.newestFirst")}
-          </Button>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={sorting[0]?.id === "created_at" && sorting[0].desc}
+              onClick={() => onSortingChange([CUSTOMER_ORGANIZATION_TABLE.defaultSort])}
+            >
+              {t("customerPortal.list.newestFirst")}
+            </Button>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" /> {t("customerPortal.list.create")}
+            </Button>
+          </div>
         </div>
         {organizations.isError || monthlyUsage.isError ? (
           <ErrorState

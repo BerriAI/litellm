@@ -65,7 +65,7 @@ export default function CustomerHierarchyUsagePage() {
 
   return (
     <main
-      className="mx-auto w-full max-w-[1600px] space-y-7 px-5 py-6 sm:px-8"
+      className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6"
       aria-label={t("customerPortal.analytics.title")}
     >
       <CustomerUsageHeader
