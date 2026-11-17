@@ -7377,6 +7377,54 @@ def _anthropic_answering_blue(respx_mock: respx.MockRouter) -> respx.Route:
     )
 
 
+def _anthropic_rejecting_the_primary_model(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content)["model"] == "primary":
+        return httpx.Response(
+            404, json={"type": "error", "error": {"type": "not_found_error", "message": "model: primary"}}
+        )
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_one_sentence",
+            "type": "message",
+            "role": "assistant",
+            "model": "backup",
+            "content": [{"type": "text", "text": "The sky is blue."}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 28, "output_tokens": 5},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
+async def test_a_responses_call_handed_to_chat_falls_back_with_the_template_the_fallback_names(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_anthropic_rejecting_the_primary_model
+    )
+    request: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            "model": "anthropic/primary",
+            "input": "What color is the sky?",
+            "prompt_id": "one-word",
+            "callbacks": [_PromptManager()],
+            "api_key": "sk-test",
+            "fallbacks": [{"model": "anthropic/backup", "prompt_id": "one-sentence-at-low-temperature"}],
+        }
+    )
+
+    response: Final = await litellm.aresponses(**request) if asynchronous else litellm.responses(**request)
+
+    fallback_body: Final = route.calls.last.request.content.decode()
+    assert response.output_text == "The sky is blue."
+    assert json.loads(fallback_body)["model"] == "backup"
+    assert fallback_body.count("Answer in one sentence.") == 1
+
+
 async def _responses_with_system_cache_points(
     asynchronous: bool, prompt_manager: CustomPromptManagement, prompt_id: str | None = "one-word"
 ) -> ResponsesAPIResponse:

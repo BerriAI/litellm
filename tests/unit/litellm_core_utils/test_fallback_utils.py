@@ -1051,6 +1051,37 @@ async def test_acompletion_fallback_to_another_provider_never_reuses_the_first_p
 
 @pytest.mark.timeout(30, method="thread")
 @pytest.mark.asyncio
+async def test_acompletion_fallback_whose_prompt_template_picks_another_provider_never_reuses_the_first_providers_credentials(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    _ = (tmp_path / "brief.prompt").write_text("---\nmodel: anthropic/claude-haiku-5-5\n---\nUser: hello\n")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "global_prompt_directory", str(tmp_path))
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+    _ = respx_mock.post("https://gateway.example/v1/chat/completions").mock(return_value=_model_unavailable())
+    _ = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        fallbacks=["dotprompt/openai/second"],
+        prompt_id="brief",
+        api_key="gateway-key",
+        api_base="https://gateway.example/v1",
+    )
+
+    fallback_request: Final = respx_mock.calls.last.request
+    assert response.choices[0].message.content == "ok"
+    assert str(fallback_request.url) == "https://api.anthropic.com/v1/messages"
+    assert fallback_request.headers["x-api-key"] == "anthropic-env-key"
+    assert not any("gateway-key" in value for value in fallback_request.headers.values())
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
 async def test_acompletion_fallback_to_an_unprefixed_model_keeps_the_requests_provider_and_credentials(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

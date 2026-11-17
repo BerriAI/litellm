@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
 )
+from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED_FIELD
 from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams
 
 FALLBACK_ATTEMPT_KWARG: Final = f"{INTERNAL_KWARG_PREFIX}fallback_attempt"
@@ -111,17 +112,14 @@ def routes_through_a_prompt_manager(model: str | None) -> bool:
     return model is not None and model.split("/", 1)[0] in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the prompt manager lookup reads this same list
 
 
-def _without_prompt_manager_prefix(model: str) -> str:
-    prompt_manager, _, routed_model = model.partition("/")
-    return routed_model if routed_model and routes_through_a_prompt_manager(prompt_manager) else model
-
-
 def _provider_of(model: str, custom_llm_provider: object) -> str | None:
+    from litellm.integrations.litellm_agent.litellm_agent_model_resolver import LITELLM_AGENT_PREFIX
     from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 
     try:
         return resolve_model_and_provider_for_metadata(
-            _without_prompt_manager_prefix(model), custom_llm_provider if isinstance(custom_llm_provider, str) else None
+            model.removeprefix(LITELLM_AGENT_PREFIX),
+            custom_llm_provider if isinstance(custom_llm_provider, str) else None,
         )[1]
     except litellm.exceptions.BadRequestError:
         return None
@@ -140,11 +138,21 @@ def _inherited_kwargs(
     return {key: value for key, value in base_kwargs.items() if key not in dropped}
 
 
+def _without_the_applied_prompt_when_the_fallback_renders_its_own(
+    inherited: Mapping[str, object], model: str, overrides: Mapping[str, object]
+) -> Mapping[str, object]:
+    if "prompt_id" not in overrides and not routes_through_a_prompt_manager(model):
+        return inherited
+    return {key: value for key, value in inherited.items() if key != PROMPT_MANAGEMENT_APPLIED_FIELD}
+
+
 def _fallback_attempt(plan: _FallbackPlan, fallback: str | Mapping[str, object]) -> _FallbackAttempt:
     overrides: Final = _NO_OVERRIDES if isinstance(fallback, str) else fallback
     model: Final = fallback if isinstance(fallback, str) else str(overrides.get("model", plan.original_model))
-    inherited: Final = _inherited_kwargs(
-        plan.base_kwargs, plan.original_model, model, overrides.get("custom_llm_provider")
+    inherited: Final = _without_the_applied_prompt_when_the_fallback_renders_its_own(
+        _inherited_kwargs(plan.base_kwargs, plan.original_model, model, overrides.get("custom_llm_provider")),
+        model,
+        overrides,
     )
     request: Final = filter_internal_params(safe_deep_copy({**inherited, **overrides}))
     return _FallbackAttempt(
