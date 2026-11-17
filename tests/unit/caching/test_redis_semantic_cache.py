@@ -1511,6 +1511,13 @@ def test_redis_semantic_cache_bypasses_tool_and_function_calls(monkeypatch):
             )
             is False
         )
+        assert (
+            cache.should_use_cache(
+                messages=[{"role": "user", "content": "refund charge"}],
+                extra_body={"tools": tool_def},
+            )
+            is False
+        )
 
 
 def test_redis_semantic_cache_allows_tools_when_explicitly_opted_in(monkeypatch):

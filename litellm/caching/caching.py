@@ -125,6 +125,78 @@ def _request_message_count(kwargs: Mapping[str, object]) -> int:
     return sum(1 for item in items if _is_conversation_item(item))
 
 
+def _mapping_or_obj_has_tools(obj: object) -> bool:
+    if isinstance(obj, Mapping):
+        if obj.get("tools") or obj.get("functions"):
+            return True
+        nested = obj.get("extra_body")
+        if isinstance(nested, Mapping) and (nested.get("tools") or nested.get("functions")):
+            return True
+    elif obj is not None:
+        if getattr(obj, "tools", None) or getattr(obj, "functions", None):
+            return True
+        nested = getattr(obj, "extra_body", None)
+        if isinstance(nested, Mapping) and (nested.get("tools") or nested.get("functions")):
+            return True
+    return False
+
+
+def _request_has_tools(kwargs: Mapping[str, object]) -> bool:
+    """Check if request kwargs, extra_body, or nested param dictionaries contain tools or functions."""
+    for key in (None, "extra_body", "optional_params", "data"):
+        candidate = kwargs if key is None else kwargs.get(key)
+        if candidate is not None and _mapping_or_obj_has_tools(candidate):
+            return True
+    return False
+
+
+def _cached_response_has_tool_calls(cached_response: object) -> bool:
+    """Check if cached response contains tool calls or function calls (Chat Completions or Responses API)."""
+    if isinstance(cached_response, Mapping):
+        # Chat Completions format
+        choices = cached_response.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if isinstance(choice, Mapping):
+                    message = choice.get("message")
+                    if isinstance(message, Mapping) and (message.get("tool_calls") or message.get("function_call")):
+                        return True
+                elif hasattr(choice, "message"):
+                    msg = getattr(choice, "message", None)
+                    if msg is not None and (getattr(msg, "tool_calls", None) or getattr(msg, "function_call", None)):
+                        return True
+        # Responses API format
+        output = cached_response.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if isinstance(item, Mapping):
+                    item_type = item.get("type")
+                    if item_type in ("function_call", "tool_call", "custom_tool_call") or item.get("call_id"):
+                        return True
+                elif hasattr(item, "type"):
+                    item_type = getattr(item, "type", None)
+                    if item_type in ("function_call", "tool_call", "custom_tool_call") or getattr(
+                        item, "call_id", None
+                    ):
+                        return True
+    elif hasattr(cached_response, "choices"):
+        choices = getattr(cached_response, "choices", None)
+        if isinstance(choices, list):
+            for choice in choices:
+                msg = getattr(choice, "message", None)
+                if msg is not None and (getattr(msg, "tool_calls", None) or getattr(msg, "function_call", None)):
+                    return True
+    elif hasattr(cached_response, "output"):
+        output = getattr(cached_response, "output", None)
+        if isinstance(output, list):
+            for item in output:
+                item_type = getattr(item, "type", None) if not isinstance(item, Mapping) else item.get("type")
+                call_id = getattr(item, "call_id", None) if not isinstance(item, Mapping) else item.get("call_id")
+                if item_type in ("function_call", "tool_call", "custom_tool_call") or call_id:
+                    return True
+    return False
+
+
 class Cache:
     def __init__(
         self,
@@ -671,18 +743,12 @@ class Cache:
             if (
                 self._is_semantic_cache()
                 and not getattr(self, "semantic_cache_allow_tools", False)
-                and isinstance(cached_response, dict)
+                and _cached_response_has_tool_calls(cached_response)
             ):
-                choices = cached_response.get("choices")
-                if choices and isinstance(choices, list) and len(choices) > 0:
-                    first_choice = choices[0]
-                    if isinstance(first_choice, dict):
-                        message = first_choice.get("message", {})
-                        if isinstance(message, dict) and (message.get("tool_calls") or message.get("function_call")):
-                            verbose_logger.debug(
-                                "get_cache_logic: Rejecting cached response containing tool_calls/function_call from semantic cache."
-                            )
-                            return None
+                verbose_logger.debug(
+                    "get_cache_logic: Rejecting cached response containing tool_calls/function_call from semantic cache."
+                )
+                return None
             return cached_response
         return cached_result
 
@@ -1047,7 +1113,7 @@ class Cache:
             return False
         if (
             self._is_semantic_cache()
-            and (kwargs.get("tools") or kwargs.get("functions"))
+            and _request_has_tools(kwargs)
             and not getattr(self, "semantic_cache_allow_tools", False)
         ):
             verbose_logger.debug(
