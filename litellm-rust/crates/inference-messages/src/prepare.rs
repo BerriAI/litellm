@@ -119,18 +119,24 @@ fn prepare_provider_request(
         &env_lookup,
     )?;
 
+    let body = config.request_body(
+        transformed,
+        &environment.headers,
+        shaping.settings.drop_params,
+    )?;
+
     let url = config.get_complete_url(
         api_base.as_deref(),
-        &transformed.model,
+        &body.model,
         &connection_params,
-        transformed.params.stream == Some(true),
+        body.params.stream == Some(true),
         &env_lookup,
     )?;
 
     Ok(ProviderMessagesRequest {
         provider,
         url,
-        body: transformed,
+        body,
         environment,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         api_key: api_key.map(SecretValue::new),
@@ -557,6 +563,63 @@ mod tests {
         assert_eq!(prepared.url, format!("{base}{path}"));
         assert!(
             matches!(prepared.environment.auth, litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 { region, service: actual, .. } if region == "us-west-2" && actual == service)
+        );
+    }
+
+    fn versioned_body(
+        version: Option<&str>,
+        drop_params: bool,
+        shaping: MessagesShaping,
+    ) -> Result<Value, Error> {
+        prepare(MessagesCall {
+            body: body(json!({
+                "model": "claude-test",
+                "max_tokens": 16,
+                "temperature": 0.2,
+                "messages": [{"role": "user", "content": "hi"}]
+            })),
+            api_key: Some("sk-test".into()),
+            api_base: Some("https://anthropic.test".into()),
+            custom_llm_provider: Some("anthropic".into()),
+            litellm_params: Default::default(),
+            extra_headers: version
+                .map(|version| Map::from_iter([("anthropic-version".into(), json!(version))])),
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                settings: MessagesSettings { drop_params, ..shaping.settings },
+                ..shaping
+            },
+        })
+        .map(|prepared| serde_json::to_value(prepared.body).unwrap())
+    }
+
+    #[rstest]
+    #[case::caller_on_2023_06_01(Some("2023-06-01"), false, Some(json!(0.2)))]
+    #[case::default_version(None, false, Some(json!(0.2)))]
+    #[case::caller_on_2026_10_21_under_drop_params(Some("2026-10-21"), true, None)]
+    fn temperature_reaches_the_wire_only_under_an_api_version_that_has_it(
+        shaping: MessagesShaping,
+        #[case] version: Option<&str>,
+        #[case] drop_params: bool,
+        #[case] expected: Option<Value>,
+    ) {
+        let prepared = versioned_body(version, drop_params, shaping).unwrap();
+        assert_eq!(prepared.get("temperature").cloned(), expected);
+    }
+
+    #[rstest]
+    fn an_api_version_without_sampling_params_refuses_them_before_the_provider_call(
+        shaping: MessagesShaping,
+    ) {
+        let Err(Error::InvalidRequest(detail)) =
+            versioned_body(Some("2026-10-21"), false, shaping)
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-test does not support temperature=0.2. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
         );
     }
 }
