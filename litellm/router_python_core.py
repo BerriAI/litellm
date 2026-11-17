@@ -4538,12 +4538,17 @@ class PythonCore(DeprecatedRouterMembers):
                 if response_id_exposed:
                     self._raise_released_stream_error(e, initial_kwargs)
                 async with contextlib.aclosing(
-                    self._aresponses_fallback_attempt(
-                        e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
+                    self._aresponses_recover_stream_error(
+                        e,
+                        source_iterator,
+                        initial_kwargs,
+                        wrapper,
+                        wrapper.adopt_fallback_headers,
+                        held_lifecycle_events,
                     )
-                ) as fallback_stream:
-                    async for fallback_item in fallback_stream:
-                        yield fallback_item
+                ) as recovered_stream:
+                    async for recovered_item in recovered_stream:
+                        yield recovered_item
             except Exception:
                 for held_event in held_lifecycle_events:
                     yield held_event
@@ -4649,6 +4654,109 @@ class PythonCore(DeprecatedRouterMembers):
         if reduced is None:
             PythonCore._raise_original_mid_stream_error(e)
         return reduced
+
+    @staticmethod
+    def _responses_stream_retries(
+        e: "MidStreamFallbackError", source_iterator: "BaseResponsesAPIStreamingIterator"
+    ) -> bool:
+        """Whether a broken Responses stream retries in its own group first: it broke before any output and
+        before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
+        ``/v1/messages`` stream does. After output the continuation fallback takes over instead."""
+        if not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
+            return False
+        status_code: Final = _stream_raised_error_status(_mid_stream_retry_trigger(e))
+        return status_code is None or bool(python_host.invoke("should_retry")(status_code))
+
+    async def _aresponses_recover_stream_error(
+        self,
+        e: "MidStreamFallbackError",
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+        initial_kwargs: dict[str, Any],  # mutable-ok: _aresponses_fallback_attempt mutates it
+        wrapper: object,
+        adopt_headers: Callable[[object], tuple[dict[str, object], dict[str, object]]],  # mutable-ok: hidden params
+        held_lifecycle_events: tuple[object, ...],
+    ) -> AsyncGenerator[object, None]:
+        """A Responses stream that broke before any output is retried in its own group, then falls back
+        with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
+        when a retry or a fallback answers."""
+        if not PythonCore._responses_stream_retries(e, source_iterator):
+            async with contextlib.aclosing(
+                self._aresponses_fallback_attempt(
+                    e, source_iterator, initial_kwargs, adopt_headers, held_lifecycle_events
+                )
+            ) as fallback_stream:
+                async for fallback_item in fallback_stream:
+                    yield fallback_item
+            return
+        if hasattr(source_iterator, "aclose"):
+            with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
+                await source_iterator.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+        outcome: Final = await self._astream_retry_same_group(
+            e,
+            initial_kwargs,
+            attempt_function=self._ageneric_api_call_with_fallbacks_responses_attempt,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # bare Callable in its signature
+        )
+        match outcome:
+            case _StreamRetryOpened(response=retried, attempted_retries=attempted, max_retries=budget):
+                async for retried_item in PythonCore._aresponses_yield_retried(
+                    retried, wrapper, adopt_headers, (attempted, budget)
+                ):
+                    yield retried_item
+            case _StreamRetriesExhausted(error=last_error):
+                async with contextlib.aclosing(
+                    self._aresponses_fallback_attempt(
+                        last_error, source_iterator, initial_kwargs, adopt_headers, held_lifecycle_events
+                    )
+                ) as exhausted_fallback_stream:
+                    async for exhausted_item in exhausted_fallback_stream:
+                        yield exhausted_item
+            case _:
+                assert_never(outcome)
+
+    @staticmethod
+    async def _aresponses_yield_retried(
+        response: object,
+        wrapper: object,
+        adopt_headers: Callable[[object], tuple[dict[str, object], dict[str, object]]],  # mutable-ok: hidden params
+        retry_counters: tuple[int, int],
+    ) -> AsyncGenerator[object, None]:
+        """Hands a same-group retry's stream to the client through the wrapper, with the retry's headers, and
+        closes it after. When the retried stream recovers onto another source (its own retry or fallback) the
+        wrapper and the events follow that source."""
+        attempted, budget = retry_counters
+        served_as: Final = PythonCore._prepare_fallback_hidden_params(wrapper)[1].get("x-litellm-model-group")
+
+        def follow_source() -> tuple[dict[str, object], dict[str, object]]:  # mutable-ok: hidden params
+            prepared: Final = adopt_headers(response)
+            if served_as is not None:
+                _ = prepared[1].setdefault("x-litellm-model-group", served_as)
+            newest: Final = prepared[1].get("x-litellm-attempted-retries")
+            _ = add_retry_headers_to_response(
+                response=wrapper,
+                attempted_retries=max(attempted, newest) if isinstance(newest, int) else attempted,
+                max_retries=budget,
+            )
+            return prepared
+
+        followed = follow_source()  # rebind-ok: refreshed when the retried stream changes its source
+        source: object = getattr(response, "_billing_source", None)  # rebind-ok: the retried stream's current source
+        try:
+            if hasattr(response, "__aiter__"):
+                async for retried_item in cast("AsyncIterator[object]", response):  # cast-ok: __aiter__ checked above
+                    if (current_source := getattr(response, "_billing_source", None)) is not source:
+                        source = current_source
+                        followed = follow_source()
+                    PythonCore._apply_fallback_hidden_params_to_item(retried_item, followed)
+                    yield retried_item
+            else:
+                yield response
+        finally:
+            if hasattr(response, "aclose"):
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await response.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+                    except Exception as exc:  # noqa: BLE001  # closing is best-effort
+                        verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing retry: %s", exc)
 
     async def _aresponses_fallback_attempt(
         self,
