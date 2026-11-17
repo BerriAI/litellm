@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.typed_model_config import typed_model_config
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
@@ -300,11 +301,7 @@ def openai_thinking_routes_to_responses(
     provider: Final = custom_llm_provider if custom_llm_provider is not None else _inferred_provider(model)
     if provider != "openai":
         return False
-    try:
-        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=provider)
-    except Exception:
-        return True
-    return model_info.get("supports_reasoning") is not False
+    return typed_model_config(model, "openai").supports_reasoning is not False
 
 
 def _keeps_encrypted_reasoning_for_responses(

@@ -17,15 +17,12 @@ _CONFLICTS: Final = ("context_management", "response_format", "stop", "stop_sequ
 
 
 def supports_native_compaction(params: Mapping[str, object]) -> bool:
-    from litellm.utils import get_model_info
+    from litellm.litellm_core_utils.typed_model_config import typed_model_config
 
     if params.get("custom_llm_provider") not in (None, "anthropic", "openai"):
         return False
     model: Final = str(params.get("model", "")).removeprefix("openai/").removeprefix("anthropic/")
-    try:
-        return get_model_info(model=model, custom_llm_provider="anthropic").get("supports_anthropic_compaction") is True
-    except Exception:
-        return False
+    return typed_model_config(model, "anthropic").supports_anthropic_compaction is True
 
 
 def compatible_defaults(payload: Mapping[str, object]) -> bool:
