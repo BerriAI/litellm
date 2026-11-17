@@ -989,11 +989,22 @@ def _resolve_deployment_cache_policy(
             caching = True
             kwargs["caching"] = True
 
-    if cache_cfg.get("no-cache") is True:
+    # Enforce deployment-level fine-grained restrictions regardless of whether
+    # response_cache was explicitly supplied.  cache_cfg is only populated when
+    # raw_response_cache was None or a Mapping, so when response_cache is a plain
+    # bool (e.g. True) the cache_cfg branch is skipped — meaning model_info.cache
+    # flags like {"no-store": true} would be ignored.  Instead, always read the
+    # deployment's fine-grained flags from deployment_cache_info / deployment_cache_params
+    # and force them onto kwargs["cache"] so client values cannot override admin policy.
+    deployment_fine_grained: dict[str, object] = {}
+    deployment_fine_grained.update(deployment_cache_params)
+    deployment_fine_grained.update(deployment_cache_info)
+
+    if deployment_fine_grained.get("no-cache") is True or cache_cfg.get("no-cache") is True:
         cache_dict_nc = as_dict(kwargs.get("cache"))
         cache_dict_nc["no-cache"] = True
         kwargs["cache"] = cache_dict_nc
-    if cache_cfg.get("no-store") is True:
+    if deployment_fine_grained.get("no-store") is True or cache_cfg.get("no-store") is True:
         cache_dict_ns = as_dict(kwargs.get("cache"))
         cache_dict_ns["no-store"] = True
         kwargs["cache"] = cache_dict_ns

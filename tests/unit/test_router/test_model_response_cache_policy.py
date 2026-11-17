@@ -511,3 +511,48 @@ async def test_router_preserves_deployment_cache_namespace():
             assert call_kw["cache"]["ttl"] == 60
     finally:
         router.retire()
+
+
+def test_model_no_store_enforced_regardless_of_response_cache_field():
+    """response_cache: true with model_info.cache.no-store: true must override client cache: {no-store: false}.
+
+    Regression test for the bug where cache_cfg was only populated when
+    raw_response_cache was None, so when response_cache was a plain bool (True)
+    the cache_cfg branch was skipped and model_info.cache fine-grained flags
+    like no-store were never enforced against client-supplied values.
+    """
+    deployment = {
+        "model_name": "restricted-model",
+        "litellm_params": {"model": "openai/gpt-4o"},
+        "model_info": {"response_cache": True, "cache": {"no-store": True}},
+    }
+    kwargs: dict[str, object] = {"cache": {"no-store": False}}  # client tries to bypass
+    caching = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs)
+    assert caching is True
+    assert kwargs["cache"]["no-store"] is True  # deployment restriction wins
+
+
+def test_model_no_cache_enforced_regardless_of_response_cache_field():
+    """response_cache: true with model_info.cache.no-cache: true must override client value."""
+    deployment = {
+        "model_name": "restricted-model",
+        "litellm_params": {"model": "openai/gpt-4o"},
+        "model_info": {"response_cache": True, "cache": {"no-cache": True}},
+    }
+    kwargs: dict[str, object] = {"cache": {"no-cache": False}}
+    caching = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs)
+    assert caching is True
+    assert kwargs["cache"]["no-cache"] is True  # deployment restriction wins
+
+
+def test_litellm_params_no_store_enforced_when_response_cache_true():
+    """litellm_params.cache.no-store: true must win when response_cache is a plain True bool."""
+    deployment = {
+        "model_name": "restricted-model",
+        "litellm_params": {"model": "openai/gpt-4o", "cache": {"no-store": True}},
+        "model_info": {"response_cache": True},
+    }
+    kwargs: dict[str, object] = {"cache": {"no-store": False}}
+    caching = _resolve_deployment_cache_policy(deployment, global_caching=True, kwargs=kwargs)
+    assert caching is True
+    assert kwargs["cache"]["no-store"] is True
