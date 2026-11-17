@@ -762,6 +762,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         client_oauth_token=None,
         count_options=None,
         caller=None,
+        request_routing=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -846,6 +847,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         client_oauth_token=None,
         count_options=None,
         caller=None,
+        request_routing=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1026,6 +1028,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
                     "model_info": {},
                 }
             )
+            mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
             # Set ANTHROPIC_API_KEY for the test
             with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
@@ -1088,6 +1091,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                         "model_info": {},
                     }
                 )
+                mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
                 client = TestClient(app)
 
@@ -1148,6 +1152,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
                         "model_info": {},
                     }
                 )
+                mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
                 client = TestClient(app)
 
@@ -1481,6 +1486,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
                 "model_info": {},
             }
         )
+        mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
         litellm.proxy.proxy_server.llm_router = mock_router
 
         with pytest.raises(ProxyException) as exc_info:
@@ -1528,6 +1534,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
 
     mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+    mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
 
@@ -1592,6 +1599,7 @@ async def test_proxy_token_counter_error_raises_when_enabled():
 
     mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+    mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
 
@@ -1670,6 +1678,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         client_oauth_token=None,
         count_options=None,
         caller=None,
+        request_routing=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1731,6 +1740,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         client_oauth_token=None,
         count_options=None,
         caller=None,
+        request_routing=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1792,6 +1802,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         client_oauth_token=None,
         count_options=None,
         caller=None,
+        request_routing=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
