@@ -37,11 +37,11 @@ const DEFAULT_TOKEN_URL: &str = "https://sts.{universe_domain}/v1/token";
 const DEFAULT_UNIVERSE_DOMAIN: &str = "googleapis.com";
 /// `iam._IAM_SCOPE`, which impersonated credentials scope their source credentials to.
 const IAM_SCOPE: &str = "https://www.googleapis.com/auth/iam";
-const IMPERSONATION_REFUSED: &str = "Unable to acquire impersonated credentials";
+const IMPERSONATION_REFUSED: &str = "IAM refused to impersonate the service account";
 /// `impersonated_credentials._DEFAULT_TOKEN_LIFETIME_SECS`.
 const DEFAULT_IMPERSONATION_LIFETIME: u64 = 3600;
 pub(crate) const NO_CREDENTIAL_SOURCE: &str =
-    "A valid credential source or a subject token supplier must be provided.";
+    "The external account credentials name no credential_source.";
 const WORKFORCE_POOL_PREFIX: &str = "//iam.googleapis.com/locations/";
 
 /// What an external account's `retrieve_subject_token` reads its token from.
@@ -168,7 +168,7 @@ impl Settings {
         {
             return Err(GoogleLoginFailure::new(
                 PythonException::InvalidValue,
-                "workforce_pool_user_project should not be set for non-workforce pool credentials",
+                "workforce_pool_user_project is only for workforce pool audiences.",
             ));
         }
         Ok(settings)
@@ -297,7 +297,7 @@ impl ExternalAccount {
         if target_principal(url).is_none() {
             return Err(GoogleLoginFailure::new(
                 PythonException::Refresh,
-                "Unable to determine target principal from service account impersonation URL.",
+                "The service account impersonation URL names no service account.",
             ));
         }
         let source = self.source_token().await?.usable()?;
@@ -335,11 +335,7 @@ impl ExternalAccount {
         if status != 200 {
             return Err(refused(IMPERSONATION_REFUSED));
         }
-        let malformed = || {
-            refused(&format!(
-                "{IMPERSONATION_REFUSED}: No access token or invalid expiration in response."
-            ))
-        };
+        let malformed = || refused("IAM's answer has no accessToken or a malformed expireTime");
         let reply = serde_json::from_str::<ImpersonationReply>(&body).map_err(|_| malformed())?;
         let (Some(token), Some(expire_time)) = (reply.access_token, reply.expire_time) else {
             return Err(malformed());
@@ -429,9 +425,7 @@ fn parse_token_data(
             let unparseable = || {
                 GoogleLoginFailure::new(
                     PythonException::Refresh,
-                    format!(
-                        "Unable to parse subject_token from JSON file '{location}' using key '{field}'"
-                    ),
+                    format!("The subject token at {location} has no {field} field."),
                 )
             };
             let data = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(content)
@@ -443,7 +437,7 @@ fn parse_token_data(
     if token.is_empty() {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            "Missing subject_token in the credential_source file",
+            "The subject token source is empty.",
         ));
     }
     Ok(token)
@@ -461,7 +455,7 @@ impl SubjectToken for FileSource {
             if !std::path::Path::new(&self.path).exists() {
                 return Err(GoogleLoginFailure::new(
                     PythonException::Refresh,
-                    format!("File '{}' was not found.", self.path),
+                    format!("The subject token file {} does not exist.", self.path),
                 ));
             }
             let content = std::fs::read_to_string(&self.path)
@@ -500,7 +494,7 @@ impl SubjectToken for UrlSource {
             if status != 200 {
                 return Err(GoogleLoginFailure::new(
                     PythonException::Refresh,
-                    format!("Unable to retrieve Identity Pool subject token: {body}"),
+                    format!("The subject token URL answered with an error: {body}"),
                 ));
             }
             parse_token_data(&body, &self.url, &self.format)
@@ -522,12 +516,12 @@ fn source_format(format: Option<&SourceFormat>) -> Result<Format, GoogleLoginFai
         "text" => Ok(Format::Text),
         "json" => match format.and_then(|format| format.subject_token_field_name.clone()) {
             None => Err(malformed(
-                "Missing subject_token_field_name for JSON credential_source format",
+                "A json credential_source format needs subject_token_field_name.",
             )),
             Some(field) => Ok(Format::Json(field)),
         },
         other => Err(malformed(format!(
-            "Invalid credential_source format '{other}'"
+            "The credential_source format {other} is neither text nor json."
         ))),
     }
 }
@@ -546,7 +540,7 @@ pub(crate) fn identity_pool(
     };
     if source.environment_id.is_some() {
         return Err(malformed(
-            "Invalid Identity Pool credential_source field 'environment_id'",
+            "An identity pool credential_source cannot name an environment_id.",
         ));
     }
     let given = [
@@ -557,13 +551,13 @@ pub(crate) fn identity_pool(
     match given.iter().filter(|given| **given).count() {
         0 => {
             return Err(malformed(
-                "Missing credential_source. A 'file', 'url', or 'certificate' must be provided.",
+                "The credential_source names no file, url or certificate.",
             ));
         }
         1 => {}
         _ => {
             return Err(malformed(
-                "Ambiguous credential_source. 'file', 'url', and 'certificate' are mutually exclusive..",
+                "The credential_source names more than one of file, url and certificate.",
             ));
         }
     }
@@ -623,30 +617,26 @@ fn executable_subject_token(
     now: f64,
 ) -> Result<String, GoogleLoginFailure> {
     let Some(version) = response.version else {
-        return Err(malformed(
-            "The executable response is missing the version field.",
-        ));
+        return Err(malformed("The executable response has no version."));
     };
     if version > 1.0 {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            format!("Executable returned unsupported version {version}."),
+            format!("The executable answered with version {version}, which is not supported."),
         ));
     }
     let Some(success) = response.success else {
-        return Err(malformed(
-            "The executable response is missing the success field.",
-        ));
+        return Err(malformed("The executable response has no success."));
     };
     if !success {
         let (Some(code), Some(message)) = (&response.code, &response.message) else {
             return Err(malformed(
-                "Error code and message fields are required in the response.",
+                "The executable failed without a code and message.",
             ));
         };
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            format!("Executable returned unsuccessful response: code: {code}, message: {message}."),
+            format!("The executable failed with code {code}: {message}"),
         ));
     }
     if response
@@ -655,13 +645,11 @@ fn executable_subject_token(
     {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            "The token returned by the executable is expired.",
+            "The executable's token has expired.",
         ));
     }
     let Some(token_type) = &response.token_type else {
-        return Err(malformed(
-            "The executable response is missing the token_type field.",
-        ));
+        return Err(malformed("The executable response has no token_type."));
     };
     let (field, token) = match token_type.as_str() {
         "urn:ietf:params:oauth:token-type:jwt" | "urn:ietf:params:oauth:token-type:id_token" => {
@@ -671,13 +659,16 @@ fn executable_subject_token(
         _ => {
             return Err(GoogleLoginFailure::new(
                 PythonException::Refresh,
-                "Executable returned unsupported token type.",
+                "The executable answered with an unsupported token_type.",
             ));
         }
     };
-    token
-        .clone()
-        .ok_or_else(|| GoogleLoginFailure::new(PythonException::Refresh, format!("'{field}'")))
+    token.clone().ok_or_else(|| {
+        GoogleLoginFailure::new(
+            PythonException::Refresh,
+            format!("The executable response has no {field}."),
+        )
+    })
 }
 
 /// A subject token an executable prints, as `pluggable` runs it.
@@ -722,7 +713,7 @@ impl Executable {
     async fn run(&self) -> Result<String, GoogleLoginFailure> {
         if (self.os_env)("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES").as_deref() != Some("1") {
             return Err(malformed(
-                "Executables need to be explicitly allowed (set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES to '1') to run.",
+                "Set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1 to let credentials run an executable.",
             ));
         }
         if let Some(token) = self.cached()? {
@@ -766,7 +757,7 @@ impl Executable {
                 GoogleLoginFailure::new(
                     PythonException::Refresh,
                     format!(
-                        "Command '{words:?}' timed out after {} seconds",
+                        "The credential_source executable timed out after {} seconds.",
                         self.timeout.as_secs_f64()
                     ),
                 )
@@ -777,7 +768,7 @@ impl Executable {
             return Err(GoogleLoginFailure::new(
                 PythonException::Refresh,
                 format!(
-                    "Executable exited with non-zero return code {}. Error: {}",
+                    "The credential_source executable exited with code {}: {}",
                     output.status.code().unwrap_or(-1),
                     String::from_utf8_lossy(&printed).trim_end()
                 ),
@@ -817,13 +808,11 @@ pub(crate) fn pluggable(
     let settings = Settings::from_info(info)?;
     let Some(source) = &info.credential_source else {
         return Err(malformed(
-            "Missing credential_source. The credential_source is not a dict.",
+            "The external account credentials name no credential_source.",
         ));
     };
     let Some(executable) = &source.executable else {
-        return Err(malformed(
-            "Missing credential_source. An 'executable' must be provided.",
-        ));
+        return Err(malformed("The credential_source names no executable."));
     };
     let Some(command) = executable
         .command
@@ -831,7 +820,7 @@ pub(crate) fn pluggable(
         .filter(|command| !command.is_empty())
     else {
         return Err(malformed(
-            "Missing command field. Executable command must be provided.",
+            "The credential_source executable has no command.",
         ));
     };
     let timeout_millis = executable
@@ -841,7 +830,7 @@ pub(crate) fn pluggable(
     if !(5_000.0..=120_000.0).contains(&timeout_millis) {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
-            "Timeout must be between 5 and 120 seconds.",
+            "The executable timeout_millis must be between 5000 and 120000.",
         ));
     }
     if executable
@@ -850,7 +839,7 @@ pub(crate) fn pluggable(
     {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
-            "Interactive timeout must be between 30 seconds and 30 minutes.",
+            "The executable interactive_timeout_millis must be between 30000 and 1800000.",
         ));
     }
     let impersonated_email = settings
@@ -1076,12 +1065,12 @@ mod tests {
     #[case::missing(
         json!({"file": "/nonexistent/fz-subject.txt"}),
         PythonException::Refresh,
-        "File '/nonexistent/fz-subject.txt' was not found."
+        "The subject token file /nonexistent/fz-subject.txt does not exist."
     )]
     #[case::json_without_field(
         json!({"file": env!("CARGO_MANIFEST_PATH"), "format": {"type": "json", "subject_token_field_name": "t"}}),
         PythonException::Refresh,
-        concat!("Unable to parse subject_token from JSON file '", env!("CARGO_MANIFEST_PATH"), "' using key 't'")
+        concat!("The subject token at ", env!("CARGO_MANIFEST_PATH"), " has no t field.")
     )]
     #[tokio::test]
     async fn a_file_source_raises_what_identity_pool_raises(
@@ -1098,11 +1087,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::aws(json!({"environment_id": "aws1"}), PythonException::Malformed, "Invalid Identity Pool credential_source field 'environment_id'")]
-    #[case::none(json!({}), PythonException::Malformed, "Missing credential_source. A 'file', 'url', or 'certificate' must be provided.")]
-    #[case::two(json!({"file": "/a", "url": "http://b"}), PythonException::Malformed, "Ambiguous credential_source. 'file', 'url', and 'certificate' are mutually exclusive..")]
-    #[case::bad_format(json!({"file": "/a", "format": {"type": "xml"}}), PythonException::Malformed, "Invalid credential_source format 'xml'")]
-    #[case::json_without_name(json!({"file": "/a", "format": {"type": "json"}}), PythonException::Malformed, "Missing subject_token_field_name for JSON credential_source format")]
+    #[case::aws(json!({"environment_id": "aws1"}), PythonException::Malformed, "An identity pool credential_source cannot name an environment_id.")]
+    #[case::none(json!({}), PythonException::Malformed, "The credential_source names no file, url or certificate.")]
+    #[case::two(json!({"file": "/a", "url": "http://b"}), PythonException::Malformed, "The credential_source names more than one of file, url and certificate.")]
+    #[case::bad_format(json!({"file": "/a", "format": {"type": "xml"}}), PythonException::Malformed, "The credential_source format xml is neither text nor json.")]
+    #[case::json_without_name(json!({"file": "/a", "format": {"type": "json"}}), PythonException::Malformed, "A json credential_source format needs subject_token_field_name.")]
     fn an_identity_pool_source_is_checked_at_load(
         #[case] source: Value,
         #[case] exception: PythonException,
@@ -1128,7 +1117,7 @@ mod tests {
             loaded.refresh().await.unwrap_err(),
             GoogleLoginFailure::new(
                 PythonException::Malformed,
-                "Executables need to be explicitly allowed (set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES to '1') to run."
+                "Set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1 to let credentials run an executable."
             )
         );
     }
@@ -1175,8 +1164,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::timeout(json!({"command": "x", "timeout_millis": 1000}), "Timeout must be between 5 and 120 seconds.")]
-    #[case::interactive(json!({"command": "x", "interactive_timeout_millis": 1000}), "Interactive timeout must be between 30 seconds and 30 minutes.")]
+    #[case::timeout(json!({"command": "x", "timeout_millis": 1000}), "The executable timeout_millis must be between 5000 and 120000.")]
+    #[case::interactive(json!({"command": "x", "interactive_timeout_millis": 1000}), "The executable interactive_timeout_millis must be between 30000 and 1800000.")]
     fn executable_timeouts_are_bounded(#[case] executable: Value, #[case] message: &str) {
         let info = json!({"type": "external_account", "audience": AUDIENCE, "credential_source": {"executable": executable}});
         assert_eq!(

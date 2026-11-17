@@ -206,10 +206,7 @@ impl Logins {
                 {
                     return Ok(login);
                 }
-                tracing::error!(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {}",
-                    failure.message
-                );
+                tracing::error!("Vertex: the credentials did not load: {}", failure.message);
                 Err(failure)
             })
             .await
@@ -300,7 +297,7 @@ impl Logins {
         };
         reloaded.map_err(|retry| {
             tracing::error!(
-                "Async reauthentication retry failed for project_id: {}. Original error: {}. Retry error: {}",
+                "Vertex: loading the credentials for project {} again failed after Google refused them ({}): {}",
                 refused.project_id,
                 failure.message,
                 retry.message
@@ -403,8 +400,9 @@ mod tests {
     fn invalid_grant() -> GoogleLoginFailure {
         GoogleLoginFailure::new(
             PythonException::Refresh,
-            "('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant'})",
+            "invalid_grant: Invalid JWT Signature.",
         )
+        .rejecting_the_grant()
     }
 
     #[tokio::test]
@@ -494,10 +492,10 @@ mod tests {
 
     #[rstest]
     #[case::invalid_grant_reloads(invalid_grant(), Ok("reloaded"), 2)]
-    #[case::reauthentication_reloads(
-        GoogleLoginFailure::new(PythonException::Refresh, "Reauthentication is needed."),
-        Ok("reloaded"),
-        2
+    #[case::refusal_text_naming_invalid_grant_stands(
+        GoogleLoginFailure::new(PythonException::Refresh, "invalid_grant: Invalid JWT Signature."),
+        Err(PythonException::Refresh),
+        1
     )]
     #[case::another_refusal_stands(
         GoogleLoginFailure::new(
@@ -707,10 +705,7 @@ mod tests {
         GoogleLoginFailure::new(PythonException::Value, "Could not resolve project_id"),
         "Could not resolve project_id"
     )]
-    #[case::token_fetch_failed(
-        invalid_grant(),
-        "('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant'})"
-    )]
+    #[case::token_fetch_failed(invalid_grant(), "invalid_grant: Invalid JWT Signature.")]
     #[tokio::test]
     async fn credentials_that_do_not_load_are_logged_as_an_error(
         #[case] failure: GoogleLoginFailure,
@@ -724,9 +719,7 @@ mod tests {
             records,
             [(
                 litellm_tracing::Level::ERROR,
-                format!(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {error}"
-                )
+                format!("Vertex: the credentials did not load: {error}")
             )]
         );
     }
@@ -779,7 +772,7 @@ mod tests {
             records.last().unwrap(),
             &(
                 litellm_tracing::Level::ERROR,
-                "Async reauthentication retry failed for project_id: project. Original error: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant'}). Retry error: the reload failed".to_owned()
+                "Vertex: loading the credentials for project project again failed after Google refused them (invalid_grant: Invalid JWT Signature.): the reload failed".to_owned()
             )
         );
     }

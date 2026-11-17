@@ -98,7 +98,7 @@ impl Requests {
 fn invalid_url(url: &str) -> GoogleLoginFailure {
     GoogleLoginFailure::new(
         PythonException::Transport,
-        format!("Invalid URL '{url}': No scheme supplied. Perhaps you meant https://{url}?"),
+        format!("The token endpoint URL {url} has no scheme."),
     )
 }
 
@@ -140,7 +140,7 @@ mod tests {
             failure,
             GoogleLoginFailure::new(
                 PythonException::Transport,
-                "Invalid URL 'None': No scheme supplied. Perhaps you meant https://None?"
+                "The token endpoint URL None has no scheme."
             )
         );
     }

@@ -146,8 +146,14 @@ impl Minted {
 /// them again once, which picks up a re-run `gcloud auth application-default login` or a rotated
 /// key.
 pub(crate) fn refresh_rejected(failure: &GoogleLoginFailure) -> bool {
-    (failure.exception == PythonException::Refresh && failure.message.contains("invalid_grant"))
-        || failure.message.contains("Reauthentication is needed")
+    failure.grant_rejected
+}
+
+impl TokenRefusal {
+    /// Google's `invalid_grant`: the refresh token or key is revoked, expired or wrong.
+    pub(crate) fn rejects_the_grant(&self) -> bool {
+        self.error.as_deref() == Some("invalid_grant")
+    }
 }
 
 /// A token source from Google's Rust SDK, which keeps and refreshes its own token.
@@ -242,29 +248,21 @@ mod tests {
 
     #[rstest]
     #[case::invalid_grant(
-        PythonException::Refresh,
-        "('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant'})",
-        true
-    )]
-    #[case::reauthentication(
-        PythonException::Refresh,
-        "Reauthentication is needed. Please run `gcloud auth application-default login`.",
+        r#"{"error": "invalid_grant", "error_description": "Invalid JWT Signature."}"#,
         true
     )]
     #[case::another_refusal(
-        PythonException::Refresh,
-        "('invalid_client: The OAuth client was not found.', {'error': 'invalid_client'})",
+        r#"{"error": "invalid_client", "error_description": "invalid_grant"}"#,
         false
     )]
-    #[case::unreachable(PythonException::Transport, "invalid_grant", false)]
-    fn only_a_refusal_for_good_reloads_the_credentials(
-        #[case] exception: PythonException,
-        #[case] message: &str,
+    #[case::text_naming_invalid_grant(r#""invalid_grant""#, false)]
+    #[case::not_json("invalid_grant", false)]
+    fn only_an_invalid_grant_error_reloads_the_credentials(
+        #[case] body: &str,
         #[case] expected: bool,
     ) {
-        assert_eq!(
-            refresh_rejected(&GoogleLoginFailure::new(exception, message)),
-            expected
-        );
+        let failure = super::super::service_account::refused(body);
+        assert_eq!(failure.exception, PythonException::Refresh);
+        assert_eq!(refresh_rejected(&failure), expected);
     }
 }

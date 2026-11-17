@@ -42,6 +42,9 @@ pub struct GoogleLoginFailure {
     pub exception: PythonException,
     pub message: String,
     pub file: Option<UnusableFile>,
+    /// Google's token endpoint refused the grant for good, so loading the credentials again
+    /// (a re-run `gcloud auth application-default login` or a rotated key) may fix it.
+    pub grant_rejected: bool,
 }
 
 impl GoogleLoginFailure {
@@ -50,6 +53,15 @@ impl GoogleLoginFailure {
             exception,
             message: message.into(),
             file: None,
+            grant_rejected: false,
+        }
+    }
+
+    /// The same failure, marked as a grant Google refused for good.
+    pub(crate) fn rejecting_the_grant(self) -> Self {
+        Self {
+            grant_rejected: true,
+            ..self
         }
     }
 
@@ -119,8 +131,8 @@ mod tests {
 
     #[rstest]
     #[case::unreadable(
-        UnusableFile::Unreadable { path: "/etc/vertex/key.json".into(), reason: "No such file or directory (FileNotFoundError)".into() },
-        "Vertex: cannot read the credentials file at '/etc/vertex/key.json': No such file or directory (FileNotFoundError)"
+        UnusableFile::Unreadable { path: "/etc/vertex/key.json".into(), reason: "No such file or directory (os error 2)".into() },
+        "Vertex: cannot read the credentials file at '/etc/vertex/key.json': No such file or directory (os error 2)"
     )]
     #[case::invalid(
         UnusableFile::Invalid { path: "/etc/vertex/key.json".into(), problem: "is not UTF-8 text".into() },

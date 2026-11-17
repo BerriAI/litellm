@@ -85,6 +85,7 @@ fn grant(
 
 /// A refused token request: the endpoint's `error` and `error_description`, or its text.
 pub(crate) fn refused(body: &str) -> GoogleLoginFailure {
+    let rejected = TokenRefusal::parse(body).is_some_and(|refusal| refusal.rejects_the_grant());
     let message = match (
         serde_json::from_str::<String>(body),
         TokenRefusal::parse(body),
@@ -106,7 +107,11 @@ pub(crate) fn refused(body: &str) -> GoogleLoginFailure {
         ) => error,
         _ => body.to_owned(),
     };
-    GoogleLoginFailure::new(PythonException::Refresh, message)
+    let failure = GoogleLoginFailure::new(PythonException::Refresh, message);
+    match rejected {
+        true => failure.rejecting_the_grant(),
+        false => failure,
+    }
 }
 
 /// `_client._can_retry`.
@@ -268,7 +273,7 @@ pub(crate) fn granted(body: &str) -> Result<(Option<String>, TokenReply), Google
     let Some(token) = reply.access_token.clone() else {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
-            "No access token in response.",
+            "The token endpoint's reply has no access_token.",
         ));
     };
     Ok((token, reply))
@@ -480,9 +485,10 @@ pub(crate) mod tests {
         #[case] expected: &str,
     ) {
         let endpoint = endpoint(vec![(status, answer)]).await;
+        let failure = quick(&endpoint.url).mint().await.unwrap_err();
         assert_eq!(
-            quick(&endpoint.url).mint().await.unwrap_err(),
-            GoogleLoginFailure::new(PythonException::Refresh, expected)
+            (failure.exception, failure.message.as_str()),
+            (PythonException::Refresh, expected)
         );
         assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
     }
@@ -525,7 +531,10 @@ pub(crate) mod tests {
         let endpoint = endpoint(vec![(200, json!({"expires_in": 60}))]).await;
         assert_eq!(
             quick(&endpoint.url).mint().await.unwrap_err(),
-            GoogleLoginFailure::new(PythonException::Refresh, "No access token in response.")
+            GoogleLoginFailure::new(
+                PythonException::Refresh,
+                "The token endpoint's reply has no access_token."
+            )
         );
     }
 

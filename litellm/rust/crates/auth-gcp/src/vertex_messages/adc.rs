@@ -19,8 +19,8 @@ use super::{
     source::{CredentialsFile, ImpersonatedInfo, Unparsed},
 };
 
-const MISSING_CREDENTIALS: &str = "Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.";
-const VALID_TYPES: &str = "('authorized_user', 'service_account', 'external_account', 'external_account_authorized_user', 'impersonated_service_account', 'gdch_service_account')";
+const MISSING_CREDENTIALS: &str = "No application default credentials were found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`.";
+const VALID_TYPES: &str = "authorized_user, service_account, external_account, external_account_authorized_user, impersonated_service_account";
 const CLOUD_RESOURCE_MANAGER: &str = "https://cloudresourcemanager.{universe_domain}/v1/projects/";
 const AWS_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:aws:token-type:aws4_request";
 const DEFAULT_UNIVERSE_DOMAIN: &str = "googleapis.com";
@@ -72,7 +72,7 @@ fn wrapped(
 ) -> Result<Loaded, GoogleLoginFailure> {
     build.map_err(|cause| {
         default_failure(format!(
-            "Failed to load {credential} credentials from {file}: {}",
+            "The {credential} credentials in {file} cannot be used: {}",
             cause.message
         ))
     })
@@ -120,7 +120,7 @@ fn external_account(
         | PythonException::Malformed
         | PythonException::InvalidValue
         | PythonException::InvalidResource => default_failure(format!(
-            "Failed to load external account credentials from {file}"
+            "The external account credentials in {file} cannot be used."
         )),
         _ => failure,
     };
@@ -143,7 +143,7 @@ fn unusable_impersonation(info: &ImpersonatedInfo, file: &str) -> Option<GoogleL
     );
     (!supported || info.service_account_impersonation_url.is_none()).then(|| {
         default_failure(format!(
-            "Failed to load impersonated service account credentials from {file}"
+            "The impersonated service account credentials in {file} cannot be used."
         ))
     })
 }
@@ -154,21 +154,25 @@ fn load_credentials_from_file(
     file: &str,
 ) -> Result<Found, GoogleLoginFailure> {
     if !Path::new(file).exists() {
-        return Err(default_failure(format!("File {file} was not found.")));
+        return Err(default_failure(format!(
+            "The credentials file {file} does not exist."
+        )));
     }
     let contents = std::fs::read_to_string(file).map_err(|error| {
-        default_failure(format!("File {file} is not a valid json file. {error}"))
+        default_failure(format!(
+            "The credentials file {file} cannot be read: {error}"
+        ))
     })?;
     let info = match serde_json::from_str::<Value>(&contents) {
         Ok(Value::Object(info)) => info,
         Ok(_) => {
             return Err(default_failure(format!(
-                "File {file} is not a valid json file."
+                "The credentials file {file} is not a JSON object."
             )));
         }
         Err(error) => {
             return Err(default_failure(format!(
-                "File {file} is not a valid json file: {error}"
+                "The credentials file {file} is not valid JSON: {error}"
             )));
         }
     };
@@ -234,7 +238,7 @@ fn parse_file(info: Map<String, Value>, file: &str) -> Result<CredentialsFile, G
     CredentialsFile::parse(info).map_err(|unparsed| match unparsed {
         Unparsed::Untyped => invalid_type(file),
         Unparsed::Field(error) => default_failure(format!(
-            "File {file} holds a field of the wrong type: {error}"
+            "The credentials file {file} holds a field of the wrong type: {error}"
         )),
     })
 }

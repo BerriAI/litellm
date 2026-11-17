@@ -483,7 +483,7 @@ mod tests {
             failure(error),
             GoogleLoginFailure::new(
                 PythonException::Malformed,
-                "Service account info was not in the expected format, missing fields token_uri."
+                "The service account key is missing token_uri."
             )
         );
     }
@@ -504,7 +504,7 @@ mod tests {
             failure(error).file,
             Some(UnusableFile::Invalid {
                 path: file.path().to_str().unwrap().into(),
-                problem: "holds credentials that cannot be used: Service account info was not in the expected format, missing fields client_email, token_uri.".into(),
+                problem: "holds credentials that cannot be used: The service account key is missing client_email, token_uri.".into(),
             })
         );
     }
@@ -659,11 +659,11 @@ mod tests {
     #[rstest]
     #[case::missing_file(
         &[("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/adc.json")],
-        "File /nonexistent/adc.json was not found."
+        "The credentials file /nonexistent/adc.json does not exist."
     )]
     #[case::nothing_found(
         &[],
-        "Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information."
+        "No application default credentials were found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`."
     )]
     #[tokio::test]
     async fn application_default_failures_are_default_credentials_errors(
@@ -697,9 +697,9 @@ mod tests {
         );
         assert_eq!(failure.exception, PythonException::DefaultCredentials);
         assert!(
-            failure
-                .message
-                .starts_with(&format!("File {path} holds a field of the wrong type: ")),
+            failure.message.starts_with(&format!(
+                "The credentials file {path} holds a field of the wrong type: "
+            )),
             "{}",
             failure.message
         );
@@ -722,7 +722,7 @@ mod tests {
         assert_eq!(
             failure(error).message,
             format!(
-                "The file {path} does not have a valid type, expected one of ('authorized_user', 'service_account', 'external_account', 'external_account_authorized_user', 'impersonated_service_account', 'gdch_service_account')."
+                "The file {path} does not have a valid type, expected one of authorized_user, service_account, external_account, external_account_authorized_user, impersonated_service_account."
             )
         );
     }
@@ -1035,6 +1035,7 @@ mod tests {
                 PythonException::Refresh,
                 "invalid_grant: Invalid JWT Signature."
             )
+            .rejecting_the_grant()
         );
         assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
     }
@@ -1122,10 +1123,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::array(json!(["a"]), "File {} is not a valid json file.")]
+    #[case::array(json!(["a"]), "The credentials file {} is not a JSON object.")]
     #[case::impersonated_without_source(
         json!({"type": "impersonated_service_account", "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken"}),
-        "Failed to load impersonated service account credentials from {}"
+        "The impersonated service account credentials in {} cannot be used."
     )]
     #[tokio::test]
     async fn unusable_application_default_files_are_default_credentials_errors(
