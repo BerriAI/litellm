@@ -22,6 +22,7 @@ from litellm.constants import (
     OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS,
     OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE,
     OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS,
+    OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE,
     OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS,
     OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS,
     OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS,
@@ -194,6 +195,7 @@ class _MessageItemsPage(BaseModel):
 
 
 _PageT: Final = TypeVar("_PageT", _TurnsPage, _SubagentsPage, _ItemsPage, _MessageItemsPage, _Session)
+_ResultT: Final = TypeVar("_ResultT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +279,9 @@ class _BilledTurns:
 @dataclass(frozen=True, slots=True)
 class _UnbilledTurn:
     reason: str
+
+
+_UNREAD_AT_SHUTDOWN: Final = _UnbilledTurn(reason="the proxy shut down before its turns were read")
 
 
 _TurnOutcome: TypeAlias = _BilledTurns | _UnbilledTurn
@@ -539,6 +544,17 @@ def _report_lost_row(task: "asyncio.Task[None]") -> None:
         verbose_proxy_logger.error("OpenAI Agents passthrough: turn billing failed, the call logged no row: %s", error)
 
 
+async def _unless_set(work: Awaitable[_ResultT], interrupt: asyncio.Event) -> _ResultT | None:
+    working: Final = asyncio.ensure_future(work)
+    interrupted: Final = asyncio.ensure_future(interrupt.wait())
+    try:
+        done, _ = await asyncio.wait((working, interrupted), return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        _ = working.cancel()
+        _ = interrupted.cancel()
+    return working.result() if working in done else None
+
+
 def _is_retryable(status_code: int) -> bool:
     return status_code >= 500 or status_code in _RETRYABLE_STATUS_CODES
 
@@ -627,6 +643,7 @@ class OpenAIAgentsTurnBiller:
         self._release_request_slot: Final = release_request_slot
         self._tasks: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio holds tasks weakly
         self._stopping: Final = asyncio.Event()
+        self._abandoning: Final = asyncio.Event()
 
     def schedule(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> "asyncio.Task[None]":
         task: Final = asyncio.create_task(self._bill(turn_start, row))
@@ -637,13 +654,24 @@ class OpenAIAgentsTurnBiller:
 
     async def drain(self, timeout: float) -> None:
         self._stopping.set()
-        if self._tasks:
-            _ = await asyncio.wait(tuple(self._tasks), timeout=timeout)
+        waiting: Final = tuple(self._tasks)
+        if not waiting:
+            return
+        _, still_polling = await asyncio.wait(waiting, timeout=timeout * OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE)
+        self._abandoning.set()
+        if still_polling:
+            _ = await asyncio.wait(still_polling, timeout=timeout * (1 - OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE))
 
     async def _bill(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
         await self._release_slot(turn_start, row)
+        costed: Final = await _unless_set(self._costed_kwargs(turn_start, row), self._abandoning)
+        await self._log(
+            row, costed if costed is not None else await self._row_kwargs(turn_start, row, _UNREAD_AT_SHUTDOWN)
+        )
+
+    async def _costed_kwargs(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> Mapping[str, object]:
         outcome: Final = await self._turn_outcome(turn_start, row.logging_obj.litellm_call_id)
-        await self._log(row, await self._row_kwargs(turn_start, row, outcome))
+        return await self._row_kwargs(turn_start, row, outcome)
 
     async def _release_slot(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
         try:
@@ -717,17 +745,8 @@ class OpenAIAgentsTurnBiller:
         )
 
     async def _wait(self, delay: float) -> None:
-        if self._stopping.is_set():
-            return
-        sleeping: Final = asyncio.ensure_future(self._sleep(delay))
-        stopping: Final = asyncio.ensure_future(self._stopping.wait())
-        try:
-            done, _ = await asyncio.wait((sleeping, stopping), return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            _ = sleeping.cancel()
-            _ = stopping.cancel()
-        if sleeping in done:
-            sleeping.result()
+        if not self._stopping.is_set():
+            _ = await _unless_set(self._sleep(delay), self._stopping)
 
     def _outcome(self, polled: _Polled, elapsed: float) -> _TurnOutcome | None:
         failure: Final = polled.failure
