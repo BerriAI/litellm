@@ -19,6 +19,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response
+from openai.types.chat import ChatCompletionStreamOptionsParam
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -668,6 +669,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.logged_call_type: str | None = None
+        self.endpoint_request: tuple[Sequence[object] | None, object] | None = None
         self.relays_llm_passthrough: Final = call_type in (
             CallTypes.llm_passthrough_route.value,
             CallTypes.allm_passthrough_route.value,
@@ -2395,6 +2397,25 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def set_logged_call_type(self, call_type: str | None) -> None:
         self.logged_call_type = call_type
+
+    def apply_adapter_request(
+        self, messages: Sequence[AllMessageValues], stream_options: ChatCompletionStreamOptionsParam | None
+    ) -> None:
+        if self.endpoint_request is None:
+            self.endpoint_request = (self.messages, self.stream_options)
+        self.messages = messages
+        self.model_call_details["messages"] = messages
+        self.stream_options = stream_options
+
+    def start_endpoint_attempt(self) -> None:
+        self.logged_call_type = None
+        if self.endpoint_request is None:
+            return
+        messages, stream_options = self.endpoint_request
+        self.endpoint_request = None
+        self.messages = messages
+        self.model_call_details["messages"] = messages
+        self.stream_options = stream_options
 
     def payload_call_type(self) -> str:
         if self.logged_call_type is not None:

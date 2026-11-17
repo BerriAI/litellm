@@ -72,7 +72,7 @@ def _start_endpoint_attempt(logging_obj: LiteLLMLoggingObj | None, marker: str, 
     if logging_obj is None:
         return
     logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
-    logging_obj.set_logged_call_type(None)
+    logging_obj.start_endpoint_attempt()
 
 
 class GenerateContentSetupResult(LiteLLMBaseModel):

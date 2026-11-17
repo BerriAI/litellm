@@ -1213,6 +1213,67 @@ async def test_generate_content_fallback_from_an_adapter_model_to_gemini_logs_th
     assert _litellm_error_messages(_litellm_errors) == []
 
 
+@pytest.mark.asyncio
+async def test_generate_content_fallback_to_gemini_logs_the_messages_a_direct_gemini_call_logs(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.litellm_core_utils.rules import Rules
+    from litellm.utils import function_setup
+
+    logged: Final = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    contents: Final = [
+        {"role": "user", "parts": [{"text": "My card is 4111-1111-1111-1111"}]},
+        {"role": "model", "parts": [{"text": "Noted"}]},
+        {"role": "user", "parts": [{"text": "Hello"}]},
+    ]
+    router: Final = litellm.Router(
+        model_list=[
+            _grok_deployment(),
+            {
+                "model_name": "gemini-group",
+                "litellm_params": {"model": "gemini/gemini-2.0-flash", "api_base": "http://gemini.test", "api_key": "k"},
+            },
+        ],
+        fallbacks=[{"grok-group": ["gemini-group"]}],
+    )
+
+    async def logged_messages(model: str, call_id: str) -> object:
+        logging_obj, _ = function_setup(
+            "agenerate_content", Rules(), datetime.datetime.now(), model=model, contents=contents, litellm_call_id=call_id
+        )
+        await router.agenerate_content(
+            model=model, contents=contents, litellm_call_id=call_id, litellm_logging_obj=logging_obj
+        )
+        await await_until(
+            lambda: any(event[0] == "success" and event[2] == call_id for event in logged.events),
+            message=f"{call_id} success was logged",
+        )
+        return next(
+            messages
+            for event, messages in zip(logged.events, logged.messages)
+            if event[0] == "success" and event[2] == call_id
+        )
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "upstream overloaded"}})
+        )
+        upstream.route(host="gemini.test").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+                    "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 4},
+                },
+            )
+        )
+        direct: Final = await logged_messages("gemini-group", "direct-gemini-call")
+        fallback: Final = await logged_messages("grok-group", "fallback-gemini-call")
+
+    assert fallback == direct
+
+
 def _stream_chunk(content: str | None, finish_reason: str | None, usage: Usage | None = None) -> ModelResponseStream:
     return ModelResponseStream(
         choices=[StreamingChoices(index=0, delta=Delta(content=content), finish_reason=finish_reason)],
