@@ -359,17 +359,30 @@ def stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping
     )
 
 
-def stream_ttft_timeout(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> float | None:
-    requested: Final = kwargs.get("stream_ttft_timeout")
-    # A request that leaves the field null has not chosen a value, so the deployment's setting applies.
-    value: Final = requested if requested is not None else deployment_params.get("stream_ttft_timeout")
-    if not isinstance(value, (int, float, str)):
+def _stream_ttft_seconds(value: object) -> float | None:
+    """A ``stream_ttft_timeout`` as seconds: a number or numeric string. A boolean, null or other value is none."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
-        seconds: Final = float(value)
+        return float(value)
     except ValueError:
         return None
-    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def is_requested_stream_ttft_timeout(value: object) -> bool:
+    """Whether a request's ``stream_ttft_timeout`` is a value the caller chose, so it overrides the deployment's.
+    Null, a boolean or a non-numeric string is not a choice; zero, a negative or a non-finite number is one
+    (it turns the timer off)."""
+    return _stream_ttft_seconds(value) is not None
+
+
+def stream_ttft_timeout(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> float | None:
+    requested: Final = kwargs.get("stream_ttft_timeout")
+    value: Final = (
+        requested if is_requested_stream_ttft_timeout(requested) else deployment_params.get("stream_ttft_timeout")
+    )
+    seconds: Final = _stream_ttft_seconds(value)
+    return seconds if seconds is not None and math.isfinite(seconds) and seconds > 0 else None
 
 
 def non_stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[str, object]) -> object:
