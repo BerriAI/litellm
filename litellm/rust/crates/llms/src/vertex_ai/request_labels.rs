@@ -365,6 +365,14 @@ mod tests {
         json!({"vertex_request_label_fields": ["user_api_key_hash"]}),
         None
     )]
+    #[case::a_header_python_cannot_encode_is_replaced(
+        vec![("X-Vertex-AI-Labels", "ZWJ\u{200d}joined".to_string())],
+        json!({
+            "vertex_request_label_fields": ["user_api_key_hash"],
+            "litellm_metadata": {"user_api_key_hash": "abc"}
+        }),
+        Some(r#"{"user_api_key_hash": "abc"}"#)
+    )]
     #[case::spend_logs_only_when_allowed(
         vec![],
         json!({
