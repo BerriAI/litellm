@@ -753,6 +753,36 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::unbillable_usage(
+        Error::invalid_response(litellm_llms::ErrorDetail::UnbillableUsage {
+            reason: "got an array".into(),
+        }),
+        true
+    )]
+    #[case::other_invalid_response(
+        Error::invalid_response(litellm_llms::ErrorDetail::MissingAzureApiBase),
+        false
+    )]
+    #[case::rejected_request(
+        Error::invalid_request(litellm_llms::ErrorDetail::UnbillableUsage {
+            reason: "got an array".into(),
+        }),
+        false
+    )]
+    fn only_an_unbillable_reply_is_marked_refused(#[case] error: Error, #[case] refused: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let marked = native
+                .value(py)
+                .getattr_opt(MESSAGES_REFUSED_REPLY)
+                .unwrap()
+                .is_some_and(|value| value.extract::<bool>().unwrap());
+            assert_eq!(marked, refused);
+        });
+    }
+
+    #[rstest::rstest]
     #[case::rejected_request(
         Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedParameter {
             model: "claude".into(),

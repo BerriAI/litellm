@@ -3319,6 +3319,33 @@ _BEDROCK_MANTLE: Final = "bedrock_mantle/anthropic.claude-sonnet-5-5"
 _MANTLE_ROUTE: Final = "bedrock/mantle/anthropic.claude-sonnet-5-5"
 
 
+@pytest.mark.parametrize(
+    ("model", "provider", "named_model", "raised_model"),
+    (
+        (_BEDROCK_MANTLE, "bedrock_mantle", "anthropic.claude-sonnet-5-5", "anthropic.claude-sonnet-5-5"),
+        (_MANTLE_ROUTE, "bedrock", "anthropic.claude-sonnet-5-5", "anthropic.claude-sonnet-5-5"),
+        (_BEDROCK_MANTLE, "bedrock_mantle", None, "anthropic.claude-sonnet-5-5"),
+    ),
+    ids=("bedrock-mantle", "mantle-route", "no-named-model"),
+)
+def test_a_refused_reply_raises_an_api_error_500(
+    model: str, provider: str, named_model: str | None, raised_model: str
+) -> None:
+    text: Final = "invalid response: Bedrock Mantle returned a `usage` litellm cannot bill: got an array"
+    refused: Final = RuntimeError(text)
+    refused.messages_refused_reply = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    if named_model is not None:
+        refused.messages_provider_model = named_model  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+
+    mapped: Final = messages_host.map_failure(refused, {"model": model, "messages": []}, provider)
+
+    assert type(mapped) is litellm.APIError
+    assert mapped.status_code == 500
+    assert mapped.llm_provider == provider  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == raised_model  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert text in str(mapped)
+
+
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize("kind", ("no_credentials", "replay"))
 def test_a_bedrock_mantle_credential_failure_raises_the_mantle_value_error(kind: str) -> None:
