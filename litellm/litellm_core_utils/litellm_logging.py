@@ -717,12 +717,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
-        self.dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = dynamic_success_callbacks
-        self.dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_success_callbacks
+        )
+        self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
-        self.dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = dynamic_failure_callbacks
-        self.dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_failure_callbacks
+        )
+        self.dynamic_async_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_failure_callbacks
         )
 
@@ -2727,7 +2731,7 @@ class Logging(LiteLLMLoggingBaseClass):
             elif (
                 self.call_type == CallTypes.generate_content.value
                 or self.call_type == CallTypes.agenerate_content.value
-            ):
+            ) and not isinstance(result, ModelResponse):
                 result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
             elif self.call_type == CallTypes.asend_message.value or self.call_type == CallTypes.send_message.value:
                 result = self._handle_a2a_response_logging(result=result)

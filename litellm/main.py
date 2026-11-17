@@ -1203,7 +1203,7 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
     return None
 
 
-def _register_custom_pricing_for_request(
+def register_custom_pricing_for_request(
     model: str,
     custom_llm_provider: str,
     kwargs: dict,
@@ -5665,7 +5665,7 @@ def completion(
             or output_cost_per_second is not None
             or cost_per_second is not None
         ):
-            _register_custom_pricing_for_request(
+            register_custom_pricing_for_request(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
@@ -6658,7 +6658,7 @@ def embedding(
         or output_cost_per_second is not None
         or cost_per_second is not None
     ):
-        _register_custom_pricing_for_request(
+        register_custom_pricing_for_request(
             model=model,
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs,
@@ -7967,7 +7967,7 @@ async def aadapter_generate_content(
 
     coro: Final = cast(
         Coroutine[object, object, dict[str, object] | AsyncIterator[bytes]],
-        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
+        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True, custom_logging_obj=None),
     )
     return await coro
 
