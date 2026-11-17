@@ -214,6 +214,7 @@ overwrite_user_with_key_hash: bool = (
 bedrock_request_metadata_fields: Optional[Sequence[str]] = (
     None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
+vertex_request_label_fields: Optional[Sequence[str]] = None
 store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -506,6 +507,22 @@ public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 if TYPE_CHECKING:
+    from .harness.evaluation import (
+        CheckResult as CheckResult,
+        CommandCheck as CommandCheck,
+        EvalCheck as EvalCheck,
+        EvalRun as EvalRun,
+        EvalScorecard as EvalScorecard,
+        EvalStatus as EvalStatus,
+        EvalSummary as EvalSummary,
+        EvalTarget as EvalTarget,
+        EvalTask as EvalTask,
+        JudgeCheck as JudgeCheck,
+        PredicateCheck as PredicateCheck,
+        aagent_eval as aagent_eval,
+        agent_eval as agent_eval,
+    )
+
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
@@ -1464,6 +1481,7 @@ from .exceptions import (
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
+    RequestOverDeploymentTpmError as RequestOverDeploymentTpmError,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
@@ -1613,6 +1631,7 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
+from .google_genai import generate_content as generate_content  # pyright: ignore[reportUnknownVariableType]  # native request types require the optional google-genai SDK
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Mapping[str, object]] = None
@@ -1794,6 +1813,9 @@ if TYPE_CHECKING:
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
+    )
+    from .llms.vercel_ai_gateway.decisions.transformation import (
+        VercelAIGatewayDecisionsConfig as VercelAIGatewayDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

@@ -56,6 +56,12 @@ def bind_scope(scope: RequestScope) -> Generator[RequestScope]:
         _CURRENT_SCOPE.reset(token)
 
 
+def enter_request_scope(selection: RequestSelection) -> RequestScope:
+    scope: Final = _HOST.dispatcher().open_scope(selection)
+    _ = _CURRENT_SCOPE.set(scope)
+    return scope
+
+
 @contextmanager
 def request_scope(selection: RequestSelection = _NO_SELECTION) -> Generator[RequestScope]:
     with _HOST.dispatcher().open_scope(selection) as scope, bind_scope(scope):

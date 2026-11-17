@@ -976,7 +976,8 @@
         "providerRequired": "Please select a provider",
         "vectorStoreIdRequired": "Please input the vector store ID from your api provider",
         "selectField": "Please select the {{field}}",
-        "inputField": "Please input the {{field}}"
+        "inputField": "Please input the {{field}}",
+        "hybridSearchNeedsPipeline": "Hybrid search needs a search pipeline with a normalization-processor"
       },
       "toasts": {
         "invalidMetadata": "Invalid JSON in metadata field",
@@ -1062,6 +1063,8 @@
         "opensearchEndpoint": "OpenSearch Endpoint",
         "awsRegionOptional": "AWS Region (optional)",
         "indexNameOptional": "Index Name (optional)",
+        "searchPipelineOptional": "Search Pipeline (optional)",
+        "hybridSearch": "Hybrid Search",
         "vectorBucketName": "Vector Bucket Name",
         "indexName": "Index Name",
         "awsRegion": "AWS Region"
@@ -1114,7 +1117,9 @@
           "embeddingModel": "The embedding model on this proxy that created the vectors already stored in your index. LiteLLM embeds every search query with it, so it must be the same model. Add it under Models first if it is not listed",
           "embeddingField": "The top-level knn_vector field in your index mapping that holds each document's embedding (default: embedding)",
           "textField": "The top-level field in each document that holds its readable text. LiteLLM returns this text in search results (default: text)",
-          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs"
+          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs",
+          "searchPipeline": "The name of a search pipeline in your OpenSearch cluster. LiteLLM runs every search through it. Hybrid search needs one with a normalization-processor, since OpenSearch returns unnormalized hybrid scores without one",
+          "hybridSearch": "Turn on to combine a BM25 keyword match on the Text Field with the k-NN vector search. Needs a Search Pipeline with a normalization-processor"
         },
         "s3Vectors": {
           "bucketName": "S3 bucket name for vector storage (will be auto-created if it doesn't exist)",
@@ -2491,6 +2496,59 @@
       "loading": "Loading keys...",
       "empty": "No keys found",
       "searchPlaceholder": "Search by key alias or ID…",
+      "bulkActions": {
+        "select": "Select keys",
+        "cancel": "Cancel selection",
+        "menu": "Actions"
+      },
+      "bulkDelete": {
+        "selectKey": "Select {{key}}",
+        "selected_one": "{{count}} key selected",
+        "selected_other": "{{count}} keys selected",
+        "action": "Delete selected ({{count}})",
+        "title_one": "Delete {{count}} Virtual Key",
+        "title_other": "Delete {{count}} Virtual Keys",
+        "warning": "Deleted keys immediately stop authenticating requests. This action cannot be undone.",
+        "message": "Confirm deletion of only the keys listed above.",
+        "requiredConfirmation": "confirm delete",
+        "keyAlias": "Key {{number}} alias",
+        "keyId": "Key {{number}} ID",
+        "noAlias": "No alias",
+        "selectionChanged": "Some selected keys are no longer available to delete. Close this dialog and review your selection.",
+        "success_one": "{{count}} Virtual Key deleted",
+        "success_other": "{{count}} Virtual Keys deleted"
+      },
+      "bulkEdit": {
+        "team": "Move to team",
+        "user": "Assign to user",
+        "budget": "Set budget",
+        "selected_one": "{{count}} key selected",
+        "selected_other": "{{count}} keys selected",
+        "apply_one": "Apply to {{count}} key",
+        "apply_other": "Apply to {{count}} keys",
+        "pending": "Applying...",
+        "cancel": "Cancel",
+        "success_one": "{{count}} Virtual Key updated",
+        "success_other": "{{count}} Virtual Keys updated",
+        "partialFailure_one": "{{count}} key could not be updated. Review the reason below and try again.",
+        "partialFailure_other": "{{count}} keys could not be updated. Review the reasons below and try again.",
+        "selectionChanged": "Some selected keys are no longer available to edit. Close this dialog and review your selection.",
+        "projectTeamLocked": "Project keys keep their project’s team",
+        "descriptions": {
+          "team": "Only the team will be updated. User, model, and budget settings stay unchanged.",
+          "user": "Only the assigned user will be updated. Team, model, and budget settings stay unchanged.",
+          "budget": "Apply the same budget and reset period to each key separately. Existing spend stays unchanged."
+        },
+        "fields": {
+          "team": "Team",
+          "user": "User",
+          "budget": "Budget per key (USD)",
+          "resetPeriod": "Reset period"
+        },
+        "invalidBudget": "Enter a finite amount of 0 or more.",
+        "resetPeriodPlaceholder": "Select a reset period",
+        "resetPeriodRequired": "Select a reset period."
+      },
       "filters": {
         "title": "Filters",
         "description": "Narrow down virtual keys",
@@ -3262,6 +3320,7 @@
         "rpm": "RPM Limit",
         "itpm": "Input TPM Limit",
         "otpm": "Output TPM Limit",
+        "batchEnqueuedTokens": "Batch Enqueued Token Limit",
         "remove": "Remove model limit {{number}}",
         "add": "Add Model Limit"
       },
@@ -3279,7 +3338,8 @@
         "missingKey": "Missing key",
         "missingValue": "Missing value",
         "duplicateModel": "Duplicate model",
-        "duplicateKey": "Duplicate key"
+        "duplicateKey": "Duplicate key",
+        "batchEnqueuedTokens": "Enter a whole number above 0"
       }
     },
     "createModal": {
@@ -5861,6 +5921,23 @@
       },
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
+      "promptCache": {
+        "title": "Prompt cache usage advisory for {{name}}",
+        "description": "{{misses}} observed requests to {{model}} reported no cache usage for a prefix the provider had cached before. Delayed, missing or unlogged observations mean these requests are not necessarily consecutive and do not prove a caching outage.",
+        "evidenceHeading": "What was observed",
+        "deployment": "Deployment",
+        "model": "Model",
+        "misses": "Observed requests with no cache usage",
+        "provenWrite": "Earlier cache write that proved the prefix",
+        "provenWriteTokens_one": "{{count}} token",
+        "provenWriteTokens_other": "{{count}} tokens",
+        "ttl": "Cache lifetime",
+        "ttlMinutes_one": "{{count}} minute",
+        "ttlMinutes_other": "{{count}} minutes",
+        "window": "Misses observed",
+        "windowValue": "{{start}} to {{end}} UTC",
+        "scope": "Only non-streaming Anthropic Chat Completions requests with one five-minute cache breakpoint are checked, after the provider confirmed a cache write for that prefix. Prefixes never confirmed as cached are not assessed."
+      },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
       "retires": "Retires",
@@ -5906,7 +5983,8 @@
           "milliseconds": "Mean response time per day",
           "ratio": "Daily error rate"
         }
-      }
+      },
+      "promptCacheError": "Could not load prompt cache alerts."
     },
     "page": {
       "tabs": {
@@ -6071,6 +6149,45 @@
       "upgrade": "Upgrade to Enterprise",
       "loadError": "Could not load monitoring settings.",
       "saveError": "Could not save monitoring settings. Try again."
+    },
+    "bulk": {
+      "resolve": "Resolve all",
+      "dismiss": "Dismiss all",
+      "cancel": "Cancel",
+      "saving": "Updating alerts…",
+      "description": "This updates all open alerts matching “{{type}}”, including results you have not loaded. You can reopen individual alerts later.",
+      "error": "Some alerts could not be updated. Saved changes were kept. Try again to update the remaining open alerts."
+    },
+    "thresholds": {
+      "title": "Performance alert thresholds",
+      "description": "Usual values come from the previous seven days. Both conditions must be met.",
+      "enterpriseOnly": "Editing thresholds requires Enterprise.",
+      "edit": "Edit thresholds",
+      "cancel": "Cancel",
+      "multiplier": "Times the usual value",
+      "multiplierInvalid": "Use a multiplier greater than 1.",
+      "rules": {
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Latency",
+        "reliability": "Error rate"
+      },
+      "minimum": {
+        "spend": "Minimum increase ($)",
+        "traffic": "Minimum increase (requests)",
+        "latency": "Minimum increase (ms)",
+        "reliability": "Minimum increase (percentage points)"
+      },
+      "summary": {
+        "spend": "At least {{multiplier}}× the usual spend and ${{minimum}} higher.",
+        "traffic": "At least {{multiplier}}× the usual requests and {{minimum}} more requests.",
+        "latency": "At least {{multiplier}}× the usual latency and {{minimum}} ms higher.",
+        "reliability": "At least {{multiplier}}× the usual error rate and {{minimum}} percentage points higher."
+      },
+      "safeguards": "Requires four active baseline days. Latency also needs 100 timed requests; error rate needs 500 requests. Changes apply to future checks.",
+      "save": "Save thresholds",
+      "saving": "Saving…",
+      "saved": "Thresholds saved."
     }
   },
   "caching": {
@@ -8157,7 +8274,7 @@
         "accessControl": "ACCESS CONTROL",
         "developerTools": "DEVELOPER TOOLS",
         "settings": "SETTINGS",
-        "customerPortal": "CUSTOMER PORTAL"
+        "customerPortal": "CUSTOMER MANAGEMENT"
       },
       "sections": {
         "aiGateway": "AI Gateway",
@@ -8165,7 +8282,7 @@
         "accessControl": "Access Control",
         "developerTools": "Developer Tools",
         "settings": "Settings",
-        "customerPortal": "Customer Portal"
+        "customerPortal": "Customer Management"
       },
       "items": {
         "home": "Home",
@@ -8767,6 +8884,7 @@
     }
   },
   "shared": {
+    "fieldInformation": "{{label}} information",
     "resourceActivity": {
       "title": "Activity",
       "ownUsage": "Showing your usage only.",
@@ -9383,11 +9501,15 @@
       "toolsLoadFailed": "Could not load tools for {{serverName}}",
       "empty": {
         "connectMode": "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access.",
+        "loadFailed": "Could not load your MCP servers. Reload the page to try again.",
         "noServers": "No MCP servers configured. Add servers in Tools -> MCP Servers.",
         "noneConnected": "No servers connected yet.",
         "noMatch": "No servers match your search."
       },
       "authorized": "Authorized",
+      "signInToUse": "Sign in to use",
+      "requiredByClient": "Required by this client",
+      "useServer": "Include {{serverName}} in this connection",
       "disconnect": "Disconnect",
       "back": "Back",
       "defaultDescription": "MCP server",
@@ -9397,13 +9519,15 @@
         "transport": "Transport",
         "status": "Status",
         "connected": "Connected",
-        "notConnected": "Not connected"
+        "notConnected": "Not connected",
+        "on": "On",
+        "off": "Off"
       },
       "availableTools": "Available Tools",
       "noTools": "No tools available",
       "title": "MCP Servers",
       "beta": "Beta",
-      "connectModeSubtitle": "Click a server to see its tools and connect",
+      "connectModeSubtitle": "Turn off any server this connection should not use. Click a server to see its tools or sign in",
       "subtitle": "Browse tools, authenticate once, use in chat",
       "loadingTools": "Loading tools...",
       "toolsAvailable_one": "{{count}} tool available",
@@ -9411,7 +9535,8 @@
       "searchPlaceholder": "Search servers...",
       "tabs": {
         "all": "All",
-        "connected": "Connected"
+        "connected": "Connected",
+        "on": "On"
       }
     },
     "connectFlowBanner": {
@@ -9423,7 +9548,8 @@
       },
       "unscoped": {
         "title": "Connect your MCP servers to {{client}}",
-        "description": "Authorize the servers you want to use below, then click Finish connecting to return to {{client}}."
+        "description": "{{client}} gets every server that is on. Turn off the ones it should not use, sign in where needed, then click Finish connecting.",
+        "fixed": "{{client}} will get every server you can reach. Sign in to the ones that need it below, then click Finish connecting to return to {{client}}."
       },
       "multi": {
         "title": "Allow {{client}} to use {{servers}}",
@@ -9437,6 +9563,7 @@
       },
       "connectServer": "Connect {{server}}",
       "finish": "Finish connecting",
+      "nothingOn": "Turn on at least one server to finish connecting.",
       "cancel": "Cancel",
       "manualDelivery": "My client is on a remote or SSH machine"
     },
@@ -15444,7 +15571,13 @@
       },
       "avgCostPerRequest": "Avg cost / request",
       "avgLatency": "Avg latency",
-      "successRateHint": "{{rate}}% success rate"
+      "successRateHint": "{{rate}}% success rate",
+      "spendDisplay": {
+        "label": "Spend display",
+        "option": "{{code}} · {{name}}",
+        "estimate": "≈ {{amount}} estimated at the ECB reference rate of {{date}}",
+        "unavailable": "Reference rates are unavailable, spend is shown in USD"
+      }
     },
     "overview": {
       "topVirtualKeys": "Top Virtual Keys",
@@ -17322,6 +17455,7 @@
         "number": "Number"
       },
       "numberHint": "Value must be between 0 and 1",
+      "langfuseSpanScopeHint": "Leave empty to use the proxy default (LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE, full if unset).",
       "disabledCallbacks": {
         "title": "Disabled Callbacks",
         "tooltip": "Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.",
@@ -17574,6 +17708,13 @@
       "staticToken": {
         "label": "Static delegated access token",
         "description": "Sends one pre-acquired delegated Microsoft Graph token for every caller."
+      },
+      "githubApp": {
+        "label": "GitHub App",
+        "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically.",
+        "uploadHelp": "Upload your GitHub App PEM below. LiteLLM encrypts it in its credential database and only shows a saved-key status. Use HTTPS and protect your proxy encryption key. No Enterprise license is required.",
+        "invalidFile": "Choose a .pem file no larger than 16 KiB.",
+        "keyProvided": "Private key supplied. Upload a replacement to change it."
       }
     },
     "classificationMethodConfig": {
@@ -17668,7 +17809,11 @@
         "empty": "Type to add a keyword"
       },
       "scoringRulesAllowance": "Custom scoring rules",
-      "keywordOverridesTitle": "Heuristic Keyword Overrides"
+      "keywordOverridesTitle": "Heuristic Keyword Overrides",
+      "contextLimit": {
+        "label": "Max conversation tokens before judge",
+        "help": "Above this estimated size, ask the judge even for short follow-ups. Counts text and tool results. Existing session and tool-continuation pins still apply. Leave blank to disable."
+      }
     },
     "autoRouterClassifierTabs": {
       "option": {
@@ -18250,7 +18395,8 @@
       "selectClassifierOrHeuristic": "Please select a classifier model, or switch back to Heuristic",
       "reasoningEffortUnsupported": "{{effort}} reasoning effort is not supported by every deployment in {{model}}. Choose Default or a supported value.",
       "selectEmbeddingModel": "Select an embedding model to use semantic keyword matching",
-      "addKeywordRuleForSemantic": "Add at least one keyword tier rule to use semantic keyword matching"
+      "addKeywordRuleForSemantic": "Add at least one keyword tier rule to use semantic keyword matching",
+      "contextLimitPositiveInteger": "Conversation limit must be a positive whole number"
     },
     "adaptiveRoutingConfig": {
       "enable": "Enable adaptive bandit selection",
@@ -20647,15 +20793,15 @@
     },
     "limits": {
       "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
-      "reachedTitle": "Free customer portal limit reached",
-      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "reachedTitle": "Customer Management free tier limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in Customer Management.",
       "upgrade": "Upgrade to Enterprise"
     },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",
       "manage": "Manage",
-      "title": "Customer management",
+      "title": "Customer Management",
       "subtitle": "Manage customer teams, customer members, and settings for this customer organization.",
       "teamSubtitle": "Manage customer members and settings for this customer team.",
       "memberSubtitle": "Manage settings and budget for this customer member.",
@@ -20678,6 +20824,8 @@
       "membersHint": "Choose a customer member to manage their settings and budget.",
       "emptyTeams": "No customer teams in this customer organization.",
       "emptyMembers": "No customer members in this customer team.",
+      "searchMembers": "Search customer members by name or ID",
+      "noMemberMatches": "No customer members match your search.",
       "error": "Unable to load customer",
       "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "missingOrganization": "Choose a customer organization to manage.",
@@ -20750,10 +20898,20 @@
       "deleteOrganizationMessage": "This deletes this customer organization and its customer teams and customer members.",
       "deleteTeamMessage": "This deletes this customer team and its customer members.",
       "deleteMemberMessage": "This deletes this customer member.",
-      "deleteInformationTitle": "{{kind}} details"
+      "deleteInformationTitle": "{{kind}} details",
+      "teamsRequired": "Select at least one team.",
+      "memberTeamsHint": "Changing teams keeps this member’s ID, budgets and spend history. Past usage stays with the original team.",
+      "defaultTeam": "Default team",
+      "defaultTeamHint": "Requests without a team use this team.",
+      "retryTeams": "Retry",
+      "chooseTeams": "Choose teams",
+      "moveTeams": "Move teams",
+      "moving": "Moving…",
+      "memberMoved": "Member teams updated.",
+      "memberActions": "Actions for {{name}}"
     },
     "switcher": {
-      "label": "Customer Portal",
+      "label": "Customer Management",
       "description": "Customer organizations and usage"
     },
     "status": {

@@ -1,10 +1,12 @@
-use std::fmt;
-
+use litellm_python_compat::lenient::IsTrue;
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
+use serde_with::serde_as;
+use veil::Redact;
 
 use crate::{
-    AdditionalFields, CacheSettings, Object, RedisSettings, Spelled, Value, value::one_or_many,
+    AdditionalFields, CacheSettings, JwtAuthSettings, Object, PassThroughEndpoint, RedisSettings,
+    RouteList, Spelled, Value, value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -13,7 +15,7 @@ pub enum TracingStoreKind {
     Clickhouse,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickHouseStoreSettings {
     #[serde(rename = "type")]
@@ -21,17 +23,6 @@ pub struct ClickHouseStoreSettings {
     pub url: Option<SecretValue>,
     pub database: Option<String>,
     pub retention_days: Option<Spelled<f64>>,
-}
-
-impl fmt::Debug for ClickHouseStoreSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ClickHouseStoreSettings")
-            .field("kind", &self.kind)
-            .field("database", &self.database)
-            .field("retention_days", &self.retention_days)
-            .finish()
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -48,7 +39,8 @@ pub struct TracingSettings {
     pub additional_fields: AdditionalFields,
 }
 
-#[derive(Clone, Deserialize)]
+#[serde_as]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct GeneralSettings {
     pub completion_model: Option<String>,
@@ -81,6 +73,16 @@ pub struct GeneralSettings {
     pub coordination_redis: Option<RedisSettings>,
     pub mcp_allowed_hosts: Option<Box<[String]>>,
     pub mcp_allowed_origins: Box<[String]>,
+    pub pass_through_endpoints: Option<Box<[PassThroughEndpoint]>>,
+    /// `general_settings.get(...) is True`, how the proxy reads each auth flag.
+    #[serde_as(as = "IsTrue")]
+    pub enable_jwt_auth: bool,
+    #[serde_as(as = "IsTrue")]
+    pub enable_oauth2_auth: bool,
+    #[serde_as(as = "IsTrue")]
+    pub enable_oauth2_proxy_auth: bool,
+    pub public_routes: Option<RouteList>,
+    pub litellm_jwtauth: Option<JwtAuthSettings>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -118,38 +120,18 @@ impl Default for GeneralSettings {
             coordination_redis: None,
             mcp_allowed_hosts: None,
             mcp_allowed_origins: Box::default(),
-            additional_fields: AdditionalFields::new(),
+            pass_through_endpoints: None,
+            enable_jwt_auth: false,
+            enable_oauth2_auth: false,
+            enable_oauth2_proxy_auth: false,
+            public_routes: None,
+            litellm_jwtauth: None,
+            additional_fields: AdditionalFields::default(),
         }
     }
 }
 
-impl fmt::Debug for GeneralSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GeneralSettings")
-            .field("completion_model", &self.completion_model)
-            .field(
-                "max_in_flight_requests_per_worker",
-                &self.max_in_flight_requests_per_worker,
-            )
-            .field(
-                "max_queued_requests_per_worker",
-                &self.max_queued_requests_per_worker,
-            )
-            .field(
-                "admission_queue_timeout_seconds",
-                &self.admission_queue_timeout_seconds,
-            )
-            .field("master_key", &self.master_key)
-            .field("database_url", &self.database_url)
-            .field("tracing", &self.tracing)
-            .field("store_model_in_db", &self.store_model_in_db)
-            .field("additional_fields", &self.additional_fields.keys())
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct RouterSettings {
     pub routing_strategy: Option<String>,
@@ -175,38 +157,8 @@ pub struct RouterSettings {
     pub additional_fields: AdditionalFields,
 }
 
-impl fmt::Debug for RouterSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RouterSettings")
-            .field("routing_strategy", &self.routing_strategy)
-            .field("routing_strategy_args", &self.routing_strategy_args)
-            .field("routing_groups", &self.routing_groups)
-            .field("retry_policy", &self.retry_policy)
-            .field("model_group_retry_policy", &self.model_group_retry_policy)
-            .field(
-                "model_group_affinity_config",
-                &self.model_group_affinity_config,
-            )
-            .field("allowed_fails", &self.allowed_fails)
-            .field("cooldown_time", &self.cooldown_time)
-            .field("num_retries", &self.num_retries)
-            .field("timeout", &self.timeout)
-            .field("max_retries", &self.max_retries)
-            .field("retry_after", &self.retry_after)
-            .field("fallbacks", &self.fallbacks)
-            .field("context_window_fallbacks", &self.context_window_fallbacks)
-            .field("model_group_alias", &self.model_group_alias)
-            .field("enable_tag_filtering", &self.enable_tag_filtering)
-            .field("weights", &self.weights)
-            .field("tag_routing_prefix", &self.tag_routing_prefix)
-            .field("optional_pre_call_checks", &self.optional_pre_call_checks)
-            .field("additional_fields", &self.additional_fields.keys())
-            .finish()
-    }
-}
-
-#[derive(Clone, Default, Deserialize)]
+/// Callback entries can carry credentials inline, so only whether they are set is printed.
+#[derive(Clone, Default, Deserialize, Redact)]
 #[serde(default)]
 pub struct LiteLlmSettings {
     pub ssl_verify: Option<Spelled<bool>>,
@@ -224,10 +176,13 @@ pub struct LiteLlmSettings {
     pub cache: Option<bool>,
     pub cache_params: Option<CacheSettings>,
     #[serde(deserialize_with = "one_or_many")]
+    #[redact(fixed = 3)]
     pub callbacks: Option<Vec<Value>>,
     #[serde(deserialize_with = "one_or_many")]
+    #[redact(fixed = 3)]
     pub success_callback: Option<Vec<Value>>,
     #[serde(deserialize_with = "one_or_many")]
+    #[redact(fixed = 3)]
     pub failure_callback: Option<Vec<Value>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
@@ -235,36 +190,19 @@ pub struct LiteLlmSettings {
     pub additional_fields: AdditionalFields,
 }
 
-impl fmt::Debug for LiteLlmSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LiteLlmSettings")
-            .field("drop_params", &self.drop_params)
-            .field("request_timeout", &self.request_timeout)
-            .field("num_retries", &self.num_retries)
-            .field("cache", &self.cache)
-            .field("cache_params", &self.cache_params)
-            .field(
-                "callbacks",
-                &self.callbacks.as_ref().map(|callbacks| callbacks.len()),
-            )
-            .field(
-                "success_callback",
-                &self
-                    .success_callback
-                    .as_ref()
-                    .map(|callbacks| callbacks.len()),
-            )
-            .field(
-                "failure_callback",
-                &self
-                    .failure_callback
-                    .as_ref()
-                    .map(|callbacks| callbacks.len()),
-            )
-            .field("json_logs", &self.json_logs)
-            .field("set_verbose", &self.set_verbose)
-            .field("additional_fields", &self.additional_fields.keys())
-            .finish()
+#[cfg(test)]
+mod tests {
+    use crate::JwtAuthSettings;
+
+    #[test]
+    fn jwt_auth_settings_hide_unknown_fields() {
+        let settings: JwtAuthSettings =
+            serde_json::from_value(serde_json::json!({"future_secret": "credential-value"}))
+                .unwrap();
+
+        let debug = format!("{settings:?}");
+
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 }

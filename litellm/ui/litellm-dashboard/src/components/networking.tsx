@@ -1079,14 +1079,24 @@ export const userCreateCall = async (
   }
 };
 
-export const keyDeleteCall = async (accessToken: string, user_key: string) => {
+export const keyDeleteCall = async (accessToken: string, user_key: string | string[]) => {
   try {
-    return await apiClient.post(`/key/delete`, { accessToken, body: { keys: [user_key] } });
+    return await apiClient.post(`/key/delete`, {
+      accessToken,
+      body: { keys: typeof user_key === "string" ? [user_key] : user_key },
+    });
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to delete key:", error);
     throw error;
   }
 };
+
+export type BulkKeyUpdateResponse = components["schemas"]["BulkUpdateKeyResponse"];
+
+export const keyBulkUpdateCall = (
+  accessToken: string,
+  keys: components["schemas"]["BulkUpdateKeyRequestItem"][],
+): Promise<BulkKeyUpdateResponse> => apiClient.post("/key/bulk_update", { accessToken, body: { keys } });
 
 export const userDeleteCall = async (accessToken: string, userIds: string[]) => {
   try {
@@ -4456,6 +4466,8 @@ export interface ConnectFlowStatus {
   connected: boolean | null;
   requested_scopes?: string[];
   servers: { server_id: string; server_name: string; connected: boolean }[] | null;
+  selectable?: false;
+  required_server_ids?: string[];
 }
 
 /**
