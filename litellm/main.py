@@ -72,7 +72,7 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
-from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.exceptions import AuthenticationError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
@@ -2789,18 +2789,21 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
-def _require_provider_own_api_key(ctx: CompletionDispatchContext) -> None:
+def _missing_provider_key_error(ctx: CompletionDispatchContext) -> AuthenticationError | None:
     if ctx.custom_llm_provider == "bigmodel" and not ctx.api_key:
-        raise litellm.AuthenticationError(
+        return AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=ctx.model
         )
     json_provider: Final = JSONProviderRegistry.get(ctx.custom_llm_provider)
-    if json_provider is not None and _dispatch_client_http(ctx) is None and not (ctx.api_key or litellm.api_key):
-        raise litellm.AuthenticationError(
-            message=f"Set {json_provider.api_key_env} or pass api_key",
-            llm_provider=ctx.custom_llm_provider,
-            model=ctx.model,
-        )
+    if json_provider is None or ctx.api_key or litellm.api_key:
+        return None
+    if isinstance(_dispatch_client_openai(ctx), openai.OpenAI | openai.AsyncOpenAI):
+        return None
+    return AuthenticationError(
+        message=f"Set {json_provider.api_key_env} or pass api_key",
+        llm_provider=ctx.custom_llm_provider,
+        model=ctx.model,
+    )
 
 
 def _complete_custom_openai(
@@ -2830,7 +2833,8 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    _require_provider_own_api_key(ctx)
+    if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
+        raise missing_key_error
     organization = (
         organization
         or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))

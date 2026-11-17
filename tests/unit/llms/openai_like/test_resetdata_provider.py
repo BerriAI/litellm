@@ -7,6 +7,7 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 _DEFAULT_API_BASE: Final = "https://api.resetdata.ai/api/v1"
 _CHAT_COMPLETIONS_URL: Final = f"{_DEFAULT_API_BASE}/chat/completions"
@@ -104,6 +105,23 @@ def test_resetdata_chat_never_borrows_the_openai_key(monkeypatch: pytest.MonkeyP
         route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
         with pytest.raises(litellm.AuthenticationError, match="RESETDATA_API_KEY"):
             litellm.completion(model="resetdata/zai/glm-5.3", messages=[{"role": "user", "content": "Say hello"}])
+
+    assert route.call_count == 0
+
+
+def test_resetdata_chat_on_the_http_handler_never_borrows_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("RESETDATA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-env")
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="RESETDATA_API_KEY"):
+            litellm.completion(
+                model="resetdata/zai/glm-5.3",
+                messages=[{"role": "user", "content": "Say hello"}],
+                client=HTTPHandler(),
+            )
 
     assert route.call_count == 0
 

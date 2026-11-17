@@ -1159,7 +1159,7 @@ openai_compatible_providers: Final[list[str]] = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
-    "resetdata",  # ResetData - JSON-configured provider
+    "resetdata",
     "featherless_ai",
     "nscale",
     "nebius",
