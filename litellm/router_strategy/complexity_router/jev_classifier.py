@@ -68,6 +68,7 @@ class JevBudgetedRequest:
     telemetry: StandardLoggingRoutingDecision
 
 
+@renamed_router_param("router", "context")
 def jev_input_targets(context: "RoutingContext", config: "OpenSourceClassifierConfig") -> tuple[JevInputTarget, ...]:
     from litellm.types.router import Deployment
 
@@ -96,13 +97,7 @@ def _jev_input_target(params: Mapping[str, object], explicit_limit: object) -> J
         model, provider = resolve_model_and_provider_for_metadata(
             qualified_model, override if isinstance(override, str) else None
         )
-        headers: Final = decisions_outbound_headers(
-            TypeAdapter[Mapping[str, str] | None](Mapping[str, str] | None).validate_python(
-                params.get("extra_headers")
-            ),
-            provider,
-            params,
-        )
+        headers: Final = decisions_outbound_headers(params.get("extra_headers"), provider, params)
         limits: Final = get_decisions_provider_config(model, provider).get_input_limits(model, provider, headers)
         candidates: Final = tuple(
             value
@@ -209,7 +204,7 @@ class JevChoiceAnswer(LiteLLMBaseModel):
     type: Literal["choice"]
     choice: str
     probabilities: Mapping[str, JevProbability]
-    confidence: JevProbability
+    confidence: JevProbability | None = None
 
 
 class JevUsage(LiteLLMBaseModel):
@@ -424,7 +419,7 @@ class HttpJevClassifierClient:
 class JevVerdict(NamedTuple):
     label: str
     probabilities: Mapping[str, float]
-    confidence: float
+    confidence: float | None
     model: str
     cost: float | None
     provider: str = "typesafe"

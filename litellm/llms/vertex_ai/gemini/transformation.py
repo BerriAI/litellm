@@ -8,21 +8,18 @@ import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, PositiveInt, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_image_mime_type_from_url,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
     convert_to_anthropic_image_obj,
@@ -33,9 +30,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     get_thought_signature_from_tool,
     response_schema_prompt,
 )
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_image_mime_type_from_url,
+)
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.llms.vertex_ai.common_utils import pop_vertex_caller_labels, pop_vertex_request_labels
+from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -66,6 +67,8 @@ from ..common_utils import (
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    with_forced_bare_root_unions_on_parameters,
+    with_integer_enums_that_fit,
 )
 from .long_decode import with_default_output_budget
 
@@ -271,8 +274,21 @@ def _image_url_payload_may_need_sync_gcs_metadata_fetch(
     return _gs_uri_requires_content_type_metadata(url)
 
 
+class _SupportsModelDump(Protocol):
+    def model_dump(self, *, exclude_none: bool) -> object: ...
+
+
+def _message_fields(raw: object) -> Mapping[object, object] | None:
+    if isinstance(raw, dict):
+        return raw
+    if not has_attributes(raw, _SupportsModelDump, "model_dump"):
+        return None
+    dumped: Final = raw.model_dump(exclude_none=False)
+    return dumped if isinstance(dumped, dict) else None
+
+
 def _openai_messages_may_need_sync_media_fetch(
-    messages: list[AllMessageValues],
+    messages: Sequence[object],
     custom_llm_provider: str = "vertex_ai",
     model: str | None = None,
 ) -> bool:
@@ -283,10 +299,7 @@ def _openai_messages_may_need_sync_media_fetch(
         model is None or VertexGeminiConfig.supports_multimodal_function_responses(model)
     )
     for raw in messages:
-        msg: Any = raw
-        if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
-            msg = msg.model_dump(exclude_none=False)
-        if not isinstance(msg, dict):
+        if (msg := _message_fields(raw)) is None:
             continue
         images_field = msg.get("images")
         if isinstance(images_field, list):
@@ -785,6 +798,8 @@ def gemini_convert_messages_with_history(
     tool_call_responses = []
     vertex_project = None
     vertex_credentials = None
+    request_settings: Final = cast(Mapping[str, object], litellm_params or {})  # cast-ok: untyped shared signature
+    drop_params: Final = drops_unsupported_params(request_settings.get("drop_params"))
     if litellm_params:
         vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
@@ -935,6 +950,8 @@ def gemini_convert_messages_with_history(
                         assistant_msg,
                         model=model,
                         forward_function_call_id=forward_function_call_id,
+                        custom_llm_provider=custom_llm_provider,
+                        drop_params=drop_params,
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
@@ -1057,6 +1074,35 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
+class _CallerToolConfig(TypedDict, total=False):
+    toolConfig: ReadOnly[JsonValue]
+    tool_config: ReadOnly[JsonValue]
+
+
+_CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
+
+
+def _tools_fit_for_caller_tool_config(tools: Tools, extra_body: object, model: str) -> Tools:
+    extra_body_fields: Final = as_str_mapping(extra_body)
+    if extra_body_fields is None:
+        return tools
+    try:
+        caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
+    except ValidationError:
+        return tools
+    tool_config: Final = caller.get("toolConfig", caller.get("tool_config"))
+    if tool_config is None:
+        return tools
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    json_tools: Final = cast(JsonValue, tools)  # cast-ok: LiteLLM built these tools as JSON request data
+    fitted: Final = with_integer_enums_that_fit(
+        partial(with_forced_bare_root_unions_on_parameters, json_tools, tool_config),
+        VertexGeminiConfig.is_gemini_3_or_newer(model),
+    )
+    return cast(Tools, fitted)  # cast-ok: same shape back
+
+
 def _has_google_maps_tool(tools: object) -> bool:
     """Return True if any tool object in the list has a 'googleMaps' key."""
     if not isinstance(tools, list):
@@ -1165,14 +1211,14 @@ def transform_request_body(
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
+        request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
-        labels: Final = pop_vertex_request_labels(optional_params, litellm_params)
+        labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
         from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
         drops_top_k: Final = "top_k" in optional_params and not VertexGeminiConfig.supports_sampling_params(model)
         if drops_top_k:
-            request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
             VertexGeminiConfig.reject_unsupported_sampling_param(
                 model=model,
                 param="top_k",
@@ -1201,7 +1247,9 @@ def transform_request_body(
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
             if tools is not None:
-                data["tools"] = tools
+                built_tools: Final = cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
+                caller_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
+                data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_params.get("extra_body"), model)
             if tool_choice is not None:
                 data["toolConfig"] = tool_choice
             if include_server_side_tool_invocations:
@@ -1231,6 +1279,10 @@ def transform_request_body(
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
         _pop_and_merge_extra_body(data, optional_params)
+        if custom_llm_provider != LlmProviders.GEMINI and vertex_request_label_fields():
+            merged_labels: Final = pop_vertex_request_labels({"labels": data.pop("labels", None)}, litellm_params)
+            if merged_labels:
+                data["labels"] = merged_labels
         _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
@@ -1256,10 +1308,12 @@ def sync_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
+    request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
     (
         messages,
@@ -1275,11 +1329,13 @@ def sync_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        drop_params=drops_unsupported_params(request_settings.get("drop_params")),
     )
 
     return _with_default_output_budget(
@@ -1390,10 +1446,12 @@ async def async_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
+    request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
     (
         messages,
@@ -1409,11 +1467,13 @@ async def async_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        drop_params=drops_unsupported_params(request_settings.get("drop_params")),
     )
 
     inlined_messages: Final = await async_inline_remote_media(

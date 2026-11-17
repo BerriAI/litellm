@@ -6,12 +6,14 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 
 import asyncio
 import contextlib
+import functools
 import importlib.metadata
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass, field
+from enum import Enum, auto
 from types import MappingProxyType
-from typing import Final, NoReturn, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Final, NoReturn, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -24,22 +26,44 @@ from litellm.constants import (
     BEDROCK_REALTIME_SDK_DISTRIBUTION,
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.realtime_errors import realtime_error_event
+from litellm.litellm_core_utils.realtime_guardrails import (
+    RealtimeGuardedItem,
+    RealtimeGuardrailBlock,
+    RealtimeGuardrailRewrite,
+    RealtimeGuardrailVerdict,
+    RealtimeToolOutput,
+    guardrail_violation_error_event,
+    guardrail_voice_prompt_events,
+    realtime_guarded_item,
+    realtime_guardrail_verdict,
+    rewritten_item,
+)
 from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
 from litellm.llms.base_llm.realtime.transformation import RealtimeSessionUpdateRejection
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
+from litellm.types.utils import StandardLoggingPayloadErrorInformation
 
 from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
+from ..web_identity_session_policy import BEDROCK_REALTIME_SESSION_POLICY, WebIdentitySessionPolicy
 from .transformation import BedrockRealtimeConfig, requested_modalities
 
+if TYPE_CHECKING:
+    from litellm.types.guardrails import GuardrailEventHooks
+
 _CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_REQUEST_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_SPEND_LOG_METADATA_KEYS: Final = ("litellm_metadata", "metadata")
+GUARDRAIL_UNAVAILABLE_MESSAGE: Final = "A guardrail could not check this request, so the session was ended"
 
 _EMPTY_JSON_OBJECT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 
@@ -59,6 +83,10 @@ _BEDROCK_STREAM_ERROR_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "ValidationException": 400,
     }
 )
+
+
+def _stream_ended_before_session_closed() -> BedrockError:
+    return BedrockError(status_code=503, message="Bedrock realtime stream ended before the session closed")
 
 
 def _as_bedrock_error(error: BaseException) -> BaseException:
@@ -165,6 +193,12 @@ class _BridgeOutcome:
     client_disconnected: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SessionEndSignals:
+    input_closing: asyncio.Event = field(default_factory=asyncio.Event)
+    output_failed: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 async def _client_messages(client_ws: RealtimeClientWebSocket, initial_message: str | None) -> AsyncIterator[str]:
     if initial_message is not None:
         yield initial_message
@@ -188,8 +222,8 @@ def raise_if_session_committed(scope: Mapping[str, object] | None) -> None:
     raise BedrockError(
         status_code=400,
         message=(
-            "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
-            + (f". The committed stream failed with: {committed_failure}" if committed_failure else "")
+            (f"{committed_failure}. " if committed_failure else "")
+            + "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
         ),
     )
 
@@ -201,19 +235,56 @@ def _pending_opening_message(scope: Mapping[str, object]) -> str | None:
     return pending if isinstance(pending, str) else None
 
 
+def _spend_log_metadata(litellm_params: Mapping[str, object]) -> tuple[str, Mapping[str, object]] | None:
+    return next(
+        (
+            (key, metadata)
+            for key in _SPEND_LOG_METADATA_KEYS
+            if (metadata := _REQUEST_MAPPING_ADAPTER.validate_python(litellm_params.get(key)))
+        ),
+        None,
+    )
+
+
+def _record_failure_on_spend_log(logging_obj: LiteLLMLogging, error: BaseException) -> None:
+    """The spend row of a session the provider ended reads failure while it still bills the forwarded events."""
+    litellm_params: Final = _REQUEST_MAPPING_ADAPTER.validate_python(
+        logging_obj.model_call_details.get("litellm_params")
+    )
+    if litellm_params is None:
+        return
+    spend_log_metadata: Final = _spend_log_metadata(litellm_params)
+    if spend_log_metadata is None:
+        return
+    status_code: Final[object] = getattr(error, "status_code", None)
+    error_information: Final[StandardLoggingPayloadErrorInformation] = {
+        "error_code": "" if status_code is None else str(status_code),
+        "error_class": type(error).__name__,
+        "error_message": redact_string(str(error)),
+        "llm_provider": "bedrock",
+    }
+    metadata_key, metadata = spend_log_metadata
+    logging_obj.model_call_details["litellm_params"] = {  # rebind-ok: the spend row reads the logging object
+        **litellm_params,
+        metadata_key: {**metadata, "status": "failure", "error_information": error_information},
+    }
+
+
 def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseException) -> NoReturn:
     error: Final = _as_bedrock_error(failure)
     verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", redact_string(str(error)))
     if _is_session_committed(scope):
         scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = redact_string(str(error))
+    if error is failure:
+        raise failure
     raise error from failure
 
 
-def _parse_client_message(message: str) -> Mapping[str, JsonValue]:
+def _parse_client_message(message: str) -> Mapping[str, JsonValue] | None:
     try:
         return _json_dict(_CLIENT_MESSAGE_ADAPTER.validate_json(message))
     except ValueError:
-        return _EMPTY_JSON_OBJECT
+        return None
 
 
 async def _send_opening_message(
@@ -230,6 +301,27 @@ async def _send_opening_message(
     await bedrock_stream.await_output()
     client_ws.scope.pop(BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY, None)
     client_ws.scope[BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY] = True  # rebind-ok: scope outlives the attempt
+
+
+async def _forward_client_message(
+    client_ws: RealtimeClientWebSocket,
+    bedrock_stream: BedrockBidirectionalStream,
+    transformation_config: BedrockRealtimeConfig,
+    model: str,
+    session_state: RealtimeResponseTransformInput,
+    send_to_bedrock: Callable[[str], Awaitable[None]],
+    client_message: str,
+) -> None:
+    transformed_messages: Final = transformation_config.transform_realtime_request(
+        message=client_message,
+        model=model,
+        session_configuration_request=session_state.get("session_configuration_request"),
+    )
+    if transformed_messages and not _is_session_committed(client_ws.scope):
+        await _send_opening_message(client_ws, bedrock_stream, client_message, transformed_messages, send_to_bedrock)
+        return
+    for bedrock_message in transformed_messages:
+        await send_to_bedrock(bedrock_message)
 
 
 async def _ack_session_update(
@@ -267,8 +359,184 @@ async def _reject_session_update(
     return True
 
 
+async def _send_guardrail_violation(client_ws: RealtimeClientWebSocket, block: RealtimeGuardrailBlock) -> bool:
+    try:
+        await client_ws.send_text(guardrail_violation_error_event(block.message))
+    except Exception as e:  # noqa: BLE001  # any send failure means the client is gone
+        verbose_proxy_logger.debug("Bedrock Realtime: guardrail error not delivered: %s", e, exc_info=True)
+        return False
+    return True
+
+
+async def _end_guarded_session(client_ws: RealtimeClientWebSocket) -> None:
+    verbose_proxy_logger.warning("Bedrock Realtime: ending session after a guardrail violation")
+    with contextlib.suppress(Exception):
+        await client_ws.close()
+
+
+async def _end_unscreened_session(client_ws: RealtimeClientWebSocket) -> None:
+    with contextlib.suppress(Exception):
+        await client_ws.send_text(realtime_error_event(GUARDRAIL_UNAVAILABLE_MESSAGE, error_type="guardrail_error"))
+    with contextlib.suppress(Exception):
+        await client_ws.close()
+
+
+@dataclass(frozen=True, slots=True)
+class _GuardrailUnavailable:
+    pass
+
+
+def _registered_callbacks() -> Iterable[object]:
+    return litellm.callbacks
+
+
+class _ClientEventRoute(Enum):
+    FORWARD = auto()
+    DROP = auto()
+    END_SESSION = auto()
+
+
+class BedrockRealtimeGuardrails:
+    """One Bedrock realtime session's guardrail checks, shared by both bridge directions.
+
+    Nova Sonic has no way to cancel a response or remove a turn, so a blocked user transcript ends
+    the session before that turn's answer reaches the client.
+    """
+
+    def __init__(
+        self,
+        request_data: Mapping[str, object] = _EMPTY_JSON_OBJECT,
+        user_api_key_dict: object | None = None,
+        callbacks: Callable[[], Iterable[object]] = _registered_callbacks,
+    ) -> None:
+        self._request_data: Final = request_data
+        self._user_api_key_dict: Final = user_api_key_dict
+        self._callbacks: Final = callbacks
+        self._violation_count = 0
+        self._drop_next_response_create = False
+        self._failed = False
+
+    @property
+    def failed(self) -> bool:
+        return self._failed
+
+    async def _verdict(
+        self, texts: tuple[str, ...], role: str, hook: "GuardrailEventHooks"
+    ) -> RealtimeGuardrailVerdict | _GuardrailUnavailable:
+        try:
+            return await realtime_guardrail_verdict(
+                texts, role, (hook,), self._request_data, self._user_api_key_dict, self._callbacks()
+            )
+        except Exception as e:  # noqa: BLE001  # a guardrail that cannot decide fails closed, never as a Bedrock failure
+            verbose_proxy_logger.warning("Bedrock Realtime: a guardrail failed, ending the session: %s", e)
+            self._failed = True
+            return _GuardrailUnavailable()
+
+    def _ends_session(self, block: RealtimeGuardrailBlock) -> bool:
+        self._violation_count += 1
+        return block.ends_session(self._violation_count)
+
+    async def screen_client_event(
+        self,
+        client_event: Mapping[str, JsonValue],
+        client_ws: RealtimeClientWebSocket,
+        forward_to_bedrock: Callable[[str], Awaitable[None]],
+    ) -> _ClientEventRoute:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        event_type: Final = client_event.get("type")
+        if event_type == "response.create" and self._drop_next_response_create:
+            self._drop_next_response_create = False
+            return _ClientEventRoute.DROP
+        if event_type == "conversation.item.create":
+            self._drop_next_response_create = False
+        guarded_item: Final = realtime_guarded_item(client_event)
+        if guarded_item is None:
+            return _ClientEventRoute.FORWARD
+        held: Final = json.dumps(client_event)
+        client_ws.scope[BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY] = held  # rebind-ok: replayed on fallback
+        role: Final = "tool" if isinstance(guarded_item, RealtimeToolOutput) else "user"
+        match await self._verdict(guarded_item.texts, role, GuardrailEventHooks.pre_call):
+            case None:
+                return _ClientEventRoute.FORWARD
+            case RealtimeGuardrailRewrite(texts=texts):
+                await forward_to_bedrock(json.dumps({**client_event, "item": rewritten_item(client_event, texts)}))
+                return _ClientEventRoute.DROP
+            case RealtimeGuardrailBlock() as block:
+                return await self._route_blocked_item(block, guarded_item, client_ws, forward_to_bedrock)
+            case _GuardrailUnavailable():
+                await _end_unscreened_session(client_ws)
+                return _ClientEventRoute.END_SESSION
+
+    async def _route_blocked_item(
+        self,
+        block: RealtimeGuardrailBlock,
+        guarded_item: RealtimeGuardedItem,
+        client_ws: RealtimeClientWebSocket,
+        forward_to_bedrock: Callable[[str], Awaitable[None]],
+    ) -> _ClientEventRoute:
+        if isinstance(guarded_item, RealtimeToolOutput):
+            await forward_to_bedrock(guarded_item.sanitized_event)
+        if not await _send_guardrail_violation(client_ws, block):
+            return _ClientEventRoute.END_SESSION
+        if self._ends_session(block):
+            await _end_guarded_session(client_ws)
+            return _ClientEventRoute.END_SESSION
+        if isinstance(guarded_item, RealtimeToolOutput):
+            return _ClientEventRoute.DROP
+        for voice_prompt_event in guardrail_voice_prompt_events(f'"{block.message}"'):
+            await forward_to_bedrock(voice_prompt_event)
+        self._drop_next_response_create = True
+        return _ClientEventRoute.DROP
+
+    async def continues_after(
+        self, provider_event: Mapping[str, object], client_ws: RealtimeClientWebSocket, client_audio_streamed: bool
+    ) -> bool:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        transcript: Final = provider_event.get("transcript")
+        if (
+            not client_audio_streamed
+            or provider_event.get("type") != "conversation.item.input_audio_transcription.completed"
+            or not isinstance(transcript, str)
+            or not transcript
+        ):
+            return True
+        match await self._verdict((transcript,), "user", GuardrailEventHooks.realtime_input_transcription):
+            case RealtimeGuardrailBlock() as block:
+                if await _send_guardrail_violation(client_ws, block):
+                    await _end_guarded_session(client_ws)
+                return False
+            case _GuardrailUnavailable():
+                await _end_unscreened_session(client_ws)
+                return False
+            case None | RealtimeGuardrailRewrite():
+                return True
+
+
+async def _close_bedrock_input(
+    bedrock_stream: BedrockBidirectionalStream,
+    close_messages: Sequence[str],
+    send_to_bedrock: Callable[[str], Awaitable[None]],
+    timeout: float,
+) -> None:
+    async def flush_and_close() -> None:
+        for close_message in close_messages:
+            with contextlib.suppress(Exception):
+                await send_to_bedrock(close_message)
+        with contextlib.suppress(Exception):
+            await bedrock_stream.input_stream.close()
+
+    try:
+        await asyncio.wait_for(flush_and_close(), timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        verbose_proxy_logger.debug("Bedrock Realtime: timed out closing Bedrock input stream after %.1fs", timeout)
+
+
 class BedrockRealtime(BaseAWSLLM):
     """Handler for Bedrock Nova Sonic realtime speech-to-speech API."""
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_REALTIME_SESSION_POLICY
 
     def __init__(
         self,
@@ -278,6 +546,18 @@ class BedrockRealtime(BaseAWSLLM):
         super().__init__()
         self._sdk_version_lookup: Final = sdk_version_lookup
         self._close_timeout: Final = close_timeout
+        self._failed_input_closes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs to running closes
+
+    def _close_failed_input_in_background(
+        self,
+        bedrock_stream: BedrockBidirectionalStream,
+        send_to_bedrock: Callable[[str], Awaitable[None]],
+    ) -> None:
+        close_task: Final = asyncio.create_task(
+            _close_bedrock_input(bedrock_stream, (), send_to_bedrock, self._close_timeout)
+        )
+        self._failed_input_closes.add(close_task)
+        close_task.add_done_callback(self._failed_input_closes.discard)
 
     async def async_realtime(
         self,
@@ -300,6 +580,8 @@ class BedrockRealtime(BaseAWSLLM):
         aws_external_id: str | None = None,
         aws_session_tags: object = None,
         drop_params: bool = False,
+        user_api_key_dict: object | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         **kwargs: object,
     ):
         """
@@ -380,7 +662,15 @@ class BedrockRealtime(BaseAWSLLM):
 
         try:
             await self._run_session(
-                websocket, open_bidirectional_stream, model, logging_obj, pending_opening_message, drop_params
+                websocket,
+                open_bidirectional_stream,
+                model,
+                logging_obj,
+                pending_opening_message,
+                drop_params,
+                BedrockRealtimeGuardrails(
+                    request_data={"litellm_metadata": litellm_metadata or {}}, user_api_key_dict=user_api_key_dict
+                ),
             )
         finally:
             await _close_bedrock_client(bedrock_client)
@@ -393,6 +683,7 @@ class BedrockRealtime(BaseAWSLLM):
         logging_obj: LiteLLMLogging,
         pending_opening_message: str | None,
         drop_params: bool = False,
+        guardrails: BedrockRealtimeGuardrails | None = None,
     ) -> None:
         transformation_config: Final = BedrockRealtimeConfig(drop_params=drop_params)
 
@@ -415,6 +706,7 @@ class BedrockRealtime(BaseAWSLLM):
             "session_configuration_request": None,
         }
 
+        session_guardrails: Final = guardrails if guardrails is not None else BedrockRealtimeGuardrails()
         outcome: Final = await self._bridge(
             websocket,
             bedrock_stream,
@@ -423,7 +715,10 @@ class BedrockRealtime(BaseAWSLLM):
             session_state,
             logging_obj,
             initial_message=pending_opening_message,
+            guardrails=session_guardrails,
         )
+        if session_guardrails.failed:
+            logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
 
         logged_events: Final = (
             *outcome.logged_events,
@@ -433,23 +728,26 @@ class BedrockRealtime(BaseAWSLLM):
                 if _should_log_event(leftover_event)
             ),
         )
+        if outcome.provider_failure is not None and outcome.client_disconnected:
+            verbose_proxy_logger.debug(
+                "Bedrock Realtime: stream failed after the client disconnected: %s", outcome.provider_failure
+            )
+        provider_failure: Final = None if outcome.client_disconnected else outcome.provider_failure
         if logged_events:
+            if provider_failure is not None:
+                _record_failure_on_spend_log(logging_obj, _as_bedrock_error(provider_failure))
+            usage_logging_obj: Final = logging_obj if provider_failure is None else logging_obj.attempt_scoped_copy()
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                logging_obj.dispatch_success_handlers(
+                usage_logging_obj.dispatch_success_handlers(
                     list(logged_events),
                     prefer_async_handlers=True,
                 )
             )
             logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
-        if outcome.provider_failure is None:
+        if provider_failure is None:
             return
-        if outcome.client_disconnected:
-            verbose_proxy_logger.debug(
-                "Bedrock Realtime: stream failed after the client disconnected: %s", outcome.provider_failure
-            )
-            return
-        _raise_provider_failure(websocket.scope, outcome.provider_failure)
+        _raise_provider_failure(websocket.scope, provider_failure)
 
     async def _bridge(
         self,
@@ -460,19 +758,41 @@ class BedrockRealtime(BaseAWSLLM):
         session_state: RealtimeResponseTransformInput,
         logging_obj: LiteLLMLogging,
         initial_message: str | None,
+        guardrails: BedrockRealtimeGuardrails | None = None,
     ) -> _BridgeOutcome:
         """Run both forwarding directions until the client leaves or either side fails."""
         logged: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: events forwarded before a failure are still spend
+        signals: Final = SessionEndSignals()
+        session_guardrails: Final = guardrails if guardrails is not None else BedrockRealtimeGuardrails()
 
         async def collect_logged_events() -> None:
-            async for event in self._forward_bedrock_to_client(
-                bedrock_stream, websocket, transformation_config, model, logging_obj, session_state
-            ):
-                logged.append(event)
+            try:
+                async for event in self._forward_bedrock_to_client(
+                    bedrock_stream,
+                    websocket,
+                    transformation_config,
+                    model,
+                    logging_obj,
+                    session_state,
+                    signals=signals,
+                    guardrails=session_guardrails,
+                ):
+                    logged.append(event)
+            except Exception:
+                signals.output_failed.set()
+                raise
 
         client_task: Final = asyncio.create_task(
             self._forward_client_to_bedrock(
-                websocket, bedrock_stream, transformation_config, model, session_state, logging_obj, initial_message
+                websocket,
+                bedrock_stream,
+                transformation_config,
+                model,
+                session_state,
+                logging_obj,
+                initial_message,
+                signals=signals,
+                guardrails=session_guardrails,
             )
         )
         bedrock_task: Final = asyncio.create_task(collect_logged_events())
@@ -506,6 +826,9 @@ class BedrockRealtime(BaseAWSLLM):
         session_state: RealtimeResponseTransformInput,
         logging_obj: LiteLLMLogging | None = None,
         initial_message: str | None = None,
+        *,
+        signals: SessionEndSignals,
+        guardrails: BedrockRealtimeGuardrails | None = None,
     ) -> None:
         """Forward messages from client WebSocket to Bedrock stream.
 
@@ -521,13 +844,29 @@ class BedrockRealtime(BaseAWSLLM):
 
         async def send_to_bedrock(bedrock_message: str) -> None:
             event: Final = build_input_chunk(bedrock_message.encode("utf-8"))
-            await bedrock_stream.input_stream.send(event)
+            try:
+                await bedrock_stream.input_stream.send(event)
+            except Exception as e:
+                raise _stream_ended_before_session_closed() from e
             verbose_proxy_logger.debug("Bedrock Realtime: Sent to Bedrock: %s", bedrock_message[:200])
 
+        forward_to_bedrock: Final = functools.partial(
+            _forward_client_message,
+            client_ws,
+            bedrock_stream,
+            transformation_config,
+            model,
+            session_state,
+            send_to_bedrock,
+        )
+        session_guardrails: Final = guardrails if guardrails is not None else BedrockRealtimeGuardrails()
         try:
             async for message in _client_messages(client_ws, initial_message):
                 verbose_proxy_logger.debug("Bedrock Realtime: Received from client: %s", message[:200])
                 parsed_client_message = _parse_client_message(message)
+                if parsed_client_message is None:
+                    verbose_proxy_logger.warning("Bedrock Realtime: dropped a client message that is not valid JSON")
+                    continue
                 is_session_update = _json_str(parsed_client_message.get("type")) == "session.update"
                 if is_session_update:
                     rejection = transformation_config.session_update_rejection(parsed_client_message)
@@ -536,37 +875,27 @@ class BedrockRealtime(BaseAWSLLM):
                             break
                         continue
 
-                transformed_messages = transformation_config.transform_realtime_request(
-                    message=message,
-                    model=model,
-                    session_configuration_request=session_state.get("session_configuration_request"),
-                )
-                if transformed_messages and not _is_session_committed(client_ws.scope):
-                    await _send_opening_message(
-                        client_ws, bedrock_stream, message, transformed_messages, send_to_bedrock
-                    )
-                else:
-                    for bedrock_message in transformed_messages:
-                        await send_to_bedrock(bedrock_message)
+                match await session_guardrails.screen_client_event(
+                    parsed_client_message, client_ws, forward_to_bedrock
+                ):
+                    case _ClientEventRoute.END_SESSION:
+                        break
+                    case _ClientEventRoute.DROP:
+                        continue
+                    case _ClientEventRoute.FORWARD:
+                        await forward_to_bedrock(message)
 
                 if is_session_update and not await _ack_session_update(
                     client_ws, transformation_config, model, logging_obj, parsed_client_message
                 ):
                     break
+            signals.input_closing.set()
         finally:
-
-            async def close_bedrock_input() -> None:
-                for close_message in transformation_config.session_close_messages():
-                    with contextlib.suppress(Exception):
-                        await send_to_bedrock(close_message)
-                with contextlib.suppress(Exception):
-                    await bedrock_stream.input_stream.close()
-
-            try:
-                await asyncio.wait_for(close_bedrock_input(), self._close_timeout)
-            except (asyncio.TimeoutError, TimeoutError):
-                verbose_proxy_logger.debug(
-                    "Bedrock Realtime: timed out closing Bedrock input stream after %.1fs", self._close_timeout
+            if signals.output_failed.is_set():
+                self._close_failed_input_in_background(bedrock_stream, send_to_bedrock)
+            else:
+                await _close_bedrock_input(
+                    bedrock_stream, transformation_config.session_close_messages(), send_to_bedrock, self._close_timeout
                 )
 
     async def _forward_bedrock_to_client(
@@ -577,6 +906,9 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         logging_obj: LiteLLMLogging,
         session_state: RealtimeResponseTransformInput,
+        *,
+        signals: SessionEndSignals,
+        guardrails: BedrockRealtimeGuardrails | None = None,
     ) -> AsyncIterator[OpenAIRealtimeEvents]:
         """Forward messages from Bedrock to the client, yielding the ones to record for spend logging.
 
@@ -592,11 +924,14 @@ class BedrockRealtime(BaseAWSLLM):
             verbose_proxy_logger.debug("Bedrock Realtime: Sent to client: %s", message_json[:200])
             return True
 
+        session_guardrails: Final = guardrails if guardrails is not None else BedrockRealtimeGuardrails()
         output: Final = await bedrock_stream.await_output()
         while True:
             result = await output[1].receive()
 
             if result is None:
+                if not signals.input_closing.is_set():
+                    raise _stream_ended_before_session_closed()
                 verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
                 with contextlib.suppress(Exception):
                     await client_ws.close()
@@ -646,3 +981,7 @@ class BedrockRealtime(BaseAWSLLM):
                         return
                     if _should_log_event(openai_message):
                         yield openai_message
+                    if not await session_guardrails.continues_after(
+                        openai_message, client_ws, transformation_config.client_audio_streamed
+                    ):
+                        return

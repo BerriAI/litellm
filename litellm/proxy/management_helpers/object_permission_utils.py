@@ -139,6 +139,14 @@ def _object_permission_mapping(raw: object) -> Mapping[str, object]:
     return mapping if mapping is not None and isinstance(decoded, dict) else {}
 
 
+def _decoded_tool_permissions(raw: str) -> Mapping[str, object]:
+    decoded: Final = _DECODED_JSON.validate_python(json.loads(raw))
+    mapping: Final = as_str_mapping(decoded)
+    if mapping is not None:
+        return mapping
+    raise AttributeError(f"{type(decoded).__name__!r} object has no attribute 'keys'", name="keys", obj=decoded)
+
+
 async def handle_update_object_permission_common(
     data_json: dict,
     existing_object_permission_id: str | None,
@@ -460,10 +468,11 @@ async def _resolve_team_allowed_mcp_servers(
     access_group_servers: Final[list[str]] = await MCPRequestHandler.get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
-    raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
-    if isinstance(raw_tool_perms, str):
-        raw_tool_perms = json.loads(raw_tool_perms)
-    tool_perm_servers: Final[list[str]] = list(raw_tool_perms.keys())
+    stored_tool_perms: Final = team_object_permission.mcp_tool_permissions or {}
+    tool_perms: Final = (
+        _decoded_tool_permissions(stored_tool_perms) if isinstance(stored_tool_perms, str) else stored_tool_perms
+    )
+    tool_perm_servers: Final[list[str]] = list(tool_perms.keys())
     raw_servers: Final = set(direct_servers + access_group_servers + tool_perm_servers)
     resolved_servers: Final = await _resolve_mcp_server_identifiers_to_ids(
         identifiers=raw_servers,
@@ -555,7 +564,7 @@ async def _get_grandfathered_key_mcp_server_ids(
         return frozenset()
     raw_tool_perms: Final = existing_object_permission.mcp_tool_permissions or {}
     tool_perm_keys: Final[frozenset[str]] = frozenset(
-        json.loads(raw_tool_perms).keys() if isinstance(raw_tool_perms, str) else raw_tool_perms.keys()
+        _decoded_tool_permissions(raw_tool_perms).keys() if isinstance(raw_tool_perms, str) else raw_tool_perms.keys()
     )
     identifiers: Final = (frozenset(existing_object_permission.mcp_servers or []) | tool_perm_keys) - {
         SpecialMCPServerNames.no_mcp_servers.value,

@@ -12,13 +12,12 @@ from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 from litellm.rust_bridge.public_call import (
     AsyncFlag,
     NativeCall,
+    native_acall_hook_on_loop,
     native_call,
     native_call_hook,
     optional_str,
     signature,
 )
-from litellm.types.utils import CallTypes
-from litellm.utils import awith_credentials_from_list, with_credentials_from_list
 
 __all__ = ("aocr", "ocr")
 
@@ -86,7 +85,7 @@ def ocr(
         return aocr(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        with_credentials_from_list(_FLAG.dropped(kwargs), CallTypes.ocr.value),
+        _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_OCR,
         native=native_call_hook,
@@ -96,8 +95,8 @@ def ocr(
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
     return await _ADISPATCH.arun(
         args,
-        await awith_credentials_from_list(_FLAG.dropped(kwargs), CallTypes.aocr.value),
+        _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_AOCR,
-        native=native_call_hook,
+        native=native_acall_hook_on_loop,
     )
