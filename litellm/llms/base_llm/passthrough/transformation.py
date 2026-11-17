@@ -4,6 +4,7 @@ import re
 from abc import abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
+    from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
     from litellm.types.rerank import RerankResponse
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 class PassthroughMetadata(LiteLLMBaseModel):
@@ -133,12 +135,22 @@ class RawBytesStreamCollector:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class LoggedPassthroughRequest:
+    messages: tuple[AllMessageValues, ...]
+    model_parameters: Mapping[str, object]
+
+
 class BasePassthroughConfig(BaseLLMModelInfo):
     @abstractmethod
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         """
         Check if the request is a streaming request
         """
+
+    def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+        """The prompt and settings of a provider-native request body, for providers whose body shape is known."""
+        return None
 
     def format_url(
         self,
@@ -236,7 +248,12 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         return None
 
     def create_stream_collector(
-        self, model: str, custom_llm_provider: str, endpoint: str
+        self,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+        *,
+        response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
     ) -> PassthroughStreamCollector:
         return RawBytesStreamCollector(
             provider_config=self, model=model, custom_llm_provider=custom_llm_provider, endpoint=endpoint

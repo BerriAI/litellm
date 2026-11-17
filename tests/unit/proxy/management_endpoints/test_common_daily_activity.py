@@ -710,6 +710,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
@@ -1294,6 +1295,7 @@ def test_update_breakdown_metrics_includes_user_email():
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        guardrail_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=2,
@@ -1375,6 +1377,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.prompt_caching_savings_spend = 0.0
     mock_record_1.gateway_injected_caching_savings_spend = 0.0
     mock_record_1.autorouter_savings_spend = 0.0
+    mock_record_1.guardrail_spend = 0.0
     mock_record_1.total_response_time_ms = 18_000
     mock_record_1.timed_requests = 9
     mock_record_1.api_requests = 10
@@ -1401,6 +1404,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.prompt_caching_savings_spend = 0.0
     mock_record_2.gateway_injected_caching_savings_spend = 0.0
     mock_record_2.autorouter_savings_spend = 0.0
+    mock_record_2.guardrail_spend = 0.0
     mock_record_2.total_response_time_ms = 2_500
     mock_record_2.timed_requests = 5
     mock_record_2.api_requests = 5
@@ -1473,6 +1477,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
@@ -1569,6 +1574,7 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "api_requests": 1,
@@ -1618,7 +1624,7 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
     assert key_breakdown["deleted-key"].metadata.key_alias == "deleted"
 
 
-def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4"):
+def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4", guardrail_spend=0.0):
     """A LiteLLM_DailyUserSpend row as the per-user breakdown reads it."""
     return SimpleNamespace(
         date="2024-01-01",
@@ -1639,12 +1645,45 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        guardrail_spend=guardrail_spend,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_paginated_activity_separates_guardrail_spend_per_model_and_key():
+    records = [
+        _daily_user_spend_record(user_id="u", api_key="key", spend=0.0076916, model="guarded", guardrail_spend=0.00015),
+        _daily_user_spend_record(user_id="u", api_key="key", spend=0.002, model="unguarded"),
+    ]
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_dailyuserspend.count = AsyncMock(return_value=len(records))
+    mock_prisma.db.litellm_dailyuserspend.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    models = result.results[0].breakdown.models
+    guarded = models["guarded"].api_key_breakdown["key"].metrics
+    assert guarded.spend - guarded.guardrail_spend == pytest.approx(0.0075416)
+    assert models["unguarded"].api_key_breakdown["key"].metrics.guardrail_spend == 0.0
+    assert result.results[0].metrics.guardrail_spend == pytest.approx(0.00015)
 
 
 @pytest.mark.asyncio
@@ -1788,6 +1827,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "prompt_caching_savings_spend": None,
             "gateway_injected_caching_savings_spend": None,
             "autorouter_savings_spend": None,
+            "guardrail_spend": None,
             "total_response_time_ms": None,
             "timed_requests": None,
             "api_requests": None,
@@ -1836,6 +1876,7 @@ def _no_spend_record():
         prompt_caching_savings_spend=None,
         gateway_injected_caching_savings_spend=None,
         autorouter_savings_spend=None,
+        guardrail_spend=None,
         total_response_time_ms=None,
         timed_requests=None,
         api_requests=None,
@@ -1975,6 +2016,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        guardrail_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=0,
@@ -2021,6 +2063,7 @@ def _grouping_row(
     endpoint=None,
     spend=0.0,
     ptu_flat_cost=0.0,
+    guardrail_spend=None,
 ):
     return GroupingSetsRow(
         date="2024-01-01",
@@ -2043,6 +2086,7 @@ def _grouping_row(
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        guardrail_spend=guardrail_spend,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=0,
@@ -2086,6 +2130,38 @@ def test_grouping_sets_dispatcher_excludes_ptu_sentinel_from_key_breakdowns(ptu_
     assert model_bucket.metrics.spend == 5.0
     assert PTU_SENTINEL_API_KEY not in model_bucket.api_key_breakdown
     assert "real-key" in model_bucket.api_key_breakdown
+
+
+def test_model_key_breakdown_separates_guardrail_spend_from_model_spend():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_API_KEY,
+        _GROUP_DATE_MODEL,
+        _GROUP_DATE_MODEL_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_MODEL, model="guarded", spend=0.0076916, guardrail_spend=0.00015),
+        _grouping_row(_GROUP_DATE_MODEL, model="unguarded", spend=0.002),
+        _grouping_row(
+            _GROUP_DATE_MODEL_API_KEY, model="guarded", api_key="key", spend=0.0076916, guardrail_spend=0.00015
+        ),
+        _grouping_row(_GROUP_DATE_MODEL_API_KEY, model="unguarded", api_key="key", spend=0.002),
+        _grouping_row(_GROUP_DATE_API_KEY, api_key="key", spend=0.0096916, guardrail_spend=0.00015),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=0.0096916, guardrail_spend=0.00015),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+    day = aggregated["results"][0]
+
+    guarded = day.breakdown.models["guarded"].api_key_breakdown["key"].metrics
+    unguarded = day.breakdown.models["unguarded"].api_key_breakdown["key"].metrics
+    assert guarded.spend - guarded.guardrail_spend == pytest.approx(0.0075416)
+    assert unguarded.guardrail_spend == 0.0
+    assert day.breakdown.models["guarded"].metrics.guardrail_spend == pytest.approx(0.00015)
+    assert day.breakdown.api_keys["key"].metrics.guardrail_spend == pytest.approx(0.00015)
+    assert aggregated["totals"].guardrail_spend == pytest.approx(0.00015)
 
 
 def test_grouping_sets_dispatcher_populates_every_breakdown_level(ptu_cost_attribution_enabled):
@@ -2205,6 +2281,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        guardrail_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=0,
@@ -2560,6 +2637,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,

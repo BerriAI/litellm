@@ -23,10 +23,10 @@ from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     map_finish_reason,
 )
+from litellm.litellm_core_utils.model_cost_table import VersionCached
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.rust_bridge.host.model_cost import VersionCached
 from litellm.types.llms.cohere import CohereV2ChatResponse
 from litellm.types.llms.openai import (
     AllMessageValues,

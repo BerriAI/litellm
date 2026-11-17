@@ -19,6 +19,12 @@ else:
     DynamicLoggingCache = Any
 
 
+def _tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.presets.destinations import langfuse_sdk_tenant_host_refused_by_otel_v2
+
+    return langfuse_sdk_tenant_host_refused_by_otel_v2(params)
+
+
 class LangFuseHandler:
     @staticmethod
     def get_langfuse_logger_for_request(
@@ -37,7 +43,9 @@ class LangFuseHandler:
 
         """
         temp_langfuse_logger: LangFuseLogger | None = globalLangfuseLogger
-        if LangFuseHandler._dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params) is False:
+        if LangFuseHandler._dynamic_langfuse_credentials_are_passed(
+            standard_callback_dynamic_params
+        ) is False or _tenant_host_refused_by_otel_v2(standard_callback_dynamic_params):
             return LangFuseHandler._return_global_langfuse_logger(
                 globalLangfuseLogger=globalLangfuseLogger,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,

@@ -550,6 +550,32 @@ def test_runtime_404_and_mantle_404_surface_provider_error(counting_proxy: Owned
         assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
 
 
+def test_utils_token_counter_prompt_answers_the_count_model_404_like_the_messages_form(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(_rejecting(404)), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _metadata_deployment(scenario, runtime.url)
+        from_prompt: Final = gateway.request(
+            "POST",
+            "/utils/token_counter",
+            {"model": model, "prompt": "Count this message"},
+            params={"call_endpoint": "true"},
+        )
+        from_messages: Final = gateway.request(
+            "POST", "/utils/token_counter", _bare(model), params={"call_endpoint": "true"}
+        )
+        assert from_prompt.status_code == from_messages.status_code == 404, from_prompt.text
+        assert _REJECTION in from_prompt.text, from_prompt.text
+        assert _JSON_OBJECT.validate_json(from_prompt.content) == _JSON_OBJECT.validate_json(from_messages.content)
+        assert runtime.drain() == ()
+        assert _mantle_bodies(mantle) == (_MANTLE_BARE, _MANTLE_BARE)
+
+
 def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     with (
