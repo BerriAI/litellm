@@ -48,6 +48,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -589,6 +590,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
+    PRICING_CURRENCY_FIELD,
 )
 
 _SECRET_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("os.environ/", OIDC_SECRET_REFERENCE_PREFIX)

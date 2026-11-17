@@ -12,9 +12,11 @@ from typing_extensions import LiteralString
 from litellm.models.alert import METRIC_ALERT_TYPES
 from litellm.models.performance_alert import (
     BASELINE_DAYS,
+    DEFAULT_THRESHOLDS,
     FREE_ALERT_LIMIT,
     AlertMonitoring,
     Claim,
+    PerformanceAlertThresholds,
     PerformanceScope,
     ResourceUnreadableError,
     ResourceWindow,
@@ -196,8 +198,23 @@ class PerformanceAlertRepository:
         async with self._transaction() as transaction:
             monitoring: Final = await self._monitoring(transaction)
         return monitoring.model_copy(
-            update={"model_deprecations_enabled": await self._config.model_deprecations_enabled()}
+            update={
+                "model_deprecations_enabled": await self._config.model_deprecations_enabled(),
+                "thresholds": await self._thresholds(),
+            }
         )
+
+    async def _thresholds(self) -> PerformanceAlertThresholds:
+        if not self._enterprise:
+            return DEFAULT_THRESHOLDS
+        saved: Final = await self._config.get_param("performance_alert_thresholds")
+        return DEFAULT_THRESHOLDS if saved is None else PerformanceAlertThresholds.model_validate(saved.param_value)
+
+    async def set_thresholds(self, thresholds: PerformanceAlertThresholds) -> AlertMonitoring:
+        if not self._enterprise:
+            raise PermissionError("Custom alert thresholds require Enterprise")
+        await self._config.set_param("performance_alert_thresholds", thresholds.model_dump(mode="json"))
+        return await self.monitoring()
 
     async def set_model_deprecations_enabled(self, enabled: bool) -> AlertMonitoring:
         await self._config.set_model_deprecations_enabled(enabled)
@@ -258,6 +275,7 @@ class PerformanceAlertRepository:
             raise
 
     async def _evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState | None:
+        thresholds: Final = await self._thresholds()
         async with self._transaction() as transaction:
             monitoring: Final = await self._monitoring(transaction, lock=True)
             if not monitoring.active:
@@ -267,7 +285,7 @@ class PerformanceAlertRepository:
             )
             saved: Final = await record_alerts(
                 transaction,
-                tuple(chain.from_iterable(detect(state.scope, window, state.day) for window in windows)),
+                tuple(chain.from_iterable(detect(state.scope, window, state.day, thresholds) for window in windows)),
                 None if self._enterprise else FREE_ALERT_LIMIT - monitoring.alerts_used,
             )
             if saved:

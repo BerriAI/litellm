@@ -1019,7 +1019,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Resolve or dismiss matching open alerts
+         * @description Update all matching open saved alerts, including unloaded pages. Only gateway admins can write.
+         */
+        patch: operations["update_open_alerts_alerts_patch"];
         trace?: never;
     };
     "/alerts/monitoring": {
@@ -6197,6 +6201,27 @@ export interface paths {
          * @description Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
          */
         get: operations["get_mcp_tool_search_settings_get_mcp_tool_search_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/reference_exchange_rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Exchange Rates
+         * @description ECB euro foreign exchange reference rates as USD per unit of each currency, with USD at 1. They estimate a USD
+         *     total in another currency for display and are not settlement quotes. Refreshes from the ECB feed when due.
+         */
+        get: operations["reference_exchange_rates_get_reference_exchange_rates_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -27750,6 +27775,28 @@ export interface components {
              */
             window_start: string;
         };
+        /** AlertBulkResult */
+        AlertBulkResult: {
+            /**
+             * Updated
+             * @description Number of open saved alerts changed.
+             */
+            updated: number;
+        };
+        /** AlertBulkUpdate */
+        AlertBulkUpdate: {
+            /**
+             * Status
+             * @description Status to apply to every matching open saved alert.
+             * @enum {string}
+             */
+            status: "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Only update this category, or all saved alerts if omitted.
+             */
+            type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
+        };
         /** AlertHistoryPoint */
         AlertHistoryPoint: {
             /**
@@ -27792,6 +27839,28 @@ export interface components {
              * @default true
              */
             model_deprecations_enabled: boolean;
+            /**
+             * @description Effective built-in thresholds. Only Enterprise admins can edit them.
+             * @default {
+             *       "latency": {
+             *         "minimum_increase": 500,
+             *         "multiplier": 3
+             *       },
+             *       "reliability": {
+             *         "minimum_increase": 0.02,
+             *         "multiplier": 3
+             *       },
+             *       "spend": {
+             *         "minimum_increase": 50,
+             *         "multiplier": 3
+             *       },
+             *       "traffic": {
+             *         "minimum_increase": 1000,
+             *         "multiplier": 10
+             *       }
+             *     }
+             */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /** AlertMonitoringUpdate */
         AlertMonitoringUpdate: {
@@ -27800,6 +27869,24 @@ export interface components {
              * @description Enable or disable performance monitoring for this gateway.
              */
             enabled: boolean;
+        };
+        /** AlertThreshold */
+        AlertThreshold: {
+            /**
+             * Minimum Increase
+             * @description Minimum absolute increase above the baseline, in the metric's unit.
+             */
+            minimum_increase: number;
+            /**
+             * Multiplier
+             * @description Minimum multiple of the baseline.
+             */
+            multiplier: number;
+        };
+        /** AlertThresholdsUpdate */
+        AlertThresholdsUpdate: {
+            /** @description Replace the built-in performance thresholds. Enterprise only. */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /**
          * AlertType
@@ -43769,6 +43856,41 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** PerformanceAlertThresholds */
+        PerformanceAlertThresholds: {
+            /**
+             * @description Average response-time increase in milliseconds over the previous seven-day weighted average.
+             * @default {
+             *       "minimum_increase": 500,
+             *       "multiplier": 3
+             *     }
+             */
+            latency: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Error-rate increase as a fraction, e.g. 0.02 is two percentage points.
+             * @default {
+             *       "minimum_increase": 0.02,
+             *       "multiplier": 3
+             *     }
+             */
+            reliability: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Spend increase in USD over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 50,
+             *       "multiplier": 3
+             *     }
+             */
+            spend: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Request increase over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 1000,
+             *       "multiplier": 10
+             *     }
+             */
+            traffic: components["schemas"]["AlertThreshold"];
+        };
         /**
          * PiiAction
          * @enum {string}
@@ -45214,6 +45336,23 @@ export interface components {
             generate_summary?: ("auto" | "concise" | "detailed") | null;
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
+        };
+        /** ReferenceExchangeRates */
+        ReferenceExchangeRates: {
+            /**
+             * Rate Date
+             * Format: date
+             */
+            rate_date: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "ecb";
+            /** Usd Per Unit */
+            usd_per_unit: {
+                [key: string]: number;
+            };
         };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
@@ -56356,6 +56495,39 @@ export interface operations {
             };
         };
     };
+    update_open_alerts_alerts_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertBulkUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertBulkResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_monitoring_alerts_monitoring_get: {
         parameters: {
             query?: never;
@@ -56385,7 +56557,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"];
+                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"] | components["schemas"]["AlertThresholdsUpdate"];
             };
         };
         responses: {
@@ -65084,6 +65256,33 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MCPToolSearchSettingsResponse"];
                 };
+            };
+        };
+    };
+    reference_exchange_rates_get_reference_exchange_rates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceExchangeRates"];
+                };
+            };
+            /** @description No ECB reference rate published in the last 7 days is available */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { act, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
+import {
+  act,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../tests/test-utils";
 import Alerts from "./Alerts";
 import type { SavedAlert } from "./alertPresentation";
 
@@ -49,12 +57,21 @@ const calls: { path: string; query: URLSearchParams; method: string; body: unkno
 let status = "open";
 let rejectWrite = false;
 let rejectHistory = false;
+let includeDeprecation = false;
+let deprecationStatus = "open";
+const thresholds = {
+  spend: { multiplier: 3, minimum_increase: 50 },
+  traffic: { multiplier: 10, minimum_increase: 1000 },
+  latency: { multiplier: 3, minimum_increase: 500 },
+  reliability: { multiplier: 3, minimum_increase: 0.02 },
+};
 let monitoring = {
   model_deprecations_enabled: true,
   enabled: true,
   alerts_used: 0,
   alert_limit: 5 as number | null,
   disabled_by_config: false,
+  thresholds,
 };
 let rejectMonitoring = false;
 function response(data: unknown, code = 200) {
@@ -72,6 +89,50 @@ function promptCacheResponse(url: URL): Response | undefined {
   });
 }
 
+function deprecationResponse(path: string, method: string, body: { status?: string } | null) {
+  if (path === "/model/deprecations")
+    return response({
+      deprecated: [],
+      imminent: includeDeprecation
+        ? [
+            {
+              model_name: "example-model",
+              litellm_model: "example/model",
+              deprecation_date: "2026-12-01",
+              status: "imminent",
+            },
+          ]
+        : [],
+    });
+  if (path === "/user/daily/activity/aggregated")
+    return response({
+      results: [{ date: "2026-11-16", breakdown: { models: { "example/model": { metrics: { api_requests: 10 } } } } }],
+    });
+  if (path === "/alerting/model-deprecations/state") {
+    if (method === "PUT") deprecationStatus = body?.status ?? "open";
+    const state = {
+      model: "example/model",
+      deprecation_date: "2026-12-01",
+      status: deprecationStatus,
+      last_seen_date: "2026-11-16",
+      last_seen_requests: 10,
+    };
+    return response(state);
+  }
+  return undefined;
+}
+
+function updateAlertResponse(url: URL, body: { status: string; type?: string }) {
+  if (rejectWrite) return response({ detail: "Unavailable" }, 503);
+  status = body.status;
+  if (url.pathname === "/alerts") {
+    if (!body.type || body.type === "prompt_cache")
+      cacheIncidents = cacheIncidents.map((incident) => ({ ...incident, status }));
+    return response({ updated: 30 });
+  }
+  return response({ ...(url.pathname === `/alerts/${cacheIncident.id}` ? cacheIncident : alert), status });
+}
+
 describe("Alerts", () => {
   beforeEach(() => {
     testQueryClient.clear();
@@ -79,6 +140,8 @@ describe("Alerts", () => {
     status = "open";
     rejectWrite = false;
     rejectHistory = false;
+    includeDeprecation = false;
+    deprecationStatus = "open";
     rejectMonitoring = false;
     monitoring = {
       model_deprecations_enabled: true,
@@ -86,6 +149,7 @@ describe("Alerts", () => {
       alerts_used: 0,
       alert_limit: 5,
       disabled_by_config: false,
+      thresholds,
     };
     role = "proxy_admin";
     cacheIncidents = [];
@@ -94,12 +158,13 @@ describe("Alerts", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const url = new URL(request.url);
-      const body = request.method === "PATCH" ? await request.clone().json() : null;
+      const body = ["PATCH", "PUT"].includes(request.method) ? await request.clone().json() : null;
       const call = { path: url.pathname, query: url.searchParams, method: request.method, body };
       calls.push(call);
       if (url.pathname === "/litellm/.well-known/litellm-ui-config") return response({});
       if (url.pathname === "/management/v1/users/me") return response({ user_id: "example-admin", user_role: role });
-      if (url.pathname === "/model/deprecations") return response({ deprecated: [], imminent: [] });
+      const retirement = deprecationResponse(url.pathname, request.method, body);
+      if (retirement) return retirement;
       if (url.pathname === "/alerts/monitoring") {
         if (rejectMonitoring) return response({ detail: "Unavailable" }, 503);
         if (request.method === "PATCH") {
@@ -108,11 +173,7 @@ describe("Alerts", () => {
         }
         return response(monitoring);
       }
-      if (request.method === "PATCH") {
-        if (rejectWrite) return response({ detail: "Unavailable" }, 503);
-        status = body.status;
-        return response({ ...(url.pathname === `/alerts/${cacheIncident.id}` ? cacheIncident : alert), status });
-      }
+      if (request.method === "PATCH") return updateAlertResponse(url, body);
       const promptCache = promptCacheResponse(url);
       if (promptCache) return promptCache;
       if (url.pathname === `/alerts/${alert.id}`)
@@ -294,6 +355,122 @@ describe("Alerts", () => {
       "href",
       "/ui/logging-and-alerts?tab=email-alerts",
     );
+  });
+
+  it.each(["Resolve all", "Dismiss all"])("%s updates the selected category beyond the loaded page", async (action) => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />, { searchParams: { type: "spend" } });
+    await screen.findByRole("button", { name: /Spend on Research agent/ });
+    await user.click(screen.getByRole("button", { name: action }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("including results you have not loaded");
+    await user.click(within(dialog).getByRole("button", { name: action }));
+    expect(await screen.findByText("No open alerts.")).toBeInTheDocument();
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([
+      expect.objectContaining({
+        path: "/alerts",
+        body: { status: action === "Resolve all" ? "resolved" : "dismissed", type: "spend" },
+      }),
+    ]);
+  });
+
+  it("keeps bulk failures retryable and leaves open alerts visible", async () => {
+    rejectWrite = true;
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await screen.findByRole("button", { name: /Spend on Research agent/ });
+    await user.click(screen.getByRole("button", { name: "Dismiss all" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Dismiss all" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Some alerts could not be updated");
+    rejectWrite = false;
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Dismiss all" }));
+    expect(await screen.findByText("No open alerts.")).toBeInTheDocument();
+  });
+
+  it("resolves performance, prompt cache, and retirement alerts together in All alerts", async () => {
+    includeDeprecation = true;
+    cacheIncidents = [cacheIncident];
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await screen.findByRole("button", { name: /example\/model retires/ });
+    await user.click(screen.getByRole("button", { name: "Resolve all" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Resolve all" }));
+    expect(await screen.findByText("No open alerts.")).toBeInTheDocument();
+    expect(calls.filter((call) => ["PATCH", "PUT"].includes(call.method))).toEqual([
+      expect.objectContaining({ path: "/alerts", body: { status: "resolved" } }),
+      expect.objectContaining({
+        path: "/alerting/model-deprecations/state",
+        body: {
+          model: "example/model",
+          deprecation_date: "2026-12-01",
+          status: "resolved",
+          last_seen_date: "2026-11-16",
+          last_seen_requests: 10,
+        },
+      }),
+    ]);
+  });
+
+  it("shows the current thresholds to free admins without an edit action", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await user.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    expect(await screen.findByText("At least 3× the usual spend and $50 higher.")).toBeInTheDocument();
+    expect(screen.getByText("Editing thresholds requires Enterprise.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit thresholds" })).not.toBeInTheDocument();
+  });
+
+  it("edits Enterprise thresholds with explicit units and saves the values", async () => {
+    monitoring.alert_limit = null;
+    monitoring.thresholds = { ...thresholds, latency: { multiplier: 1.005, minimum_increase: 500 } };
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await user.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    await user.click(await screen.findByRole("button", { name: "Edit thresholds" }));
+    const spend = screen.getByRole("group", { name: "Spend" });
+    const multiplier = within(spend).getByRole("spinbutton", { name: "Times the usual value" });
+    fireEvent.change(multiplier, { target: { value: "1" } });
+    await user.click(screen.getByRole("button", { name: "Save thresholds" }));
+    expect(multiplier).toBeInvalid();
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([]);
+    fireEvent.change(multiplier, {
+      target: { value: "4" },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Minimum increase ($)" }), { target: { value: "75" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Minimum increase (percentage points)" }), {
+      target: { value: "3.5" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save thresholds" }));
+    expect(await screen.findByText("Thresholds saved.")).toBeInTheDocument();
+    expect(screen.getByText("At least 4× the usual spend and $75 higher.")).toBeInTheDocument();
+    expect(screen.getByText("At least 3× the usual error rate and 3.5 percentage points higher.")).toBeInTheDocument();
+    expect(calls.find((call) => call.method === "PATCH")).toMatchObject({
+      path: "/alerts/monitoring",
+      body: {
+        thresholds: {
+          ...thresholds,
+          spend: { multiplier: 4, minimum_increase: 75 },
+          latency: { multiplier: 1.005, minimum_increase: 500 },
+          reliability: { multiplier: 3, minimum_increase: 0.035 },
+        },
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Edit thresholds" }));
+    expect(screen.getByRole("spinbutton", { name: "Minimum increase ($)" })).toHaveValue(75);
+    expect(screen.getByRole("spinbutton", { name: "Minimum increase (percentage points)" })).toHaveValue(3.5);
+  });
+
+  it("shows free thresholds without editing and hides bulk actions for viewers", async () => {
+    role = "proxy_admin_viewer";
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await screen.findByRole("button", { name: /Spend on Research agent/ });
+    expect(screen.queryByRole("button", { name: "Resolve all" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss all" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage alerts" }));
+    expect(await screen.findByText("At least 3× the usual spend and $50 higher.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit thresholds" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
   });
 
   it("lets viewers read the evidence without write controls", async () => {
