@@ -91,9 +91,8 @@ pub(crate) fn mantle_headers(
 ) -> Result<Headers, Error> {
     let headers = invoke_headers(headers, litellm_params)?;
     let project = litellm_params
-        .extra
-        .get("aws_bedrock_project_id")
-        .and_then(Value::as_str)
+        .aws_bedrock_project_id
+        .as_deref()
         .filter(|project| !project.is_empty());
     let has_version = has_any_casing(&headers, "anthropic-version");
     let headers = match project {
