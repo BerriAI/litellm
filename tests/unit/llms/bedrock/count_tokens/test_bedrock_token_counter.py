@@ -8,12 +8,13 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import CountContextManagement
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -345,16 +346,7 @@ def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "chat_params",
-    [
-        {"tool_choice": "required"},
-        {
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
-            }
-        },
-        {"reasoning_effort": "low"},
-    ],
+    [{"reasoning_effort": "low"}],
 )
 async def test_runtime_count_leaves_out_the_options_only_mantle_counts(chat_params: dict[str, JsonValue]) -> None:
     runtime_counts: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
@@ -383,6 +375,111 @@ async def test_runtime_count_leaves_out_the_options_only_mantle_counts(chat_para
     assert {name: mantle_body[name] for name in ("messages", "tools")} == {
         name: invoke_body[name] for name in ("messages", "tools")
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages_format", "tools", "count_options", "chat_params", "counted_tool_choice"),
+    [
+        (
+            "anthropic",
+            [{"name": "get_weather", "input_schema": {"type": "object"}}],
+            {"tool_choice": {"type": "any"}},
+            {},
+            {"type": "any"},
+        ),
+        (
+            "openai",
+            [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            {},
+            {"tool_choice": "required"},
+            {"type": "any"},
+        ),
+        (
+            "openai",
+            [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            {},
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "city",
+                        "schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                    },
+                }
+            },
+            {"type": "tool", "name": RESPONSE_FORMAT_TOOL_NAME},
+        ),
+    ],
+    ids=["anthropic_any", "openai_required", "openai_json_schema_response_format"],
+)
+async def test_claude_runtime_count_carries_the_forced_tool_choice_inference_sends(
+    messages_format: TokenCountMessagesFormat,
+    tools: list[dict[str, JsonValue]],
+    count_options: dict[str, JsonValue],
+    chat_params: dict[str, JsonValue],
+    counted_tool_choice: dict[str, JsonValue],
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 675}), mantle=(200, {"input_tokens": 1}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        tools=tools,
+        messages_format=messages_format,
+        count_options=count_options,
+        chat_params=chat_params,
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 675)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    invoke_body: Final = _invoke_body(bedrock.requests[0])
+    assert invoke_body["tool_choice"] == counted_tool_choice
+    assert invoke_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Weather in Paris?"}]}]
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_count_sends_a_forced_tool_choice_without_tools_so_the_caller_gets_bedrocks_400() -> None:
+    rejected: Final = {"message": "tool_choice.any may only be specified while providing tools"}
+    bedrock: Final = _Bedrock(runtime=(400, rejected), mantle=(400, rejected))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-sonnet-4-6",
+        count_options={"tool_choice": {"type": "any"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert _invoke_body(bedrock.requests[0])["tool_choice"] == {"type": "any"}
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_count_drops_a_forced_tool_choice_without_tools_under_drop_params() -> None:
+    with_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 31}), mantle=(200, {"input_tokens": 1}))
+    without_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 31}), mantle=(200, {"input_tokens": 1}))
+    request: Final = {
+        "model_to_use": "anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "contents": None,
+        "deployment": {"litellm_params": {**DEPLOYMENT["litellm_params"], "drop_params": True}},
+        "request_model": "claude-sonnet-4-6",
+    }
+
+    result: Final = await _counter(with_choice).count_tokens(**request, count_options={"tool_choice": {"type": "any"}})
+    await _counter(without_choice).count_tokens(**request)
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert with_choice.posted_hosts() == (RUNTIME_HOST,)
+    assert with_choice.requests[0].content == without_choice.requests[0].content
 
 
 @pytest.mark.asyncio

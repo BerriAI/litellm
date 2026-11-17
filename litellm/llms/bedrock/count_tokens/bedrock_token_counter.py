@@ -20,6 +20,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     anthropic_count_fields,
     messages_count_options,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params
 from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_litellm_params
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
@@ -161,6 +162,14 @@ def _invoke_context_management(context_management: CountContextManagement | None
     )
 
 
+def _invoke_tool_choice(
+    options: Mapping[str, JsonValue], tools: Sequence[Mapping[str, object]] | None, drops_params: bool
+) -> Mapping[str, JsonValue]:
+    tool_choice: Final = options.get("tool_choice")
+    dropped: Final = tool_choice is None or (drops_params and not tools)
+    return MappingProxyType({} if dropped else {"tool_choice": tool_choice})
+
+
 class BedrockTokenCounter(BaseTokenCounter):
     """Counts on the configured Bedrock endpoint, with Mantle retry when Runtime rejects a Claude model"""
 
@@ -271,14 +280,19 @@ class BedrockTokenCounter(BaseTokenCounter):
             return options.response(request_model, model_to_use, primary_tokenizer)
         native_context_management: Final = _invoke_context_management(context_management if claude else None)
         counted_messages: Final = messages if translated is None else translated.messages
+        counted_tools: Final = tools if translated is None else translated.tools
+        invoke_fields: Final = {
+            **native_context_management,
+            **_invoke_tool_choice(options, counted_tools, deployment_drops_params(deployment)),
+        }
         runtime_request: Final = {
             **_request_data(
                 model_to_use,
-                tuple(map(_invoke_model_message, counted_messages)) if native_context_management else counted_messages,
-                tools if translated is None else translated.tools,
+                tuple(map(_invoke_model_message, counted_messages)) if invoke_fields else counted_messages,
+                counted_tools,
                 system if translated is None else translated.system,
             ),
-            **native_context_management,
+            **invoke_fields,
         }
         mantle_request: Final = {**runtime_request, **options}
 

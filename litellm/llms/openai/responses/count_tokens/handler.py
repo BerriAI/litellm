@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -37,6 +37,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
         text: Mapping[str, object] | None = None,
+        tool_choice: JsonValue = None,
     ) -> object:
         """
         Handle a token counting request to OpenAI's Responses API.
@@ -58,6 +59,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 tools=tools,
                 instructions=instructions,
                 text=text,
+                tool_choice=tool_choice,
             )
         except ValueError as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)

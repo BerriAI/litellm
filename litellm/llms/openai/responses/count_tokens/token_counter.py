@@ -9,13 +9,14 @@ from typing import Any, Final
 
 import httpx
 import openai
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.messages.responses_adapters.handler import count_messages_as_sent
@@ -38,10 +39,47 @@ from litellm.llms.openai.workload_identity import (
     openai_static_api_key,
     resolve_openai_workload_identity_config,
 )
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
+_ANTHROPIC_TOOL_CHOICE: Final[TypeAdapter[AnthropicMessagesToolChoice | None]] = TypeAdapter(
+    AnthropicMessagesToolChoice | None
+)
+_RESPONSES_TOOL_CHOICE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _responses_tool_choice(
+    messages_format: TokenCountMessagesFormat,
+    count_options: Mapping[str, JsonValue],
+    chat_params: Mapping[str, JsonValue],
+) -> JsonValue | ChatCountTranslationError:
+    match messages_format:
+        case "anthropic":
+            try:
+                anthropic_choice: Final = _ANTHROPIC_TOOL_CHOICE.validate_python(count_options.get("tool_choice"))
+            except ValidationError as e:
+                return ChatCountTranslationError(message=str(e))
+            return (
+                None
+                if anthropic_choice is None
+                else _RESPONSES_TOOL_CHOICE.validate_python(
+                    LiteLLMAnthropicToResponsesAPIAdapter.translate_tool_choice_to_responses_api(anthropic_choice)
+                )
+            )
+        case "openai":
+            chat_choice: Final = chat_params.get("tool_choice")
+            return (
+                None
+                if chat_choice is None
+                else _RESPONSES_TOOL_CHOICE.validate_python(
+                    LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(chat_choice)
+                )
+            )
+        case _:
+            assert_never(messages_format)
 
 
 def _workload_identity_config(
@@ -175,6 +213,9 @@ class OpenAITokenCounter(BaseTokenCounter):
                 status_code=400,
                 rejected_before_provider_call=True,
             )
+        tool_choice: Final = _responses_tool_choice(messages_format, count_options, chat_params)
+        if isinstance(tool_choice, ChatCountTranslationError):
+            return tool_choice.response(request_model, model_to_use, "openai_api")
 
         sent_messages: Final = await count_messages_as_sent(
             model=model_to_use,
@@ -223,6 +264,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 tools=counted_tools,
                 instructions=instructions,
                 text=text,
+                tool_choice=tool_choice if counted_tools or not deployment_drops_params(deployment) else None,
                 timeout=resolved.timeout,
             ),
             model_to_use,
