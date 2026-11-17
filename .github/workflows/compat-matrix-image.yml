@@ -1,11 +1,8 @@
 name: Compat Matrix Image
 
 on:
-  pull_request:
-    paths:
-      - tests/e2e/claude_code/cron_vm/**
-      - tests/e2e/cli_harness/npm_version_resolver.py
-      - .github/workflows/compat-matrix-image.yml
+  schedule:
+    - cron: "47 6 * * *"
   workflow_dispatch:
 
 permissions: {}
