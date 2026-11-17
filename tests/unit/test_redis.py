@@ -260,20 +260,22 @@ def test_async_host_port_pool_preserves_credential_provider_identity(clean_redis
         ),
     ],
 )
-def test_async_host_port_pool_opens_a_plaintext_connection_when_ssl_is_off(clean_redis_environment, ssl_settings):
-    pool = get_redis_connection_pool(host="redis-host", port=6379, **ssl_settings)
+def test_async_host_port_pool_opens_a_plaintext_connection_when_ssl_is_off(
+    clean_redis_environment: None, ssl_settings: dict[str, bool | str]
+) -> None:
+    pool: Final = get_redis_connection_pool(host="redis-host", port=6379, **ssl_settings)
 
     assert pool is not None
-    connection = pool.make_connection()
+    connection: Final = pool.make_connection()
     assert type(connection) is async_redis.Connection
     assert (connection.host, connection.port) == ("redis-host", 6379)
 
 
-def test_async_host_port_pool_keeps_ssl_settings_on_a_tls_connection(clean_redis_environment):
-    pool = get_redis_connection_pool(host="redis-host", port=6379, ssl=True, ssl_check_hostname=False)
+def test_async_host_port_pool_keeps_ssl_settings_on_a_tls_connection(clean_redis_environment: None) -> None:
+    pool: Final = get_redis_connection_pool(host="redis-host", port=6379, ssl=True, ssl_check_hostname=False)
 
     assert pool is not None
-    connection = pool.make_connection()
+    connection: Final = pool.make_connection()
     assert isinstance(connection, async_redis.SSLConnection)
     assert connection.check_hostname is False
 
