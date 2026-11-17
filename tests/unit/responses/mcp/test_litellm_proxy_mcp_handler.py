@@ -401,6 +401,7 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
         server_id="test-server-id",
         short_prefix=None,
         mcp_info=None,
+        guardrails=None,
         tool_name_to_display_name=None,
     )
     from litellm.proxy.mcp_server import mcp_server_manager as _msm
@@ -443,6 +444,7 @@ async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
         server_id="test-server-id",
         short_prefix=None,
         mcp_info=None,
+        guardrails=None,
         tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
     )
     from litellm.proxy.mcp_server import mcp_server_manager as _msm
@@ -2262,3 +2264,53 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
     assert scoped.object_permission is not None
     assert scoped.object_permission.mcp_servers == ["srv-1"]
     assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+class _ResultMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="result-mask", event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(texts=[text.replace("secret", "[MASKED]") for text in inputs.get("texts", [])])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("listed", "expected"), [(("result-mask",), "token [MASKED]"), (None, "token secret")])
+@pytest.mark.parametrize("with_logging", [True, False], ids=["logging-obj", "no-logging-obj"])
+async def test_execute_tool_calls_runs_server_listed_guardrails_on_the_tool_result(
+    monkeypatch: pytest.MonkeyPatch, listed: tuple[str, ...] | None, expected: str, with_logging: bool
+) -> None:
+    server: Final = MCPServer(
+        server_id="tickets", name="tickets", transport=MCPTransport.http, url="http://upstream", guardrails=listed
+    )
+    manager: Final = MCPServerManager()
+    manager.registry = {server.server_id: server}
+    manager.tool_name_to_mcp_server_name_mapping = {"tickets-get_ticket": "tickets"}
+    client: Final = AsyncMock()
+    client.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="token secret")])
+    manager.create_mcp_client = AsyncMock(return_value=client)
+    monkeypatch.setattr(litellm, "callbacks", [_ResultMaskingGuardrail()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    if not with_logging:
+        monkeypatch.setattr(mcp_handler_module, "function_setup", MagicMock(side_effect=RuntimeError("no logging")))
+
+    try:
+        results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+            tool_server_map={"get_ticket": "tickets"},
+            tool_calls=[{"id": "c1", "function": {"name": "get_ticket", "arguments": "{}"}}],
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key"),
+            served_tools=[MCPTool(name="get_ticket", inputSchema={"type": "object"})],
+        )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert [entry["result"] for entry in results] == [expected]

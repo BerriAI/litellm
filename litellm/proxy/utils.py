@@ -156,7 +156,6 @@ from litellm.exceptions import (
     SensitiveDataRouteException,
 )
 from litellm.integrations.custom_guardrail import (
-    MCP_SERVER_GUARDRAILS_KEY,
     CustomGuardrail,
     ModifyResponseException,
     merged_guardrail_entries,
@@ -3493,7 +3492,6 @@ class ProxyLogging:
         self,
         request_metadata: Mapping[str, object],
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
-        server_guardrails: Sequence[str] = (),
     ) -> bool:
         """
         Whether anything configured would inspect the content of a request carrying this metadata.
@@ -3506,9 +3504,7 @@ class ProxyLogging:
         hook to consult, but it judges the payload the same way, so a proxy configured only with
         one of those still has something to say about every record.
         """
-        return self.request_has_pre_call_guardrails(
-            {"metadata": dict(request_metadata), MCP_SERVER_GUARDRAILS_KEY: list(server_guardrails)}, event_type
-        )
+        return self.request_has_pre_call_guardrails({"metadata": dict(request_metadata)}, event_type)
 
     def request_has_pre_call_guardrails(
         self,

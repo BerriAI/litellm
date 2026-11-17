@@ -73,7 +73,7 @@ from litellm.constants import (
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY, CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -444,7 +444,7 @@ class MCPServerConfig(TypedDict, total=False):
     allowed_tools: _StringList
     disallowed_tools: _StringList
     allowed_params: _ToolParamMap
-    guardrails: _StringList
+    guardrails: ReadOnly[_StringList]
     access_groups: _StringList
     static_headers: _StringMap
     env_vars: _EnvVarList
@@ -1795,6 +1795,22 @@ def _warn_overlapping_tool_policies(server: MCPServer) -> None:
         )
 
 
+def _warn_unknown_server_guardrails(server: MCPServer) -> None:
+    loaded: Final = frozenset(
+        callback.guardrail_name
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
+        if isinstance(callback, CustomGuardrail)
+    )
+    unknown: Final = tuple(name for name in server.guardrails or () if name not in loaded)
+    if unknown:
+        verbose_logger.warning(
+            "MCP server %s lists guardrails that are not loaded: %s. They will not run for this server "
+            "until a guardrail with that name exists. Guardrails added through the UI load after this check.",
+            server.name,
+            ", ".join(unknown),
+        )
+
+
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
     """Point legacy delegated OAuth configurations at the client-forwarded replacements."""
     if not is_legacy_upstream_delegate(server):
@@ -2970,6 +2986,7 @@ class MCPServerManager:
             )
             self.assign_unique_short_prefix(new_server)
             _warn_overlapping_tool_policies(new_server)
+            _warn_unknown_server_guardrails(new_server)
             _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
             self.invalidate_server_definition_caches(server_id)
@@ -6529,7 +6546,6 @@ class MCPServerManager:
             and proxy_logging_obj.has_pre_call_guardrails(
                 TypeAdapter(Mapping[str, object]).validate_python(initial_data.get("metadata") or {}),
                 event_type=GuardrailEventHooks.pre_mcp_call,
-                server_guardrails=server.guardrails or (),
             )
             else tool
         )
