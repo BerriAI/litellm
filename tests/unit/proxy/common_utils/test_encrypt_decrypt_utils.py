@@ -10,6 +10,7 @@ import _hashlib
 import base64
 import hmac
 import re
+from traceback import walk_tb
 from typing import Final
 
 import pytest
@@ -279,15 +280,19 @@ _needs_shared_openssl: Final = pytest.mark.skipif(
 
 @_needs_shared_openssl
 @pytest.mark.usefixtures("fips_openssl")
-@pytest.mark.parametrize("salt_key", ["sk-" + bytes(range(32)).hex(), bytes(range(32)).hex().upper()])
-def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
+@pytest.mark.parametrize(
+    "salt_key",
+    ["sk-" + bytes(range(32)).hex(), "fourteen-bytes", "é" * 7],
+    ids=["openssl-rand-hex-32", "14-ascii-bytes", "14-utf8-bytes-in-7-characters"],
+)
+def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256_over_the_salt_key_bytes(
     monkeypatch: pytest.MonkeyPatch, salt_key: str
 ) -> None:
     label: Final = b"litellm-test:label:"
     context: Final = b"sk-test-master-key"
     monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     fixed_input: Final = (1).to_bytes(4, "big") + label + b"\x00" + context + (256).to_bytes(4, "big")
-    assert derive_key_from_salt_key(label, context) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()
+    assert derive_key_from_salt_key(label, context) == hmac.digest(salt_key.encode(), fixed_input, "sha256").hex()
 
 
 @_needs_shared_openssl
@@ -296,3 +301,31 @@ def test_derive_key_from_salt_key_refuses_an_openssl_without_a_fips_provider(mon
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
     with pytest.raises(ValueError, match="OpenSSL could not run KBKDF"):
         derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+
+
+@pytest.mark.parametrize(
+    "salt_key", ["thirteen-byte", "é" * 6 + "x", "", None], ids=["13-ascii-bytes", "13-utf8-bytes", "empty", "unset"]
+)
+def test_derive_key_from_salt_key_refuses_a_salt_key_under_112_bits(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str | None
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY")
+    if salt_key is not None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    with pytest.raises(ValueError, match=r"LITELLM_SALT_KEY must be set and at least 112 bits \(14 bytes\)"):
+        derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+
+
+_FRAME_SECRET: Final = "frame-secret"
+
+
+def test_a_refused_derive_key_from_salt_key_leaves_the_salt_key_in_no_frame_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FRAME_SECRET)
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be set") as refused:
+        derive_key_from_salt_key(b"litellm-test:label:", b"litellm-test:context")
+    held_by: Final = tuple(
+        frame.f_code.co_name for frame, _ in walk_tb(refused.tb) if _FRAME_SECRET in repr(frame.f_locals)
+    )
+    assert held_by == ()

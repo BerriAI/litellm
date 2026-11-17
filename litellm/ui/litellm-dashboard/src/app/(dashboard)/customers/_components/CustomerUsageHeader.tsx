@@ -1,11 +1,11 @@
 import type { ParseKeys } from "i18next";
 import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
-import { uiHref } from "@/utils/uiHref";
-import type { CustomerHierarchyUsage, CustomerUsageEntity, CustomerUsageScope } from "./customerUsageApi";
+import { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
+import { customerUsagePresets, CUSTOMER_USAGE_MAX_RANGE_DAYS } from "./customerUsageRange";
+import type { CustomerHierarchyUsage, CustomerUsageScope } from "./customerUsageApi";
 
 interface CustomerUsageHeaderProps {
   scope: CustomerUsageScope;
@@ -30,13 +30,14 @@ function CustomerUsageBreadcrumbs({
   onTeamClick,
 }: Pick<CustomerUsageHeaderProps, "scope" | "data" | "onOrganizationClick" | "onTeamClick">) {
   const { t } = useTranslation();
+  const { customersHref } = useCustomerHierarchyLinks();
   return (
     <nav
       aria-label={t("customerPortal.analytics.breadcrumb")}
       className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
     >
-      <a href={uiHref("customers")} className="hover:text-foreground">
-        {t("customerPortal.analytics.customers")}
+      <a href={customersHref} className="hover:text-foreground">
+        {t("customerPortal.entities.organizations")}
       </a>
       <ChevronRight aria-hidden="true" className="size-3" />
       <button type="button" className="hover:text-foreground" onClick={onOrganizationClick}>
@@ -57,19 +58,6 @@ function CustomerUsageBreadcrumbs({
         </>
       )}
     </nav>
-  );
-}
-
-function CustomerCurrentSpend({ entity }: { entity: CustomerUsageEntity }) {
-  const { t } = useTranslation();
-  return (
-    <p className="mt-3 text-xs text-muted-foreground">
-      {t("customerPortal.analytics.currentSpend")}{" "}
-      <span className="font-medium tabular-nums text-foreground">{formatUsd(entity.spend)}</span>
-      {entity.budgetLimit === null
-        ? ` · ${t("customerPortal.analytics.noBudget")}`
-        : ` / ${formatUsd(entity.budgetLimit)}`}
-    </p>
   );
 }
 
@@ -98,12 +86,14 @@ export default function CustomerUsageHeader({
           <p className="mb-1 text-xs text-muted-foreground">{t(scopeLabel(scope))}</p>
           <h1 className="text-2xl font-semibold tracking-tight">{label}</h1>
           <p className="mt-1.5 text-sm text-muted-foreground">{t("customerPortal.analytics.subtitle")}</p>
-          {entity && <CustomerCurrentSpend entity={entity} />}
         </div>
         <AdvancedDatePicker
           value={dateValue}
           presetShortLabel={preset}
+          label={t("customerPortal.range.label")}
           showTimeRange={false}
+          presets={customerUsagePresets}
+          maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
           onValueChange={onDateRangeChange}
         />
       </div>

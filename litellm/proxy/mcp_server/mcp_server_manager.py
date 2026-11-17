@@ -159,6 +159,7 @@ from litellm.proxy.mcp_server.outbound_credentials.token_exchange_provider impor
 )
 from litellm.proxy.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
+    ApiKeyConfig,
     AuthResolution,
     IdJagConfig,
     PassthroughConfig,
@@ -371,6 +372,12 @@ _UpstreamSessionKey: TypeAlias = tuple[
     str,
     tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool, bool],
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceListingFailed:
+    server_name: str
+    error: Exception
 
 
 @dataclass(frozen=True, slots=True)
@@ -1340,6 +1347,47 @@ def _server_auth_header_for(
     return mcp_auth_header if server_specific is None else server_specific
 
 
+def _v1_default_key_header(auth_type: MCPAuthType) -> str | None:
+    match auth_type:
+        case (
+            MCPAuth.bearer_token
+            | MCPAuth.basic
+            | MCPAuth.authorization
+            | MCPAuth.oauth2
+            | MCPAuth.token
+            | MCPAuth.oauth2_token_exchange
+        ):
+            return "Authorization"
+        case MCPAuth.api_key:
+            return "X-API-Key"
+        case (
+            None
+            | MCPAuth.none
+            | MCPAuth.aws_sigv4
+            | MCPAuth.oauth2_id_jag
+            | MCPAuth.true_passthrough
+            | MCPAuth.oauth_delegate
+        ):
+            return None
+    assert_never(auth_type)  # pragma: no cover
+
+
+def _v1_key_occupies_authorization(server: MCPServer) -> bool:
+    if server.is_byok or not server.authentication_token:
+        return False
+    default_header: Final = _v1_default_key_header(server.auth_type)
+    if default_header is None:
+        return False
+    return (server.upstream_token_header or default_header).lower() == "authorization"
+
+
+def _server_key_occupies_authorization(server: MCPServer) -> bool:
+    spec: Final = to_server_spec(server)
+    if spec is None:
+        return _v1_key_occupies_authorization(server)
+    return isinstance(spec.config, ApiKeyConfig) and spec.config.header_name.lower() == "authorization"
+
+
 def listed_tools_caller_for(
     server: MCPServer,
     user_api_key_auth: UserAPIKeyAuth | None,
@@ -1621,13 +1669,14 @@ def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str
 
 def caller_authorization_fans_out(
     server: MCPServer,
-    scope_servers: list[MCPServer] | None,
+    scope_servers: Sequence[MCPServer] | None,
 ) -> bool:
     """True when forwarding the caller's request-wide ``Authorization`` to ``server`` inside a
     listing fan-out would replay one credential against multiple upstreams: another server in the
     scope also consumes it (RFC 9700 cross-resource replay). ``scope_servers`` is None for
-    explicitly-addressed operations (tool call, get_prompt, read_resource, single-server routes),
-    where the client named the one target and the gateway is not choosing recipients."""
+    explicitly-addressed operations (tool call, get_prompt, single-server routes), where the client
+    named the one target and the gateway is not choosing recipients. An aggregate read_resource passes
+    its scope because the gateway picks the owner from listings."""
     if scope_servers is None:
         return False
     return any(
@@ -4597,6 +4646,7 @@ class MCPServerManager:
                     and not has_static_authorization
                     and not mcp_auth_header
                     and not has_extra_authorization
+                    and not _server_key_occupies_authorization(server)
                 ):
                     extra_headers = await inject_mcp_jwt_headers_for_upstream(
                         user_api_key_dict=user_api_key_auth,
@@ -5099,8 +5149,33 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Resource]:
-        if self._skip_blocked_stdio_listing(server, "resource"):
+        listing: Final = await self.list_resources_from_server(
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=add_prefix,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        if isinstance(listing, ResourceListingFailed):
+            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, listing.error)
             return []
+        return list(listing)
+
+    async def list_resources_from_server(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | Mapping[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        add_prefix: bool = True,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
+    ) -> tuple[Resource, ...] | ResourceListingFailed:
+        if self._skip_blocked_stdio_listing(server, "resource"):
+            return ()
+        auth_header: Final = dict(mcp_auth_header) if isinstance(mcp_auth_header, Mapping) else mcp_auth_header
         try:
             headers: Final = (
                 dict(
@@ -5115,7 +5190,7 @@ class MCPServerManager:
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
             client: Final = await self.create_mcp_client(
                 server=server,
-                mcp_auth_header=mcp_auth_header,
+                mcp_auth_header=auth_header,
                 extra_headers=headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
@@ -5127,7 +5202,7 @@ class MCPServerManager:
             key: Final = self._discovery_key(
                 server,
                 user_api_key_auth,
-                mcp_auth_header,
+                auth_header,
                 headers,
                 stdio_env,
                 subject_token,
@@ -5139,10 +5214,9 @@ class MCPServerManager:
                 return await client.list_resources_result(raise_on_error=True)
 
             items: Final = await self._resource_discovery_cache.get(key, fetch)
-            return self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix)
+            return tuple(self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix))
         except Exception as error:
-            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
-            return []
+            return ResourceListingFailed(server_name=server.name, error=error)
 
     async def get_resource_templates_from_server(
         self,
@@ -6857,9 +6931,11 @@ class MCPServerManager:
             hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
             existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
             server_auth_occupies_authorization: Final = (
-                any(k.lower() == "authorization" for k in server_auth_header)
+                _server_key_occupies_authorization(mcp_server)
+                if not server_auth_header
+                else any(k.lower() == "authorization" for k in server_auth_header)
                 if isinstance(server_auth_header, dict)
-                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+                else mcp_server.auth_type != MCPAuth.api_key
             )
             if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
                 # Mirror the tools/list signer guard: an upstream credential (user OAuth,

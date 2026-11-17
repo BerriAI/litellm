@@ -1,6 +1,6 @@
 use std::error::Error as StdError;
 
-use litellm_error::Report;
+use litellm_error::{Report, Source};
 use litellm_inference::Error;
 use pyo3::{
     exceptions::{PyRuntimeError, PyTypeError, PyValueError},
@@ -42,28 +42,81 @@ const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 /// The text of a refusal Python's provider config raises from its request transform, which its
 /// HTTP handler maps as a provider error.
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
+/// Python's provider config raises the refusal as litellm's `BadRequestError`.
+const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
+/// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
+/// when only running Python's signing again gives its exception.
+const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
 
-fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<String> {
+struct ProviderRejection {
+    text: String,
+    bad_request: bool,
+}
+
+fn credential_failure(error: &Error) -> Option<&'static str> {
+    let (Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth))) = error else {
+        return None;
+    };
+    match auth {
+        litellm_auth::Error::Provider(_) => Some(aws_credential_failure(auth)),
+        litellm_auth::Error::CredentialAcquisition(_)
+        | litellm_auth::Error::CredentialChain { .. } => Some("replay"),
+        litellm_auth::Error::InvalidConfiguration(_)
+        | litellm_auth::Error::EmptyCallerCredential { .. }
+        | litellm_auth::Error::MissingApiKey { .. }
+        | litellm_auth::Error::MissingParam { .. }
+        | litellm_auth::Error::MissingApiBase { .. }
+        | litellm_auth::Error::InvalidHeader => None,
+    }
+}
+
+fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
+    let innermost = std::iter::successors(Some(error), |&cause| cause.source())
+        .filter_map(|cause| {
+            cause
+                .downcast_ref::<litellm_auth_aws::Error>()
+                .or_else(|| cause.downcast_ref::<Source>()?.downcast_ref())
+        })
+        .last();
+    match innermost {
+        Some(litellm_auth_aws::Error::WebIdentityTokenReference) => "web_identity_reference",
+        Some(litellm_auth_aws::Error::MissingWebIdentityToken) => "missing_web_identity_token",
+        Some(failure) if failure.is_empty_default_chain() => "no_credentials",
+        _ => "replay",
+    }
+}
+
+fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<ProviderRejection> {
     match rejection.downcast_ref::<litellm_llms::Error>() {
         Some(litellm_llms::Error::MissingField("max_tokens")) => {
-            return Some("max_tokens is required for Anthropic /v1/messages API".to_owned());
+            return Some(ProviderRejection {
+                text: "max_tokens is required for Anthropic /v1/messages API".to_owned(),
+                bad_request: false,
+            });
         }
         Some(_) => return None,
         None => {}
     }
     match rejection.downcast_ref::<litellm_llms::ErrorDetail>() {
         Some(
-            detail @ litellm_llms::ErrorDetail::InvalidChoice {
+            detail @ (litellm_llms::ErrorDetail::InvalidChoice {
                 field: "reasoning effort",
                 ..
-            },
-        ) => Some(format!("litellm.BadRequestError: {detail}")),
+            }
+            | litellm_llms::ErrorDetail::UnsupportedBedrockWebSearchTool { .. }),
+        ) => Some(ProviderRejection {
+            text: detail.to_string(),
+            bad_request: true,
+        }),
         Some(
             detail @ (litellm_llms::ErrorDetail::InvalidReasoningEffort { .. }
             | litellm_llms::ErrorDetail::UnsupportedValue {
                 field: "effort", ..
             }),
-        ) => Some(detail.to_string()),
+        ) => Some(ProviderRejection {
+            text: detail.to_string(),
+            bad_request: false,
+        }),
         _ => None,
     }
 }
@@ -150,6 +203,19 @@ pub(crate) fn route_failure(
             value.setattr(MESSAGES_PYTHON_RAISED, true)?;
             native
         }
+        (RequestMarker::Messages, Some(rejection))
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::MissingAzureApiBase)
+            ) =>
+        {
+            // Python raises it from `get_complete_url`, after the provider resolved.
+            let native = PyValueError::new_err(rejection.to_string());
+            let value = native.value(py);
+            value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            value.setattr(MESSAGES_PYTHON_RAISED, true)?;
+            native
+        }
         (RequestMarker::Messages, Some(rejection)) => {
             let native = PyValueError::new_err(Report::new(rejection).to_string());
             let value = native.value(py);
@@ -169,8 +235,11 @@ pub(crate) fn route_failure(
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
             }
-            if let Some(text) = provider_rejection(rejection) {
-                value.setattr(MESSAGES_PROVIDER_REJECTION, text)?;
+            if let Some(provider) = provider_rejection(rejection) {
+                value.setattr(MESSAGES_PROVIDER_REJECTION, provider.text)?;
+                if provider.bad_request {
+                    value.setattr(MESSAGES_PROVIDER_BAD_REQUEST, true)?;
+                }
             }
             native
         }
@@ -190,6 +259,9 @@ pub(crate) fn route_failure(
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            if let Some(failure) = credential_failure(&error) {
+                value.setattr(MESSAGES_CREDENTIAL_FAILURE, failure)?;
             }
             native
         }
@@ -376,7 +448,7 @@ mod tests {
     #[rstest::rstest]
     #[case::missing_max_tokens(
         litellm_llms::Error::MissingField("max_tokens").into(),
-        Some("max_tokens is required for Anthropic /v1/messages API")
+        Some(("max_tokens is required for Anthropic /v1/messages API", false))
     )]
     #[case::unmapped_effort(
         Error::invalid_request(litellm_llms::ErrorDetail::InvalidChoice {
@@ -384,7 +456,17 @@ mod tests {
             actual: "'ultra'".into(),
             choices: vec!["low", "none"],
         }),
-        Some("litellm.BadRequestError: Unmapped reasoning effort: 'ultra'. Must be one of: 'low', 'none'.")
+        Some(("Unmapped reasoning effort: 'ultra'. Must be one of: 'low', 'none'.", true))
+    )]
+    #[case::bedrock_web_search(
+        Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedBedrockWebSearchTool {
+            tool_type: "web_search_20250305".into(),
+            model: "claude".into(),
+        }),
+        Some((
+            "Bedrock does not support Anthropic's server-side web search tool (tool type 'web_search_20250305', model 'claude'). To use web search with this model, enable LiteLLM's web search interception so the proxy executes the search instead: https://docs.litellm.ai/docs/integrations/websearch_interception. Alternatively, remove the web_search tool from the request.",
+            true
+        ))
     )]
     #[case::other_missing_field(litellm_llms::Error::MissingField("model").into(), None)]
     #[case::unsupported_param(
@@ -398,17 +480,169 @@ mod tests {
     )]
     fn provider_config_rejections_carry_python_text(
         #[case] error: Error,
-        #[case] expected: Option<&str>,
+        #[case] expected: Option<(&str, bool)>,
     ) {
         Python::initialize();
         Python::attach(|py| {
             let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
-            let text = native
-                .value(py)
+            let value = native.value(py);
+            let text = value
                 .getattr_opt(MESSAGES_PROVIDER_REJECTION)
                 .unwrap()
                 .map(|value| value.extract::<String>().unwrap());
-            assert_eq!(text.as_deref(), expected);
+            let bad_request = value
+                .getattr_opt(MESSAGES_PROVIDER_BAD_REQUEST)
+                .unwrap()
+                .is_some_and(|value| value.extract::<bool>().unwrap());
+            assert_eq!(text.as_deref().map(|text| (text, bad_request)), expected);
+            assert!(text.is_some() || !bad_request);
+        });
+    }
+
+    fn web_identity_failure(failure: litellm_auth_aws::Error) -> litellm_auth_aws::Error {
+        litellm_auth_aws::Error::Credentials {
+            flow: litellm_auth_aws::CredentialFlow::WebIdentity,
+            source: Source::new(
+                aws_credential_types::provider::error::CredentialsError::provider_error(failure),
+            ),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::environment_reference(
+        litellm_auth_aws::Error::WebIdentityTokenReference,
+        "web_identity_reference"
+    )]
+    #[case::unresolved_token(
+        web_identity_failure(litellm_auth_aws::Error::MissingWebIdentityToken),
+        "missing_web_identity_token"
+    )]
+    #[case::empty_default_chain(
+        litellm_auth_aws::Error::Credentials {
+            flow: litellm_auth_aws::CredentialFlow::DefaultChain,
+            source: Source::new(aws_credential_types::provider::error::CredentialsError::not_loaded(
+                "no providers in chain provided credentials",
+            )),
+        },
+        "no_credentials"
+    )]
+    #[case::unreadable_token(
+        web_identity_failure(litellm_auth_aws::Error::WebIdentityToken(Source::new(
+            std::io::Error::other("secret source unavailable"),
+        ))),
+        "replay"
+    )]
+    #[case::sts_rejection(
+        web_identity_failure(litellm_auth_aws::Error::MissingWebIdentityCredentials),
+        "replay"
+    )]
+    #[case::assume_role(
+        litellm_auth_aws::Error::Credentials {
+            flow: litellm_auth_aws::CredentialFlow::AssumeRole,
+            source: Source::new(aws_credential_types::provider::error::CredentialsError::provider_error(
+                std::io::Error::other("AccessDenied"),
+            )),
+        },
+        "replay"
+    )]
+    #[case::empty_profile(
+        litellm_auth_aws::Error::Credentials {
+            flow: litellm_auth_aws::CredentialFlow::Profile,
+            source: Source::new(aws_credential_types::provider::error::CredentialsError::not_loaded(
+                "profile not found",
+            )),
+        },
+        "replay"
+    )]
+    #[case::expired(litellm_auth_aws::Error::ExpiredCredentials, "replay")]
+    fn an_aws_credential_failure_names_what_python_signing_raises(
+        #[case] failure: litellm_auth_aws::Error,
+        #[case] expected: &str,
+        #[values(false, true)] through_llm: bool,
+    ) {
+        let auth = litellm_auth::Error::from(failure);
+        let error = match through_llm {
+            true => Error::Llm(litellm_llms::Error::Auth(auth)),
+            false => Error::Auth(auth),
+        };
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            assert!(native.is_instance_of::<PyRuntimeError>(py));
+            let marked = native
+                .value(py)
+                .getattr(MESSAGES_CREDENTIAL_FAILURE)
+                .unwrap()
+                .extract::<String>()
+                .unwrap();
+            assert_eq!(marked, expected);
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::acquisition(
+        litellm_auth::Error::CredentialAcquisition(litellm_auth::ErrorDetail::Empty {
+            subject: "token"
+        }),
+        Some("replay")
+    )]
+    #[case::chain(
+        litellm_auth::Error::CredentialChain {
+            last: Box::new(litellm_auth::Error::CredentialAcquisition(
+                litellm_auth::ErrorDetail::Empty { subject: "token" },
+            )),
+            earlier: Vec::new(),
+        },
+        Some("replay")
+    )]
+    #[case::missing_key(
+        litellm_auth::Error::MissingApiKey {
+            provider: "Anthropic",
+            environment_variable: "ANTHROPIC_API_KEY",
+        },
+        None
+    )]
+    #[case::invalid_header(litellm_auth::Error::InvalidHeader, None)]
+    fn only_credential_acquisition_failures_carry_the_credential_marker(
+        #[case] auth: litellm_auth::Error,
+        #[case] expected: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let unmarked =
+                route_failure(py, Error::Auth(auth.clone()), RequestMarker::Unmarked, Ok).unwrap();
+            assert!(
+                unmarked
+                    .value(py)
+                    .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)
+                    .unwrap()
+                    .is_none()
+            );
+            let native = route_failure(py, Error::Auth(auth), RequestMarker::Messages, Ok).unwrap();
+            let marked = native
+                .value(py)
+                .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)
+                .unwrap()
+                .map(|value| value.extract::<String>().unwrap());
+            assert_eq!(marked.as_deref(), expected);
+        });
+    }
+
+    #[test]
+    fn a_wrapped_credential_failure_keeps_the_native_mapping() {
+        let error = Error::post_call(Error::Auth(litellm_auth::Error::from(
+            litellm_auth_aws::Error::WebIdentityTokenReference,
+        )));
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            assert!(
+                native
+                    .value(py)
+                    .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)
+                    .unwrap()
+                    .is_none()
+            );
         });
     }
 

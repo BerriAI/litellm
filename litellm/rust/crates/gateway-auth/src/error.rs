@@ -8,6 +8,8 @@ use litellm_error::Source;
 pub enum Error {
     #[error("missing or invalid bearer token")]
     InvalidToken,
+    #[error("missing or invalid API key")]
+    InvalidApiKey,
     #[error("invalid UI credentials or session")]
     InvalidSession,
     #[error("credential has expired")]
@@ -16,8 +18,6 @@ pub enum Error {
     Forbidden,
     #[error("authentication service unavailable")]
     Unavailable(#[source] Source),
-    #[error("gateway authentication unavailable")]
-    Secret(#[from] litellm_secrets::Error),
     #[error("UI session unavailable")]
     Session(#[from] tower_sessions::session::Error),
     #[error("gateway auth not configured")]
@@ -33,11 +33,12 @@ pub enum Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidToken | Self::InvalidSession | Self::Expired => StatusCode::UNAUTHORIZED,
+            Self::InvalidToken | Self::InvalidApiKey | Self::InvalidSession | Self::Expired => {
+                StatusCode::UNAUTHORIZED
+            }
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Secret(_)
-            | Self::Session(_)
+            Self::Session(_)
             | Self::Unconfigured
             | Self::UiUnconfigured
             | Self::MissingIdentity
@@ -47,9 +48,12 @@ impl Error {
 
     pub fn is_denied(&self) -> bool {
         match self {
-            Self::InvalidToken | Self::InvalidSession | Self::Expired | Self::Forbidden => true,
+            Self::InvalidToken
+            | Self::InvalidApiKey
+            | Self::InvalidSession
+            | Self::Expired
+            | Self::Forbidden => true,
             Self::Unavailable(_)
-            | Self::Secret(_)
             | Self::Session(_)
             | Self::Unconfigured
             | Self::UiUnconfigured

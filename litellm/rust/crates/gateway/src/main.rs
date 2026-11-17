@@ -3,7 +3,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use litellm_config::Config;
 use litellm_gateway_auth::UiBackend;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
@@ -58,7 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
-    let config = Config::load(settings.litellm_config)?;
+    let config = litellm_gateway::load_config(settings.litellm_config).await?;
     let inference = litellm_gateway::build_inference(&config)?;
     let _redis =
         litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
@@ -88,15 +87,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let mcp = litellm_gateway::build_mcp(
         &config,
-        inference.secrets.clone(),
         shutdown.clone(),
         &inference.resources.pool,
         &inference.http,
     )
     .await?;
-    let mcp_router = mcp.as_ref().map(|gateway| {
+    let mcp_routes = mcp.as_ref().map(|gateway| {
         let defaults = litellm_gateway_mcp::HttpConfig::default();
-        litellm_gateway_mcp::router(
+        litellm_gateway_mcp::routes(
             gateway.operations.clone(),
             litellm_gateway_mcp::HttpConfig {
                 allowed_hosts: config
@@ -117,7 +115,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let result = axum::serve(
         listener,
-        litellm_gateway::router(inference, &config, ui, mcp_router),
+        litellm_gateway::router(inference, &config, ui, mcp_routes),
     )
     .with_graceful_shutdown(shutdown.clone().cancelled_owned())
     .await;

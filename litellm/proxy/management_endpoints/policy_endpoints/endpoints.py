@@ -28,6 +28,7 @@ from litellm.constants import (
     MAX_COMPETITOR_NAMES,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import subclass_overrides_hook
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
@@ -181,7 +182,7 @@ async def apply_policies(
             continue
         if not isinstance(callback, CustomGuardrail):
             continue
-        if "apply_guardrail" not in type(callback).__dict__:
+        if not subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail):
             verbose_proxy_logger.debug(
                 "apply_policies: guardrail '%s' has no apply_guardrail, skipping",
                 guardrail_name,
@@ -333,7 +334,7 @@ async def test_policies_and_guardrails(
             item_result = await apply_policies(
                 policy_names=data.policy_names,
                 inputs=inp,
-                request_data=data.request_data,
+                request_data=copy.deepcopy(data.request_data),
                 input_type=data.input_type,
                 proxy_logging_obj=logging_obj,
                 guardrail_names=data.guardrail_names,

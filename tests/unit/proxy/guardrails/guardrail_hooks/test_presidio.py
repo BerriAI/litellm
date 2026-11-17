@@ -5480,3 +5480,18 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_its_verdict_on_a_request_dict_that_starts_empty() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        guardrail_name="presidio-pii",
+        mock_testing=True,
+        mock_redacted_text={"text": "my name is <PERSON>"},
+    )
+    request_data: Final[dict[str, object]] = {}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["my name is Jane"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_name"] for record in recorded] == ["presidio-pii"]

@@ -126,7 +126,10 @@ fn a_param_of_the_wrong_type_is_rejected(#[case] value: Value) {
 #[rstest]
 fn fields_fill_the_model_the_credentials_and_every_group() {
     let filled: Value = LitellmParams::fields()
-        .map(|name| (name.to_string(), Value::from(name)))
+        .map(|name| match name {
+            AwsParams::SESSION_TAGS => (name.to_string(), json!([{"Key": "k", "Value": "v"}])),
+            _ => (name.to_string(), Value::from(name)),
+        })
         .collect::<Map<_, _>>()
         .into();
     let typed = params(filled);
