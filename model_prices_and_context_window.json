@@ -103036,5 +103036,27 @@
         "mode": "moderation",
         "output_cost_per_token": 0.0,
         "source": "https://developers.openai.com/api/docs/guides/csam-classifier"
+    },
+    "databricks/system.ai.gemini-4-hydrogen": {
+        "cache_creation_input_token_cost": 1.5e-06,
+        "cache_read_input_token_cost": 1.5e-06,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "metadata": {"notes":"Gemini 4 Hydrogen on Databricks is available only through Unity Gateway with the model service name system.ai.gemini-4-hydrogen on a global endpoint, and Databricks supports text input only. The Databricks pricing pages list no row for it yet, so input and output are the Global rates on the Vertex AI pricing page for Gemini 4 Hydrogen, no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": false,
+        "supports_reasoning": true,
+        "supports_video_input": false,
+        "supports_vision": false
     }
 }
