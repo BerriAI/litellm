@@ -72,6 +72,22 @@ def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter
     assert provider.default_model_placeholder.startswith("bigmodel/")
 
 
+def test_siapi_add_model_fields_use_optional_base_and_password_key() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = TypeAdapter(list[ProviderCreateInfo]).validate_json(response.content)
+    provider: Final = next(item for item in providers if item.litellm_provider == "siapi")
+    fields: Final = {field.key: field for field in provider.credential_fields}
+    assert provider.provider_display_name == "SI-API"
+    assert provider.default_model_placeholder in litellm.get_valid_models(custom_llm_provider="siapi")
+    assert {key: (field.field_type, field.required) for key, field in fields.items()} == {
+        "api_base": ("text", False),
+        "api_key": ("password", True),
+    }
+
+
 def test_fuse_presets_route_serves_the_shared_catalog_without_authentication() -> None:
     app: Final = FastAPI()
     app.include_router(router)

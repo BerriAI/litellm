@@ -4842,6 +4842,7 @@ class LlmProviders(str, Enum):
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"
+    SIAPI = "siapi"
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
