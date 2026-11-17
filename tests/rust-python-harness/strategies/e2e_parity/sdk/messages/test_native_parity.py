@@ -4254,6 +4254,39 @@ E2_GOOGLE_AUTH_TEXT: Final = (
     "(cryptography's PEM error, urllib3's connection error), which Rust cannot rebuild"
 )
 
+R4_ODD_TYPED_CREDENTIAL_FIELD: Final = (
+    "R4: approved difference, Rust reads credentials into typed fields, so a project_id that is not text is refused "
+    "as a ValueError when the credentials are read, where Python raises TypeError after minting a token"
+)
+# R3: approved difference, Rust words these login failures and their logs in litellm's own terms where Python
+# raises google-auth's or its own text, so they compare by exception class, status and attribution only.
+VERTEX_LITELLM_WORDED_LOGIN: Final = frozenset(
+    {
+        "vertex_ai_application_default_credentials_file_that_does_not_exist",
+        "vertex_ai_no_project_after_the_login",
+        "vertex_ai_adc_external_account_authorized_user_without_refresh_fields",
+        "vertex_ai_adc_external_account_authorized_user_that_cannot_load",
+        "vertex_ai_impersonated_credentials_are_refused",
+        "vertex_ai_service_account_without_a_private_key",
+        "vertex_ai_authorized_user_missing_a_field",
+        "vertex_ai_unsupported_region_is_overridden_with_a_warning",
+    }
+)
+_LOGIN_TEXT_FIELDS: Final = frozenset({"message", "details", "error_str", "error_message", "exception"})
+
+
+def _without_login_text(case: Case, aspect: str, value: object) -> object:
+    """A worded login failure or log with its text left out, for the cases in `VERTEX_LITELLM_WORDED_LOGIN`."""
+    if case.name not in VERTEX_LITELLM_WORDED_LOGIN:
+        return value
+    if aspect == "warnings" and isinstance(value, tuple):
+        return tuple("<log line>" for _ in cast(tuple[object, ...], value))
+    if aspect not in ("outcome", "logged_error") or not isinstance(value, Mapping):
+        return value
+    fields: Final = cast(Mapping[str, object], value)
+    return {name: "<login text>" if name in _LOGIN_TEXT_FIELDS else item for name, item in fields.items()}
+
+
 VERTEX_CREDENTIAL_CASES: Final = tuple(
     replace(case, model=VERTEX_CLAUDE, upstream=())
     for case in (
@@ -4630,6 +4663,9 @@ VERTEX_AUTH_CASES: Final = tuple(
             _vertex_login(vertex_credentials=dict(_service_account("e1-numeric-project", project_id=7))),
             upstream=(),
             warned=True,
+            gaps=_gaps(
+                **dict.fromkeys(("outcome", "logged", "logged_error", "warnings"), R4_ODD_TYPED_CREDENTIAL_FIELD)
+            ),
         ),
         Case(
             "vertex_ai_invalid_location_after_the_login",
@@ -5420,7 +5456,9 @@ async def test_native_messages_match_python(
         case "request":
             assert _comparable(native.requests) == _comparable(python.requests)
         case "outcome":
-            assert native.outcome == _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
+            assert _without_login_text(case, aspect, native.outcome) == _without_login_text(
+                case, aspect, _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
+            )
         case "hidden_params":
             assert native.hidden_params == python.hidden_params
         case "logged":
@@ -5428,7 +5466,9 @@ async def test_native_messages_match_python(
         case "cached":
             assert native.cached == python.cached
         case "warnings":
-            assert native.warnings == python.warnings
+            assert _without_login_text(case, aspect, native.warnings) == _without_login_text(
+                case, aspect, python.warnings
+            )
         case "hook_inputs":
             assert native.hook_inputs == python.hook_inputs
         case "classified":
@@ -5438,8 +5478,8 @@ async def test_native_messages_match_python(
         case "stream_type":
             assert native.stream_type == _stream_type_reference(case, python.stream_type)
         case "logged_error":
-            assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(
-                _logged_error_reference(case, python.callback_kwargs.get(aspect))
+            assert _comparable(_without_login_text(case, aspect, native.callback_kwargs.get(aspect))) == _comparable(
+                _without_login_text(case, aspect, _logged_error_reference(case, python.callback_kwargs.get(aspect)))
             )
         case _:
             assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
