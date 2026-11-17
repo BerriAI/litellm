@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -6,8 +7,8 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
-from pydantic_core import to_jsonable_python
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails, InitErrorDetails, to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
@@ -84,6 +85,21 @@ _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
+
+
+def _without_surrounding_whitespace(value: str) -> str:
+    return value.strip(" \t")
+
+
+_HeaderName: TypeAlias = Annotated[str, Field(pattern=r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")]
+_HeaderValue: TypeAlias = Annotated[
+    str, Field(pattern=r"^[\t\x20-\x7e]*$"), AfterValidator(_without_surrounding_whitespace)
+]
+_EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(
+    Mapping[_HeaderName, _HeaderValue] | None,
+    config=ConfigDict(title="extra_headers", hide_input_in_errors=True),
+)
+_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_HeaderName, _HeaderValue])
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
@@ -100,6 +116,7 @@ _ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, Decisions
     tuple[DecisionsAssetReference, DecisionsAsset]
 )
 _ASSET_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_HEADER_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -483,8 +500,58 @@ def _provider_ir_request(
     return supported
 
 
+def _valid_header(entry: tuple[object, object]) -> tuple[str, str] | None:
+    try:
+        return _HEADER_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _header_entries(extra_headers: object) -> Mapping[object, object]:
+    try:
+        return _HEADER_ENTRIES_ADAPTER.validate_python(extra_headers)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+_HEADER_LABEL_END: Final = re.compile(r"[\s:]")
+
+
+def _header_label(name: str | int) -> str:
+    return _HEADER_LABEL_END.split(str(name), maxsplit=1)[0]
+
+
+def _without_full_header_name(detail: ErrorDetails) -> InitErrorDetails:
+    loc: Final = detail["loc"]
+    return InitErrorDetails(
+        type=detail["type"],
+        loc=(_header_label(loc[0]), *loc[1:]) if loc else loc,
+        input=None,
+        ctx=detail.get("ctx", {}),
+    )
+
+
+def _strict_extra_headers(extra_headers: object) -> Mapping[str, str]:
+    try:
+        return _EXTRA_HEADERS_ADAPTER.validate_python(extra_headers) or MappingProxyType({})
+    except ValidationError as error:
+        raise ValidationError.from_exception_data(
+            error.title, [_without_full_header_name(detail) for detail in error.errors()], hide_input=True
+        ) from None
+
+
+def _request_extra_headers(extra_headers: object, drops_params: bool) -> Mapping[str, str]:
+    if not extra_headers:
+        return MappingProxyType({})
+    if not drops_params:
+        return _strict_extra_headers(extra_headers)
+    return MappingProxyType(
+        dict(header for header in map(_valid_header, _header_entries(extra_headers).items()) if header is not None)
+    )
+
+
 def decisions_outbound_headers(
-    extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
+    extra_headers: object, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
@@ -492,7 +559,7 @@ def decisions_outbound_headers(
         ),
         custom_llm_provider=custom_llm_provider,
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    return MappingProxyType({**_request_extra_headers(extra_headers, _drops_params(kwargs)), **forwarded})
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])

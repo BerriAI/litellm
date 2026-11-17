@@ -49,7 +49,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 model_entry(second_fallback, second_fallback_wire),
             ),
             fallbacks=({primary: [fallback, second_fallback]},),
-            general_settings={},
+            general_settings={"enforce_fallback_model_access": True},
         )
         owned: Final = stack.enter_context(
             owned_proxy_process(
@@ -77,3 +77,20 @@ def test_quota_fallback_response_counts_every_candidate_a_limit_rejected(rig: Ri
         assert_served(response, rig.second_fallback, "served pmrl-")
         assert response.headers.get("x-litellm-attempted-fallbacks") == "2", dict(response.headers)
         assert response.headers.get("x-litellm-fallback-reason") == "rate_limit:model_per_key", dict(response.headers)
+
+
+def test_a_client_sent_model_group_alias_does_not_authorize_a_fallback_the_key_may_not_call(rig: Rig) -> None:
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(models=[rig.primary], model_tpm_limit={rig.primary: 1})
+
+        response: Final = chat(
+            rig.gateway,
+            key,
+            rig.primary,
+            f"pmrl-{uuid.uuid4().hex}",
+            router_settings_override={
+                "model_group_alias": {rig.fallback: rig.primary, rig.second_fallback: rig.primary}
+            },
+        )
+        assert response.status_code == 429, (response.headers.get("x-litellm-model-group"), response.text)
+        assert "x-litellm-attempted-fallbacks" not in response.headers, dict(response.headers)

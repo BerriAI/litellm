@@ -186,6 +186,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
+    redacted_standard_logging_payload,
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.served_output_texts import (
@@ -990,11 +991,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self.llm_caching_handler = value
 
     @property
-    def _on_detached_stream_failure(self) -> Callable[[Exception], Awaitable[None]] | None:
+    def _on_detached_stream_failure(self) -> Callable[["Logging", Exception], Awaitable[None]] | None:
         return self.on_detached_stream_failure
 
     @_on_detached_stream_failure.setter
-    def _on_detached_stream_failure(self, value: Callable[[Exception], Awaitable[None]] | None) -> None:
+    def _on_detached_stream_failure(self, value: Callable[["Logging", Exception], Awaitable[None]] | None) -> None:
         self.on_detached_stream_failure = value
 
     @property
@@ -1042,6 +1043,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
+        self.passthrough_model_parameters: Mapping[str, object] | None = None
+        self.passthrough_stream: bool | None = None
         self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -1175,8 +1178,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
-        self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
+        self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
+        self._holding_stream_failure: bool = False
+        self._held_stream_failure: Exception | None = None
         self._stash_owed_on_success: bool = False
         self._stash_billed_by_continuation: bool = False
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
@@ -3177,6 +3182,30 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.cost_breakdown is not None:
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
 
+    async def report_detached_stream_failure(self, exc: Exception) -> None:
+        """Fires the proxy's detached-stream failure hook, if one is armed, with this logging object.
+        While the proxy's client stream holds failures, the first one is kept for it instead."""
+        hook: Final = self.on_detached_stream_failure
+        if hook is None:
+            return
+        if self._holding_stream_failure:
+            if self._held_stream_failure is None:
+                self._held_stream_failure = exc
+            return
+        await hook(self, exc)
+
+    def hold_stream_failures(self) -> None:
+        """Defer detached-stream failure reports until the client stream ends, so a failure the
+        client stream reports itself claims the report first."""
+        self._holding_stream_failure = True
+
+    def release_held_stream_failure(self) -> Exception | None:
+        """Stop holding, and return the failure held meanwhile for the caller to report."""
+        self._holding_stream_failure = False
+        held: Final = self._held_stream_failure
+        self._held_stream_failure = None
+        return held
+
     def claim_stream_failure_report(self) -> bool:
         if self._stream_failure_claimed:
             return False
@@ -3300,7 +3329,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if request_params.get("no-log", False) is True:
             # proxy cost tracking cal backs should run
 
-            if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
+            if not (
+                isinstance(callback, CustomLogger)
+                and (callback.runs_on_no_log_requests or "_PROXY_" in callback.__class__.__name__)
+            ):
                 verbose_logger.debug("no-log request, skipping logging for %s event", event_hook)
                 return False
 
@@ -5182,7 +5214,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## STANDARDIZED LOGGING PAYLOAD
 
-        self.model_call_details["standard_logging_object"] = get_standard_logging_object_payload(
+        failure_payload: Final = get_standard_logging_object_payload(
             kwargs=self.model_call_details,
             init_response_obj={},
             start_time=start_time,
@@ -5192,6 +5224,11 @@ class Logging(LiteLLMLoggingBaseClass):
             error_str=redact_string(str(exception)),
             original_exception=exception,
             standard_built_in_tools_params=self.standard_built_in_tools_params,
+        )
+        self.model_call_details["standard_logging_object"] = (
+            redacted_standard_logging_payload(failure_payload)
+            if failure_payload is not None and should_redact_message_logging(self.model_call_details)
+            else failure_payload
         )
         return start_time, end_time
 
@@ -5608,7 +5645,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 return
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.async_log_failure_event(
-                    kwargs=self.model_call_details,
+                    kwargs=redacted_model_call_details_for_custom_logger(
+                        model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=self.model_call_details
+                        ),
+                        custom_logger=callback,
+                    ),
                     response_obj=result,
                     start_time=start_time,
                     end_time=end_time,
@@ -6541,7 +6583,7 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_gcs_bucket_logger)
         return _gcs_bucket_logger
     elif logging_integration == "s3_v2":
-        from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
+        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
         for callback in _in_memory_loggers:
             if isinstance(callback, S3V2Logger):
@@ -6695,7 +6737,11 @@ def build_custom_logger_compatible_class(
                     return callback
             otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
             otel_logger_v2: Final = build_otel_v2_logger(
-                config=OpenTelemetryV2Config(**otel_settings), settings=otel_settings, console_default=True
+                config=OpenTelemetryV2Config(
+                    **otel_settings,  # pyright: ignore[reportUnknownArgumentType]  # Pydantic validates dynamic settings
+                ),
+                settings=otel_settings,
+                console_default=True,
             )
             _in_memory_loggers.append(otel_logger_v2)
             _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
@@ -6963,6 +7009,15 @@ def build_custom_logger_compatible_class(
         anthropic_cache_control_hook: Final = AnthropicCacheControlHook()
         _in_memory_loggers.append(anthropic_cache_control_hook)
         return anthropic_cache_control_hook
+    elif logging_integration == "prefix_block_hashes":
+        from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrefixBlockHashes):
+                return callback
+        prefix_block_hashes: Final = PrefixBlockHashes()
+        _in_memory_loggers.append(prefix_block_hashes)
+        return prefix_block_hashes
     elif logging_integration == "vector_store_pre_call_hook":
         from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
             VectorStorePreCallHook,
@@ -7365,7 +7420,7 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, GCSBucketLogger):
                     return callback
         elif logging_integration == "s3_v2":
-            from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
+            from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
@@ -7463,6 +7518,12 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "prefix_block_hashes":
+            from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrefixBlockHashes):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
@@ -8072,7 +8133,7 @@ class StandardLoggingPayloadSetup:
                 )
                 if custom_logger and hasattr(custom_logger, "s3_path") and getattr(custom_logger, "s3_path"):
                     s3_path = getattr(custom_logger, "s3_path")
-                from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
+                from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
                 if isinstance(custom_logger, S3V2Logger):
                     partition_granularity = custom_logger.resolve_partition_granularity()
@@ -8705,7 +8766,7 @@ def get_standard_logging_object_payload(
             kwargs=kwargs,
         )
 
-        stream: bool | None = None
+        stream: bool | None = logging_obj.passthrough_stream
         if (
             kwargs.get("complete_streaming_response") is not None
             or kwargs.get("async_complete_streaming_response") is not None
@@ -8850,9 +8911,10 @@ def get_standard_logging_object_payload(
                 )
             ),
             response=final_response_obj,
-            model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
-                kwargs.get("optional_params", None) or {}
-            ),
+            model_parameters={
+                **ModelParamHelper.get_standard_logging_model_parameters(kwargs.get("optional_params", None) or {}),
+                **(logging_obj.passthrough_model_parameters or {}),
+            },
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
