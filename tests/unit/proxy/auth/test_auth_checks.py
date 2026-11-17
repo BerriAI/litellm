@@ -2274,6 +2274,12 @@ _SERVER_SHOWING_A_PAID_TOOL_AS_A_FREE_ONES_BARE_NAME = (
     {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"basic": 0.0}},
     {"basic": "friendly", "premium": "basic"},
 )
+_PAID_SERVER_SHOWING_A_TOOL_AS_AN_UNPRICED_SERVERS_PREFIXED_NAME = (
+    "cross-id",
+    "cross_tools",
+    {"default_cost_per_query": 0.5},
+    {"premium": "unpriced_tools-echo"},
+)
 _ZERO_PRICED_SERVER = ("zero-id", "zero_tools", {"default_cost_per_query": 0.0})
 _PAID_SERVER = (
     "paid-id",
@@ -2395,15 +2401,15 @@ _FREE_DEFAULT_PAID_TOOL_SERVER = ("mixed-id", "mixed_tools", {"tool_name_to_cost
             (_RENAMED_PAID_TOOL_SERVER,),
             "/mcp-rest/tools/call",
             {"name": "plain", "server_id": "renamed-id"},
-            True,
-            id="rest-call-by-the-display-name-of-a-free-tool",
+            False,
+            id="rest-call-by-a-display-name-stays-checked-even-when-its-tool-is-free",
         ),
         pytest.param(
             (_RENAMED_PAID_TOOL_SERVER,),
             "/mcp",
             {"method": "tools/call", "params": {"name": "plain"}},
-            True,
-            id="jsonrpc-call-by-a-free-display-name-that-no-server-charges-for",
+            False,
+            id="jsonrpc-call-by-a-bare-display-name-stays-checked",
         ),
         pytest.param(
             (_FREE_SERVER_SHOWING_A_TOOL_AS_PREMIUM, _RENAMED_PAID_TOOL_SERVER),
@@ -2423,8 +2429,8 @@ _FREE_DEFAULT_PAID_TOOL_SERVER = ("mixed-id", "mixed_tools", {"tool_name_to_cost
             (_PAID_DEFAULT_FREE_RENAMED_TOOL_SERVER,),
             "/mcp-rest/tools/call",
             {"name": "plain", "server_id": "paid-default-id"},
-            True,
-            id="rest-call-by-the-display-name-of-a-free-tool-on-a-server-with-a-paid-default",
+            False,
+            id="rest-call-by-a-display-name-on-a-server-with-a-paid-default-stays-checked",
         ),
         pytest.param(
             (_SERVER_SHOWING_A_FREE_TOOL_AS_A_PAID_ONE,),
@@ -2462,11 +2468,18 @@ _FREE_DEFAULT_PAID_TOOL_SERVER = ("mixed-id", "mixed_tools", {"tool_name_to_cost
             id="jsonrpc-call-scoped-to-a-name-that-is-not-one-server",
         ),
         pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER_SHOWING_A_TOOL_AS_AN_UNPRICED_SERVERS_PREFIXED_NAME),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="prefixed-name-of-a-free-server-that-another-server-shows-a-tool-under-stays-checked",
+        ),
+        pytest.param(
             (_SERVER_SHOWING_A_PAID_TOOL_AS_A_FREE_ONES_BARE_NAME,),
             "/mcp-rest/tools/call",
             {"name": "friendly", "server_id": "bare-id"},
-            True,
-            id="rest-call-by-a-free-display-name-whose-bare-tool-name-also-shows-a-paid-tool",
+            False,
+            id="rest-call-on-a-server-with-display-names-stays-checked",
         ),
         pytest.param(
             (_UNPRICED_SERVER, _RENAMED_PAID_TOOL_SERVER),

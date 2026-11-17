@@ -17,7 +17,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial, reduce
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
@@ -1134,39 +1134,8 @@ def _mcp_tool_call_name(route: str, request_body: Mapping[str, object]) -> str |
     return string_field(request_body.get("params"), "name")
 
 
-def _native_names_displayed_as(display_name: str, server: "MCPServer") -> frozenset[str]:
-    return frozenset(
-        native_name
-        for native_name, shown_name in (server.tool_name_to_display_name or {}).items()
-        if shown_name == display_name
-    )
-
-
-def _native_names_reached_from(tool_name: str, server: "MCPServer") -> frozenset[str]:
-    """Execution resolves a display name more than once, so a tool shown under another tool's name is reached too."""
-    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
-        add_server_prefix_to_name,
-        get_server_prefix,
-    )
-
-    display_names: Final = server.tool_name_to_display_name or {}
-    prefix: Final = get_server_prefix(server)
-
-    def with_the_tools_shown_under_their_names(reached: frozenset[str], _: int) -> frozenset[str]:
-        names_they_are_called_by: Final = {add_server_prefix_to_name(name, prefix) for name in reached}
-        return reached | {
-            native_name for native_name, shown_name in display_names.items() if shown_name in names_they_are_called_by
-        }
-
-    return reduce(
-        with_the_tools_shown_under_their_names,
-        range(len(display_names)),
-        _native_names_displayed_as(tool_name, server),
-    )
-
-
-def _costs_of_running_tool_on(tool_name: str, server: "MCPServer") -> tuple[float, ...]:
-    """A server that shows a tool under this name always runs that tool, never a native tool of the same name."""
+def _server_free_price_for(tool_name: str, server: "MCPServer") -> bool:
+    """A server with display names can run a different tool than the one named, so it is never taken as free."""
     from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
         mcp_tool_cost_per_query,
     )
@@ -1174,13 +1143,19 @@ def _costs_of_running_tool_on(tool_name: str, server: "MCPServer") -> tuple[floa
         strip_known_server_prefix,
     )
 
-    cost_info: Final = (server.mcp_info or {}).get("mcp_server_cost_info")
-    return tuple(
-        mcp_tool_cost_per_query(cost_info=cost_info, tool_name=native_name)
-        for native_name in (
-            _native_names_reached_from(tool_name, server) or (strip_known_server_prefix(tool_name, server),)
+    if server.tool_name_to_display_name:
+        return False
+    return (
+        mcp_tool_cost_per_query(
+            cost_info=(server.mcp_info or {}).get("mcp_server_cost_info"),
+            tool_name=strip_known_server_prefix(tool_name, server),
         )
+        <= 0
     )
+
+
+def _is_shown_as_a_display_name(tool_name: str, server: "MCPServer") -> bool:
+    return tool_name in (server.tool_name_to_display_name or {}).values()
 
 
 def _is_reserved_mcp_tool_name(tool_name: str) -> bool:
@@ -1203,9 +1178,9 @@ def _mcp_scope_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
 def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
     """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
 
-    Header or path scoping can route a name with no known server prefix to a server this check cannot see, so
-    such a name is only trusted when the REST ``server_id`` names the server, or when it is a display name
-    and no server charges for a tool of that name."""
+    Only a name with a known server prefix, or a REST ``server_id``, says which server runs it. Display names can
+    send a name to another tool, so a call stays budget checked when a server that could run it has any, or when
+    any server shows a tool under the name."""
     if not _is_mcp_tool_call(route=route, request_body=request_body):
         return False
     from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
@@ -1237,18 +1212,17 @@ def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -
         )
         if server is not None
     )
-    servers_showing_the_name: Final = tuple(
-        server for server in servers if _native_names_displayed_as(tool_name, server)
-    )
     servers_in_scope: Final = tuple(
         global_mcp_server_manager.get_mcp_server_by_identifier(name) for name in _mcp_scope_names(request_body)
     )
-    if _is_reserved_mcp_tool_name(tool_name) or not (named_servers or servers_showing_the_name):
-        return False
-    return all(
-        server is not None and max(_costs_of_running_tool_on(tool_name, server)) <= 0
-        for server in (*servers_showing_the_name, *servers_in_scope, *(named_servers or servers))
+    servers_that_could_run_it: Final = tuple(
+        server for server in (*named_servers, *servers_in_scope) if server is not None
     )
+    if _is_reserved_mcp_tool_name(tool_name) or not named_servers or None in servers_in_scope:
+        return False
+    if any(_is_shown_as_a_display_name(tool_name, server) for server in servers):
+        return False
+    return all(_server_free_price_for(tool_name, server) for server in servers_that_could_run_it)
 
 
 def is_video_retrieval_request(route: str, http_method: str | None) -> bool:
