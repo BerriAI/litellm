@@ -536,13 +536,8 @@ def _call_part(call_id: str | None = None, index: int = 0) -> Mapping[str, JsonV
     return {"function_call": call, **({"thoughtSignature": _SKIP_SIGNATURE} if call_id else {})}
 
 
-def _result_part(response: JsonValue, call_id: str | None = None, parts: JsonValue = None) -> Mapping[str, JsonValue]:
-    result: Final = {
-        "name": _TOOL,
-        "response": response,
-        **({"id": call_id} if call_id else {}),
-        **({"parts": parts} if parts is not None else {}),
-    }
+def _result_part(response: JsonValue, call_id: str | None = None) -> Mapping[str, JsonValue]:
+    result: Final = {"name": _TOOL, "response": response, **({"id": call_id} if call_id else {})}
     return {"function_response": result}
 
 
@@ -680,7 +675,7 @@ def test_a_multimodal_tool_result_with_a_ref_keeps_its_image_parts_beside_the_ra
             **expected,
             "contents": [
                 *_items(expected["contents"])[:2],
-                {"role": "user", "parts": [_result_part({"content": _CHART_TEXT}, parts=_INLINE_PNG)]},
+                {"role": "user", "parts": [_result_part({"content": _CHART_TEXT}), *_INLINE_PNG]},
             ],
         }
         assert _spend_row(response_id)["status"] == "success"

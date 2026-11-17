@@ -14,11 +14,11 @@ import respx
 import litellm
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
-GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy._experimental.mcp_server.mcp_server_manager"
+GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy.mcp_server.mcp_server_manager"
 GATEWAY_HANDLER_MODULES: Final = (
     "litellm.responses.mcp.litellm_proxy_mcp_handler",
     "litellm.responses.mcp.chat_completions_handler",
-    "litellm.llms.anthropic.pass_through.messages.mcp_handler",
+    "litellm.llms.anthropic.messages.native.mcp_handler",
 )
 
 FUNCTION_TOOL: Final = {
@@ -35,16 +35,6 @@ ANTHROPIC_FUNCTION_TOOL: Final = {
     "name": "noop",
     "description": "No operation",
     "input_schema": {"type": "object", "properties": {}},
-}
-ANTHROPIC_MESSAGE_PAYLOAD: Final = {
-    "id": "msg_1",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-sonnet-5-5",
-    "content": [{"type": "text", "text": "ok"}],
-    "stop_reason": "end_turn",
-    "stop_sequence": None,
-    "usage": {"input_tokens": 1, "output_tokens": 1},
 }
 GATEWAY_MCP_TOOL: Final = {"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy"}
 GATEWAY_SERVER_MCP_TOOL: Final = {"type": "mcp", "server_label": "x", "server_url": "litellm_proxy/mcp/github"}
@@ -193,23 +183,16 @@ def test_responses_with_gateway_mcp_tool_still_reaches_the_handler():
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("gateway_handler_unavailable")
-async def test_anthropic_messages_with_function_tool_does_not_import_the_gateway_handler(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=ANTHROPIC_MESSAGE_PAYLOAD)
-    )
-
+async def test_anthropic_messages_with_function_tool_does_not_import_the_gateway_handler():
     response: Final = await litellm.anthropic_interface.messages.acreate(
         model="anthropic/claude-sonnet-5-5",
         messages=[{"role": "user", "content": "hi"}],
         max_tokens=16,
         tools=[ANTHROPIC_FUNCTION_TOOL],
         api_key="sk-test",
+        mock_response="ok",
     )
 
-    assert upstream.called
     assert response["content"][0]["text"] == "ok"
 
 

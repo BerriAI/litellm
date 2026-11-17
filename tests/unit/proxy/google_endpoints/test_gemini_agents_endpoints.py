@@ -8,12 +8,18 @@ query parameter.  Flat credential query params (e.g. ?api_key=…) are no
 longer accepted — they would appear in server logs.
 """
 
+import asyncio
 import json
+from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import Request
 from fastapi.datastructures import Headers, QueryParams
+from fastapi.testclient import TestClient
 
 
 from litellm.proxy.google_endpoints.agents_endpoints import (
@@ -470,3 +476,41 @@ def test_validate_environment_env_fallback_when_no_api_base_override(monkeypatch
     cfg = GeminiAgentsConfig()
     headers = cfg.validate_environment(headers={}, litellm_params={})
     assert headers["x-goog-api-key"] == "AIzaFromEnv"
+
+
+_PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "test_configs" / "test_bad_config.yaml"
+
+
+@pytest.fixture
+def proxy_client(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> TestClient:
+    from litellm.proxy.proxy_server import app, cleanup_router_config_variables, initialize
+
+    monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+    cleanup_router_config_variables()
+    asyncio.run(initialize(config=str(_PROXY_CONFIG)))
+    return TestClient(app)
+
+
+def test_create_agent_route_forwards_googles_create_body(proxy_client: TestClient, respx_mock: respx.MockRouter):
+    google_body: Final = {
+        "id": "sentinel",
+        "base_agent": "antigravity-preview-09-2026",
+        "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+        "system_instruction": "Always answer in exactly three words.",
+        "base_environment": {"type": "remote"},
+        "description": "Watches the queue.",
+        "tools": [{"type": "code_execution"}],
+    }
+    upstream: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/agents").mock(
+        return_value=httpx.Response(200, json=google_body)
+    )
+
+    response: Final = proxy_client.post(
+        "/v1beta/agents",
+        json={**google_body, "litellm_params_template": {"api_key": "AIza-caller"}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == google_body
+    assert upstream.calls.last.request.headers["x-goog-api-key"] == "AIza-caller"
+    assert response.json()["id"] == "sentinel"

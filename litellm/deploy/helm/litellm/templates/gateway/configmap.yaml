@@ -1,0 +1,12 @@
+{{- if .Values.gateway.config.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "litellm.workload.fullname" . }}-config
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ include "litellm.workload.componentName" . }}
+data:
+  config.yaml: |
+{{ .Values.gateway.config.proxy_config | toYaml | indent 6 }}
+{{- end }}
