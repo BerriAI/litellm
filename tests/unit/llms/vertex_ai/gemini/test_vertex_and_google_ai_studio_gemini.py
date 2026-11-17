@@ -1841,8 +1841,8 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
     "audio_format",
-    [{"mimeType": "AUDIO_WAV"}, {"mimeType": "AUDIO_L16"}, {"mime_type": "AUDIO_WAV"}, {"mimeType": 4}],
-    ids=["wav", "l16", "snake-case-key", "enum-number"],
+    [{"mimeType": "AUDIO_WAV"}, {"mimeType": "AUDIO_L16"}, {"mime_type": "AUDIO_WAV"}, {"mimeType": 4}, {"mimeType": 4.0}],
+    ids=["wav", "l16", "snake-case-key", "enum-number", "enum-number-as-float"],
 )
 @pytest.mark.parametrize(
     "extra_body_key", [None, "responseFormat", "response_format"], ids=["param", "extra-body", "extra-body-snake-case"]
@@ -1850,7 +1850,7 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
 @pytest.mark.parametrize("sends_data_uri", [False, True], ids=["inline-data", "data-uri"])
 def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
     respx_mock: respx.MockRouter,
-    audio_format: Mapping[str, str | int],
+    audio_format: Mapping[str, str | int | float],
     extra_body_key: str | None,
     sends_data_uri: bool,
 ) -> None:
@@ -1887,11 +1887,11 @@ def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
     "audio_format",
-    [{}, {"mimeType": None}, {"mime_type": None}, {"mimeType": 0}],
-    ids=["no-mime-type", "null-mime-type", "null-snake-case-mime-type", "unspecified-enum-number"],
+    [{}, {"mimeType": None}, {"mime_type": None}, {"mimeType": 0}, {"mimeType": 0.0}],
+    ids=["no-mime-type", "null-mime-type", "null-snake-case-mime-type", "unspecified-enum-number", "unspecified-as-float"],
 )
 def test_gemini_tts_chat_audio_is_raw_pcm16_when_the_caller_names_no_audio_mime_type(
-    respx_mock: respx.MockRouter, audio_format: Mapping[str, int | None]
+    respx_mock: respx.MockRouter, audio_format: Mapping[str, int | float | None]
 ) -> None:
     _mock_gemini_audio(respx_mock, "audio/wav", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)))
 
