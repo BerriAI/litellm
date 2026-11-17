@@ -231,7 +231,8 @@ def merged_guardrail_entries(*entry_lists: Iterable[object]) -> list[object]:
     merged: Final[list[object]] = []  # mutable-ok: local to this walk
     for entry in entries:
         names = guardrail_entry_names(entry)
-        if (names and seen.issuperset(names)) or (isinstance(entry, str) and entry in named_with_settings):
+        plain_name_with_settings = isinstance(entry, str) and entry in named_with_settings
+        if plain_name_with_settings or (names and seen.issuperset(names)):
             continue
         merged.append(entry)
         seen.update(names)
