@@ -45,8 +45,8 @@ INPUT_RATE: Final = 0.001
 OUTPUT_RATE: Final = 0.002
 SPEND_SQL: Final = (
     "SELECT request_id, call_type, spend, prompt_tokens, completion_tokens, total_tokens, status, model, "
-    'model_group, model_id, custom_llm_provider, api_base, metadata, "startTime", "endTime" '
-    'FROM "LiteLLM_SpendLogs" WHERE api_key = %s ORDER BY "startTime"'
+    'model_group, model_id, custom_llm_provider, api_base, metadata, "startTime"::text AS "startTime", "endTime"::text AS "endTime" '
+    'FROM "LiteLLM_SpendLogs" WHERE api_key = %s ORDER BY "LiteLLM_SpendLogs"."startTime"'
 )
 POLICY_VIOLATION: Final = 1008
 INTERNAL_ERROR: Final = 1011

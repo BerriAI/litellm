@@ -122,7 +122,14 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("dec1-azure-entra-client-secret")
     port: Final = allocate_port()
     cert, key = write_self_signed_cert(directory)
-    environment: Final = {"AZURE_AUTHORITY_HOST": f"https://127.0.0.1:{port}", "SSL_CERT_FILE": str(cert)}
+    # The token client mirrors `requests`: it trusts REQUESTS_CA_BUNDLE (or CURL_CA_BUNDLE) and never reads
+    # SSL_CERT_FILE (litellm/rust/crates/auth-azure/src/requests_transport.rs:18 and :300), while the model call
+    # over httpx trusts SSL_CERT_FILE, so the peer's CA goes in both.
+    environment: Final = {
+        "AZURE_AUTHORITY_HOST": f"https://127.0.0.1:{port}",
+        "SSL_CERT_FILE": str(cert),
+        "REQUESTS_CA_BUNDLE": str(cert),
+    }
     with (
         wire_server(_peer, tls=server_context(cert, key), port=port) as wire,
         gateway_from_environment() as shared,

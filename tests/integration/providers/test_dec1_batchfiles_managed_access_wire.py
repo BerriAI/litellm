@@ -213,8 +213,10 @@ def test_the_raw_provider_id_of_a_managed_file_is_guarded_like_the_managed_id(ri
 def test_a_managed_file_still_resolves_when_the_request_also_names_a_model(rig: Rig) -> None:
     """The owner retrieves its managed file with `?model=<the target model>` added (#51780).
 
-    The answer must be 200 with the unified id, and the upstream must get `GET /v1/files/file-<stem>`: the
-    unified id wins over model routing instead of being sent to the provider as if it were a raw id.
+    The answer must be 200 with the unified id: the unified id wins over model routing instead of being sent to
+    the provider as if it were a raw id. The managed-files hook answers from the file object it stored at upload
+    (`afile_retrieve` case 2, litellm/enterprise/litellm_enterprise/proxy/hooks/managed_files.py:2504), so no `GET`
+    reaches the upstream at all, and in particular none naming the unified id.
     """
     stem: Final = unique("with-model")
     with rig.proxy.scenario() as scenario:
@@ -224,7 +226,7 @@ def test_a_managed_file_still_resolves_when_the_request_also_names_a_model(rig: 
         response: Final = rig.proxy.request("GET", f"/v1/files/{file_id}", key=key, params={"model": OPENAI_MODEL})
         assert response.status_code == 200, response.text
         assert JSON_OBJECT.validate_json(response.content)["id"] == file_id
-        assert [path_of(request) for request in rig.drained() if request.method == "GET"] == [f"/v1/files/file-{stem}"]
+        assert [path_of(request) for request in rig.drained() if request.method == "GET"] == []
 
 
 def test_deleting_a_managed_file_used_by_an_unbilled_batch_is_400_naming_the_batch(rig: Rig) -> None:

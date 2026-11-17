@@ -47,9 +47,9 @@ VERTEX_PROJECT: Final = "dec1-batchfiles-project"
 VERTEX_LOCATION: Final = "us-central1"
 GCS_BUCKET: Final = "dec1-batchfiles-gcs"
 CREATED_ISO: Final = "2026-11-17T10:00:00Z"
-CREATED_UNIX: Final = 1763373600
+CREATED_UNIX: Final = 1794909600
 ENDED_ISO: Final = "2026-11-17T11:00:00Z"
-ENDED_UNIX: Final = 1763377200
+ENDED_UNIX: Final = 1794913200
 
 
 def unique(stem: str) -> str:

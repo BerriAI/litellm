@@ -105,11 +105,17 @@ def test_the_provider_connection_carries_the_deployment_key_in_the_query_and_not
 def test_the_first_session_update_becomes_the_single_setup_frame_with_the_models_prefix(gateway: Gateway) -> None:
     """The client's first ``session.update`` (instructions and text modality) reaches the provider as one
     ``{"setup": {...}}`` frame whose ``model`` is ``models/gemini-2.5-flash-native-audio-latest`` and whose
-    ``inputAudioTranscription`` is ``{}`` (``_handle_session_update``)."""
+    ``inputAudioTranscription`` is ``{}`` (``_handle_session_update``). The proxy holds session updates and sends
+    the setup right before the first conversation content (``_holds_session_updates_until_first_content`` and
+    ``_send_setup_before_content``, litellm/litellm_core_utils/realtime_streaming.py:1144 and :2421-2427), so the
+    client sends a user text turn after the update."""
     with gateway.scenario() as scenario:
         model, handle = _gemini(scenario)
         realtime(
-            gateway, f"model={model}", key=gateway.key, steps=(Await("session.created"), Send(SESSION_UPDATE), Idle(2))
+            gateway,
+            f"model={model}",
+            key=gateway.key,
+            steps=(Await("session.created"), Send(SESSION_UPDATE), Send(USER_TEXT), Await("response.done")),
         )
         setups: Final = _setups(gateway, handle.scenario_id)
         assert len(setups) == 1, setups
@@ -118,15 +124,23 @@ def test_the_first_session_update_becomes_the_single_setup_frame_with_the_models
 
 
 def test_a_second_session_update_is_dropped_instead_of_sent_as_a_second_setup(gateway: Gateway) -> None:
-    """The client sends two ``session.update`` frames. The provider receives exactly one ``setup`` frame; the
-    second update is dropped (Gemini Live closes with 1007 on a second setup, which would end the session)."""
+    """The client sends two ``session.update`` frames and then a user text turn. The provider receives exactly one
+    ``setup`` frame (Gemini Live closes with 1007 on a second setup, which would end the session): the proxy merges
+    the held updates into the one setup it sends before the first content (realtime_streaming.py:2421-2427)."""
     with gateway.scenario() as scenario:
         model, handle = _gemini(scenario)
         realtime(
             gateway,
             f"model={model}",
             key=gateway.key,
-            steps=(Await("session.created"), Send(SESSION_UPDATE), Idle(1), Send(SESSION_UPDATE), Idle(2)),
+            steps=(
+                Await("session.created"),
+                Send(SESSION_UPDATE),
+                Idle(1),
+                Send(SESSION_UPDATE),
+                Send(USER_TEXT),
+                Await("response.done"),
+            ),
         )
         assert len(_setups(gateway, handle.scenario_id)) == 1
 
@@ -178,8 +192,9 @@ def test_appended_audio_becomes_realtime_input_audio_with_the_pcm_24k_mime_type(
 
 
 def test_a_buffer_clear_and_an_unknown_client_event_are_not_forwarded(gateway: Gateway) -> None:
-    """After the setup the client sends ``input_audio_buffer.clear`` and ``x.client.custom``. Neither produces a
-    provider frame: the provider sees only the setup (``transform_realtime_request`` returns ``[]``)."""
+    """After the session update the client sends ``input_audio_buffer.clear`` and ``x.client.custom``, then a user
+    text turn. Neither of the first two produces a provider frame (``transform_realtime_request`` returns ``[]``):
+    the provider sees only the setup, sent before the first content, and the ``clientContent`` turn."""
     with gateway.scenario() as scenario:
         model, handle = _gemini(scenario)
         realtime(
@@ -191,11 +206,12 @@ def test_a_buffer_clear_and_an_unknown_client_event_are_not_forwarded(gateway: G
                 Send(SESSION_UPDATE),
                 Send({"type": "input_audio_buffer.clear"}),
                 Send({"type": "x.client.custom", "n": 1}),
-                Idle(2),
+                Send(USER_TEXT),
+                Await("response.done"),
             ),
         )
         frames: Final = upstream_frames(gateway, handle.scenario_id)
-        assert [sorted(frame) for frame in frames] == [["setup"]], frames
+        assert [sorted(frame) for frame in frames] == [["setup"], ["clientContent"]], frames
 
 
 def test_text_content_without_a_session_update_still_gets_a_default_setup_first(gateway: Gateway) -> None:

@@ -117,11 +117,12 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
 def _deploy(rig: _Rig, **params: JsonValue) -> str:
     """Register a Converse deployment with no `api_key`, the Bedrock peer as runtime and the STS peer as `aws_sts_endpoint`.
 
-    The deletion callback is dropped on purpose: the deployment lives until the module's owned proxy stops.
+    The deletion callback is dropped on purpose: the deployment lives until the module's owned proxy stops. It is
+    dropped after `register_model` registers it; dropping it before would leave the new callback in place and
+    delete the deployment as the scenario exits.
     """
     with rig.gateway.scenario() as scenario:
-        scenario.cleanups.pop_all()
-        return register_model(
+        model: Final = register_model(
             scenario,
             model=CONVERSE_MODEL,
             aws_region_name="us-east-1",
@@ -129,6 +130,8 @@ def _deploy(rig: _Rig, **params: JsonValue) -> str:
             aws_sts_endpoint=rig.sts.url,
             **params,
         )
+        scenario.cleanups.pop_all()
+        return model
 
 
 def _chat(rig: _Rig, model: str) -> tuple[int, str]:

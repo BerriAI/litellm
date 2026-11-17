@@ -132,15 +132,17 @@ def test_gemini_chat_without_credentials_mints_with_the_application_credentials_
 
 def test_the_application_credentials_grant_is_a_jwt_signed_by_the_key_file(adc_proxy: Gateway, adc_peer: Peer) -> None:
     """The grant posted to the key file's `token_uri` uses `grant_type=urn:ietf:params:oauth:grant-type:
-    jwt-bearer`, and the assertion names the key file's `client_email` as issuer, the token URI as audience
-    and the `cloud-platform` scope google-auth was asked for (`vertex_llm_base.py:222`)."""
+    jwt-bearer`, and the assertion names the key file's `client_email` as issuer,
+    `https://oauth2.googleapis.com/token` as audience and the `cloud-platform` scope google-auth was asked for
+    (`vertex_llm_base.py:222`). google-auth signs the canonical Google token endpoint as the audience whatever
+    the key's `token_uri` (google/oauth2/service_account.py, google-auth 2.52 in uv.lock)."""
     with vertex(adc_proxy, vertex_echo, vertex_credentials=None) as rig:
         assert rig.chat().status_code == 200
     grant: Final = form_of(adc_peer.token_calls()[0])
     assert grant["grant_type"] == JWT_BEARER
     claims: Final = jwt_claims(grant["assertion"])
     assert claims["iss"] == f"dec1-vertex@{ADC_PROJECT}.iam.gserviceaccount.com"
-    assert claims["aud"] == f"{adc_peer.url}/_oauth/token"
+    assert claims["aud"] == "https://oauth2.googleapis.com/token"
     assert claims["scope"] == SCOPE
 
 

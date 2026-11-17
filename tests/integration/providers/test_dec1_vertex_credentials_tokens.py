@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 from typing import Final
 
+import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.wire import Reply
 from integration.providers.dec1_vertex_support import (
@@ -34,7 +35,6 @@ from integration.providers.dec1_vertex_support import (
     QUOTA_PROJECT,
     SA_PROJECT,
     SCOPE,
-    TOKEN_PATH,
     TokenPlan,
     authorized_user,
     claude_echo,
@@ -50,6 +50,9 @@ from integration.providers.dec1_vertex_support import (
     vertex,
 )
 
+# google-auth signs every service account JWT grant for this audience, whatever the key's `token_uri`.
+GOOGLE_TOKEN_AUDIENCE: Final = "https://oauth2.googleapis.com/token"
+
 
 def _bearer_tokens(calls: tuple[object, ...]) -> list[str]:
     return [call.headers["authorization"].removeprefix("Bearer ") for call in calls]
@@ -61,8 +64,10 @@ def _bearer_tokens(calls: tuple[object, ...]) -> list[str]:
 def test_the_first_request_mints_a_token_with_a_signed_jwt_bearer_grant(gateway: Gateway) -> None:
     """The first Gemini call makes the proxy POST the service account's `token_uri` with form fields
     `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` and an `assertion` whose claims name the
-    service account as `iss`, the token URI as `aud` and `https://www.googleapis.com/auth/cloud-platform`
-    as `scope`."""
+    service account as `iss`, `https://oauth2.googleapis.com/token` as `aud` and
+    `https://www.googleapis.com/auth/cloud-platform` as `scope`. google-auth signs the canonical Google token
+    endpoint as the audience whatever the key's `token_uri` (`_make_authorization_grant_assertion`,
+    google/oauth2/service_account.py, google-auth 2.52 in uv.lock); only the POST goes to `token_uri`."""
     with vertex(gateway, gemini_echo) as rig:
         assert rig.chat().status_code == 200
         token_call: Final = rig.peer.token_calls()[0]
@@ -70,7 +75,7 @@ def test_the_first_request_mints_a_token_with_a_signed_jwt_bearer_grant(gateway:
         assert form["grant_type"] == JWT_BEARER
         claims: Final = jwt_claims(form["assertion"])
         assert claims["iss"] == f"dec1-vertex@{SA_PROJECT}.iam.gserviceaccount.com"
-        assert claims["aud"] == f"{rig.peer.url}{TOKEN_PATH}"
+        assert claims["aud"] == GOOGLE_TOKEN_AUDIENCE
         assert claims["scope"] == SCOPE
 
 
@@ -230,7 +235,15 @@ def test_a_replaced_key_file_that_does_not_load_keeps_the_earlier_credentials(ga
 def test_authorized_user_credentials_refresh_with_the_refresh_token_grant(gateway: Gateway) -> None:
     """`authorized_user` credentials (gcloud application default login) mint by POSTing their
     `token_uri` with `grant_type=refresh_token` plus the file's `client_id`, `client_secret` and
-    `refresh_token`, and the model call carries the returned token."""
+    `refresh_token`, and the model call carries the returned token.
+
+    HARNESS (run 44176682961): not observable here. `Credentials.from_authorized_user_info` always replaces the
+    file's `token_uri` with `https://oauth2.googleapis.com/token` (google/oauth2/credentials.py, "always
+    overrides", google-auth 2.52 pinned in uv.lock), and litellm loads authorized users through it
+    (litellm/llms/vertex_ai/vertex_llm_base.py:319-325), so the refresh never reaches the peer and the CI egress
+    guard refuses the real endpoint (500 "Network is unreachable").
+    """
+    pytest.skip("HARNESS: google-auth pins authorized_user token_uri to oauth2.googleapis.com, which CI cannot reach")
     user: Final[dict[str, object]] = {}
 
     def build(base: str) -> str:
@@ -250,7 +263,15 @@ def test_authorized_user_credentials_refresh_with_the_refresh_token_grant(gatewa
 
 def test_an_authorized_user_without_vertex_project_uses_its_quota_project(gateway: Gateway) -> None:
     """With `authorized_user` credentials and no `vertex_project`, the project in the Vertex path is the
-    credentials' `quota_project_id` (`load_auth`); Rust fixed the same case in `credential-gaps.md`."""
+    credentials' `quota_project_id` (`load_auth`); Rust fixed the same case in `credential-gaps.md`.
+
+    HARNESS (run 44176682961): not observable here. `Credentials.from_authorized_user_info` always replaces the
+    file's `token_uri` with `https://oauth2.googleapis.com/token` (google/oauth2/credentials.py, "always
+    overrides", google-auth 2.52 pinned in uv.lock), and litellm loads authorized users through it
+    (litellm/llms/vertex_ai/vertex_llm_base.py:319-325), so the refresh never reaches the peer and the CI egress
+    guard refuses the real endpoint (500 "Network is unreachable").
+    """
+    pytest.skip("HARNESS: google-auth pins authorized_user token_uri to oauth2.googleapis.com, which CI cannot reach")
     with vertex(
         gateway, gemini_echo, vertex_project=None, credentials=lambda base: json.dumps(authorized_user(base))
     ) as rig:
@@ -260,8 +281,11 @@ def test_an_authorized_user_without_vertex_project_uses_its_quota_project(gatewa
 
 def test_an_authorized_user_without_any_project_is_refused_without_a_model_call(gateway: Gateway) -> None:
     """An `authorized_user` with no `quota_project_id` and no `vertex_project` cannot resolve a project,
-    so the request fails with `Could not resolve project_id` and the model is never called. UNVERIFIED:
-    the status is expected to be 500 and the message may be wrapped."""
+    so the request fails with a 500 and the model is never called. The credentials are refreshed before the
+    project is resolved, and google-auth sends that refresh to `oauth2.googleapis.com` whatever the
+    `token_uri` (google/oauth2/credentials.py `from_authorized_user_info`, google-auth 2.52), so in CI the
+    500 names the unreachable token endpoint rather than `Could not resolve project_id`; the message is not
+    pinned because it depends on the network."""
     with vertex(
         gateway,
         gemini_echo,
@@ -270,7 +294,6 @@ def test_an_authorized_user_without_any_project_is_refused_without_a_model_call(
     ) as rig:
         response: Final = rig.chat()
         assert response.status_code == 500, response.text
-        assert "Could not resolve project_id" in response.text
         assert rig.peer.model_calls() == ()
 
 
@@ -346,7 +369,15 @@ def test_messages_ignores_a_deployment_api_key(gateway: Gateway) -> None:
 def test_messages_with_authorized_user_credentials_uses_the_quota_project(gateway: Gateway) -> None:
     """On `/v1/messages`, `authorized_user` credentials without `vertex_project` resolve the project
     from `quota_project_id` and the rawPredict path names it; the Rust draft only learned this in
-    `471ba58f` (`credential-gaps.md`, project table)."""
+    `471ba58f` (`credential-gaps.md`, project table).
+
+    HARNESS (run 44176682961): not observable here. `Credentials.from_authorized_user_info` always replaces the
+    file's `token_uri` with `https://oauth2.googleapis.com/token` (google/oauth2/credentials.py, "always
+    overrides", google-auth 2.52 pinned in uv.lock), and litellm loads authorized users through it
+    (litellm/llms/vertex_ai/vertex_llm_base.py:319-325), so the refresh never reaches the peer and the CI egress
+    guard refuses the real endpoint (500 "Network is unreachable").
+    """
+    pytest.skip("HARNESS: google-auth pins authorized_user token_uri to oauth2.googleapis.com, which CI cannot reach")
     with vertex(
         gateway,
         claude_echo,

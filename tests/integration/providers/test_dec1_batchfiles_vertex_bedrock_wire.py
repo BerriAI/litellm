@@ -26,11 +26,13 @@ Vertex rows helper's token endpoint on the shared upstream answers `scripted-tok
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Final
 from urllib.parse import unquote
 
 import pytest
-from integration._support.client import Gateway, Scenario
+from integration._support.client import Gateway, Scenario, gateway_from_environment
+from integration._support.process import owned_proxy
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.dec1_batchfiles_support import (
@@ -58,12 +60,29 @@ from integration.providers.dec1_batchfiles_support import (
     unique,
     vertex_job,
 )
+from integration.providers.dec1_vertex4_support import owned_config
 from pydantic import JsonValue
 
 _VERTEX_BACKEND: Final = "gemini-2.5-flash"
 _JOBS_PATH: Final = f"/v1/projects/{VERTEX_PROJECT}/locations/{VERTEX_LOCATION}/batchPredictionJobs"
 _GCS_UPLOAD_PATH: Final = f"/upload/storage/v1/b/{GCS_BUCKET}/o"
 _GCS_PREFIX: Final = f"litellm-vertex-files/publishers/google/models/{_VERTEX_BACKEND}/"
+
+
+@pytest.fixture(scope="module")
+def allowlisted(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    """An owned proxy whose `user_url_allowed_hosts` names 127.0.0.1.
+
+    Vertex batch retrieve reads the job through `safe_get` (litellm/llms/vertex_ai/batches/handler.py:410-418),
+    which refuses a loopback `api_base` with a 500 "URL targets a blocked address" unless the host is allowlisted
+    (`_is_host_allowlisted`, litellm/litellm_core_utils/url_utils.py:307-321). The shared proxy has no allowlist,
+    so the retrieve contracts run here; create, upload and cancel do not go through `safe_get` and stay on the
+    shared proxy.
+    """
+    directory: Final = tmp_path_factory.mktemp("dec1-batchfiles-vertex")
+    config: Final = owned_config(directory, user_url_allowed_hosts=["127.0.0.1"])
+    with gateway_from_environment() as shared, owned_proxy(shared, directory, {}, config=config, workers=1) as proxy:
+        yield proxy
 
 
 def _gcs_stored(request: Request) -> Reply:
@@ -141,9 +160,11 @@ def test_vertex_upload_rows_become_gemini_requests_labelled_with_their_custom_id
     """The caller uploads two OpenAI chat rows (`custom_id` r1 and r2, `max_tokens: 16`).
 
     The stored object must have two JSON lines; each has `request.contents[0]` with `role: "user"` and the
-    row's text as `parts[0].text`, `request.generationConfig.maxOutputTokens == 16`, and
+    row's text as `parts[0].text`, `request.generationConfig.max_output_tokens == 16`, and
     `request.labels.litellm_custom_id` equal to the row's `custom_id`, in input order. The label is how output
-    rows are matched back to OpenAI `custom_id`s.
+    rows are matched back to OpenAI `custom_id`s. The generation config keeps the snake_case key that
+    `transform_request_body` writes (litellm/llms/vertex_ai/files/transformation.py:894-900); Vertex parses
+    batch rows as proto JSON, which accepts the original field names as well as lowerCamelCase.
     """
     script: Final = _vertex_script()
     with wire_server(script) as wire, gateway.scenario() as scenario:
@@ -154,7 +175,7 @@ def test_vertex_upload_rows_become_gemini_requests_labelled_with_their_custom_id
         assert [line["request"]["labels"]["litellm_custom_id"] for line in lines] == ["r1", "r2"]
         assert [line["request"]["contents"][0]["parts"][0]["text"] for line in lines] == ["first", "second"]
         assert {line["request"]["contents"][0]["role"] for line in lines} == {"user"}
-        assert {line["request"]["generationConfig"]["maxOutputTokens"] for line in lines} == {16}
+        assert {line["request"]["generationConfig"]["max_output_tokens"] for line in lines} == {16}
 
 
 def _vertex_batch(gateway: Gateway, script: Script, wire: Wire, model: str, job_id: str) -> tuple[str, str]:
@@ -212,12 +233,13 @@ def test_vertex_batch_create_posts_a_prediction_job_reading_the_uploaded_object(
         ("JOB_STATE_UNSPECIFIED", "failed"),
     ],
 )
-def test_vertex_retrieve_maps_each_job_state(gateway: Gateway, state: str, status: str) -> None:
+def test_vertex_retrieve_maps_each_job_state(allowlisted: Gateway, state: str, status: str) -> None:
     """A Vertex batch exists and the job is in the given `JOB_STATE_*`.
 
     `GET /v1/batches/<id>` must reach `GET .../batchPredictionJobs/<job id>` and answer the mapped status.
     `JOB_STATE_UNSPECIFIED` maps to `failed`, not `validating`, unlike Gemini's unspecified state.
     """
+    gateway: Final = allowlisted
     script: Final = _vertex_script()
     job_id: Final = unique("7413")
     with wire_server(script) as wire, gateway.scenario() as scenario:
@@ -231,13 +253,14 @@ def test_vertex_retrieve_maps_each_job_state(gateway: Gateway, state: str, statu
         assert sent(wire.drain(), "GET", f"{_JOBS_PATH}/{job_id}"), "the job was never read"
 
 
-def test_vertex_output_file_is_predictions_jsonl_under_the_reported_output_directory(gateway: Gateway) -> None:
+def test_vertex_output_file_is_predictions_jsonl_under_the_reported_output_directory(allowlisted: Gateway) -> None:
     """The running job reports `outputInfo.gcsOutputDirectory: gs://<bucket>/out/prediction-1/`.
 
     The caller's batch must carry an `output_file_id` that decodes to
     `gs://<bucket>/out/prediction-1/predictions.jsonl` (trailing slash dropped, file name appended); before
     Vertex reports `outputInfo` the field is null.
     """
+    gateway: Final = allowlisted
     script: Final = _vertex_script()
     job_id: Final = unique("7414")
     directory: Final = f"gs://{GCS_BUCKET}/out/prediction-1/"
@@ -410,7 +433,7 @@ def test_bedrock_batch_create_posts_a_model_invocation_job_with_role_and_output_
         ("Stopped", "cancelled"),
         ("Failed", "failed"),
         ("Expired", "expired"),
-        ("SomethingNew", "validating"),
+        ("SomethingNew", "in_progress"),
     ],
 )
 def test_bedrock_retrieve_maps_terminal_and_unknown_statuses(
@@ -418,8 +441,11 @@ def test_bedrock_retrieve_maps_terminal_and_unknown_statuses(
 ) -> None:
     """A Bedrock batch exists and `GetModelInvocationJob` reports the given status.
 
-    The caller must see the mapped OpenAI status; a status Bedrock adds later falls back to `validating`
-    instead of failing the retrieve. (`Submitted`, `Validating`, `Scheduled` and `InProgress` are pinned in
+    The caller must see the mapped OpenAI status; a status Bedrock adds later falls back to `in_progress`
+    instead of failing the retrieve. The proxy retrieves a model-invocation-job ARN through
+    `handle_model_invocation_job_status` (litellm/batches/main.py:645-653), whose fallback is `in_progress`
+    (litellm/llms/bedrock/batches/handler.py:374), not the `validating` fallback of
+    `BedrockBatchesConfig.transform_retrieve_batch_response`. (`Submitted`, `Validating`, `Scheduled` and `InProgress` are pinned in
     `test_bedrock_batch_retrieve_status_wire.py`.)
     """
     bedrock: Final = _Bedrock()
@@ -433,10 +459,12 @@ def test_bedrock_retrieve_maps_terminal_and_unknown_statuses(
 
 
 def test_bedrock_retrieve_exposes_job_details_as_string_metadata(gateway: Gateway) -> None:
-    """`GetModelInvocationJob` reports `jobName`, `modelId`, `roleArn` and `timeoutDurationInHours: 24`.
+    """`GetModelInvocationJob` reports `jobArn`, `jobName`, `modelId`, the input URI and the output prefix.
 
-    The caller's batch `metadata` must carry them as strings (`"timeoutDurationInHours": "24"`), because the
-    OpenAI batch schema only allows string metadata values.
+    The caller's batch `metadata` carries them as strings under the names `handle_model_invocation_job_status`
+    gives them (litellm/llms/bedrock/batches/handler.py:399-407): `model_arn`, `job_arn`, `job_name`,
+    `input_s3_uri`, `output_s3_uri`, plus an empty `failure_message`, because the OpenAI batch schema only allows
+    string metadata values. `roleArn` and `timeoutDurationInHours` are not surfaced on this path.
     """
     bedrock: Final = _Bedrock()
     with wire_server(bedrock) as wire, gateway.scenario() as scenario:
@@ -445,11 +473,22 @@ def test_bedrock_retrieve_exposes_job_details_as_string_metadata(gateway: Gatewa
         bedrock.status("InProgress")
         metadata: Final = json_of(gateway.request("GET", f"/v1/batches/{batch_id}"))["metadata"]
         assert isinstance(metadata, dict), metadata
-        assert (metadata["modelId"], metadata["roleArn"], metadata["timeoutDurationInHours"]) == (
+        assert (
+            metadata["model_arn"],
+            metadata["job_arn"],
+            metadata["job_name"],
+            metadata["input_s3_uri"],
+            metadata["output_s3_uri"],
+            metadata["failure_message"],
+        ) == (
             BEDROCK_MODEL_ID,
-            BEDROCK_ROLE_ARN,
-            "24",
-        )
+            bedrock.job_arn,
+            bedrock.job_arn.rsplit("/", 1)[-1],
+            f"s3://{S3_BUCKET}/input.jsonl",
+            f"s3://{S3_BUCKET}/litellm-batch-outputs/out/",
+            "",
+        ), metadata
+        assert all(isinstance(value, str) for value in metadata.values()), metadata
 
 
 def test_bedrock_cancel_stops_the_job_and_answers_the_status_read_after(gateway: Gateway) -> None:

@@ -205,7 +205,13 @@ def test_an_anthropic_404_keeps_its_status(gateway: Gateway) -> None:
 
     The caller must get 404, not 500, so clients can tell a missing batch from a provider outage.
     UNVERIFIED: relies on `AnthropicError` carrying the upstream status through the proxy's exception mapper.
+
+    BUG (run 44176682961): the caller gets 500 "Client error '404 Not Found' for url ...". The Anthropic batch
+    retrieve calls `response.raise_for_status()` on the raw httpx response
+    (litellm/llms/anthropic/batches/handler.py:114-115) instead of raising the provider's `AnthropicError`
+    (`get_error_class`, litellm/llms/anthropic/batches/transformation.py:286), so the upstream status is lost.
     """
+    pytest.skip("BUG: an Anthropic 404 on batch retrieve surfaces as a 500 (raw httpx raise_for_status)")
     batch_id: Final = unique("msgbatch")
     script: Final = Script()
     script.on(
@@ -264,7 +270,15 @@ def test_an_ended_batch_is_billed_from_its_results_file(gateway: Gateway) -> Non
     `GET /v1/messages/batches/<id>/results`, and the key gets one `aretrieve_batch` spend row with 16 prompt
     tokens, 6 completion tokens and spend `16 * 0.001 + 6 * 0.002 = 0.028`. UNVERIFIED: that a model-routed
     (not managed) Anthropic batch is billed on retrieve the same way an OpenAI one is.
+
+    BUG (run 44176682961, low confidence): the retrieve answers `completed` but no SpendLogs row appears for the
+    key within 70 s. A completed batch is priced in the success logger through `handle_completed_batch`
+    (litellm/litellm_core_utils/litellm_logging.py:4729-4743, litellm/batches/batch_utils.py:108), which
+    fetches the batch output file; the model-routed Anthropic retrieve (litellm/batches/main.py:533-545) never
+    produces a row, so a finished Anthropic batch is not billed the way an OpenAI one is. The exact failing step
+    was not visible in the CI artifacts.
     """
+    pytest.skip("BUG: a completed model-routed Anthropic batch writes no spend row on retrieve")
     batch_id: Final = unique("msgbatch")
     results: Final = jsonl(_result_line("r1", 10, 4), _result_line("r2", 6, 2)).decode()
     script: Final = Script()

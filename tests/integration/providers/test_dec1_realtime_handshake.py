@@ -336,14 +336,11 @@ def test_a_session_on_a_deleted_deployment_is_refused(gateway: Gateway) -> None:
     routing failure) and the upstream sees exactly the one earlier handshake."""
     with gateway.scenario() as scenario:
         handle: Final = scripted(scenario, (done_event(),))
-        model: Final = openai_deployment(scenario, handle)
-        assert realtime(gateway, f"model={model}", key=gateway.key).types[:1] == ("session.created",)
-        identity: Final = str(
-            gateway.rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_name = %s', (model,))[0][
-                "model_id"
-            ]
-        )
-        scenario.delete_model(identity)
+        # The deployment lives in its own scenario: leaving it runs the one ``/model/delete`` (and waits until the
+        # model is no longer served), so the outer teardown does not delete it a second time.
+        with gateway.scenario() as deployment:
+            model: Final = openai_deployment(deployment, handle)
+            assert realtime(gateway, f"model={model}", key=gateway.key).types[:1] == ("session.created",)
         outcome: Final = realtime(gateway, f"model={model}", key=gateway.key)
         assert "session.created" not in outcome.types, outcome
         assert len(upgrades(gateway, handle.scenario_id)) == 1
