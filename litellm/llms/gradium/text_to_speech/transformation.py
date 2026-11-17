@@ -36,6 +36,8 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
     Reference: https://docs.gradium.ai/api-reference/endpoint/tts-post
     """
 
+    supports_streaming = True
+
     TTS_ENDPOINT_PATH = "/api/post/speech/tts"
     DEFAULT_OUTPUT_FORMAT = "wav"
 

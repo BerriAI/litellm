@@ -274,6 +274,31 @@ async def test_aspeech_calls_the_gradium_rest_endpoint(gradium_env):
         assert response.content == _AUDIO
 
 
+class _RecordingAudioStream(httpx.AsyncByteStream):
+    def __init__(self, produced: list[bytes]):
+        self._produced = produced
+
+    async def __aiter__(self):
+        for chunk in (b"RIFF", b"gradium-audio"):
+            self._produced.append(chunk)
+            yield chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("stream", "read_before_caller"), [(True, []), (False, [b"RIFF", b"gradium-audio"])])
+async def test_aspeech_streams_gradium_audio_only_when_asked(gradium_env, stream, read_before_caller):
+    produced: Final[list[bytes]] = []
+    with respx.mock:
+        respx.post(_URL).mock(side_effect=lambda _: httpx.Response(200, stream=_RecordingAudioStream(produced)))
+
+        response = await litellm.aspeech(
+            model="gradium/default", input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY, stream=stream
+        )
+
+        assert produced == read_before_caller
+        assert b"".join([chunk async for chunk in await response.aiter_bytes()]) == _AUDIO
+
+
 def test_speech_rejects_a_missing_voice(gradium_env):
     with pytest.raises(ValueError, match="voice_id is required"):
         litellm.speech(model="gradium/default", input="Bonjour", voice=None, api_base=_API_BASE, api_key=_API_KEY)
