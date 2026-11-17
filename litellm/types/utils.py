@@ -4804,6 +4804,7 @@ class LlmProviders(str, Enum):
     MONGODB = "mongodb"
     OPENSEARCH = "opensearch"
     HELICONE = "helicone"
+    HOPBASE = "hopbase"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
     FAL_AI = "fal_ai"
