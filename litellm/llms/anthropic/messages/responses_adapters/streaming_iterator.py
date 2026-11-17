@@ -2,8 +2,8 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import anyio
 from pydantic import ConfigDict, field_validator
@@ -12,7 +12,8 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import APIError, MidStreamFallbackError
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.native.utils import (
@@ -27,6 +28,7 @@ from litellm.responses.streaming_iterator import (
     partial_responses_incomplete_event_on_disconnect,
     stream_error_status_and_message,
 )
+from litellm.types.llms.anthropic import AppliedEdit, ContextManagementResponse
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -94,6 +96,11 @@ def _failure_status_and_message(exception: Exception) -> tuple[int, str]:
     return status_code, message
 
 
+@runtime_checkable
+class _Closeable(Protocol):
+    def close(self) -> None: ...
+
+
 def _anthropic_error_chunk(status_code: int, message: str) -> dict[str, object]:
     from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
         AnthropicExceptionMapping,
@@ -117,6 +124,7 @@ class AnthropicResponsesStreamWrapper:
       response.output_text.delta         -> content_block_delta (text_delta)
       response.reasoning_summary_part.added -> content_block_delta (thinking_delta separator)
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
+      response.reasoning_text.delta      -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
@@ -125,12 +133,14 @@ class AnthropicResponsesStreamWrapper:
 
     def __init__(
         self,
-        responses_stream: Any,
+        responses_stream: object,
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        applied_edits: Sequence[AppliedEdit] | None = None,
     ) -> None:
         self.responses_stream = responses_stream
+        self._applied_edits: Final = tuple(applied_edits or ())
         self.model = model
         self.litellm_logging_obj = litellm_logging_obj
         self.safeguards_evaluator: Final = safeguards_evaluator
@@ -138,6 +148,8 @@ class AnthropicResponsesStreamWrapper:
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self._unreported_failure: Exception | None = None
+        # The failure behind this stream's error frame, for a router that accounts for it.
+        self.stream_failure: Exception | None = None
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
@@ -149,6 +161,7 @@ class AnthropicResponsesStreamWrapper:
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text: str = ""
         self._sync_responses_iterator: Iterator[object] | None = None
+        self._closed = False
 
     def _make_message_start(self) -> dict[str, object]:
         return {
@@ -191,32 +204,52 @@ class AnthropicResponsesStreamWrapper:
     def _field(source: object, name: str) -> object:
         return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
+    def _replay_whole_reasoning_item(self, item: object, item_id: str | None) -> None:
+        block: Final = LiteLLMAnthropicToResponsesAPIAdapter.thinking_block_from_reasoning_item(
+            iter_items(self._field(item, "summary") or self._field(item, "content") or ()),
+            self._field(item, "encrypted_content"),
+        )
+        if block is None:
+            return
+        if block.get("type") == "redacted_thinking":
+            redacted_idx: Final = self._open_block(item_id, block)
+            self._chunk_queue.append({"type": "content_block_stop", "index": redacted_idx})
+            return
+        block_idx: Final = self._open_block(item_id, {"type": "thinking", "thinking": "", "signature": ""})
+        self._chunk_queue.extend(
+            (
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "thinking_delta", "thinking": block.get("thinking")},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "signature_delta", "signature": block.get("signature")},
+                },
+                {"type": "content_block_stop", "index": block_idx},
+            )
+        )
+
     def _close_reasoning_item(self, item: object, item_id: str | None) -> None:
         block_idx: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+        if block_idx < 0:
+            self._replay_whole_reasoning_item(item, item_id)
+            return
         encrypted_content: Final = self._field(item, "encrypted_content")
         signature: Final = (
             encrypted_reasoning_signature(encrypted_content)
             if isinstance(encrypted_content, str) and encrypted_content
             else None
         )
-        if block_idx < 0 and signature is None:
-            return
-        if block_idx < 0:
-            redacted_idx: Final = self._open_block(
-                item_id,
-                {"type": "redacted_thinking", "data": signature},
-            )
-            stop: Final[dict[str, object]] = {"type": "content_block_stop", "index": redacted_idx}
-            self._chunk_queue.append(stop)
-            return
-        if signature is not None:
-            self._chunk_queue.append(
-                {
-                    "type": "content_block_delta",
-                    "index": block_idx,
-                    "delta": {"type": "signature_delta", "signature": signature},
-                }
-            )
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {"type": "signature_delta", "signature": signature or ""},
+            }
+        )
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def _process_event(self, event: object) -> None:
@@ -320,8 +353,7 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
-        # ---- reasoning summary text delta ----
-        if event_type == "response.reasoning_summary_text.delta":
+        if event_type in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
@@ -409,7 +441,9 @@ class AnthropicResponsesStreamWrapper:
             response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
-            output: Final = (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
+            output: Final[Iterable[object]] = (
+                (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
+            )
             refusal_text: Final = responses_output_refusal_text(output) or (self._refusal_text or None)
             status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
             has_tool_call: Final = any(
@@ -445,6 +479,11 @@ class AnthropicResponsesStreamWrapper:
                     "type": "message_delta",
                     "delta": message_delta_payload,
                     "usage": dict(anthropic_usage),
+                    **(
+                        {"context_management": ContextManagementResponse(applied_edits=list(self._applied_edits))}
+                        if self._applied_edits
+                        else {}
+                    ),
                 }
             )
             self._chunk_queue.append({"type": "message_stop"})
@@ -459,6 +498,7 @@ class AnthropicResponsesStreamWrapper:
             llm_provider=getattr(self.responses_stream, "custom_llm_provider", None),
             model=self.model,
         )
+        self.stream_failure = self._unreported_failure
         self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
 
     async def _report_unreported_failure(self) -> None:
@@ -466,14 +506,12 @@ class AnthropicResponsesStreamWrapper:
         if failure is None:
             return
         self._unreported_failure = None
-        on_failure: Final[Callable[[Exception], Awaitable[None]] | None] = getattr(
-            self.litellm_logging_obj, "_on_detached_stream_failure", None
-        )
-        if on_failure is None:
+        logging_obj: Final = self.litellm_logging_obj
+        if logging_obj is None:
             return
         try:
             with anyio.CancelScope(shield=True):
-                await on_failure(failure)
+                await logging_obj.report_detached_stream_failure(failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not hide the error event from the client
             verbose_logger.warning(
                 "AnthropicResponsesStreamWrapper: stream failure hook raised: %s(%s)",
@@ -484,7 +522,9 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
-    async def __anext__(self) -> dict[str, object]:
+    async def __anext__(self) -> Mapping[str, object]:
+        if self._closed:
+            raise StopAsyncIteration
         if self._chunk_queue:
             return self._chunk_queue.popleft()
         if self._stream_failed:
@@ -497,15 +537,13 @@ class AnthropicResponsesStreamWrapper:
             return self._chunk_queue.popleft()
 
         try:
-            if hasattr(self.responses_stream, "__aiter__"):
+            if has_attributes(self.responses_stream, AsyncIterable[object], "__aiter__"):
                 async for event in self.responses_stream:
                     self._process_event(event)
                     if self._chunk_queue:
                         return self._chunk_queue.popleft()
             else:
-                if self._sync_responses_iterator is None:
-                    self._sync_responses_iterator = iter(self.responses_stream)
-                sync_iterator: Final = self._sync_responses_iterator
+                sync_iterator: Final = self._sync_upstream()
                 missing: Final = object()
                 while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
                     self._process_event(event)
@@ -514,22 +552,66 @@ class AnthropicResponsesStreamWrapper:
         except StopAsyncIteration:
             pass
         except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
-            verbose_logger.exception(
-                "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed", self.model
-            )
-            self._fail_stream(*_failure_status_and_message(e), failure=_original_failure(e))
+            self._fail_on_upstream_error(e)
 
+        last_chunk: Final = self._chunk_after_upstream_ends()
+        if last_chunk is None:
+            raise StopAsyncIteration
+        return last_chunk
+
+    def __iter__(self) -> "AnthropicResponsesStreamWrapper":
+        return self
+
+    def __next__(self) -> Mapping[str, object]:
+        if self._closed:
+            raise StopIteration
+        if self._chunk_queue:
+            return self._chunk_queue.popleft()
+        if self._stream_failed:
+            raise StopIteration
+
+        if not self._sent_message_start:
+            self._sent_message_start = True
+            return self._make_message_start()
+
+        try:
+            for event in self._sync_upstream():
+                self._process_event(event)
+                if self._chunk_queue:
+                    return self._chunk_queue.popleft()
+        except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
+            self._fail_on_upstream_error(e)
+
+        last_chunk: Final = self._chunk_after_upstream_ends()
+        if last_chunk is None:
+            raise StopIteration
+        return last_chunk
+
+    def close(self) -> None:
+        self._closed = True
+        if isinstance(self.responses_stream, _Closeable):
+            self.responses_stream.close()
+
+    def _sync_upstream(self) -> Iterator[object]:
+        if self._sync_responses_iterator is None:
+            self._sync_responses_iterator = iter(iter_items(self.responses_stream))
+        return self._sync_responses_iterator
+
+    def _fail_on_upstream_error(self, error: Exception) -> None:
+        verbose_logger.exception("AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed", self.model)
+        self._fail_stream(*_failure_status_and_message(error), failure=_original_failure(error))
+
+    def _chunk_after_upstream_ends(self) -> Mapping[str, object] | None:
         if not self._chunk_queue and not self._sent_message_stop and not self._stream_failed:
             verbose_logger.error(
                 "AnthropicResponsesStreamWrapper: upstream Responses stream for %s ended without a terminal event",
                 self.model,
             )
             self._fail_stream(500, INCOMPLETE_STREAM_ERROR_MESSAGE)
+        return self._chunk_queue.popleft() if self._chunk_queue else None
 
-        if self._chunk_queue:
-            return self._chunk_queue.popleft()
-
-        raise StopAsyncIteration
+    def anthropic_sse_wrapper(self) -> "AnthropicResponsesSyncSSEByteStream":
+        return AnthropicResponsesSyncSSEByteStream(self)
 
     def async_anthropic_sse_wrapper(self) -> "AnthropicResponsesSSEByteStream":
         """SSE-encoded bytes for each Anthropic event chunk."""
@@ -570,5 +652,24 @@ class AnthropicResponsesSSEByteStream:
     async def aclose(self) -> None:
         await self._frames.aclose()
 
+    @property
+    def stream_failure(self) -> Exception | None:
+        return self._wrapper.stream_failure
+
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()
+
+
+class AnthropicResponsesSyncSSEByteStream(AnthropicResponsesSSEByteStream):
+    def __iter__(self) -> "AnthropicResponsesSyncSSEByteStream":
+        return self
+
+    def __next__(self) -> bytes:
+        return anthropic_sse_frame(next(self._wrapper))
+
+    def close(self) -> None:
+        self._wrapper.close()
+
+    async def aclose(self) -> None:
+        self.close()
+        await super().aclose()

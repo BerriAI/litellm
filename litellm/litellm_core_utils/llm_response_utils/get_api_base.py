@@ -2,12 +2,23 @@ from typing import Final
 
 import litellm
 from litellm import verbose_logger
+from litellm.exceptions import BadRequestError
 
 from ...litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     get_llm_provider,
 )
 from ...types.router import LiteLLM_Params
+
+
+def _github_app_api_base(params: LiteLLM_Params) -> str | None:
+    from litellm.llms.github_copilot.app_auth import app_config
+
+    try:
+        github_app: Final = app_config(params)
+    except BadRequestError:
+        return None
+    return github_app.api_base if github_app is not None else None
 
 
 def _api_base_without_login(provider: str) -> str | None:
@@ -57,6 +68,12 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
         return None
     # get llm provider
 
+    if litellm.model_alias_map and model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
+    declared: Final = declared_authenticating_provider(model, _optional_params.custom_llm_provider)
+    github_app_api_base: Final = _github_app_api_base(_optional_params) if declared == "github_copilot" else None
+    if github_app_api_base is not None:
+        return github_app_api_base
     if _optional_params.api_base is not None:
         return _optional_params.api_base
     extra_params: Final = _optional_params.model_extra
@@ -64,9 +81,6 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
     if isinstance(base_url_alias, str) and base_url_alias:
         return base_url_alias
 
-    if litellm.model_alias_map and model in litellm.model_alias_map:
-        model = litellm.model_alias_map[model]
-    declared: Final = declared_authenticating_provider(model, _optional_params.custom_llm_provider)
     if declared is not None:
         return _api_base_without_login(declared)
     try:

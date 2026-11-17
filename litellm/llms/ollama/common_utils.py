@@ -1,6 +1,7 @@
 import base64
 import io
-from typing import Final, overload
+from collections.abc import Iterable
+from typing import Final, Protocol, overload
 
 import httpx
 from openai.types.chat import ChatCompletionChunk
@@ -8,12 +9,24 @@ from pydantic import BaseModel, TypeAdapter
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 _PROVIDER_FIELDS: Final = TypeAdapter(dict[str, object])
+_THINK_ON_EFFORTS: Final = frozenset({"low", "medium", "high"})
+_THINK_OFF_REASON: Final = "Ollama takes think only as on or off, and litellm maps this level to off."
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _JsonLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+class _JsonItems(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
 
 
 class OllamaResponseIdNormalizer:
@@ -203,15 +216,15 @@ class OllamaModelInfo(BaseLLMModelInfo):
         return any(name.lower() in model_cost_keys for name in potential_model_names)
 
     @staticmethod
-    def _supports_function_calling(ollama_model_info: dict) -> bool:
-        _template: Final[str] = str(ollama_model_info.get("template", "") or "")
+    def _supports_function_calling(ollama_model_info: object) -> bool:
+        _template: Final[str] = str(require_attributes(ollama_model_info, _JsonLookup, "get").get("template", "") or "")
         return "tools" in _template.lower()
 
     @staticmethod
-    def _get_max_tokens(ollama_model_info: dict) -> int | None:
-        _model_info: Final[dict] = ollama_model_info.get("model_info", {})
+    def _get_max_tokens(ollama_model_info: object) -> object:
+        _model_info: Final = require_attributes(ollama_model_info, _JsonLookup, "get").get("model_info", {})
 
-        for key, value in _model_info.items():
+        for key, value in require_attributes(_model_info, _JsonItems, "items").items():
             if "context_length" in key:
                 return value
         return None
@@ -250,7 +263,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 "max_output_tokens": None,
             }
 
-        model_info: Final = response.json()
+        model_info: Final = _DECODED_JSON.validate_python(response.json())
         max_tokens: Final = self._get_max_tokens(model_info)
 
         return {
@@ -296,3 +309,12 @@ class OllamaModelInfo(BaseLLMModelInfo):
         Return the base model name for Ollama (no-op).
         """
         return model
+
+
+def ollama_think(model: str, reasoning_effort: object) -> object:
+    if model.startswith("gpt-oss"):
+        return reasoning_effort
+    think: Final = reasoning_effort in _THINK_ON_EFFORTS
+    if isinstance(reasoning_effort, str) and not think and reasoning_effort != "none":
+        warn_dropped_reasoning("reasoning_effort", reasoning_effort, model, _THINK_OFF_REASON, drop_params_gated=False)
+    return think

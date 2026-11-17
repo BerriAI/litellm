@@ -197,6 +197,29 @@ def test_chat_does_not_send_the_openai_organization_to_bigmodel(monkeypatch: pyt
     assert "openai-organization" not in route.calls.last.request.headers
 
 
+@respx.mock
+def test_chat_sends_json_schema_response_format_as_given() -> None:
+    route: Final = respx.post(f"{BASE}/api/paas/v4/chat/completions").respond(
+        json={
+            "id": "chat_test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "glm-4.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "{}"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    messages: Final = [{"role": "user", "content": "Ann likes 7"}]
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {"name": "profile", "schema": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+    }
+    _ = litellm.completion(model="bigmodel/glm-4.6", messages=messages, response_format=response_format)
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["response_format"] == response_format
+    assert body["messages"] == messages
+
+
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.asyncio
 @respx.mock
