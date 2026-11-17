@@ -1,7 +1,7 @@
 import os
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange_and_chacha20
@@ -121,8 +121,10 @@ def fips_mode_refusal(general_settings: Mapping[str, object], salt_key: str | No
     return None
 
 
-def enforce_fips_mode(general_settings: Mapping[str, object], salt_key: str | None = None) -> None:
-    refusal: Final = fips_mode_refusal(general_settings, salt_key)
+def enforce_fips_mode(
+    general_settings: Mapping[str, object], get_salt_key: Callable[[], str | None] = lambda: None
+) -> None:
+    refusal: Final = fips_mode_refusal(general_settings, get_salt_key())
     if refusal is not None:
         raise FipsModeError(refusal)
     active: Final = fips_mode_setting(general_settings) is True

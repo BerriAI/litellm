@@ -10,6 +10,7 @@ import _hashlib
 import base64
 import hmac
 import re
+from traceback import walk_tb
 from typing import Final
 
 import pytest
@@ -359,3 +360,18 @@ def test_derive_key_from_salt_key_refuses_a_salt_key_under_112_bits(
         monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     with pytest.raises(ValueError, match=r"LITELLM_SALT_KEY must be set and at least 112 bits \(14 bytes\)"):
         derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+
+
+_FRAME_SECRET: Final = "frame-secret"
+
+
+def test_a_refused_derive_key_from_salt_key_leaves_the_salt_key_in_no_frame_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FRAME_SECRET)
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be set") as refused:
+        derive_key_from_salt_key(b"litellm-test:label:", b"litellm-test:context")
+    held_by: Final = tuple(
+        frame.f_code.co_name for frame, _ in walk_tb(refused.tb) if _FRAME_SECRET in repr(frame.f_locals)
+    )
+    assert held_by == ()

@@ -1,6 +1,7 @@
 import _hashlib
 from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
+from traceback import walk_tb
 from typing import Final
 from unittest.mock import Mock
 
@@ -129,7 +130,7 @@ def test_enforce_fips_mode(
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: cryptography_fips)
 
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
-        enforce_fips_mode(general_settings, _HEX_SALT_KEY)
+        enforce_fips_mode(general_settings, lambda: _HEX_SALT_KEY)
 
 
 @pytest.mark.parametrize(
@@ -142,7 +143,7 @@ def test_fips_mode_active_follows_the_setting_the_gate_accepted(
 ) -> None:
     _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
-    enforce_fips_mode(general_settings, _HEX_SALT_KEY)
+    enforce_fips_mode(general_settings, lambda: _HEX_SALT_KEY)
     assert fips_mode_active() is active
 
 
@@ -231,7 +232,7 @@ def test_key_derivation_key_refuses_a_salt_key_under_112_bits(salt_key: str) -> 
     ],
 )
 def test_fips_mode_starts_with_a_salt_key_of_at_least_112_bits(salt_key: str) -> None:
-    enforce_fips_mode({"fips_mode": True}, salt_key)
+    enforce_fips_mode({"fips_mode": True}, lambda: salt_key)
     assert fips_mode_active() is True
 
 
@@ -249,7 +250,7 @@ def test_fips_mode_refuses_to_start_with_a_salt_key_under_112_bits(
     if salt_key_in_environment:
         monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     with pytest.raises(FipsModeError) as refused:
-        enforce_fips_mode({"fips_mode": True}, salt_key)
+        enforce_fips_mode({"fips_mode": True}, lambda: salt_key)
     assert str(refused.value) == (
         f"general_settings.fips_mode is on but {checked} is too short. fips_mode derives its encryption keys from it, "
         "so it must be at least 112 bits (14 bytes). Set LITELLM_SALT_KEY=sk-$(openssl rand -hex 32), or turn "
@@ -261,7 +262,7 @@ def test_fips_mode_refuses_to_start_with_a_salt_key_under_112_bits(
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
 def test_fips_mode_refuses_to_start_with_no_salt_key_or_master_key() -> None:
     with pytest.raises(FipsModeError, match="neither LITELLM_SALT_KEY nor a master key is set") as refused:
-        enforce_fips_mode({"fips_mode": True}, None)
+        enforce_fips_mode({"fips_mode": True}, lambda: None)
     assert "LITELLM_SALT_KEY=sk-$(openssl rand -hex 32)" in str(refused.value)
     assert fips_mode_active() is False
 
@@ -271,9 +272,30 @@ def test_fips_mode_refuses_to_start_with_no_salt_key_or_master_key() -> None:
 def test_the_fips_mode_salt_key_refusal_does_not_print_the_key(monkeypatch: pytest.MonkeyPatch, salt_key: str) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     with pytest.raises(FipsModeError) as refused:
-        enforce_fips_mode({"fips_mode": True}, salt_key)
+        enforce_fips_mode({"fips_mode": True}, lambda: salt_key)
     assert salt_key not in str(refused.value)
     assert salt_key[3:] not in str(refused.value)
+
+
+_FRAME_SECRET: Final = "frame-secret"
+
+
+@pytest.mark.parametrize(
+    "openssl_fips, cryptography_fips",
+    [(True, True), (False, True), (True, False)],
+    ids=["salt-key-under-112-bits", "openssl-not-fips", "cryptography-not-fips"],
+)
+def test_a_refused_fips_mode_boot_leaves_the_salt_key_in_no_frame_local(
+    monkeypatch: pytest.MonkeyPatch, openssl_fips: bool, cryptography_fips: bool
+) -> None:
+    _fake_openssl(monkeypatch, fips_flag=int(openssl_fips), scrypt_refused=openssl_fips)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: cryptography_fips)
+    with pytest.raises(FipsModeError) as refused:
+        enforce_fips_mode({"fips_mode": True}, lambda: _FRAME_SECRET)
+    held_by: Final = tuple(
+        frame.f_code.co_name for frame, _ in walk_tb(refused.tb) if _FRAME_SECRET in repr(frame.f_locals)
+    )
+    assert held_by == ()
 
 
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
@@ -286,5 +308,5 @@ def test_the_fips_mode_salt_key_refusal_does_not_print_the_key(monkeypatch: pyte
 def test_standard_mode_starts_whatever_the_salt_key_looks_like(
     general_settings: Mapping[str, object], salt_key: str | None
 ) -> None:
-    enforce_fips_mode(general_settings, salt_key)
+    enforce_fips_mode(general_settings, lambda: salt_key)
     assert fips_mode_active() is False

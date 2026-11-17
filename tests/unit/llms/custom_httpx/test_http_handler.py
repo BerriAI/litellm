@@ -389,7 +389,7 @@ def test_fips_mode_drops_rsa_key_exchange_and_tls_1_2_chacha20_from_the_outbound
     held: Final = get_ssl_configuration()
     standard: Final = _offered_ciphers(held)
     _fake_fips_openssl(monkeypatch)
-    enforce_fips_mode({"fips_mode": True}, salt_key="sk-" + bytes(range(32)).hex())
+    enforce_fips_mode({"fips_mode": True}, get_salt_key=lambda: "sk-" + bytes(range(32)).hex())
     try:
         held_in_fips: Final = _offered_ciphers(held)
         new_in_fips: Final = _offered_ciphers(get_ssl_configuration(http2=True))
@@ -427,7 +427,7 @@ def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_excluded_tl
     assert isinstance(held, ssl.SSLContext)
     _fake_fips_openssl(monkeypatch)
     caplog.set_level(logging.WARNING, logger="LiteLLM")
-    enforce_fips_mode({"fips_mode": True}, salt_key="sk-" + bytes(range(32)).hex())
+    enforce_fips_mode({"fips_mode": True}, get_salt_key=lambda: "sk-" + bytes(range(32)).hex())
     try:
         started_in_fips: Final = fips_mode_active()
         new: Final = get_ssl_configuration(http2=True)

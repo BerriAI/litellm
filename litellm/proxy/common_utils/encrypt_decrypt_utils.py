@@ -102,8 +102,7 @@ def derive_key_from_salt_key(label: bytes, context: bytes) -> str:
     """Hex of 32 bytes derived from key_derivation_key(LITELLM_SALT_KEY) under label and context by SP 800-108r1 KBKDF
     in counter mode with HMAC-SHA256, run by EVP_KDF from the FIPS provider of the OpenSSL that hashlib uses. Raises
     ValueError when LITELLM_SALT_KEY is not set or is under 112 bits, or when no FIPS provider runs it."""
-    salt_key: Final = os.getenv(SALT_KEY_ENV_VAR)
-    key: Final = None if salt_key is None else key_derivation_key(salt_key)
+    key: Final = key_derivation_key(os.getenv(SALT_KEY_ENV_VAR) or "")
     if key is None:
         raise ValueError(
             f"With general_settings.fips_mode on, {SALT_KEY_ENV_VAR} must be set and {KEY_DERIVATION_KEY_RULE}, "

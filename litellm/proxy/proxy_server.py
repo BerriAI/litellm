@@ -1745,7 +1745,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
-    enforce_fips_mode(general_settings_view(), salt_key=get_salt_key())
+    enforce_fips_mode(general_settings_view(), get_salt_key=get_salt_key)
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
