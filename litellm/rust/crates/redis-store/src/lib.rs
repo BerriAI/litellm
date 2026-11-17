@@ -21,7 +21,7 @@ mod value;
 pub use codec::DecodeError;
 pub use dual_cache::TierPolicy;
 pub use error::{Error, ErrorKind};
-pub use memory::{Clock, system_clock};
+pub use memory::{Clock, UpdateGuard, UpdateLock, system_clock};
 pub use number::Number;
 pub use remote::Remote;
 pub use request::{DeadlineTag, Pending, RequestRedis, Send};

@@ -19,9 +19,7 @@ from litellm.proxy.auth.fallback_budget import (
     _user_api_key_auth_from_request,  # pyright: ignore[reportPrivateUsage]  # shared auth lookup for fallback checks
 )
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # the proxy's limiter type
-)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook, fallback_target_allowed
 from litellm.router_api import RoutingContext
 
 
@@ -38,7 +36,7 @@ class RouterFallbackRateLimitCheck:
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         limiter: Final = self.limiter()
-        if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        if not isinstance(limiter, ParallelRequestLimiterHook):
             return True
         valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
         if valid_token is None:
@@ -51,7 +49,7 @@ class RouterFallbackRateLimitCheck:
                 valid_token, model, request_kwargs, commit=False
             ):
                 return False
-            if not await limiter.async_fallback_target_allowed(valid_token, model, request_kwargs):
+            if not await fallback_target_allowed(limiter, valid_token, model, request_kwargs):
                 return False
             return dynamic_limiter is None or await dynamic_limiter.async_fallback_target_allowed(
                 valid_token, model, request_kwargs

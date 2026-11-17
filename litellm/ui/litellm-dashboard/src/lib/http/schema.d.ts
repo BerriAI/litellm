@@ -4154,6 +4154,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cursor-cli/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cursor Cli Passthrough
+         * @description Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header "x-litellm-api-key: Bearer YOUR_KEY"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Keys bound to LiteLLM agents are unsupported. Model restrictions, token limits, spend budgets and content guardrails are unsupported. Configured moderation, content guardrails or policy-engine rules disable this relay, even when not selected by this request. Request limits count RPCs, not agent sessions. Allow overlapping stream and append calls. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.
+         */
+        post: operations["cursor_cli_passthrough_cursor_cli__endpoint__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor/chat/completions": {
         parameters: {
             query?: never;
@@ -8645,6 +8665,8 @@ export interface paths {
          *         - key: str - The key identifier (token) to update
          *         - budget_id: Optional[str] - Budget ID associated with the key
          *         - max_budget: Optional[float] - Max budget for key
+         *         - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+         *         - user_id: Optional[str] - Owner user ID, or null to remove the owner
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
@@ -16322,7 +16344,7 @@ export interface paths {
         put?: never;
         /**
          * Import Skill
-         * @description Import a public skills.sh or GitHub skill as a portable snapshot.
+         * @description Register a source reference, or import a public skills.sh/GitHub URL as a portable snapshot.
          */
         post: operations["import_skill_skill_hub_skills_import_post"];
         delete?: never;
@@ -16365,7 +16387,7 @@ export interface paths {
         get: operations["get_skill_skill_hub_skills__name__get"];
         /**
          * Replace Skill Metadata
-         * @description Replace registry metadata, preserving files. Members submit an immutable proposal for admin review.
+         * @description Update supplied registry fields. Omitted metadata is retained, null clears it, and version defaults to a bump.
          */
         put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
         post?: never;
@@ -16469,7 +16491,7 @@ export interface paths {
         get?: never;
         /**
          * Replace Skill Archive
-         * @description Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp.
+         * @description Replace files and refresh their inherited description, retaining registry overrides and other metadata.
          */
         put: operations["replace_skill_archive_skill_hub_skills__name__upload_put"];
         post?: never;
@@ -16528,7 +16550,7 @@ export interface paths {
         };
         /**
          * Download Skill Version
-         * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
+         * @description Download a retained skill ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
         put?: never;
@@ -16616,7 +16638,7 @@ export interface paths {
         get: operations["get_submission_skill_hub_submissions__submission_id__get"];
         /**
          * Edit Submission
-         * @description Replace a pending proposal's metadata, preserving files. Only its original submitting user may edit.
+         * @description Update supplied proposal metadata. Omit/null version uses automatic versioning on approval.
          */
         put: operations["edit_submission_skill_hub_submissions__submission_id__put"];
         post?: never;
@@ -16655,7 +16677,7 @@ export interface paths {
         };
         /**
          * Download Submission
-         * @description Download an owned proposal as a private portable ZIP. Legacy nonportable archives return 404.
+         * @description Download an owned proposal as a private ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_submission_skill_hub_submissions__submission_id__archive_get"];
         put?: never;
@@ -29431,10 +29453,13 @@ export interface components {
             expected_revision: number;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
-            /** Version */
+            /**
+             * Version
+             * @description Explicit SemVer, or omit/send empty for automatic versioning on approval
+             */
             version?: string | null;
         };
         /** Body_image_edit_api_images_edits_post */
@@ -29481,7 +29506,7 @@ export interface components {
             expected_updated_at?: string | null;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
             /** Version */
@@ -29599,6 +29624,11 @@ export interface components {
              * @description Agent Skills ZIP with SKILL.md and optional supporting files
              */
             file: string;
+            /**
+             * Metadata
+             * @description Optional JSON registry metadata
+             */
+            metadata?: string | null;
             /** Version */
             version?: string | null;
         };
@@ -30259,6 +30289,8 @@ export interface components {
          * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Key */
@@ -30270,6 +30302,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * BulkUpdateKeyResponse
@@ -36062,6 +36096,8 @@ export interface components {
         };
         /** ImportSkillRequest */
         ImportSkillRequest: {
+            /** @description Optional registry name and metadata overrides */
+            metadata?: components["schemas"]["SkillHubUpload"] | null;
             /**
              * Path
              * @description Repository-relative skill directory
@@ -45793,6 +45829,11 @@ export interface components {
              */
             context_window_escalation_buffer: number;
             /**
+             * Conversation Header
+             * @description Request header whose value names the application conversation for session_affinity, deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. A request without a usable value (header missing, empty, or a redacted credential header, and any SDK call without proxy request headers) gets no conversation-based reuse from this router and never falls back to its session_id. A separately enabled Router-level session_affinity pre-call check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. Unset keeps the session_id behavior
+             */
+            conversation_header?: string | null;
+            /**
              * Custom Dimensions
              * @description Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
              * @default []
@@ -45848,6 +45889,11 @@ export interface components {
              * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
              */
             fallback_tier?: string | null;
+            /**
+             * Heuristic First Max Context Tokens
+             * @description Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. Unset preserves the local shortcut. Existing session and user-turn pins still take precedence.
+             */
+            heuristic_first_max_context_tokens?: number | null;
             /**
              * Heuristic First Max Tier
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', the predicted tier must meet its success threshold. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
@@ -48626,8 +48672,19 @@ export interface components {
              * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
              */
             router_names: string[];
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
             /** Shadow Percentage */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Status
              * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
@@ -48920,27 +48977,6 @@ export interface components {
              */
             tags: string[];
         };
-        /** SkillHubMetadata */
-        SkillHubMetadata: {
-            /** Description */
-            description?: string | null;
-            /** Domain */
-            domain?: string | null;
-            /**
-             * Expected Updated At
-             * @description Published updated_at read by the editor. A stale value returns 409
-             */
-            expected_updated_at?: string | null;
-            /** Keywords */
-            keywords?: string[] | null;
-            /** Namespace */
-            namespace?: string | null;
-            /**
-             * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
-             */
-            version?: string | null;
-        };
         /** SkillHubPendingSkill */
         SkillHubPendingSkill: {
             /**
@@ -48962,10 +48998,15 @@ export interface components {
         /** SkillHubProposal */
         SkillHubProposal: {
             agent_skill?: components["schemas"]["SkillHubAgentSkill"] | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -48981,6 +49022,40 @@ export interface components {
         };
         /** SkillHubPublication */
         SkillHubPublication: Record<string, never>;
+        /** SkillHubRegistration */
+        SkillHubRegistration: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Repository or HTTPS archive source reference
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
+        };
         /** SkillHubRejection */
         SkillHubRejection: {
             /** Expected Revision */
@@ -49026,6 +49101,9 @@ export interface components {
         SkillHubSkill: {
             /** Approved By */
             approved_by?: string | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Content Url */
             content_url?: string | null;
             /** Created At */
@@ -49043,6 +49121,8 @@ export interface components {
             download_count?: number | null;
             /** Download Url */
             download_url?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Id */
             id: string;
             /** Keywords */
@@ -49128,9 +49208,22 @@ export interface components {
         };
         /** SkillHubSubmissionEdit */
         SkillHubSubmissionEdit: {
-            /** Description */
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
             description?: string | null;
-            /** Domain */
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
             domain?: string | null;
             /**
              * Expected Revision
@@ -49142,13 +49235,24 @@ export interface components {
              * @description Published updated_at read by the editor. A stale value returns 409
              */
             expected_updated_at?: string | null;
-            /** Keywords */
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
             keywords?: string[] | null;
-            /** Namespace */
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
             namespace?: string | null;
             /**
              * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             * @description Explicit SemVer, or omit/null for automatic versioning on approval
              */
             version?: string | null;
         };
@@ -49168,6 +49272,85 @@ export interface components {
              * @description Revision read from the submission detail
              */
             expected_revision: number;
+        };
+        /** SkillHubUpdate */
+        SkillHubUpdate: {
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
+            domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
+            keywords?: string[] | null;
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Explicit replacement source reference. Omit/null to preserve the stored source and archive
+             */
+            source?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
+        };
+        /** SkillHubUpload */
+        SkillHubUpload: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
         };
         /** SkillHubVersion */
         SkillHubVersion: {
@@ -49767,6 +49950,12 @@ export interface components {
              * @description Percentage of each target's requests to duplicate through the router
              */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Team Ids
              * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
@@ -61726,6 +61915,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserConnectionStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cursor_cli_passthrough_cursor_cli__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "agent.v1.AgentService/RunSSE" | "aiserver.v1.BidiService/BidiAppend";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/connect+proto": string;
+                "application/proto": string;
+            };
+        };
+        responses: {
+            /** @description Unchanged native Cursor response bytes, including streamed agent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/proto": string;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -78169,6 +78396,7 @@ export interface operations {
                 security_scan_passed?: boolean | null;
                 sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
                 sort_order?: "asc" | "desc";
+                enabled_only?: boolean;
             };
             header?: never;
             path?: never;
@@ -78205,7 +78433,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ImportSkillRequest"];
+                "application/json": components["schemas"]["SkillHubRegistration"] | components["schemas"]["ImportSkillRequest"];
             };
         };
         responses: {
@@ -78304,7 +78532,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SkillHubMetadata"];
+                "application/json": components["schemas"]["SkillHubUpdate"];
             };
         };
         responses: {
@@ -79248,7 +79476,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -79370,7 +79598,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;

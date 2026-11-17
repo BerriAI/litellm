@@ -8213,6 +8213,41 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
     assert resp.choices[0].provider_specific_fields["native_finish_reason"] == "NO_IMAGE"
 
 
+@pytest.mark.parametrize(
+    ("google_signal", "expected_provider_specific_fields"),
+    [
+        ({"candidates": [{"finishReason": "RECITATION", "index": 0}]}, {"native_finish_reason": "RECITATION"}),
+        ({"candidates": [{"finishReason": "SAFETY", "index": 0}]}, {"native_finish_reason": "SAFETY"}),
+        ({"candidates": [{"finishReason": "IMAGE_SAFETY", "index": 0}]}, {"native_finish_reason": "IMAGE_SAFETY"}),
+        (
+            {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT", "blockReasonMessage": "blocked"}},
+            {"block_reason": "PROHIBITED_CONTENT"},
+        ),
+    ],
+)
+def test_non_streamed_content_filter_choice_keeps_google_reason(
+    google_signal: dict[str, object], expected_provider_specific_fields: dict[str, str]
+):
+    completion_response: Final = {
+        **google_signal,
+        "usageMetadata": {"promptTokenCount": 23, "candidatesTokenCount": 4, "totalTokenCount": 27},
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 1
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.choices[0].message.content is None
+    assert resp.choices[0].provider_specific_fields == expected_provider_specific_fields
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
+
+
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
     from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
