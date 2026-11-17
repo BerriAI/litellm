@@ -1,12 +1,12 @@
 from datetime import date
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, TypeAlias
 
 from pydantic import ConfigDict, Field, NonNegativeFloat, NonNegativeInt
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
-UsdPrice = Annotated[float, Field(ge=0)]
-Multiplier = Annotated[float, Field(gt=0)]
+UsdPrice: TypeAlias = Annotated[float, Field(ge=0)]
+Multiplier: TypeAlias = Annotated[float, Field(gt=0)]
 
 
 class CostMapConfig(LiteLLMBaseModel):
