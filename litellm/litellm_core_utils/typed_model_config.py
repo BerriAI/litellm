@@ -3,9 +3,10 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Literal, overload
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.model_cost_table import published
 from litellm.types.cost_map_configs import (
     AnthropicModelOnAnthropicProvider,
     OpenAIModelOnOpenAIProvider,
@@ -22,6 +23,8 @@ _CONFIGS: Final[Mapping[str, type[SharedModelConfig]]] = MappingProxyType(
 _COST_MAP_FIELDS: Final = frozenset(ModelInfo.__required_keys__ | ModelInfo.__optional_keys__).union(
     *(config.model_fields for config in _CONFIGS.values())
 )
+
+_ROW: Final = TypeAdapter(Mapping[str, object])
 
 
 def _is_cost_map_field(key: str) -> bool:
@@ -40,7 +43,7 @@ def _catalog_row(model: str, custom_llm_provider: str) -> Mapping[str, object]:
         key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
     except Exception:  # noqa: BLE001  # an unmapped model has no catalog row
         return MappingProxyType({})
-    return litellm.model_cost.get(key, {})
+    return _ROW.validate_python(published().get(key) or {})
 
 
 def _parse(config: type[SharedModelConfig], model: str, row: Mapping[str, object]) -> SharedModelConfig:
