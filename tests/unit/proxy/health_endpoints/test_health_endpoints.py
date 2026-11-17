@@ -6260,3 +6260,32 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_email_errors_when_alert_is_not_sent():
+    """service=email must not report success when the test alert email was never sent (LIT-6072)."""
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as logging_obj:
+        logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email = AsyncMock(return_value=False)
+
+        with pytest.raises(ProxyException) as error:
+            await health_services_endpoint(
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+                service="email",
+            )
+
+    assert error.value.code == "500"
+    logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_email_reports_success_when_alert_is_sent():
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as logging_obj:
+        logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email = AsyncMock(return_value=True)
+
+        result = await health_services_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            service="email",
+        )
+
+    assert result["status"] == "success"

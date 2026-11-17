@@ -713,9 +713,16 @@ async def health_services_endpoint(
             )
 
             # use create task - this can take 10 seconds. don't keep ui users waiting for notification to check their email
-            await proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
+            alert_sent: Final = await proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                 webhook_event=webhook_event
             )
+            if not alert_sent:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "Email alert was not sent. Add 'email' to general_settings.alerting and configure the SMTP_* environment variables, then check the proxy logs for the send error."
+                    },
+                )
 
             return {
                 "status": "success",
