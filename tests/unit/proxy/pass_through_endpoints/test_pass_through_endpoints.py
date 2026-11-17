@@ -42,7 +42,6 @@ from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
@@ -97,6 +96,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
 )
 from tests._master_key import MASTER_KEY
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
@@ -8742,7 +8742,7 @@ async def test_websocket_passthrough_holds_the_keys_parallel_slot_until_the_sess
     not free it, or a second session gets in while the first is still running.
     """
     limiter_cache: Final = DualCache()
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-socket"), max_parallel_requests=1)
     logged_rows: Final[list[asyncio.Task[None]]] = []
 

@@ -1838,7 +1838,10 @@ async def _reject_from_headers_before_reading_body(
         return
     from litellm.proxy import proxy_server
     from litellm.proxy.common_request_processing import proxy_exception_from_http_exception
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        ParallelRequestLimiterHook,
+        raise_if_over_limit_before_body,
+    )
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     configured_header: Final = proxy_server.general_settings_view().get("litellm_key_header_name")
@@ -1884,7 +1887,7 @@ async def _reject_from_headers_before_reading_body(
     if RouteChecks.is_unbilled_route(route) or _is_bodyless_get(request):
         return
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+    if not isinstance(limiter, ParallelRequestLimiterHook):
         return
     team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
     rate_limited: Final = cached_key.model_copy(
@@ -1896,7 +1899,7 @@ async def _reject_from_headers_before_reading_body(
         }
     )
     try:
-        await limiter.raise_if_over_limit_before_body(rate_limited)
+        await raise_if_over_limit_before_body(limiter, rate_limited)
     except HTTPException as rejection:
         if team_fields is None and _refused_by_team_limit(rejection):
             return

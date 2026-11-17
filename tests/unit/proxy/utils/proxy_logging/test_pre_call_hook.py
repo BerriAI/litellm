@@ -447,7 +447,6 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "ENTERPRISE_BlockedUserList",
     }
     counts_or_shapes_the_request = {
-        "_PROXY_MaxParallelRequestsHandler_v3",
         "_PROXY_MaxIterationsHandler",
         "_PROXY_MaxBudgetPerSessionHandler",
         "_PROXY_CacheControlCheck",
