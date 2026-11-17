@@ -4576,5 +4576,33 @@
       }
     ],
     "default_model_placeholder": "vispark/vision-medium"
+  },
+  {
+    "provider": "CLOUDGPU",
+    "provider_display_name": "CloudGPU",
+    "litellm_provider": "cloudgpu",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://cloudgpu.app/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Bearer token from CLOUDGPU_API_KEY",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "cloudgpu/deepseek-v4-flash"
   }
 ]

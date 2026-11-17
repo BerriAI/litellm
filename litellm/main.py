@@ -2901,13 +2901,21 @@ def _complete_custom_openai(
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
-    # set API KEY
     api_key = (
-        api_key
-        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-        or litellm.openai_key
-        or get_secret("OPENAI_API_KEY")
+        (api_key or get_secret_str("CLOUDGPU_API_KEY"))
+        if custom_llm_provider == "cloudgpu"
+        else (api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY"))
     )
+    if (
+        custom_llm_provider == "cloudgpu"
+        and not api_key
+        and not (isinstance(client, (openai.OpenAI, openai.AsyncOpenAI)) and client.api_key)
+    ):
+        raise litellm.AuthenticationError(
+            message="CloudGPU requires api_key or CLOUDGPU_API_KEY",
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
 
     headers = headers or litellm.headers
 
