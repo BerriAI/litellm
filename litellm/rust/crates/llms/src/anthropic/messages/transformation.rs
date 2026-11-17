@@ -1328,7 +1328,11 @@ mod tests {
         );
     }
 
-    fn tool_turn(opening: Value) -> Value {
+    fn tool_turn(opening: Option<Value>) -> Value {
+        let pending: Vec<Value> = opening
+            .into_iter()
+            .chain([json!({"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}})])
+            .collect();
         json!([
             {"role": "user", "content": "List the files."},
             {"role": "assistant", "content": [
@@ -1336,10 +1340,7 @@ mod tests {
                 {"type": "text", "text": "Draft."}
             ]},
             {"role": "user", "content": "Now list them."},
-            {"role": "assistant", "content": [
-                opening,
-                {"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}
-            ]},
+            {"role": "assistant", "content": pending},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]}
         ])
     }
@@ -1352,19 +1353,21 @@ mod tests {
         #[case] unsigned: Value,
         unmapped: MessagesModelCapabilities,
     ) {
-        let mut expected = tool_turn(Value::Null);
-        expected[3]["content"] =
-            json!([{"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}]);
         assert_eq!(
-            transform(json!({"messages": tool_turn(unsigned)}), unmapped, false),
-            Ok(body(json!({"messages": expected})))
+            transform(
+                json!({"messages": tool_turn(Some(unsigned))}),
+                unmapped,
+                false
+            ),
+            Ok(body(json!({"messages": tool_turn(None)})))
         );
     }
 
     #[rstest]
     fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
-        let messages =
-            tool_turn(json!({"type": "thinking", "thinking": "open model plan", "signature": ""}));
+        let messages = tool_turn(Some(
+            json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        ));
         assert_eq!(
             transform(
                 json!({"model": "deepseek-v4-pro", "messages": messages.clone()}),

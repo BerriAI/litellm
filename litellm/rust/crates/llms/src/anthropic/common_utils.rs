@@ -1126,7 +1126,6 @@ fn is_raw_unsigned_thinking_block(block: &Value) -> bool {
             .is_none_or(str::is_empty)
 }
 
-/// [`strip_unsigned_thinking_blocks`] on a raw message.
 pub fn strip_raw_unsigned_thinking_blocks(message: Value) -> Option<Value> {
     with_raw_blocks(message, |blocks| {
         let kept: Vec<Value> = blocks
