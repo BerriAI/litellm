@@ -1,7 +1,8 @@
 import contextlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -17,7 +18,12 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrailAPIError,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import TextChoices, TextCompletionResponse
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    StandardLoggingGuardrailInformation,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 
 @pytest.fixture
@@ -916,6 +922,115 @@ async def test_post_call_never_forwards_the_proxy_key_metadata_of_the_request_me
     )
 
     assert "litellm_metadata" not in client.calls[0]["json"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+@pytest.mark.parametrize("action", ["block", "monitor", "passthrough"])
+@pytest.mark.parametrize("fail_open", [False, True])
+@pytest.mark.parametrize("payload", [{}, {"violation": None}, {"error": True, "violation": 0.0}])
+async def test_application_errors_respect_failure_policy(
+    grayswan_guardrail_factory: tuple[Callable[[bool, str, str], GraySwanGuardrail], Mock],
+    input_type: Literal["request", "response"],
+    action: str,
+    fail_open: bool,
+    payload: dict[str, object],
+) -> None:
+    make_guardrail, respond = grayswan_guardrail_factory
+    api_key: Final = "test-key"
+    guardrail: Final = make_guardrail(fail_open, action, api_key)
+    respond.return_value = httpx.Response(200, json=payload)
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["synthetic input"]}
+    metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+    request_data: Final = {"metadata": metadata}
+    if fail_open:
+        assert await guardrail.apply_guardrail(inputs, request_data, input_type) is inputs
+    else:
+        with pytest.raises(GraySwanGuardrailAPIError):
+            await guardrail.apply_guardrail(inputs, request_data, input_type)
+    respond.assert_called_once()
+    assert respond.call_args.args[0].headers["authorization"] == f"Bearer {api_key}"
+    (failure_record,) = metadata["standard_logging_guardrail_information"]
+    assert failure_record["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {"violation": "0"},
+        {"violation": True},
+        {"violation": -0.1},
+        {"violation": 1.1},
+        {"violation": float("nan")},
+        {"violation": float("inf")},
+        {"error": True, "violation": 1.0},
+    ],
+)
+@pytest.mark.parametrize("legacy", [False, True])
+def test_invalid_decisions_are_errors(payload: object, legacy: bool) -> None:
+    guardrail: Final = GraySwanGuardrail(guardrail_name="invalid-decision", api_key="test-key")
+    if legacy:
+        with pytest.raises(GraySwanGuardrailAPIError):
+            guardrail._process_grayswan_response(payload)
+    else:
+        with pytest.raises(GraySwanGuardrailAPIError):
+            guardrail._process_response_internal(payload, {}, {"texts": ["hello"]}, False)
+
+
+@pytest.mark.parametrize("score", [0, 0.49, 0.5, 1])
+def test_valid_decisions_keep_threshold_semantics(score: float) -> None:
+    guardrail: Final = GraySwanGuardrail(
+        guardrail_name="valid-decision",
+        api_key="test-key",
+        violation_threshold=0.5,
+        on_flagged_action="block",
+    )
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["hello"]}
+    payload: Final = {
+        "violation": score,
+        "error": False,
+        "observe_violation": 1.0,
+        "block_message": "Informational only below threshold",
+    }
+    if score >= 0.5:
+        with pytest.raises(HTTPException) as error:
+            guardrail._process_response_internal(payload, {}, inputs, False)
+        assert error.value.status_code == 400
+    else:
+        assert guardrail._process_response_internal(payload, {}, inputs, False) is inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "malformed_json", "http_error"])
+@pytest.mark.parametrize("fail_open", [False, True])
+async def test_transport_errors_respect_failure_policy(
+    grayswan_guardrail_factory: tuple[Callable[[bool, str, str], GraySwanGuardrail], Mock],
+    failure: str,
+    fail_open: bool,
+) -> None:
+    make_guardrail, respond = grayswan_guardrail_factory
+    guardrail: Final = make_guardrail(fail_open, "block", "test-key")
+
+    def transport_response(request: httpx.Request) -> httpx.Response:
+        if failure == "timeout":
+            raise httpx.ReadTimeout("controlled timeout", request=request)
+        if failure == "malformed_json":
+            return httpx.Response(200, content=b"not-json")
+        return httpx.Response(503, json={"error": "controlled failure"})
+
+    respond.side_effect = transport_response
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["synthetic input"]}
+    metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+    request_data: Final = {"metadata": metadata}
+    if fail_open:
+        assert await guardrail.apply_guardrail(inputs, request_data, "request") is inputs
+    else:
+        with pytest.raises(GraySwanGuardrailAPIError):
+            await guardrail.apply_guardrail(inputs, request_data, "request")
+    (failure_record,) = metadata["standard_logging_guardrail_information"]
+    assert failure_record["guardrail_status"] == "guardrail_failed_to_respond"
 
 
 @pytest.mark.asyncio
