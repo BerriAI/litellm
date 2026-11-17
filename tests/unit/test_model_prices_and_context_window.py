@@ -121,7 +121,9 @@ def _price_fields(row: Mapping[str, object]) -> Mapping[str, object]:
     return {field: value for field, value in row.items() if "cost" in field}
 
 
-def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows(prices: dict) -> None:
+def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows(
+    prices: Mapping[str, Mapping[str, object]],
+) -> None:
     assert _mantle_route_rows_priced_apart_from_their_provider_row(prices) == ()
 
 
