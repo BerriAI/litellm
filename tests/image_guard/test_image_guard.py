@@ -204,6 +204,24 @@ def test_base64_counted() -> None:
     )
     check("mixed url+b64: total trimmed to 20", total2 == 20, f"total={total2}")
 
+# ---- Anthropic messages format: base64 + url source both counted ----
+def test_anthropic_image_sources() -> None:
+    """Anthropic SDK sends {"type":"image","source":{"type":"base64",...}} —
+    the backend cap counts these too, so the guard must see and trim them."""
+    def b64src(i):
+        return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": f"QUFB{i}"}}
+    def urlsrc(i):
+        return {"type": "image", "source": {"type": "url", "url": f"https://x/{i}"}}
+    for name, img in [("base64", b64src), ("url", urlsrc)]:
+        parts = [{"type": "text", "text": "solo"}] + [img(i) for i in range(21)]
+        messages = [{"role": "user", "content": parts}]
+        trimmed, removed = trim_chat_messages(messages, limit=20, model="glm-chat")
+        total = sum(
+            1 for p in trimmed[0]["content"]
+            if isinstance(p, dict) and p.get("type") == "image"
+        )
+        check(f"anthropic {name} source: 20 images remain", total == 20, f"total={total}")
+        check(f"anthropic {name} source: 1 removed", removed == 1, f"removed={removed}")
 # ---- conversion tier disabled by default ----
 def test_conversion_disabled() -> None:
     """vLLM cap counts total images (b64 included), so conversion cannot
@@ -269,6 +287,24 @@ def test_responses() -> None:
 
 
 # ---- limit learning ----
+
+# ---- responses single-turn overflow: newest turn trimmed internally ----
+def test_responses_single_turn_overflow() -> None:
+    """Codex-style: one Responses turn carries 21 images. Eviction cannot
+    help (single unit), so the newest turn must be trimmed internally."""
+    items = [{"type": "message", "role": "user", "content":
+              [{"type": "input_text", "text": "describe"}] +
+              [{"type": "input_image", "image_url": f"https://x/{i}"} for i in range(21)]}]
+    trimmed, removed = trim_responses_input(items, limit=20, model="qwen-instruct")
+    total = sum(
+        1 for p in trimmed[0]["content"]
+        if isinstance(p, dict) and p.get("type") in ("input_image", "image_url")
+    )
+    check("responses single-turn: 20 images remain", total == 20, f"total={total}")
+    check("responses single-turn: 1 removed", removed == 1, f"removed={removed}")
+    # newest image survives
+    last_img = [p for p in trimmed[0]["content"] if isinstance(p, dict) and p.get("type") == "input_image"][-1]
+    check("responses single-turn: newest image kept", last_img["image_url"] == "https://x/20", f"url={last_img['image_url']}")
 def test_learn() -> None:
     got = learn_limit_from_error("glm-chat",
         'litellm.BadRequestError: 400 - {"error": {"message": "You can only include 8 images."}}')
@@ -326,12 +362,14 @@ if __name__ == "__main__":
     test_oldest_first()
     test_single_turn_overflow()
     test_base64_counted()
+    test_anthropic_image_sources()
     # URL conversion tier removed: vLLM cap counts total images (b64 included).
 
     test_conversion_disabled()
     test_noop_under_limit()
     test_malformed()
     test_responses()
+    test_responses_single_turn_overflow()
     test_learn()
     test_hook_assigns_conversion_only()
     print()

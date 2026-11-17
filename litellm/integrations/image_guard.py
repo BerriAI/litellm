@@ -155,6 +155,15 @@ def _image_url_of(part: Any) -> str | None:
     if part.get("type") == "image":
         src = part.get("source")
         if isinstance(src, dict):
+            # Anthropic SDK sends base64 images as
+            # {"type":"image","source":{"type":"base64","media_type":...,"data":...}}
+            # — synthesize a data URI so the counter sees them (the backend cap
+            # counts these too).
+            if src.get("type") == "base64":
+                data = str(src.get("data") or "")
+                if data:
+                    media = str(src.get("media_type") or "image/png")
+                    return f"data:{media};base64,{data}"
             return str(src.get("url") or "")
     return None
 
@@ -456,8 +465,14 @@ def _group_responses_units(items: list) -> list[list[int]]:
     return units
 
 
-def trim_responses_input(items: list, limit: int) -> tuple[list, int]:
-    """Trim image overflow for Responses `input` item lists."""
+def trim_responses_input(items: list, limit: int, model: str = "") -> tuple[list, int]:
+    """Trim image overflow for Responses `input` item lists.
+
+    Same policy as chat: evict oldest whole units first, then trim INSIDE the
+    newest unit (keep newest images, placeholder the oldest). The inside-unit
+    tier matters for Codex-style sessions where a single turn carries 20+
+    screenshots — eviction alone cannot reduce a one-unit overflow.
+    """
     if limit <= 0 or not isinstance(items, list) or not items:
         return items, 0
     working: list[Any] = list(items)
@@ -480,6 +495,33 @@ def trim_responses_input(items: list, limit: int) -> tuple[list, int]:
             "role": "user",
             "content": [{"type": "input_text", "text": _PLACEHOLDER_TEXT}],
         }
+    # newest unit still over cap (e.g. single 21-image turn): trim inside it
+    newest = image_units[-1]
+    overflow = total - removed - limit
+    if overflow > 0:
+        slots: list[tuple[int, int]] = []
+        for idx in newest:
+            item = working[idx]
+            content = item.get("content") if isinstance(item, dict) else None
+            if not isinstance(content, list):
+                continue
+            for part_idx, part in enumerate(content):
+                ptype = part.get("type") if isinstance(part, dict) else None
+                if ptype in ("input_image", "image_url"):
+                    slots.append((idx, part_idx))
+        for msg_idx, part_idx in slots[:overflow]:  # oldest images first
+            content = working[msg_idx]["content"]
+            content[part_idx] = {"type": "input_text", "text": _PLACEHOLDER_TEXT}
+            removed += 1
+    if removed and _PROBE_PATH:
+        try:
+            with open(_PROBE_PATH, "a", encoding="utf-8") as _pf:
+                _pf.write(
+                    "image_guard: model=%s scope=responses url_overflow=%d deleted=%d %s\n"
+                    % (model, total - (total - removed), removed, time.time())
+                )
+        except Exception:  # noqa: BLE001
+            pass
     if removed:
         working = [i for i in working if i is not None]
     return working, removed
@@ -512,7 +554,7 @@ class ImageGuardHandler(CustomLogger):
                 return data
             input_value = data.get("input")
             if isinstance(input_value, list) and input_value:
-                trimmed, removed = trim_responses_input(input_value, limit)
+                trimmed, removed = trim_responses_input(input_value, limit, model)
                 if removed or trimmed != input_value:
                     data["input"] = trimmed
         except Exception:  # noqa: BLE001 — a guard must never break a request
