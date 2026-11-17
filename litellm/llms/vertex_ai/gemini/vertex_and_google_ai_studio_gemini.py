@@ -264,17 +264,11 @@ def _served_model_name(model_version: object) -> str | None:
     return model_version.split("@", 1)[0]
 
 
-def _sent_response_format(optional_params: Mapping[str, object]) -> object:
-    match optional_params.get("extra_body"):
-        case {"generationConfig": {"responseFormat": response_format} | {"response_format": response_format}}:
-            return response_format
-        case _:
-            return optional_params.get("responseFormat")
-
-
-def _requests_audio_mime_type(optional_params: Mapping[str, object]) -> bool:
-    match _sent_response_format(optional_params):
-        case {"audio": {"mimeType": str()} | {"mime_type": str()}}:
+def _requests_audio_mime_type(request_body: Mapping[str, object]) -> bool:
+    match request_body.get("generationConfig"):
+        case {"responseFormat": {"audio": {"mimeType": str() | int()} | {"mime_type": str() | int()}}}:
+            return True
+        case {"response_format": {"audio": {"mimeType": str() | int()} | {"mime_type": str() | int()}}}:
             return True
         case _:
             return False
@@ -3120,6 +3114,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         standard_optional_params: dict,
         cumulative_tool_call_index: int = 0,
         thought_signature_in_tool_call_id: bool = True,
+        keeps_requested_audio_format: bool = False,
     ) -> tuple[list[dict], list[dict], list, list, int]:
         """
         Helper method to process candidates and extract metadata
@@ -3177,9 +3172,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
                     parts=candidate["content"]["parts"],
-                    keeps_requested_audio_format=_requests_audio_mime_type(
-                        cast(Mapping[str, object], standard_optional_params)  # cast-ok: untyped shared signature
-                    ),
+                    keeps_requested_audio_format=keeps_requested_audio_format,
                 )
                 image_response = VertexGeminiConfig()._extract_image_response_from_parts(
                     parts=candidate["content"]["parts"]
@@ -3312,6 +3305,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         cumulative_tool_call_index: int = 0,
         thought_signature_in_tool_call_id: bool = True,
+        keeps_requested_audio_format: bool = False,
     ) -> tuple[  # mutable-ok: mirrors override contract
         list[dict[str, object]],
         list[dict[str, object]],
@@ -3325,6 +3319,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             standard_optional_params,
             cumulative_tool_call_index,
             thought_signature_in_tool_call_id,
+            keeps_requested_audio_format,
         )
 
     def transform_response(
@@ -3355,6 +3350,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model=model,
             logging_obj=logging_obj,
             raw_response=raw_response,
+            keeps_requested_audio_format=_requests_audio_mime_type(
+                cast(Mapping[str, object], request_data)  # cast-ok: untyped shared signature
+            ),
         )
 
     def _transform_google_generate_content_to_openai_model_response(
@@ -3364,6 +3362,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         logging_obj: LoggingClass,
         raw_response: httpx.Response,
+        keeps_requested_audio_format: bool = False,
     ) -> ModelResponse:
         """
         Transforms a Google GenAI generate content response to an OpenAI model response.
@@ -3414,6 +3413,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     thought_signature_in_tool_call_id=embeds_thought_signature_in_tool_call_id(
                         logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
                     ),
+                    keeps_requested_audio_format=keeps_requested_audio_format,
                 )
 
             usage: Final = VertexGeminiConfig._calculate_usage(
@@ -3475,9 +3475,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         logging_obj: LoggingClass,
         raw_response: httpx.Response,
+        keeps_requested_audio_format: bool = False,
     ) -> ModelResponse:
         return self._transform_google_generate_content_to_openai_model_response(
-            completion_response, model_response, model, logging_obj, raw_response
+            completion_response, model_response, model, logging_obj, raw_response, keeps_requested_audio_format
         )
 
     def _transform_messages(
@@ -4235,6 +4236,7 @@ def _transform_long_decode_hops(
         model=model,
         logging_obj=logging_obj,
         raw_response=first_response,
+        keeps_requested_audio_format=_requests_audio_mime_type(request_body),
     )
     merged_usage: Final = getattr(merged, "usage", None)
     if not isinstance(merged_usage, Usage):
@@ -4287,6 +4289,9 @@ class ModelResponseIterator:
         self.has_seen_tool_calls: bool = False
         self._resume = resume
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
+        self._keeps_requested_audio_format: Final = resume is not None and _requests_audio_mime_type(
+            resume.request_body
+        )
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
         self._first_response_id: str | None = None
@@ -4348,6 +4353,7 @@ class ModelResponseIterator:
             self.logging_obj.optional_params,
             cumulative_tool_call_index=self.cumulative_tool_call_index,
             thought_signature_in_tool_call_id=self.thought_signature_in_tool_call_id,
+            keeps_requested_audio_format=self._keeps_requested_audio_format,
         )
 
         # Track whether tool_calls have been seen across streaming chunks.

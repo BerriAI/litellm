@@ -2447,15 +2447,15 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
     "audio_format",
-    [{"mimeType": "AUDIO_WAV"}, {"mimeType": "AUDIO_L16"}, {"mime_type": "AUDIO_WAV"}],
-    ids=["wav", "l16", "snake-case-key"],
+    [{"mimeType": "AUDIO_WAV"}, {"mimeType": "AUDIO_L16"}, {"mime_type": "AUDIO_WAV"}, {"mimeType": 4}],
+    ids=["wav", "l16", "snake-case-key", "enum-number"],
 )
 @pytest.mark.parametrize(
     "extra_body_key", [None, "responseFormat", "response_format"], ids=["param", "extra-body", "extra-body-snake-case"]
 )
 @pytest.mark.parametrize("sends_data_uri", [False, True], ids=["inline-data", "data-uri"])
 def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
-    respx_mock: respx.MockRouter, audio_format: dict[str, str], extra_body_key: str | None, sends_data_uri: bool
+    respx_mock: respx.MockRouter, audio_format: dict[str, str | int], extra_body_key: str | None, sends_data_uri: bool
 ) -> None:
     wav_base64: Final = _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
     route: Final = _mock_gemini_part(
@@ -2488,7 +2488,11 @@ def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
 
 
 @pytest.mark.respx(assert_all_called=True)
-@pytest.mark.parametrize("audio_format", [{}, {"mimeType": None}], ids=["no-mime-type", "null-mime-type"])
+@pytest.mark.parametrize(
+    "audio_format",
+    [{}, {"mimeType": None}, {"mime_type": None}],
+    ids=["no-mime-type", "null-mime-type", "null-snake-case-mime-type"],
+)
 def test_gemini_tts_chat_audio_is_raw_pcm16_when_the_caller_names_no_audio_mime_type(
     respx_mock: respx.MockRouter, audio_format: dict[str, None]
 ) -> None:
@@ -2508,8 +2512,31 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_when_the_caller_names_no_audio_mime_
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_gemini_tts_chat_audio_follows_the_extra_body_response_format_gemini_receives(
+@pytest.mark.parametrize(
+    ("extra_generation_config", "drops", "sent_response_format", "audio_data"),
+    [
+        ({"responseFormat": {"audio": {}}}, [], {"audio": {}}, _b64(GEMINI_TTS_PCM16_FRAMES)),
+        (
+            {"responseFormat": {"audio": {}}},
+            ["extra_body.generationConfig.responseFormat"],
+            {"audio": {"mimeType": "AUDIO_WAV"}},
+            _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
+        ),
+        (
+            {"temperature": 0.2},
+            [],
+            {"audio": {"mimeType": "AUDIO_WAV"}},
+            _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
+        ),
+    ],
+    ids=["extra-body-overrides-param", "dropped-extra-body-override", "unrelated-extra-body-key"],
+)
+def test_gemini_tts_chat_audio_follows_the_response_format_gemini_receives(
     respx_mock: respx.MockRouter,
+    extra_generation_config: dict[str, object],
+    drops: list[str],
+    sent_response_format: dict[str, object],
+    audio_data: str,
 ) -> None:
     route: Final = _mock_gemini_audio(
         respx_mock, "audio/wav", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
@@ -2521,13 +2548,14 @@ def test_gemini_tts_chat_audio_follows_the_extra_body_response_format_gemini_rec
         modalities=["audio"],
         audio={"voice": "Kore"},
         responseFormat={"audio": {"mimeType": "AUDIO_WAV"}},
-        extra_body={"generationConfig": {"responseFormat": {"audio": {}}}},
+        extra_body={"generationConfig": extra_generation_config},
+        additional_drop_params=drops,
         api_key="test-api-key",
         client=HTTPHandler(),
     )
 
-    assert json.loads(route.calls.last.request.content)["generationConfig"]["responseFormat"] == {"audio": {}}
-    assert base64.b64decode(response.choices[0].message.audio.data) == GEMINI_TTS_PCM16_FRAMES
+    assert json.loads(route.calls.last.request.content)["generationConfig"]["responseFormat"] == sent_response_format
+    assert response.choices[0].message.audio.data == audio_data
 
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")
