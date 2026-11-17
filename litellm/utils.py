@@ -4647,6 +4647,14 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: str | None) -> str:
     return size_to_aspect_ratio.get(size, "1:1")  # Default to square if size not recognized
 
 
+def _takes_openai_image_params_unmapped(custom_llm_provider: str | None) -> bool:
+    if custom_llm_provider in ("openai", "azure") or custom_llm_provider in litellm.openai_compatible_providers:
+        return True
+    return custom_llm_provider not in ("bedrock", "vertex_ai") and any(
+        item["provider"] == custom_llm_provider for item in litellm.custom_provider_map
+    )
+
+
 def get_optional_params_image_gen(
     model: str | None = None,
     n: int | None = None,
@@ -4735,11 +4743,7 @@ def get_optional_params_image_gen(
             model=model or "",
             drop_params=litellm.drop_params is True or drop_params is True,
         )
-    elif (
-        custom_llm_provider == "openai"
-        or custom_llm_provider == "azure"
-        or custom_llm_provider in litellm.openai_compatible_providers
-    ):
+    elif _takes_openai_image_params_unmapped(custom_llm_provider):
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
         config_class: Final = litellm.BedrockImageGeneration.get_config_class(model=model)
