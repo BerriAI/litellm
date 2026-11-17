@@ -9,6 +9,7 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 
 IGNORE_FUNCTIONS = [
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
+    "_compact_actor_value",
     "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
     "_count_anthropic_content",  # Nested server result mappings are bounded by DEFAULT_MAX_RECURSE_DEPTH.
@@ -90,12 +91,12 @@ IGNORE_FUNCTIONS = [
     "with_id_fields_replaced",  # harness/opencode: bounded by the nesting depth of the JsonValue that validate_json parsed from `opencode export`, which refuses nesting past ~200 levels.
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
     "_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
+    "_compact_actor_value",  # OCSF actors have schema-bounded depth.
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_redacted_client_field",  # bounded by the nesting depth of a JSON-decoded error body (a finite JSON tree, no cycles possible).
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
-    "_without_additional_properties",  # bounded by the nesting depth of a pydantic-validated JsonValue response_format (a finite JSON tree, no cycles possible).
     "_merge_session_fields",  # max depth set (_SESSION_MERGE_MAX_DEPTH); deeper mappings are replaced wholesale by the later session.update.
     "_json",  # router_rust index views: max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by raising ValueError at the cap.
     "to_wire",  # router_rust model info: bounded by the nesting depth of a stored deployment or cost-map entry (finite JSON trees: pydantic refuses a cycle when it dumps a deployment).

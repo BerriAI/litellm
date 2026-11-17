@@ -130,8 +130,8 @@ S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
-S3_PARTITION_GRANULARITY_ENV_VAR: Final = "S3_PARTITION_GRANULARITY"
 MAX_FILE_LIST_LIMIT: Final = 10000
+MAX_IMAGE_FAN_OUT_REQUESTS: Final = get_env_int("MAX_IMAGE_FAN_OUT_REQUESTS", 10)
 ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
@@ -709,6 +709,7 @@ STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
 STREAM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
 STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
+PROVIDER_FINISH_REASONS_HIDDEN_PARAM: Final = "provider_finish_reasons"
 VLLM_CHOICE_FIELDS: Final = STREAM_FINISH_CHOICE_FIELDS + STREAM_CHUNK_CHOICE_FIELDS
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
@@ -1836,6 +1837,10 @@ OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_se
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED: Final = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+KEY_EXPIRY_ALERT_MAX_DAYS: Final = 365
+LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS: Final = get_env_int(
+    "LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS", 43200
+)  # 12 hours default
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = get_env_int(
     "LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400
 )  # 24 hours default
@@ -1895,6 +1900,7 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = get_env_int("CLOUDZERO_MAX_FETCHED_D
 SPEND_LOG_CLEANUP_JOB_NAME: Final = "spend_log_cleanup"
 BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME: Final = "background_health_check_db_save"
 KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
+KEY_EXPIRY_ALERT_JOB_NAME: Final = "litellm_key_expiry_alert_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
@@ -2352,13 +2358,16 @@ PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
 # was never observed (e.g. proxy restart); expiry returns the tokens to the caller.
 BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 
-# Key/team metadata field that opts batches into enqueued-token limiting. Only proxy
-# admins may write it: when present it replaces the standard RPM/TPM checks for
-# batch submissions.
+# Key/team metadata field that opts batches into enqueued-token limiting, and its
+# per-model project counterpart. Only proxy admins may write them. A key or team limit
+# replaces the standard batch rate-limit checks. A project limit on the model the batch
+# routes to replaces the per-minute checks, and daily caps still apply.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "model_batch_enqueued_token_limit"
 MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
 MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
 MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"
+MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: Final = "model_limit_max_borrow_multiple"
 ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
     MAX_BATCH_FILE_RECORDS_KEY,

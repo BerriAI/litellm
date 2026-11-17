@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_config::{RedisSettings, Value};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_redis_resolve::{Expected, Kwargs};
 use litellm_redis_types::{ProviderHandle, Resolution};
 use veil::Redact;
