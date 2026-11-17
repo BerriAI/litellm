@@ -25306,6 +25306,14 @@
             "notes": "Firecrawl search pricing: $83 for 100,000 credits, 2 credits per 10 results. Cost = ceiling(limit/10) * 2 * $0.00083"
         }
     },
+    "bigdata/search": {
+        "input_cost_per_query": 0.0,
+        "litellm_provider": "bigdata",
+        "metadata": {
+            "notes": "Bigdata.com bills search by content tokens per content tier, at account-specific prices shown on the Bigdata usage page. Set input_cost_per_query on the search tool to track spend."
+        },
+        "mode": "search"
+    },
     "webiq/search": {
         "input_cost_per_query": 0.007,
         "litellm_provider": "webiq",
