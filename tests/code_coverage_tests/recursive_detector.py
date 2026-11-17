@@ -105,6 +105,7 @@ IGNORE_FUNCTIONS = [
     "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
     "_cause_chain",  # openai common_utils: max depth set (_LONGEST_CAUSE_CHAIN links of __cause__ / __context__).
+    "_context_chain",  # router_rust core: max depth set (_LONGEST_CONTEXT_CHAIN links of __context__).
 ]
 
 

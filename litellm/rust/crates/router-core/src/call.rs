@@ -651,8 +651,8 @@ impl Core {
                         return Ok(response);
                     }
                     Err(raised) => {
-                        let ends_chain =
-                            retried_failure(&raised).is_some_and(|failure| failure.create_may_exist);
+                        let ends_chain = retried_failure(&raised)
+                            .is_some_and(|failure| failure.create_may_exist);
                         last_hop_error = Some(raised);
                         if ends_chain {
                             break;

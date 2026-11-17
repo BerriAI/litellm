@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -1085,32 +1086,56 @@ _ANTHROPIC_FILE: Final = {
 }
 
 
-def _anthropic_files_router() -> Router:
+def _anthropic_files_router(*placements: Mapping[str, object]) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "files-anthropic",
-                "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test"},
+                "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test", **placement},
             }
+            for placement in placements or ({},)
         ],
         num_retries=2,
     )
 
 
-async def test_an_anthropic_upload_that_could_not_connect_in_time_is_retried(
+async def test_an_anthropic_upload_that_could_not_connect_in_time_is_retried_on_every_attempt(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     _patch_asyncio_sleep(monkeypatch)
     upload_route: Final = respx_mock.post("https://api.anthropic.com/v1/files").mock(
-        side_effect=[httpx.ConnectTimeout, httpx.Response(200, json=_ANTHROPIC_FILE)]
+        side_effect=[httpx.ConnectTimeout, httpx.ConnectTimeout, httpx.Response(200, json=_ANTHROPIC_FILE)]
     )
 
     created: Final = await _anthropic_files_router().acreate_file(
         model="files-anthropic", file=("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"), purpose="batch"
     )
 
-    assert upload_route.call_count == 2
+    assert upload_route.call_count == 3
+    assert created.id == _ANTHROPIC_FILE["id"]
+
+
+async def test_an_anthropic_upload_whose_first_deployment_never_connects_reaches_the_next_order(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    unreachable_base: Final = "https://router-anthropic-unreachable.test"
+    healthy_base: Final = "https://router-anthropic-healthy.test"
+    respx_mock.post(url__startswith=unreachable_base).mock(side_effect=httpx.ConnectTimeout)
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_FILE)
+    )
+    router: Final = _anthropic_files_router(
+        {"api_base": unreachable_base, "order": 1}, {"api_base": healthy_base, "order": 2}
+    )
+
+    created: Final = await router.acreate_file(
+        model="files-anthropic", file=("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"), purpose="batch"
+    )
+
+    assert healthy_route.call_count == 1
     assert created.id == _ANTHROPIC_FILE["id"]
 
 

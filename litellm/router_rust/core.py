@@ -496,6 +496,14 @@ _NUMBER_SETTINGS: Final = frozenset(
 )
 # The settings `_core_update_settings` casts with `int(value)`.
 _UPDATE_INT_SETTINGS: Final = frozenset({"timeout", "num_retries", "retry_after", "allowed_fails", "cooldown_time"})
+_LONGEST_CONTEXT_CHAIN: Final = 32
+
+
+def _context_chain(error: BaseException, links_left: int = _LONGEST_CONTEXT_CHAIN) -> tuple[BaseException, ...]:
+    following: Final = error.__context__
+    if following is None or links_left == 0:
+        return (error,)
+    return (error, *_context_chain(following, links_left - 1))
 
 
 def _raised_before_provider(error: BaseException) -> bool:
@@ -5145,10 +5153,14 @@ class _Driver:
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop
-        runs in its ``except`` block), so it chains to it."""
+        runs in its ``except`` block), so the end of its own chain links to it."""
         first: Final = self._hop_first.get(level)
-        if first is not None and first is not error:
-            error.__context__ = first  # rebind-ok: chained as the retry loop's raise chains it
+        if first is None:
+            return
+        chain: Final = _context_chain(error)
+        if any(link is first for link in chain) or chain[-1].__context__ is not None:
+            return
+        chain[-1].__context__ = first
 
     def _succeeded(
         self, call: "AttemptCall", response: object, host_op: str, stream: "StreamAttempt | None" = None

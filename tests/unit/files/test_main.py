@@ -389,6 +389,41 @@ async def test_a_rate_limited_file_upload_is_resent_up_to_the_callers_max_retrie
     assert {call.request.headers["x-request-tag"] for call in upload_route.calls} == {"kept"}
 
 
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_resent_file_upload_carries_only_the_retry_count_the_caller_set(
+    custom_llm_provider: str, sync_mode: bool, request: pytest.FixtureRequest, respx_mock: respx.MockRouter
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+
+    with pytest.raises(openai.RateLimitError):
+        await _create_file(
+            sync_mode, _upload(custom_llm_provider, api_base, extra_headers={"X-Stainless-Retry-Count": "7"})
+        )
+
+    assert upload_route.call_count == 3
+    assert {tuple(call.request.headers.get_list("x-stainless-retry-count")) for call in upload_route.calls} == {
+        ("7",)
+    }
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_file_upload_is_never_sent_without_headers_the_caller_passed_as_a_list(
+    sync_mode: bool, request: pytest.FixtureRequest, respx_mock: respx.MockRouter
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(return_value=_created_file())
+
+    with pytest.raises(TypeError):
+        await _create_file(sync_mode, _upload("openai", api_base, extra_headers=[["x-request-tag", "kept"]]))
+
+    assert upload_route.call_count == 0
+
+
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
 async def test_a_rate_limited_file_upload_waits_the_providers_retry_after_before_the_resend(
     sync_mode: bool, request: pytest.FixtureRequest, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
