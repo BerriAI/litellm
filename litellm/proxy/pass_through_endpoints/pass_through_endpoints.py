@@ -1685,7 +1685,7 @@ async def pass_through_request(
         )
         upstream_headers: Final = _with_trace_context(
             _upstream_headers_filter_or_pin(
-                upstream_headers_filter, user_api_key_dict, request.headers, custom_headers
+                upstream_headers_filter, user_api_key_dict, safe_get_request_headers(request), custom_headers
             )(forwarded_headers),
             parent_span=user_api_key_dict.parent_otel_span,
         )
