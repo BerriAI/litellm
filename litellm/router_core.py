@@ -1,7 +1,7 @@
 """
 ``RouterCore``: the interface ``litellm.Router`` delegates to, and ``make_core``, which builds it.
 
-The core is ``RustCore`` (``litellm/router_rust/core.py`` over litellm-rust/crates/router-core),
+The core is ``RustCore`` (``litellm/router_rust/core.py`` over litellm/rust/crates/router-core),
 which reaches outside itself only through its host.
 """
 
