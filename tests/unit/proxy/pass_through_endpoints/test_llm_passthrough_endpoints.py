@@ -454,6 +454,12 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
 
 
 _VERTEX_PINNED_PROFILE: Final = {"anthropic_user_profile_id": "uprof_key"}
+_VERTEX_GEMINI_PATH: Final = (
+    "v1/projects/deployment-project/locations/global/publishers/google/models/gemini-omni-1.2-flash:generateContent"
+)
+_VERTEX_CLAUDE_COUNT_TOKENS_PATH: Final = (
+    "v1/projects/deployment-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict"
+)
 
 
 @pytest.mark.parametrize(
@@ -484,6 +490,21 @@ _VERTEX_PINNED_PROFILE: Final = {"anthropic_user_profile_id": "uprof_key"}
             "uprof_caller",
             id="caller-credentials-keep-their-own-id",
         ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_CLAUDE_COUNT_TOKENS_PATH,
+            {},
+            "anthropic-user-profile-id",
+            "uprof_key",
+            id="pin-on-claude-count-tokens",
+        ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE, _VERTEX_GEMINI_PATH, {}, "anthropic-user-profile-id", None, id="gemini-gets-no-pin"
+        ),
+        pytest.param({}, _VERTEX_GEMINI_PATH, {}, "anthropic-user-profile-id", None, id="gemini-gets-no-callers-id"),
+        pytest.param(
+            {}, _VERTEX_GEMINI_PATH, {}, "x-pass-anthropic-user-profile-id", None, id="gemini-gets-no-x-pass-id"
+        ),
     ],
 )
 def test_vertex_pass_through_sends_the_pinned_user_profile_id_or_the_callers(
@@ -494,7 +515,7 @@ def test_vertex_pass_through_sends_the_pinned_user_profile_id_or_the_callers(
     model_path: str,
     caller_headers: dict[str, str],
     profile_header: str,
-    sent_profile_id: str,
+    sent_profile_id: str | None,
 ) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
@@ -514,7 +535,7 @@ def test_vertex_pass_through_sends_the_pinned_user_profile_id_or_the_callers(
     )
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
-    assert upstream.calls.last.request.headers["anthropic-user-profile-id"] == sent_profile_id
+    assert upstream.calls.last.request.headers.get("anthropic-user-profile-id") == sent_profile_id
 
 
 

@@ -548,7 +548,7 @@ def llm_passthrough_route(
     )
 
     headers = BasePassthroughUtils.forward_headers_from_request(
-        request_headers=claude_scoped_pass_through_headers(request_headers or {}, model),
+        request_headers=dict(claude_scoped_pass_through_headers(request_headers or {}, model)),
         headers=auth_headers,
         forward_headers=False,
     )

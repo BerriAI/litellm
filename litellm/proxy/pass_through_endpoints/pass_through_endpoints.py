@@ -18,7 +18,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass
 from datetime import datetime
-from functools import reduce
+from functools import partial, reduce
 from itertools import chain, count, groupby, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
@@ -79,6 +79,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     require_attributes,
 )
+from litellm.litellm_core_utils.get_provider_specific_headers import override_headers
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -157,6 +158,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     check_customer_request_model_access,
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    pinned_anthropic_user_profile_id,
     redact_credential_headers,
     resolve_customer_request_usage,
     strip_client_guardrail_information,
@@ -173,6 +175,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
 from litellm.types.litellm_params import ProxyRequestState, wire_names
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -1281,8 +1284,18 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
-def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
-    return headers
+def _with_pinned_profile_id_where_sent(pinned_profile_id: str | None, headers: Mapping[str, str]) -> Mapping[str, str]:
+    if pinned_profile_id is None or all(name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers):
+        return headers
+    return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id})
+
+
+def _upstream_headers_filter_or_pin(
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None, user_api_key_dict: UserAPIKeyAuth
+) -> Callable[[Mapping[str, str]], Mapping[str, str]]:
+    if upstream_headers_filter is not None:
+        return upstream_headers_filter
+    return partial(_with_pinned_profile_id_where_sent, pinned_anthropic_user_profile_id(user_api_key_dict))
 
 
 UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
@@ -1441,7 +1454,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
-    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None = None,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
@@ -1504,7 +1517,7 @@ async def pass_through_request(
             forward_headers=forward_headers,
         )
         upstream_headers: Final = _with_trace_context(
-            upstream_headers_filter(forwarded_headers),
+            _upstream_headers_filter_or_pin(upstream_headers_filter, user_api_key_dict)(forwarded_headers),
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
@@ -2520,7 +2533,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
-    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None = None,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,

@@ -4957,11 +4957,14 @@ def add_provider_specific_headers_to_request(
     anthropic_oauth_credential_headers: Final = {
         header: value
         for header, value in headers.items()
-        if header.lower() == "authorization" and value.startswith("Bearer ") and is_anthropic_oauth_key(value)
+        if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    sends_anthropic_bearer_oauth: Final = any(
+        value.startswith("Bearer ") for value in anthropic_oauth_credential_headers.values()
+    )
     chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
     caller_credential_providers: Final = (
-        ANTHROPIC_OAUTH_FORWARD_PROVIDERS if anthropic_oauth_credential_headers else frozenset[str]()
+        ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_bearer_oauth else frozenset[str]()
     ) | (
         _CALLER_API_KEY_PROVIDERS
         if _carries_a_caller_api_key(_REQUEST_FIELDS.validate_python(data))
@@ -5009,7 +5012,7 @@ def add_provider_specific_headers_to_request(
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
+    return bool(sends_anthropic_bearer_oauth or chatgpt_oauth_credential_headers)
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

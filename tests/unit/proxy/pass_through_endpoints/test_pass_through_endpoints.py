@@ -6471,6 +6471,63 @@ async def test_pass_through_request_without_caller_trace_headers_still_propagate
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "inbound_headers", "forward_headers", "sent_profile_id"),
+    [
+        pytest.param(
+            {"anthropic_user_profile_id": "uprof_key"},
+            {"x-pass-anthropic-user-profile-id": "uprof_caller"},
+            False,
+            "uprof_key",
+            id="pin-replaces-x-pass-id",
+        ),
+        pytest.param(
+            {"anthropic_user_profile_id": "uprof_key"},
+            {"Anthropic-User-Profile-Id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="pin-replaces-forwarded-id",
+        ),
+        pytest.param({"anthropic_user_profile_id": "uprof_key"}, {}, False, None, id="pin-adds-nothing"),
+        pytest.param({}, {"x-pass-anthropic-user-profile-id": "uprof_caller"}, False, "uprof_caller", id="no-pin"),
+    ],
+)
+async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
+    key_metadata: dict[str, str],
+    inbound_headers: dict[str, str],
+    forward_headers: bool,
+    sent_profile_id: str | None,
+) -> None:
+    captured: Final[dict[str, httpx.Headers]] = {}  # mutable-ok: the mock transport records the upstream headers
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, {})
+            request: Final = _relay_client_request(method="POST")
+            request.headers = Headers(inbound_headers)
+            response: Final = await pass_through_request(
+                request=request,
+                target="http://internal-api.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=forward_headers,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert (response.status_code, captured["headers"].get_list("anthropic-user-profile-id")) == (
+        200,
+        [] if sent_profile_id is None else [sent_profile_id],
+    )
+
+
+@pytest.mark.asyncio
 async def test_pass_through_request_relays_non_json_body_without_buffering():
     """
     Regression (LIT-4009): non-SSE passthrough responses used to be fully

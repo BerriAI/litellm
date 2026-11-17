@@ -3340,9 +3340,19 @@ def _pinned_profile_header(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, st
 
 
 def _vertex_upstream_headers(
-    dropped_anthropic_betas: frozenset[str], pinned_profile: Mapping[str, str], headers: Mapping[str, str]
+    dropped_anthropic_betas: frozenset[str],
+    pinned_profile: Mapping[str, str],
+    keeps_profile_header: bool,
+    headers: Mapping[str, str],
 ) -> Mapping[str, str]:
-    return override_headers(_without_dropped_anthropic_betas(dropped_anthropic_betas, headers), pinned_profile)
+    without_betas: Final = _without_dropped_anthropic_betas(dropped_anthropic_betas, headers)
+    if keeps_profile_header:
+        return override_headers(without_betas, pinned_profile)
+    return {name: value for name, value in without_betas.items() if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER}
+
+
+def _targets_vertex_claude(path: str) -> bool:
+    return _vertex_publisher(tuple(path.strip("/").split("/"))) == "anthropic"
 
 
 def _relay_request_headers(request: Request, user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
@@ -3586,6 +3596,7 @@ async def _base_vertex_proxy_route(
             _vertex_upstream_headers,
             _vertex_dropped_anthropic_betas(general_settings, request.headers),
             {} if headers_passed_through else _pinned_profile_header(user_api_key_dict),
+            headers_passed_through or _targets_vertex_claude(updated_url.path),
         ),
         upstream_request_filter=partial(
             _with_vertex_request_labels, _vertex_label_placement(request.method, updated_url.path)

@@ -42,9 +42,9 @@ def _is_forwarded_pass_through_header(header_name: str) -> bool:
 _PASS_THROUGH_PROFILE_HEADER: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USER_PROFILE_ID_HEADER
 
 
-def claude_scoped_pass_through_headers(request_headers: Mapping[str, str], model: str) -> dict[str, str]:
+def claude_scoped_pass_through_headers(request_headers: Mapping[str, str], model: str) -> Mapping[str, str]:
     if names_a_claude_model(model):
-        return dict(request_headers)
+        return request_headers
     return {name: value for name, value in request_headers.items() if name.lower() != _PASS_THROUGH_PROFILE_HEADER}
 
 
