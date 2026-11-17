@@ -925,3 +925,67 @@ async def test_header_rotation_replaces_registered_logger_and_forwards_late_call
         await replacement._flush_task
         await handler.close()
 
+
+@pytest.mark.asyncio
+async def test_shutdown_finishes_the_flush_loop_when_the_log_sink_refuses_connections() -> None:
+    attempted: Final = asyncio.Event()
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        attempted.set()
+        raise httpx.ConnectError("log sink is down", request=request)
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(refuse))
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid", async_httpx_client=handler, batch_size=1000, flush_interval=60
+    )
+    try:
+        await logger.async_log_success_event({"standard_logging_object": {"id": "queued"}}, None, None, None)
+        logger.shutdown()
+        await asyncio.wait_for(logger._flush_task, timeout=5)
+        assert attempted.is_set()
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_retired_logger_finishes_its_in_flight_send_and_hands_queued_logs_to_its_replacement() -> None:
+    sink: Final = _InProcessLogSink(hold_first=True)
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    old: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "old"},
+        async_httpx_client=handler,
+        batch_size=1,
+        flush_interval=3600,
+    )
+    replacement: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        headers={"Authorization": "new"},
+        async_httpx_client=handler,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    try:
+        in_flight: Final = asyncio.create_task(
+            old.async_log_success_event({"standard_logging_object": {"id": "in-flight"}}, None, None, None)
+        )
+        await asyncio.wait_for(sink.arrived.wait(), timeout=5)
+        old.log_queue.append({"id": "queued"})
+        old.shutdown(replacement=replacement)
+        sink.release.set()
+        await in_flight
+        await asyncio.wait_for(old._flush_task, timeout=5)
+        await replacement.flush_queue()
+        delivered: Final = tuple(
+            (event["id"], request.headers["Authorization"])
+            for request in sink.requests
+            for event in _batch_events(request.content, "json_array")
+        )
+        assert delivered == (("in-flight", "old"), ("queued", "new"))
+    finally:
+        sink.release.set()
+        old.shutdown()
+        replacement.shutdown()
+        await old._flush_task
+        await replacement._flush_task
+        await handler.close()

@@ -463,24 +463,6 @@ async def test_env_header_shadowed_by_config_reuses_logger(monkeypatch: pytest.M
         logger_a.shutdown()
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("generic_api_logger_cache")
-async def test_final_flush_error_on_shutdown_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    _use_generic_api_settings(monkeypatch, endpoint=_ENDPOINT_A, headers=_BEARER_HEADERS)
-    logger: Final = _resolve_generic_api_logger()
-    flushed: Final = asyncio.Event()
-
-    async def raise_on_flush() -> None:
-        flushed.set()
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(logger, "flush_queue", raise_on_flush)
-    logger.shutdown()
-
-    await asyncio.wait_for(logger._flush_task, timeout=5)
-    assert flushed.is_set()
-
-
 def test_get_callbacks_by_type_treats_both_failure_lists_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     for callback_list in (
         "callbacks",

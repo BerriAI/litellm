@@ -7,7 +7,6 @@ Callback to log events to a Generic API Endpoint
 """
 
 import asyncio
-import contextlib
 import json
 import os
 import re
@@ -211,8 +210,15 @@ class GenericAPILogger(CustomBatchLogger):
             except asyncio.TimeoutError:
                 verbose_logger.debug("CustomLogger periodic flush after %s seconds", self.flush_interval)
                 await self.flush_queue()
-        with contextlib.suppress(Exception):
-            await self.flush_queue()
+        if self._replacement is not None:
+            await self._hand_off_unsent_logs()
+        await self.flush_queue()
+
+    async def _hand_off_unsent_logs(self) -> None:
+        async with self.flush_lock:
+            unsent: Final = tuple(self.log_queue)
+            del self.log_queue[: len(unsent)]
+            self.active_logger().log_queue.extend(unsent)
 
     def shutdown(self, replacement: "GenericAPILogger | None" = None) -> None:
         if self._stop_flush.is_set():
