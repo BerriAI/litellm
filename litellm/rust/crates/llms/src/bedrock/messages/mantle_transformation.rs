@@ -1,3 +1,8 @@
+//! Bedrock Mantle's Anthropic Messages endpoint on the `bedrock/mantle/` route, Python's
+//! `AmazonMantleMessagesConfig`: the Bedrock Invoke request transform with Mantle's overrides,
+//! the betas moved into a header, the model id and `stream` back in the body, the Mantle URL and
+//! zero-filled usage. `bedrock_mantle/` reuses this shaping.
+
 use std::sync::LazyLock;
 
 use litellm_auth::AwsParams;
@@ -71,6 +76,9 @@ pub(crate) const AMAZON_MANTLE_REQUEST_SETTINGS: InvokeRequestSettings = InvokeR
 
 // TODO: `bedrock/mantle/` is slated for deprecation in favour of `bedrock_mantle/`. Folding it in must keep
 // its defaults (us-west-2, no BEDROCK_MANTLE_API_KEY, this URL building, no claude gate) or ship a deprecation notice.
+/// The `bedrock/mantle/` Messages config: Bedrock region resolution and SigV4 or
+/// `AWS_BEARER_TOKEN_BEDROCK` auth, an explicit base, runtime endpoint or `BEDROCK_MANTLE_API_BASE`
+/// before the regional host, and the model id with its first `mantle/` dropped.
 pub struct AmazonMantleMessagesConfig;
 pub const AMAZON_MANTLE_MESSAGES_CONFIG: AmazonMantleMessagesConfig = AmazonMantleMessagesConfig;
 
@@ -160,7 +168,7 @@ fn move_betas_into_header(request: &MessagesRequest, headers: Headers) -> Result
         .params
         .extra
         .get("anthropic_beta")
-        .map(|betas| Vec::<String>::deserialize(betas))
+        .map(Vec::<String>::deserialize)
         .transpose()
         .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("anthropic_beta", error)))?;
     let headers = without_exact(headers, "anthropic-beta");
@@ -211,6 +219,7 @@ pub(crate) fn transform_mantle_messages_request(
     ))
 }
 
+/// The model id `bedrock/mantle/` sends: the model without its first `mantle/`.
 pub fn amazon_mantle_model_id(model: &str) -> String {
     model.replacen("mantle/", "", 1)
 }
@@ -221,10 +230,10 @@ pub fn amazon_mantle_model_id(model: &str) -> String {
 struct MantleWireBody {
     #[serde(flatten)]
     fields: Map<String, Value>,
-    #[serde(default, skip_serializing)]
-    anthropic_version: Option<IgnoredAny>,
-    #[serde(default, skip_serializing)]
-    anthropic_beta: Option<IgnoredAny>,
+    #[serde(rename = "anthropic_version", default, skip_serializing)]
+    _version: Option<IgnoredAny>,
+    #[serde(rename = "anthropic_beta", default, skip_serializing)]
+    _betas: Option<IgnoredAny>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

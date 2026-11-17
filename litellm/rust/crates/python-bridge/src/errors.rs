@@ -785,9 +785,9 @@ mod tests {
         });
         Python::initialize();
         Python::attach(|py| {
-            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
-            assert!(native.is_instance_of::<PyValueError>(py));
-            let value = native.value(py);
+            let raised = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            assert!(raised.is_instance_of::<PyValueError>(py));
+            let value = raised.value(py);
             assert_eq!(
                 value.str().unwrap().to_string(),
                 "Invalid AWS region format: 'US-EAST-1'. Region names must contain only lowercase letters, digits, and hyphens."

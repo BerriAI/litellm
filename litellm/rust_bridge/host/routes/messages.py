@@ -939,13 +939,13 @@ def _sent_base(
 def _connect_failure(
     error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
 ) -> str | None:
-    native: Final = str(error)
+    rust_error_text: Final = str(error)
     base: Final = _sent_base(error, request, request_provider, secrets_read)
     if base is None:
         return None
-    refused: Final = "tcp connect error: Connection refused" in native
-    dns_reason: Final = native.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in native else None
-    tls_eof: Final = native.endswith("tls handshake eof")
+    refused: Final = "tcp connect error: Connection refused" in rust_error_text
+    dns_reason: Final = rust_error_text.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in rust_error_text else None
+    tls_eof: Final = rust_error_text.endswith("tls handshake eof")
     if not http_transport.uses_aiohttp_transport():
         if refused:
             return "All connection attempts failed"

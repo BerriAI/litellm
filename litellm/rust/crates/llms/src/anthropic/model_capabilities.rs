@@ -133,7 +133,7 @@ pub fn with_invoke_flags(
 
 /// Python's Mantle routes gate sampling and speed on the `requested` model, run the shared
 /// Anthropic transform on `route` and the Bedrock Invoke helpers on `invoke`.
-pub fn mantle_capabilities(
+fn mantle_capabilities(
     requested: &MessagesModelCapabilities,
     route: MessagesModelCapabilities,
     invoke: &MessagesModelCapabilities,

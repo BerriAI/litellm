@@ -2903,7 +2903,7 @@ def _ssl_configuration(_ssl_verify: object) -> str:
 
 
 @pytest.mark.parametrize(
-    ("aiohttp", "provider", "origin", "native", "text"),
+    ("aiohttp", "provider", "origin", "rust_error", "text"),
     [
         (
             True,
@@ -2931,14 +2931,14 @@ def _ssl_configuration(_ssl_verify: object) -> str:
     ids=("aiohttp-refused", "aiohttp-mantle-dns", "httpx"),
 )
 def test_a_bedrock_connect_failure_names_the_origin_rust_could_not_reach(
-    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, origin: str, native: str, text: str
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, origin: str, rust_error: str, text: str
 ) -> None:
     from litellm.rust_bridge.host import http_transport
 
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
     monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
-    unreachable: Final = RuntimeError(native)
-    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    unreachable: Final = RuntimeError(rust_error)
+    unreachable.messages_connect_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
     model: Final = _BEDROCK_INVOKE if provider == "bedrock" else _BEDROCK_MANTLE
 
     mapped: Final = messages_host.map_failure(unreachable, {"model": model, "messages": [], **_AWS}, provider)
@@ -3008,11 +3008,11 @@ def test_a_bedrock_mantle_sts_failure_raises_the_class_the_mantle_signer_lets_th
 ) -> None:
     from botocore.exceptions import ClientError
 
-    native: Final = _credential_failure("replay")
-    native.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    rust_error: Final = _credential_failure("replay")
+    rust_error.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
 
     mapped: Final = messages_host.map_failure(
-        native, {"model": _BEDROCK_MANTLE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock_mantle"
+        rust_error, {"model": _BEDROCK_MANTLE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock_mantle"
     )
 
     assert type(mapped).__name__ == raised
@@ -3279,11 +3279,11 @@ def test_a_bedrock_mantle_route_credential_failure_raises_botocores_error_unwrap
 
 
 def _refused(text: str, **markers: object) -> ValueError:
-    native: Final = ValueError(text)
-    native.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    rust_error: Final = ValueError(text)
+    rust_error.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
     for name, value in markers.items():
-        setattr(native, name, value)
-    return native
+        setattr(rust_error, name, value)
+    return rust_error
 
 
 def test_a_region_refused_while_resolving_bedrock_mantle_raises_a_bad_request() -> None:
@@ -3297,13 +3297,13 @@ def test_a_region_refused_while_resolving_bedrock_mantle_raises_a_bad_request() 
 
 def test_a_bedrock_mantle_web_search_rejection_raises_the_invoke_transforms_bad_request() -> None:
     text: Final = "Bedrock does not support Anthropic's server-side web search tool"
-    native: Final = _refused(text)
-    native.messages_provider_rejection = text  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
-    native.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
-    native.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    rust_error: Final = _refused(text)
+    rust_error.messages_provider_rejection = text  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    rust_error.messages_provider_bad_request = True  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
+    rust_error.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
 
     mapped: Final = messages_host.map_failure(
-        native, {"model": "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5", "messages": []}, "bedrock_mantle"
+        rust_error, {"model": "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5", "messages": []}, "bedrock_mantle"
     )
 
     assert type(mapped) is litellm.BadRequestError
@@ -3358,7 +3358,7 @@ def test_a_mantle_refusal_python_would_send_keeps_the_native_bad_request(
     request_fields: Mapping[str, object],
 ) -> None:
     mapped: Final = messages_host.map_failure(
-        _refused("native refusal"), {**request_fields, "messages": []}, "bedrock_mantle"
+        _refused("rust refusal"), {**request_fields, "messages": []}, "bedrock_mantle"
     )
 
     assert type(mapped) is litellm.BadRequestError
@@ -3380,7 +3380,7 @@ def _mantle_logger() -> Logging:
 
 def test_a_mantle_route_refusal_logs_and_raises_the_model_id_rust_names() -> None:
     text: Final = "Bedrock does not support Anthropic's server-side web search tool"
-    native: Final = _refused(
+    rust_error: Final = _refused(
         text,
         messages_provider_rejection=text,
         messages_provider_bad_request=True,
@@ -3389,7 +3389,7 @@ def test_a_mantle_route_refusal_logs_and_raises_the_model_id_rust_names() -> Non
     logger: Final = _mantle_logger()
 
     mapped: Final = messages_host.map_failure(
-        native, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
+        rust_error, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
     )
 
     assert type(mapped) is litellm.BadRequestError
@@ -3399,12 +3399,12 @@ def test_a_mantle_route_refusal_logs_and_raises_the_model_id_rust_names() -> Non
 
 @pytest.mark.usefixtures("no_aws_credentials")
 def test_a_mantle_route_credential_failure_logs_the_model_id_rust_names() -> None:
-    native: Final = _credential_failure("no_credentials")
-    native.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    rust_error: Final = _credential_failure("no_credentials")
+    rust_error.messages_provider_model = "anthropic.claude-sonnet-5-5"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
     logger: Final = _mantle_logger()
 
     messages_host.map_failure(
-        native, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
+        rust_error, {"model": _MANTLE_ROUTE, "messages": [], "litellm_logging_obj": logger}, "bedrock"
     )
 
     assert logger.model == "anthropic.claude-sonnet-5-5"
@@ -3422,11 +3422,11 @@ def test_a_mantle_route_credential_failure_logs_the_model_id_rust_names() -> Non
 def test_a_mantle_route_credential_failure_maps_the_kind_rust_names(
     sts_failure: tuple[str, str, str, str] | None, raised: str
 ) -> None:
-    native: Final = _credential_failure("unavailable")
-    native.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    rust_error: Final = _credential_failure("unavailable")
+    rust_error.messages_sts_failure = sts_failure  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
 
     mapped: Final = messages_host.map_failure(
-        native, {"model": _MANTLE_ROUTE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock"
+        rust_error, {"model": _MANTLE_ROUTE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock"
     )
 
     assert type(mapped).__name__ == raised
