@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
@@ -34,6 +35,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
         text: Mapping[str, object] | None = None,
+        tool_choice: JsonValue = None,
     ) -> dict[str, object]:
         """
         Handle a token counting request to OpenAI's Responses API.
@@ -55,6 +57,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 tools=tools,
                 instructions=instructions,
                 text=text,
+                tool_choice=tool_choice,
             )
 
             endpoint_url: Final = self.get_openai_count_tokens_endpoint(api_base)
@@ -70,7 +73,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
             response: Final = await async_client.post(
                 endpoint_url,
                 headers=headers,
-                json=request_body,
+                json=dict(request_body),
                 timeout=request_timeout,
             )
 

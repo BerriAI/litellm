@@ -6,6 +6,7 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block_without_text
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.types.utils import TokenCountMessagesFormat
@@ -107,3 +108,11 @@ def unconvertible_blocks_error(
             )
         case _:
             assert_never(messages_format)
+
+
+def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
+    match deployment:
+        case {"litellm_params": {"drop_params": object() as drop_params}}:
+            return drops_unsupported_params(drop_params)
+        case _:
+            return drops_unsupported_params(None)

@@ -1,5 +1,7 @@
 import json
 import operator
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -174,6 +176,9 @@ async def _sent_count_body(
     system: object,
     messages_format: TokenCountMessagesFormat,
     output_format: JsonValue = None,
+    tools: list[dict[str, object]] | None = None,
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    litellm_params: Mapping[str, object] = MappingProxyType({}),
 ) -> object:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
@@ -182,11 +187,13 @@ async def _sent_count_body(
             model_to_use="gpt-4o",
             messages=messages,
             contents=None,
-            deployment={"litellm_params": {"api_key": "sk-test"}},
+            deployment={"litellm_params": {"api_key": "sk-test", **litellm_params}},
             request_model="openai/gpt-4o",
+            tools=tools,
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            count_options=count_options,
         )
         return json.loads(route.calls.last.request.content)
 
@@ -368,6 +375,125 @@ async def test_openai_format_sends_a_list_system_as_its_text(monkeypatch: pytest
         "input": [{"role": "user", "content": "hi"}],
         "instructions": "Be brief.\nAnswer in English.",
     }
+
+
+_WEATHER_ASK: Final[list[dict[str, object]]] = [{"role": "user", "content": "What is the weather in Paris?"}]
+_ANTHROPIC_WEATHER_TOOL: Final[dict[str, object]] = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+}
+_CHAT_WEATHER_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "counted_tool_choice"),
+    [
+        ({"type": "auto"}, "auto"),
+        ({"type": "any"}, "required"),
+        ({"type": "tool", "name": "get_weather"}, {"type": "function", "name": "get_weather"}),
+        ({"type": "none"}, "none"),
+    ],
+    ids=["auto", "any", "named_tool", "none"],
+)
+async def test_anthropic_format_counts_the_tool_choice_messages_inference_sends(
+    monkeypatch: pytest.MonkeyPatch, tool_choice: dict[str, JsonValue], counted_tool_choice: JsonValue
+) -> None:
+    sent: Final = await _sent_count_body(
+        monkeypatch,
+        _WEATHER_ASK,
+        system=None,
+        messages_format="anthropic",
+        tools=[_ANTHROPIC_WEATHER_TOOL],
+        count_options={"tool_choice": tool_choice},
+    )
+
+    assert isinstance(sent, dict)
+    assert sent["tool_choice"] == counted_tool_choice
+
+
+_FORCED_CHOICE_WITHOUT_TOOLS: Final = pytest.mark.parametrize(
+    ("messages_format", "count_options"),
+    [("anthropic", {"tool_choice": {"type": "any"}})],
+    ids=["anthropic"],
+)
+
+
+@pytest.mark.asyncio
+@_FORCED_CHOICE_WITHOUT_TOOLS
+async def test_forced_tool_choice_without_tools_reaches_openai_so_the_caller_gets_its_400(
+    monkeypatch: pytest.MonkeyPatch,
+    messages_format: TokenCountMessagesFormat,
+    count_options: dict[str, JsonValue],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=httpx.Response(
+                400, json={"error": {"message": "tool_choice needs tools", "type": "invalid_request_error"}}
+            )
+        )
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=_WEATHER_ASK,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            messages_format=messages_format,
+            count_options=count_options,
+        )
+        sent: Final = json.loads(route.calls.last.request.content)
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert sent["tool_choice"] == "required"
+
+
+@pytest.mark.asyncio
+@_FORCED_CHOICE_WITHOUT_TOOLS
+async def test_drop_params_leaves_a_forced_tool_choice_without_tools_out_of_the_count(
+    monkeypatch: pytest.MonkeyPatch,
+    messages_format: TokenCountMessagesFormat,
+    count_options: dict[str, JsonValue],
+) -> None:
+    sent: Final = await _sent_count_body(
+        monkeypatch,
+        _WEATHER_ASK,
+        system=None,
+        messages_format=messages_format,
+        count_options=count_options,
+        litellm_params={"drop_params": True},
+    )
+
+    assert isinstance(sent, dict)
+    assert "tool_choice" not in sent
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_unknown_tool_choice_answers_400_without_calling_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=_WEATHER_ASK,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            tools=[_ANTHROPIC_WEATHER_TOOL],
+            messages_format="anthropic",
+            count_options={"tool_choice": {"type": "sometimes"}},
+        )
+
+    assert route.called is False
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
 
 
 @pytest.mark.asyncio

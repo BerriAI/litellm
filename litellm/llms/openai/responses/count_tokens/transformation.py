@@ -153,27 +153,25 @@ class OpenAICountTokensConfig:
         tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
         text: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
+        tool_choice: JsonValue = None,
+    ) -> Mapping[str, object]:
         """
         Transform request to OpenAI Responses API token counting format.
 
         The Responses API uses `input` (not `messages`) and `instructions` (not `system`).
         """
-        request: Final[dict[str, object]] = {
+        return {
             "model": model,
             "input": input,
+            **({} if instructions is None else {"instructions": instructions}),
+            **(
+                {}
+                if tools is None
+                else {"tools": self._transform_tools_for_responses_api([dict(tool) for tool in tools])}
+            ),
+            **({} if text is None else {"text": dict(text)}),
+            **({} if tool_choice is None else {"tool_choice": tool_choice}),
         }
-
-        if instructions is not None:
-            request["instructions"] = instructions
-
-        if tools is not None:
-            request["tools"] = self._transform_tools_for_responses_api([dict(tool) for tool in tools])
-
-        if text is not None:
-            request["text"] = text
-
-        return request
 
     def get_required_headers(self, api_key: str) -> dict[str, str]:
         return {

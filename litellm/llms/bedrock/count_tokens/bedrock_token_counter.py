@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.common_utils import without_unrendered_blocks
+from litellm.llms.anthropic.pass_through.convertible_blocks import deployment_drops_params
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -29,6 +30,7 @@ from litellm.types.utils import (
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
 _RUNTIME_FALLBACK_STATUSES: Final = frozenset({400, 404})
+_NO_OPTIONS: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -58,6 +60,21 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
         and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
+
+
+def _invoke_model_message(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    return (
+        {**message, "content": [{"type": "text", "text": content}]} if isinstance(content, str) and content else message
+    )
+
+
+def _invoke_tool_choice(
+    options: Mapping[str, JsonValue], tools: Sequence[Mapping[str, object]] | None, drops_params: bool
+) -> Mapping[str, JsonValue]:
+    tool_choice: Final = options.get("tool_choice")
+    dropped: Final = tool_choice is None or (drops_params and not tools)
+    return MappingProxyType({} if dropped else {"tool_choice": tool_choice})
 
 
 class BedrockTokenCounter(BaseTokenCounter):
@@ -123,14 +140,23 @@ class BedrockTokenCounter(BaseTokenCounter):
             return None
 
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        request_data: Final[dict[str, object]] = {
-            "model": model_to_use,
-            "messages": list(without_unrendered_blocks(messages)),
-            **({"tools": tools} if tools else {}),
-            **({"system": system} if system else {}),
-        }
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(model_to_use.removeprefix("bedrock_mantle/"))
+        invoke_fields: Final = _invoke_tool_choice(
+            count_options if is_mantle_claude_model(resolved_model) else _NO_OPTIONS,
+            tools,
+            deployment_drops_params(deployment),
+        )
+        counted_messages: Final = tuple(without_unrendered_blocks(messages))
+        request_data: Final[dict[str, object]] = {
+            "model": model_to_use,
+            "messages": [dict(message) for message in map(_invoke_model_message, counted_messages)]
+            if invoke_fields
+            else list(counted_messages),
+            **({"tools": tools} if tools else {}),
+            **({"system": system} if system else {}),
+            **invoke_fields,
+        }
 
         primary: Final = await self._count_with(
             self._mantle_handler if use_mantle else self._runtime_handler,

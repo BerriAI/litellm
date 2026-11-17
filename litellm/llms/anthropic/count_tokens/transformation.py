@@ -5,6 +5,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
@@ -25,6 +26,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ChatCompletionImageObject
+from litellm.types.utils import TokenCountResponse
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
@@ -79,6 +81,23 @@ def _lift_leading_system(
     if isinstance(system, str) and system:
         return conversation, [{"type": "text", "text": system}, *lifted]
     return conversation, lifted or system
+
+
+@dataclass(frozen=True, slots=True)
+class ChatCountTranslationError:
+    message: str
+
+    def response(self, request_model: str, model_used: str, tokenizer_type: str) -> TokenCountResponse:
+        return TokenCountResponse(
+            total_tokens=0,
+            request_model=request_model,
+            model_used=model_used,
+            tokenizer_type=tokenizer_type,
+            error=True,
+            error_message=self.message,
+            status_code=400,
+            rejected_before_provider_call=True,
+        )
 
 
 class AnthropicCountTokensConfig:
