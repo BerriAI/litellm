@@ -27,7 +27,12 @@ pub struct BearerOrXApiKey;
 
 impl CredentialExtractor for BearerOrXApiKey {
     fn extract(&self, parts: &Parts) -> Result<Credential, Error> {
-        if parts.headers.contains_key(AUTHORIZATION) {
+        if parts
+            .headers
+            .get_all(AUTHORIZATION)
+            .iter()
+            .any(|value| !value.is_empty())
+        {
             return Bearer.extract(parts);
         }
         single(parts, "x-api-key")
@@ -123,6 +128,7 @@ mod tests {
     #[case::bearer(&[("authorization", "Bearer key")], Some("key"))]
     #[case::bearer_wins(&[("authorization", "Bearer bearer"), ("x-api-key", "x")], Some("bearer"))]
     #[case::invalid_bearer_does_not_fall_back(&[("authorization", "Basic key"), ("x-api-key", "x")], None)]
+    #[case::empty_authorization_falls_back(&[("authorization", ""), ("x-api-key", "key")], Some("key"))]
     #[case::empty(&[("x-api-key", "")], None)]
     #[case::inner_whitespace(&[("x-api-key", "a b")], None)]
     #[case::duplicate(&[("x-api-key", "key"), ("x-api-key", "key")], None)]
