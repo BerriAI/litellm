@@ -11707,6 +11707,7 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
         patch("litellm.proxy.proxy_server.premium_user", premium),
         patch("litellm.proxy.proxy_server.master_key", "sk-fixture-master"),
         patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.database_url_configured", True),
         patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
         patch("httpx.AsyncClient.send", side_effect=AssertionError("OAuth2 must not run for this request")) as network,
     ):

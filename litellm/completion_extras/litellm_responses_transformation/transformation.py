@@ -27,7 +27,9 @@ from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.history import (
     PHASE_FIELD,
+    Phase,
     UnknownPhase,
+    message_item_phase,
     output_message_text,
     reasoning_input_item,
     replay_fields,
@@ -235,6 +237,13 @@ def _effort_with_requested_summary(nested_effort: object, top_level_effort: obje
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
     return custom_llm_provider if isinstance(custom_llm_provider, str) else None
+
+
+_HISTORY_REPLAY_PROVIDERS: Final = frozenset({"openai", "azure"})
+
+
+def replays_responses_history(provider: str | None) -> bool:
+    return provider in _HISTORY_REPLAY_PROVIDERS
 
 
 def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
@@ -1406,7 +1415,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             keep_system_order=marked_a_system_string,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
-            replay_openai_history=provider == "openai",
+            replay_openai_history=replays_responses_history(provider),
         )
         # Keep the system text in input instead of instructions when the Responses API needs it there.
         # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
@@ -1781,10 +1790,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             structured_output=is_structured_output_request(
                 cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
             ),
-            replay_openai_history=_served_provider(
-                cast("Mapping[str, object]", litellm_params)  # cast-ok: litellm_params is an untyped dict
-            )
-            == "openai",
+            replay_openai_history=replays_responses_history(
+                _served_provider(
+                    cast("Mapping[str, object]", litellm_params)  # cast-ok: litellm_params is an untyped dict
+                )
+            ),
             completed=raw_response.status == "completed",
             keeps_every_reasoning_item=serves_anthropic_messages(logging_obj),
         )
@@ -2263,6 +2273,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
+        self._message_phases: Mapping[int, Phase] = MappingProxyType({})
         self._reasoning_summary_streamed: bool = False
         self._summary_streamed_outputs: frozenset[int | None] = frozenset()
         self._tool_arguments_streamed_outputs: frozenset[int] = frozenset()
@@ -2308,6 +2319,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
         replays_openai_history: bool = False,
         structured_output: bool = False,
+        item_phase: Phase | None = None,
         reasoning_summary_streamed: bool = False,
     ) -> "ModelResponseStream":
         """
@@ -2318,6 +2330,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
             replays_openai_history: Record the completed output's item sequence for the next turn
             structured_output: Only the first message item became content
+            item_phase: Phase of the message item this chunk belongs to
             reasoning_summary_streamed: Whether earlier chunks already streamed reasoning summary text
 
         Returns:
@@ -2494,7 +2507,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                             delta=Delta(content=content_part),
                             finish_reason=None,
                         )
-                    ]
+                    ],
+                    provider_specific_fields={PHASE_FIELD: item_phase} if item_phase is not None else None,
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
@@ -2599,6 +2613,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
+        self._remember_message_phase(chunk)
         reasoning_chunk: Final = (
             _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)
             if self._streams_reasoning_signatures
@@ -2622,6 +2637,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 tool_call_index_map=self._tool_call_index_map,
                 replays_openai_history=self._replays_openai_history,
                 structured_output=self._structured_output,
+                item_phase=self._item_phase(chunk),
                 reasoning_summary_streamed=self._reasoning_summary_streamed,
             )
         )
@@ -2648,6 +2664,21 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)])
+
+    def _remember_message_phase(self, chunk: Mapping[str, object]) -> None:
+        if (
+            not self._replays_openai_history
+            or _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value
+        ):
+            return
+        output_index: Final = chunk.get("output_index")
+        phase: Final = message_item_phase(chunk.get("item"))
+        if isinstance(output_index, int) and phase is not None:
+            self._message_phases = MappingProxyType({**self._message_phases, output_index: phase})
+
+    def _item_phase(self, chunk: Mapping[str, object]) -> Phase | None:
+        output_index: Final = chunk.get("output_index")
+        return self._message_phases.get(output_index) if isinstance(output_index, int) else None
 
     def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
         response_payload: Final = chunk.get("response")

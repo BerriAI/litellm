@@ -195,6 +195,7 @@ mod tests {
             master_key: Some(MasterKey::new("sk-master")),
             premium: false,
             has_db: true,
+            db_configured: true,
             ui_login: false,
             proxy_budget: false,
             metrics_require_auth: false,
