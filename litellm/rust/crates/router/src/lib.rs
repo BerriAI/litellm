@@ -87,6 +87,7 @@ impl Router {
                                         .and_then(|value| value.as_bool())
                                 },
                             ),
+                            ..MessagesShaping::default()
                         },
                         litellm_params,
                         ..Deployment::default()
