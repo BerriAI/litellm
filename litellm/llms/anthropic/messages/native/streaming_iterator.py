@@ -294,16 +294,11 @@ def _anthropic_content_block_start_and_deltas(
             )
         case "thinking":
             signature: Final = block.get("signature")
-            signature_deltas: Final = (
-                ({"signature": signature, "type": "signature_delta"},)
-                if isinstance(signature, str) and signature
-                else ()
-            )
             return (
                 {"thinking": "", "signature": "", "type": "thinking"},
                 (
                     {"thinking": block.get("thinking") or "", "type": "thinking_delta"},
-                    *signature_deltas,
+                    {"signature": signature if isinstance(signature, str) else "", "type": "signature_delta"},
                 ),
             )
         case "redacted_thinking":
@@ -899,11 +894,8 @@ class BaseAnthropicMessagesStreamingIterator:
     async def _fire_detached_failure_hook(self, exc: Exception) -> None:
         from litellm._logging import verbose_proxy_logger
 
-        on_detached_failure: Final = getattr(self.litellm_logging_obj, "on_detached_stream_failure", None)
-        if on_detached_failure is None:
-            return
         try:
-            await on_detached_failure(exc)
+            await self.litellm_logging_obj.report_detached_stream_failure(exc)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not crash the detached pump
             verbose_proxy_logger.warning(
                 "async_sse_wrapper detached failure hook raised: %s(%s)", type(hook_failure).__name__, hook_failure

@@ -3,8 +3,9 @@ use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
 use litellm_auth_aws::{
-    AwsCredentialSource, bedrock_model_id_and_region,
-    constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
+    AwsCredentialSource, CallerSigningHeaders, bedrock_model_id_and_region,
+    bedrock_runtime_endpoint,
+    constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
 use litellm_core_utils::decline::Decline;
@@ -128,7 +129,7 @@ impl BaseConfig for AmazonConverseConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
+            .unwrap_or_else(|| bedrock_runtime_endpoint(&region));
         let endpoint = endpoint.trim_end_matches('/');
         // A host that already built the full Converse URL (LiteLLM's Python
         // path encodes the model id itself) passes it through untouched, the
@@ -253,6 +254,7 @@ impl BaseConfig for AmazonConverseConfig {
                 region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
                 service: BEDROCK_SERVICE,
                 credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
+                caller_headers: CallerSigningHeaders::Botocore,
             },
         })
     }
@@ -582,16 +584,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn builds_the_converse_url_from_the_region_in_the_model_id() {
+    #[rstest]
+    #[case::commercial(
+        "us-east-1/anthropic.claude-v2",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
+    )]
+    #[case::china_partition(
+        "cn-north-1/anthropic.claude-v2",
+        "https://bedrock-runtime.cn-north-1.amazonaws.com.cn/model/anthropic.claude-v2/converse"
+    )]
+    fn builds_the_converse_url_from_the_region_in_the_model_id(
+        #[case] model: &str,
+        #[case] expected: &str,
+    ) {
         let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
         assert_eq!(
             config
-                .get_complete_url(None, "us-east-1/anthropic.claude-v2", &Map::new(), &|_| {
-                    None
-                })
+                .get_complete_url(None, model, &Map::new(), &|_| None)
                 .expect("url builds"),
-            "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
+            expected
         );
     }
 

@@ -412,7 +412,7 @@ impl PatternRouter {
 }
 
 /// `_cache_flags_left_to_the_catalog`: the `model_info` flags a wildcard deployment does not speak
-/// for on the models it matches. An azure_ai wildcard's `supports_prompt_cache_breakpoint` does.
+/// for on the models it matches. An azure_ai wildcard's OpenAI prompt cache breakpoint flags do.
 /// `inferred_provider` names `azure_ai` only for a model carrying that prefix.
 pub(crate) fn cache_flags_left_to_the_catalog(
     params: &Map<String, Value>,
@@ -433,6 +433,8 @@ pub(crate) fn cache_flags_left_to_the_catalog(
     } else {
         &[
             "supports_prompt_cache_breakpoint",
+            "supports_openai_prompt_cache_breakpoint",
+            "supports_bedrock_converse_cache_point",
             "supports_prompt_caching",
         ]
     }
@@ -689,11 +691,23 @@ mod tests {
     )]
     #[case::azure_ai_keeps_the_breakpoint_flag(
         json!({"model": "azure_ai/*"}),
-        json!({"id": "w", "keep": 1, "supports_prompt_cache_breakpoint": true}),
+        json!({
+            "id": "w",
+            "keep": 1,
+            "supports_prompt_cache_breakpoint": true,
+            "supports_openai_prompt_cache_breakpoint": true,
+            "supports_bedrock_converse_cache_point": true,
+        }),
     )]
     #[case::azure_ai_named_by_custom_llm_provider(
         json!({"model": "*", "custom_llm_provider": "azure_ai"}),
-        json!({"id": "w", "keep": 1, "supports_prompt_cache_breakpoint": true}),
+        json!({
+            "id": "w",
+            "keep": 1,
+            "supports_prompt_cache_breakpoint": true,
+            "supports_openai_prompt_cache_breakpoint": true,
+            "supports_bedrock_converse_cache_point": true,
+        }),
     )]
     #[case::a_fixed_model_speaks_for_itself(
         json!({"model": "openai/gpt-4o"}),
@@ -701,6 +715,8 @@ mod tests {
             "id": "w",
             "keep": 1,
             "supports_prompt_cache_breakpoint": true,
+            "supports_openai_prompt_cache_breakpoint": true,
+            "supports_bedrock_converse_cache_point": true,
             "supports_prompt_caching": true,
         }),
     )]
@@ -717,6 +733,8 @@ mod tests {
                     "id": "w",
                     "keep": 1,
                     "supports_prompt_cache_breakpoint": true,
+                    "supports_openai_prompt_cache_breakpoint": true,
+                    "supports_bedrock_converse_cache_point": true,
                     "supports_prompt_caching": true,
                 },
             }),

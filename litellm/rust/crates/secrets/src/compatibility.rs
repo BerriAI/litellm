@@ -1,4 +1,4 @@
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_python_compat::{Value, literal::literal_eval};
 use litellm_secrets_types::PythonSecretRead;
 

@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secret_value::SecretValue;
 use litellm_secrets_types::{
     BaseSecretManager, HashicorpOperationContext, RotationError, SecretCache, SecretDeleter,

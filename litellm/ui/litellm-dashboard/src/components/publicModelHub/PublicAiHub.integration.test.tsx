@@ -615,15 +615,26 @@ describe("PublicAiHub", () => {
   it("opens the chosen skill with its source and install commands and updates the URL", async () => {
     const onUrlUpdate = vi.fn();
     const user = userEvent.setup();
+    const source = {
+      source: "git-subdir",
+      url: "https://gitlab.com/team/nested/research-tools.git",
+      ref: "release-2",
+      path: "plugins/research",
+    };
+    apiGetMock.mockImplementation((path: string, options?: Query) =>
+      path === SKILL_HUB_PATH ? Promise.resolve({ plugins: [{ ...SKILLS[0], source }] }) : respond(path, options),
+    );
     renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { tab: "skills" }, onUrlUpdate });
     await user.click(await screen.findByRole("link", { name: /research-assistant/ }));
 
     const dialog = await screen.findByRole("dialog", { name: "Details" });
     expect(within(dialog).getByRole("heading", { name: "research-assistant", level: 2 })).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "github.com/example/research-tools" })).toHaveAttribute(
-      "href",
-      "https://github.com/example/research-tools",
-    );
+    expect(
+      within(dialog).getByRole("button", {
+        name: "gitlab.com/team/nested/research-tools/-/tree/release-2/plugins/research",
+        exact: true,
+      }),
+    ).toHaveAttribute("href", "https://gitlab.com/team/nested/research-tools/-/tree/release-2/plugins/research");
     expect(within(dialog).getByText("knowledge")).toBeInTheDocument();
     expect(within(dialog).getByText("Research")).toBeInTheDocument();
     expect(
