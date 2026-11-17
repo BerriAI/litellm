@@ -173,10 +173,6 @@ def test_anthropic_count_tokens_relays_an_upstream_client_error(gateway: Gateway
 
 
 def test_anthropic_count_tokens_preserves_thinking_tool_choice_and_output_config(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: /v1/messages/count_tokens drops thinking, tool_choice and output_config before the provider count call"
-    )
-
     thinking: Final = {"type": "enabled", "budget_tokens": 1024}
     tool_choice: Final = {"type": "auto", "disable_parallel_tool_use": True}
     output_config: Final = {"effort": "medium"}

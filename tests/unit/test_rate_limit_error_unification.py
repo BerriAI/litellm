@@ -22,11 +22,13 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
+from litellm.proxy.utils import InternalUsageCache
 
 
 class TestRateLimitErrorCategory:
@@ -421,13 +423,12 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
     def test_parallel_request_limiter_v3_handle_rate_limit_error_raises(self):
         """v3 parallel_request_limiter's ``_handle_rate_limit_error`` must
         translate an OVER_LIMIT response into a ProxyRateLimitError."""
-        from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
             PROXY_MaxParallelRequestsHandler_v3,
         )
 
-        handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+        handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         # Minimal fabricated OVER_LIMIT response. The helper only reads a
         # handful of fields off `status` and ignores everything else.
         response = {
@@ -1171,14 +1172,13 @@ class TestProxyHooksWireTypeCorrectly:
         `map_v3_rate_limit_type(status["rate_limit_type"])` call site so
         coverage tools see the new wiring as exercised.
         """
-        from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
             PROXY_MaxParallelRequestsHandler_v3,
         )
 
         handler = PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=MagicMock(),
+            internal_usage_cache=InternalUsageCache(DualCache()),
         )
         # Minimal RateLimitResponse + descriptors shape that the handler
         # reads. We only need one OVER_LIMIT status to drive the raise.
@@ -1222,14 +1222,13 @@ class TestProxyHooksWireTypeCorrectly:
 
     @pytest.mark.asyncio
     async def test_v3_limiter_max_parallel_requests_maps_to_concurrent(self):
-        from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
             PROXY_MaxParallelRequestsHandler_v3,
         )
 
         handler = PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=MagicMock(),
+            internal_usage_cache=InternalUsageCache(DualCache()),
         )
         response = {
             "overall_code": "OVER_LIMIT",

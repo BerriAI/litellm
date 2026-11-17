@@ -36,10 +36,15 @@ from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast, runtime_checkable
 
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # TypeIs reaches typing only on 3.13
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -47,7 +52,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -66,11 +71,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     stream_item_items,
     unappliable_request_rewrite,
+    web_search_call,
+    with_web_search_call_arguments,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
     append_returned_tools,
     merge_guardrailed_tools,
 )
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     decode_compaction_item,
@@ -81,12 +89,14 @@ from litellm.responses.litellm_completion_transformation.tool_search import is_s
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALL_OUTPUT_ITEM_TYPES,
     LiteLLMCompletionResponsesConfig,
+    claude_web_search_call_tool_call,
     tool_output_to_chat_content,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     BaseLiteLLMOpenAIResponseObject,
+    ChatCompletionAssistantToolCall,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
     ContentPartAddedEvent,
@@ -99,8 +109,8 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
     ResponseAPIUsage,
+    ResponseCompactionItem,
     ResponseCompletedEvent,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -108,6 +118,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputText,
+    OutputToolSearchOutput,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -260,9 +271,13 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
 _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
+_WEB_SEARCH_CALL_TYPE: Final = "web_search_call"
+_ITEM_ID_KEYED_TOOL_CALL_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, _WEB_SEARCH_CALL_TYPE})
 _OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
 _SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
 _TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RAW_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_STREAM_EVENT_TYPE_ADAPTER: Final = TypeAdapter(str)
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call": "arguments", "custom_tool_call": "input"}
 )
@@ -277,12 +292,11 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
+_TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
 _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
-
-_EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
 
 
 def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
@@ -328,8 +342,39 @@ def _is_tool_call_item(item: object) -> bool:
     return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
 
 
+def _is_tool_search_item(item: object) -> bool:
+    match item:
+        case {"type": "tool_search_call" | "tool_search_output"}:
+            return True
+        case _:
+            return False
+
+
+def _joins_assistant_turn(item: object) -> bool:
+    return _is_tool_call_item(item) or _is_tool_search_item(item)
+
+
+def _claude_web_search_tool_call(item: object) -> ChatCompletionAssistantToolCall | None:
+    search: Final = web_search_call(item)
+    return None if search is None else claude_web_search_call_tool_call(search)
+
+
+def _claude_web_tool_call(item: object, index: int) -> ChatCompletionToolCallChunk | None:
+    tool_call: Final = _claude_web_search_tool_call(item)
+    if tool_call is None:
+        return None
+    return ChatCompletionToolCallChunk(id=tool_call["id"], type="function", function=tool_call["function"], index=index)
+
+
+def _is_output_tool_call_item(item: object) -> bool:
+    return (
+        stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
+        or _claude_web_search_tool_call(item) is not None
+    )
+
+
 def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
-    if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES:
+    if not _is_output_tool_call_item(item):
         return None
     if isinstance(item, Mapping):
         return cast("Mapping[str, object]", item)  # cast-ok: output items are str-keyed JSON objects
@@ -341,7 +386,7 @@ def _tool_call_item_key(item: object) -> str | None:
     if isinstance(call_id, str) and call_id:
         return call_id
     item_id: Final = stream_item_field(item, "id")
-    if stream_item_field(item, "type") == _TOOL_SEARCH_CALL_TYPE and isinstance(item_id, str) and item_id:
+    if stream_item_field(item, "type") in _ITEM_ID_KEYED_TOOL_CALL_TYPES and isinstance(item_id, str) and item_id:
         return item_id
     return None
 
@@ -359,6 +404,17 @@ def _scanned_tool_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
     if item.get("type") != _TOOL_SEARCH_CALL_TYPE:
         return item
     return {**item, "name": _SCANNED_TOOL_SEARCH_NAME, "arguments": json.dumps(item.get("arguments") or {})}
+
+
+def _scanned_tool_call(item: Mapping[str, object], index: int) -> ChatCompletionToolCallChunk:
+    web_tool_call: Final = _claude_web_tool_call(item, index)
+    if web_tool_call is not None:
+        return web_tool_call
+    return tool_call_dict_from_output_item(_scanned_tool_call_item(item), index)
+
+
+def _rewritten_web_search_call(item: object, payload: str | None) -> object:
+    return item if payload is None else with_web_search_call_arguments(item, payload)
 
 
 def _tool_search_rewrite(payload: str) -> Mapping[str, object]:
@@ -445,14 +501,17 @@ def _provenance_unit_bounds(
 ) -> tuple[tuple[int, int], ...]:
     trailing_roles: Final = tuple(
         accumulate(
-            (_last_message_role(messages) for messages in solo_conversions),
+            (
+                "assistant" if _is_tool_search_item(item) else _last_message_role(messages)
+                for item, messages in zip(raw_input, solo_conversions)
+            ),
             lambda previous, current: current if current is not None else previous,
         )
     )
     start_indexes: Final = tuple(
         index
         for index in range(len(raw_input))
-        if index == 0 or not (_is_tool_call_item(raw_input[index]) and trailing_roles[index - 1] == "assistant")
+        if index == 0 or not (_joins_assistant_turn(raw_input[index]) and trailing_roles[index - 1] == "assistant")
     )
     return tuple(zip(start_indexes, (*start_indexes[1:], len(raw_input))))
 
@@ -460,20 +519,24 @@ def _provenance_unit_bounds(
 def _input_item_provenance(
     raw_input: Sequence[object],
     expected_messages: Sequence[object],
+    request_tools: object = None,
 ) -> tuple[Mapping[int, int], frozenset[int]] | None:
     if not all(isinstance(item, Mapping) for item in raw_input):
         return None
+    request_params: Final = {"tools": request_tools}
     solo_conversions: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
-            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            responses_api_request=request_params,
+            replay_tool_search=True,
         )
         for item in raw_input
     )
     full_conversion: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
-            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            responses_api_request=request_params,
+            replay_tool_search=True,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -485,7 +548,8 @@ def _input_item_provenance(
         else tuple(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
-                responses_api_request=_EMPTY_RESPONSES_REQUEST,
+                responses_api_request=request_params,
+                replay_tool_search=True,
             )
         )
         for start, end in units
@@ -535,6 +599,14 @@ def _input_item_role(item: object) -> str:
 
 def _scanned_text_field(item: Mapping[str, object]) -> str:
     return "output" if item.get("type") in TOOL_CALL_OUTPUT_ITEM_TYPES else "content"
+
+
+def _content_part_text_field(part: object) -> str:
+    return "refusal" if stream_item_field(part, "type") == "refusal" else "text"
+
+
+def _has_writable_field(part: object, field: str) -> bool:
+    return isinstance(part, dict) or hasattr(part, field)
 
 
 def _tool_output_part_text(part: object) -> str | None:
@@ -622,6 +694,24 @@ def _is_textless_tool_row(message: Mapping[str, object], texts: tuple[str, ...] 
     return _is_string_tool_row(message) and (not message.get("content") or texts == ())
 
 
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _assignable(item: object) -> _SupportsSetItem:
+    if isinstance(item, _SupportsSetItem):
+        return item
+    raise TypeError(f"'{type(item).__name__}' object does not support item assignment")
+
+
+def _summarized_encrypted_content(item: Mapping[str, object]) -> str | None:
+    if compaction_summary(item) is None:
+        return None
+    encrypted_content: Final = item["encrypted_content"]
+    return encrypted_content if isinstance(encrypted_content, str) else None
+
+
 def _rewritten_whole_text(item: object, field: str, guardrail_response: str) -> object | None:
     if isinstance(stream_item_field(item, field), str):
         return guardrail_response
@@ -635,11 +725,12 @@ def _patched_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[object],
+    request_tools: object = None,
 ) -> _RequestFields | None:
     if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
         return None
     offset: Final = 1 if instructions else 0
-    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:], request_tools)
     if provenance is None:
         return None
     item_for_message, tainted = provenance
@@ -682,16 +773,54 @@ def _patch_or_convert_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[AllMessageValues],
+    request_tools: object = None,
 ) -> _RequestFields | None:
     if not isinstance(structured_messages, list):
         return None
-    patched: Final = _patched_request_fields(raw_input, instructions, original_messages, structured_messages)
+    patched: Final = _patched_request_fields(
+        raw_input, instructions, original_messages, structured_messages, request_tools
+    )
     if patched is not None:
         return patched
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
     )
-    return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
+    return _RequestFields(
+        input=_with_tool_searches_restored(input_items, raw_input), instructions=converted_instructions
+    )
+
+
+def _tool_search_items_by_call_id(raw_input: Sequence[object], item_type: str) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            call_id: item
+            for item in raw_input
+            if stream_item_field(item, "type") == item_type
+            and isinstance(call_id := stream_item_field(item, "call_id"), str)
+        }
+    )
+
+
+def _restored_tool_search(
+    item: object, calls: Mapping[str, object], outputs: Mapping[str, object]
+) -> tuple[object, ...]:
+    call_id: Final = stream_item_field(item, "call_id")
+    if stream_item_field(item, "type") != "function_call" or not isinstance(call_id, str) or call_id not in calls:
+        return (item,)
+    arguments: Final = stream_item_field(item, "arguments")
+    restored_call: Final = _rewritten_tool_search_call(
+        calls[call_id], arguments if isinstance(arguments, str) else None
+    )
+    return (restored_call, outputs[call_id]) if call_id in outputs else (restored_call,)
+
+
+def _with_tool_searches_restored(input_items: Sequence[object], raw_input: object) -> tuple[object, ...]:
+    raw_items: Final = _RAW_ITEMS_ADAPTER.validate_python(raw_input) if isinstance(raw_input, list) else ()
+    if not any(map(_is_tool_search_item, raw_items)):
+        return tuple(input_items)
+    calls: Final = _tool_search_items_by_call_id(raw_items, _TOOL_SEARCH_CALL_TYPE)
+    outputs: Final = _tool_search_items_by_call_id(raw_items, "tool_search_output")
+    return tuple(chain.from_iterable(_restored_tool_search(item, calls, outputs) for item in input_items))
 
 
 def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> int:
@@ -700,6 +829,15 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
         for item in reversed(responses_so_far or ())
     )
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
+
+
+def _is_responses_input(
+    input_data: object,
+) -> TypeIs["str | ResponseInputParam"]:  # guard-ok: str, or a list of Mapping items
+    if isinstance(input_data, str):
+        return True
+    items: Final = cast(list[object], input_data)  # cast-ok: isinstance narrows to list[Unknown] only
+    return isinstance(input_data, list) and all(isinstance(item, (Mapping, ResponseCompactionItem)) for item in items)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -716,19 +854,20 @@ class OpenAIResponsesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
         """
         Convert Responses API request data to OpenAI-spec structured messages.
 
         Transforms `input` (string or ResponseInputParam) and optional
         `instructions` into chat completion messages.
         """
-        input_data: Final = data.get("input")
-        if input_data is None:
+        input_data: Final[object] = data.get("input")
+        if not _is_responses_input(input_data):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,
             responses_api_request=data,
+            replay_tool_search=True,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
@@ -924,14 +1063,19 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         return _patch_or_convert_request_fields(
-            data.get("input"), data.get("instructions"), structured_messages, merged
+            data.get("input"), data.get("instructions"), structured_messages, merged, data.get("tools")
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
+        and custom, tools[].server_label for mcp), including tools carried by
+        ``additional_tools`` input items."""
         names: Final[list[str]] = []
-        for tool in list_field(data, "tools"):
+        request_tools: Final[tuple[object, ...]] = (
+            *list_field(data, "tools"),
+            *additional_tools_in_input(data.get("input")),
+        )
+        for tool in request_tools:
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):
@@ -993,7 +1137,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             for content_idx, content_item in enumerate(content):
                 if isinstance(content_item, dict):
                     # Extract text
-                    text_str = content_item.get("text", None)
+                    text_str = content_item.get(_content_part_text_field(content_item), None)
                     if text_str is not None:
                         texts_to_check.append(text_str)
                         task_mappings.append((msg_idx, int(content_idx)))
@@ -1008,7 +1152,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        messages: Any,  # Can be List[Dict[str, Any]] or ResponseInputParam
+        messages: Sequence[Mapping[str, object]],
         responses: Sequence[str],
         task_mappings: Sequence[tuple[int, int | None]],
     ) -> None:
@@ -1023,27 +1167,27 @@ class OpenAIResponsesHandler(BaseTranslation):
         for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
+            item = messages[msg_idx]
 
-            if compaction_summary(messages[msg_idx]) is not None:
-                messages[msg_idx]["encrypted_content"] = with_compaction_summary(  # rebind-ok: in-place input rewrite
-                    messages[msg_idx]["encrypted_content"], guardrail_response
-                )
+            encrypted_content = _summarized_encrypted_content(item)
+            if encrypted_content is not None:
+                _assignable(item)["encrypted_content"] = with_compaction_summary(encrypted_content, guardrail_response)
                 continue
 
-            field = _scanned_text_field(messages[msg_idx])
-            content = messages[msg_idx].get(field, None)
+            field = _scanned_text_field(item)
+            content = item.get(field, None)
             if content is None:
                 continue
 
+            content_parts = as_object_list(content)
             if content_idx_optional is None:
-                rewritten = _rewritten_whole_text(messages[msg_idx], field, guardrail_response)
+                rewritten = _rewritten_whole_text(item, field, guardrail_response)
                 if rewritten is not None:
-                    messages[msg_idx][field] = rewritten
+                    _assignable(item)[field] = rewritten
 
-            elif isinstance(content, list):
+            elif content_parts is not None:
                 # Replace specific text item in list content
-                if isinstance(messages[msg_idx][field][content_idx_optional], dict):
-                    messages[msg_idx][field][content_idx_optional]["text"] = guardrail_response
+                self._write_content_part_text(content_parts[content_idx_optional], guardrail_response)
 
     async def process_output_response(
         self,
@@ -1174,7 +1318,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> list[Any]:
+    ) -> Sequence[object]:
         """
         Process output streaming response by applying guardrails to text content.
 
@@ -1299,17 +1443,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         # delivered, so a truncated buffer still reports text undeliverable. #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
-            finished_summary: Final = _output_compaction_summary(stream_item_field(final_chunk, "item"))
+            finished_item: Final = stream_item_field(final_chunk, "item")
+            finished_summary: Final = _output_compaction_summary(finished_item)
             model_response_stream: Final = (
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
             )
-            tool_calls: Final = model_response_stream.choices[0].delta.tool_calls
+            finished_web_tool_call: Final = _claude_web_tool_call(finished_item, 0)
+            tool_calls: Final = [
+                *cast(list[ChatCompletionToolCallChunk], model_response_stream.choices[0].delta.tool_calls or []),
+                *(() if finished_web_tool_call is None else (finished_web_tool_call,)),
+            ]
             if tool_calls or finished_summary is not None:
                 inputs = GenericGuardrailAPIInputs()
                 if finished_summary is not None:
                     inputs["texts"] = [finished_summary]
                 if tool_calls:
-                    inputs["tool_calls"] = cast(list[ChatCompletionToolCallChunk], tool_calls)
+                    inputs["tool_calls"] = tool_calls
                 if hasattr(model_response_stream, "model") and model_response_stream.model:
                     inputs["model"] = model_response_stream.model
                 await guardrail_to_apply.apply_guardrail(
@@ -1380,7 +1529,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             if isinstance(output_index, int) and isinstance(content_index, int)
         )
         if len(placeable_positions) != len(scanned_positions) or any(
-            stream_item_field(event, "type") not in _OUTPUT_TEXT_EVENT_TYPES for event in scanned_events
+            stream_item_field(event, "type") not in _OUTPUT_TEXT_EVENT_TYPES | _TEXT_DELTA_EVENT_TYPES
+            for event in scanned_events
         ):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
@@ -1402,6 +1552,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             setattr(event, field, value)
 
     @staticmethod
+    def _write_content_part_text(part: object, text: str) -> None:
+        field: Final = _content_part_text_field(part)
+        if _has_writable_field(part, field):
+            OpenAIResponsesHandler._write_event_field(part, field, text)
+
+    @staticmethod
     def _write_compaction_summary(item: object, summary: str) -> None:
         encrypted_content: Final = stream_item_field(item, "encrypted_content")
         if isinstance(encrypted_content, str):
@@ -1416,11 +1572,12 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> None:
         """Sync pre-completion stream events with the rewritten completed
         response, keyed by ``(output_index, content_index)``: the first
-        ``output_text.delta`` for a rewritten item carries the full rewritten
-        text and the rest are blanked, while ``output_text.done``,
-        ``content_part.done``, and ``output_item.done`` events carry the full
-        rewritten text, so every event a client may read agrees with the
-        rewritten ``response.completed`` payload."""
+        ``output_text.delta`` or ``refusal.delta`` for a rewritten item carries
+        the full rewritten text and the rest are blanked, while
+        ``output_text.done``, ``refusal.done``, ``content_part.done``, and
+        ``output_item.done`` events carry the full rewritten text, so every
+        event a client may read agrees with the rewritten ``response.completed``
+        payload."""
         delta_replacements: Final = MappingProxyType(
             {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
         )
@@ -1436,14 +1593,14 @@ class OpenAIResponsesHandler(BaseTranslation):
             if not isinstance(output_index, int) or not isinstance(content_index, int):
                 continue
             position = (output_index, content_index)
-            if event_type == "response.output_text.delta" and position in delta_replacements:
+            if event_type in _TEXT_DELTA_EVENT_TYPES and position in delta_replacements:
                 self._write_event_field(event, "delta", next(delta_replacements[position]))
             elif event_type == "response.output_text.done" and position in rewrites_by_position:
                 self._write_event_field(event, "text", rewrites_by_position[position])
+            elif event_type == "response.refusal.done" and position in rewrites_by_position:
+                self._write_event_field(event, "refusal", rewrites_by_position[position])
             elif event_type == "response.content_part.done" and position in rewrites_by_position:
-                part = event.get("part")
-                if isinstance(part, dict) or hasattr(part, "text"):
-                    self._write_event_field(part, "text", rewrites_by_position[position])
+                self._write_content_part_text(event.get("part"), rewrites_by_position[position])
 
     @staticmethod
     def _sync_output_item_done_event(
@@ -1459,7 +1616,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         for (item_idx, content_idx), rewritten in rewrites_by_position.items():
             if item_idx != output_index or not 0 <= content_idx < len(content):
                 continue
-            OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
+            OpenAIResponsesHandler._write_content_part_text(content[content_idx], rewritten)
 
     def _deliver_ended_stream_tool_call_rewrites(
         self,
@@ -1598,7 +1755,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         if event_type not in _OUTPUT_ITEM_EVENT_TYPES:
             return None
         item: Final = stream_item_field(event, "item")
-        return _tool_call_item_key(item) if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES else None
+        return _tool_call_item_key(item) if _is_output_tool_call_item(item) else None
 
     @staticmethod
     def _write_tool_call_item(item: object, name: str | None, payload: str | None) -> object:
@@ -1612,6 +1769,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             return item
         if item_type == _TOOL_SEARCH_CALL_TYPE:
             return _rewritten_tool_search_call(item, payload)
+        if item_type == _WEB_SEARCH_CALL_TYPE:
+            return _rewritten_web_search_call(item, payload)
         if name is not None:
             OpenAIResponsesHandler._write_event_field(item, "name", name)
         if payload is not None and isinstance(item_type, str) and item_type in _TOOL_CALL_PAYLOAD_FIELDS:
@@ -1667,7 +1826,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
             or (
                 stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
-                and stream_item_field(stream_item_field(event, "item"), "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
+                and _is_output_tool_call_item(stream_item_field(event, "item"))
             )
             for event in responses_so_far
         )
@@ -1675,9 +1834,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     @staticmethod
     def _completed_response_scan_key(response: object) -> StreamingScanKey:
         output_items: Final = stream_item_items(response, "output")
-        message_items: Final = tuple(
-            item for item in output_items if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES
-        )
+        message_items: Final = tuple(item for item in output_items if not _is_output_tool_call_item(item))
         message_parts: Final = chain.from_iterable(stream_item_items(item, "content") for item in message_items)
         part_texts: Final = tuple(
             text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
@@ -1685,11 +1842,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
         return StreamingScanKey(
             texts=(*part_texts, *summaries),
-            tool_calls=tuple(
-                stream_item_fingerprint(item)
-                for item in output_items
-                if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
-            ),
+            tool_calls=tuple(stream_item_fingerprint(item) for item in output_items if _is_output_tool_call_item(item)),
             stream_ended=True,
         )
 
@@ -1802,9 +1955,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         tool_call_item: Final = _tool_call_output_item_mapping(output_item)
         if tool_call_item is not None:
             if tool_calls_to_check is not None:
-                tool_calls_to_check.append(
-                    tool_call_dict_from_output_item(_scanned_tool_call_item(tool_call_item), output_idx)
-                )
+                tool_calls_to_check.append(_scanned_tool_call(tool_call_item, output_idx))
             return
 
         summary: Final = _output_compaction_summary(output_item)
@@ -1814,7 +1965,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             return
 
         # Handle both GenericResponseOutputItem and dict
-        content: list[OutputText] | list[dict] | None = None
+        content: list[OutputText | ResponseOutputRefusal] | list[dict[str, object]] | None = None
         if isinstance(output_item, BaseModel):
             try:
                 output_item_dump: Final = output_item.model_dump()
@@ -1837,17 +1988,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         verbose_proxy_logger.debug("OpenAI Responses API: Processing output item: %s", output_item)
 
-        # Iterate through content items (list of OutputText objects)
         for content_idx, content_item in enumerate(content):
-            # Handle both OutputText objects and dicts
-            if isinstance(content_item, OutputText):
-                text_content = content_item.text
-            elif isinstance(content_item, dict):
-                text_content = content_item.get("text")
-            else:
-                continue
-
-            if text_content:
+            text_content = stream_item_field(content_item, _content_part_text_field(content_item))
+            if isinstance(text_content, str) and text_content:
                 texts_to_check.append(text_content)
                 task_mappings.append((output_idx, int(content_idx)))
 
@@ -1887,33 +2030,24 @@ class OpenAIResponsesHandler(BaseTranslation):
             # Handle both GenericResponseOutputItem, BaseModel, and dict
             if isinstance(output_item, GenericResponseOutputItem):
                 if output_item.content and content_idx < len(output_item.content):
-                    content_item = output_item.content[content_idx]
-                    if isinstance(content_item, OutputText):
-                        content_item.text = guardrail_response
-                    elif isinstance(content_item, dict):
-                        content_item["text"] = guardrail_response
-            elif isinstance(output_item, BaseModel):
+                    self._write_content_part_text(output_item.content[content_idx], guardrail_response)
+            elif isinstance(output_item, BaseModel) and not isinstance(output_item, OutputToolSearchOutput):
                 # Handle other Pydantic models by converting to GenericResponseOutputItem
                 try:
                     generic_item = GenericResponseOutputItem.model_validate(output_item.model_dump())
-                    if generic_item.content and content_idx < len(generic_item.content):
-                        content_item = generic_item.content[content_idx]
-                        if isinstance(content_item, OutputText):
-                            content_item.text = guardrail_response
-                            # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
-                                if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
+                    if (
+                        generic_item.content
+                        and content_idx < len(generic_item.content)
+                        and hasattr(output_item, "content")
+                        and output_item.content
+                    ):
+                        self._write_content_part_text(output_item.content[content_idx], guardrail_response)
                 except Exception:
                     pass
             elif isinstance(output_item, dict):
                 content = output_item.get("content", [])
                 if content and content_idx < len(content):
-                    if isinstance(content[content_idx], dict):
-                        content[content_idx]["text"] = guardrail_response
-                    elif hasattr(content[content_idx], "text"):
-                        content[content_idx].text = guardrail_response
+                    self._write_content_part_text(content[content_idx], guardrail_response)
 
     def build_block_sse_chunks(
         self,
@@ -1936,7 +2070,6 @@ class OpenAIResponsesHandler(BaseTranslation):
           new output item under the same response id, and close with a
           ``response.completed`` carrying only the replacement item.
 
-        The proxy's data generator appends ``data: [DONE]`` itself.
         """
         events: Final = (
             self._block_continuation_events(exc, responses_so_far or ())
@@ -1944,6 +2077,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             else self._standalone_block_events(exc)
         )
         return tuple(
+            f"event: {_STREAM_EVENT_TYPE_ADAPTER.validate_python(stream_item_field(event, 'type'))}\n"
             f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)}\n\n".encode()
             for event in events
         )
@@ -1974,7 +2108,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             "annotations": (),
             "logprobs": None,
         }
-        return (
+        events: Final = (
             *_open_item_closing_events(responses_so_far),
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -2018,6 +2152,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=_blocked_response(exc, response_id=response_id, model=model, output_item=item),
             ),
+        )
+        return tuple(
+            event.model_copy(update={"sequence_number": number})
+            for number, event in enumerate(events, start=_next_stream_sequence_number(responses_so_far))
         )
 
 

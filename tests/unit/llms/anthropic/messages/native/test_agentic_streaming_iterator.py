@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
+import litellm
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
@@ -21,6 +21,10 @@ from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     _handle_message_start,
     _parse_sse_events,
 )
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.utils import ProxyLogging
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +90,14 @@ def _build_simple_text_stream() -> List[bytes]:
     )
     chunks.append(_sse_event("message_stop", {"type": "message_stop"}))
     return chunks
+
+
+def _sse_frames(wire: str) -> list[tuple[str, str]]:
+    return [
+        (frame.split("\n")[0].removeprefix("event: "), frame.split("data: ", 1)[1])
+        for frame in wire.split("\n\n")
+        if frame.startswith("event: ") and "data: " in frame
+    ]
 
 
 def _build_tool_use_stream() -> List[bytes]:
@@ -727,8 +739,7 @@ class TestAgenticStreamingIteratorPhase2:
 
 class TestAgenticStreamingIteratorErrorHandling:
     @pytest.mark.asyncio
-    async def test_should_swallow_hook_errors(self):
-        """Errors in hook processing should be swallowed; Phase 1 chunks are still yielded."""
+    async def test_a_hook_failure_reaches_the_client_after_the_streamed_message(self):
         chunks = _build_simple_text_stream()
         mock_stream = MockAsyncStream(chunks)
 
@@ -751,11 +762,15 @@ class TestAgenticStreamingIteratorErrorHandling:
         )
 
         collected = []
-        async for chunk in iterator:
-            collected.append(chunk)
 
-        # All Phase 1 chunks should still have been yielded
-        assert len(collected) == len(chunks)
+        async def _drain():
+            async for chunk in iterator:
+                collected.append(chunk)
+
+        with pytest.raises(RuntimeError, match="hook exploded"):
+            await _drain()
+
+        assert collected == chunks
 
     @pytest.mark.asyncio
     async def test_should_handle_empty_stream(self):
@@ -924,21 +939,54 @@ class TestAgenticStreamingIteratorHoldBack:
         assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
 
     @pytest.mark.asyncio
-    async def test_should_error_instead_of_replaying_server_fulfilled_tool_use_when_hook_crashes(self):
-        """A hook crash must not replay the buffered retrieval tool_use: that is the unknown-tool bug."""
+    async def test_a_rate_limited_follow_up_reaches_the_client_as_its_anthropic_error_event(self):
         chunks = _build_tool_use_stream()
 
         mock_handler = MagicMock()
-        mock_handler._call_agentic_completion_hooks = AsyncMock(side_effect=RuntimeError("hook exploded"))
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            side_effect=litellm.RateLimitError(
+                message="follow-up rate limited", llm_provider="anthropic", model="claude-sonnet-4-20250514"
+            )
+        )
 
-        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler)
+        wire = "".join(
+            [
+                frame if isinstance(frame, str) else frame.decode()
+                async for frame in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                    response=_build_hold_back_iterator(MockAsyncStream(chunks), mock_handler),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                    request_data={"model": "claude-sonnet-4-20250514"},
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+                )
+            ]
+        )
 
-        collected = []
-        async for chunk in iterator:
-            collected.append(chunk)
+        error_events = [json.loads(data) for event, data in _sse_frames(wire) if event == "error"]
+        assert [event["error"]["type"] for event in error_events] == ["rate_limit_error"]
+        assert "follow-up rate limited" in error_events[0]["error"]["message"]
+        assert "litellm_content_retrieve" not in wire
 
-        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
-        assert b"litellm_content_retrieve" not in b"".join(collected)
+    @pytest.mark.asyncio
+    async def test_a_capped_loop_tells_the_client_to_raise_max_agentic_loops_instead_of_retrying(self):
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            side_effect=lambda **_: BaseLLMHTTPHandler._check_agentic_loop_safety(
+                tool_calls=[{"name": "litellm_content_retrieve"}],
+                fingerprints=[],
+                depth=1,
+                max_loops=1,
+                model="claude-sonnet-4-20250514",
+            )
+        )
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(_build_tool_use_stream()), mock_handler)
+        wire = b"".join([chunk async for chunk in iterator if chunk != STREAM_SSE_KEEPALIVE_PING_BYTES]).decode()
+
+        error_messages = [json.loads(data)["error"]["message"] for event, data in _sse_frames(wire) if event == "error"]
+        assert len(error_messages) == 1
+        assert "max_agentic_loops" in error_messages[0]
+        assert "retry" not in error_messages[0].lower()
+        assert "litellm_content_retrieve" not in wire
 
     @pytest.mark.asyncio
     async def test_should_error_instead_of_replaying_when_no_hook_fires_on_tool_use(self):

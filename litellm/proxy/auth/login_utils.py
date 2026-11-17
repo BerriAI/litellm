@@ -5,6 +5,7 @@ This module contains the core login logic that can be reused across different
 login endpoints (e.g., /login and /v2/login).
 """
 
+import asyncio
 import os
 import secrets
 from collections.abc import Mapping
@@ -31,6 +32,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
 from litellm.proxy.auth.login_throttle import LoginAttempt, LoginThrottle
 from litellm.proxy.auth.password_policy import is_breach_check_enabled, is_password_breached
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -42,6 +44,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     get_server_root_path,
     hash_password,
+    run_off_loop_if_fips,
     verify_password,
 )
 from litellm.repositories.user_repository import UserRepository
@@ -105,9 +108,21 @@ async def screen_login_password_for_breach(
     return breached
 
 
+_ONE_FIPS_LOGIN_AT_A_TIME: Final = asyncio.Lock()
+
+
+async def _password_matches(password: str, stored: str, attempt: LoginAttempt) -> bool:
+    """Checks inline, or in FIPS mode one login at a time, refusing a login whose user got blocked while it waited."""
+    if not fips_mode_active():
+        return verify_password(password, stored)
+    async with _ONE_FIPS_LOGIN_AT_A_TIME:
+        await attempt.refuse_if_blocked_while_waiting()
+        return await run_off_loop_if_fips(verify_password, password, stored)
+
+
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
     """Rehash legacy password (SHA256) to scrypt on successful login."""
-    if stored.startswith("scrypt:"):
+    if stored.startswith(("scrypt:", "pbkdf2:")):
         return
     from litellm.proxy.proxy_server import prisma_client
 
@@ -339,6 +354,7 @@ async def _sign_in(
             response = await generate_key_helper_fn(
                 llm_router=None,
                 request_type="key",
+                actor=None,
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
                     "duration": LITELLM_UI_SESSION_DURATION,
@@ -411,7 +427,7 @@ async def _sign_in(
                 code=401,
             )
 
-        if verify_password(password, _password):
+        if await _password_matches(password, _password, attempt):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
             breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
                 user_id=_user_row.user_id,

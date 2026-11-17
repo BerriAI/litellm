@@ -10,6 +10,23 @@ from litellm.integrations.helicone_mock_client import (
     create_mock_helicone_client,
     should_use_helicone_mock,
 )
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+from litellm.types.utils import ChatCompletionMessageCustomToolCall, ChatCompletionMessageToolCall
+
+
+def _tool_use_block(
+    tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+) -> dict[str, object]:
+    match tool_call:
+        case ChatCompletionMessageCustomToolCall(custom=custom):
+            return {"type": "tool_use", "id": tool_call.id, "name": custom.name, "input": custom.input}
+        case _:
+            return {
+                "type": "tool_use",
+                "id": tool_call.id,
+                "name": tool_call.function.name,
+                "input": tool_call.function.arguments,
+            }
 
 
 class HeliconeLogger:
@@ -57,23 +74,8 @@ class HeliconeLogger:
         message = choice["message"]
 
         content = []
-        if "tool_calls" in message and message["tool_calls"]:
-            for tool_call in message["tool_calls"]:
-                function = tool_call.get("function")
-                custom = tool_call.get("custom")
-                if not function and not custom:
-                    continue
-                name, tool_input = (
-                    (function["name"], function["arguments"]) if function else (custom["name"], custom["input"])
-                )
-                content.append(
-                    {
-                        "type": "tool_use",
-                        "id": tool_call["id"],
-                        "name": name,
-                        "input": tool_input,
-                    }
-                )
+        if tool_calls := tool_calls_with_server_tool_calls(message):
+            content = [_tool_use_block(tool_call) for tool_call in tool_calls]
         elif "content" in message and message["content"]:
             content = [{"type": "text", "text": message["content"]}]
 

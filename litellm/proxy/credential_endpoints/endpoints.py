@@ -107,6 +107,25 @@ def _normalized_github_copilot_values(
     return {**credential_values, GITHUB_COPILOT_HOST_KEY: host}
 
 
+def _validate_github_app_values(values: Mapping[str, object]) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.llms.github_copilot.app_auth import app_config
+
+    try:
+        app_config(
+            {key: value for key, value in values.items() if key != "litellm_credential_name"},
+            validate_stored_key=True,
+        )
+    except BadRequestError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid GitHub App configuration. Use an App/client ID, positive installation ID, "
+                "and a valid RSA PEM private key or private-key secret reference."
+            ),
+        ) from None
+
+
 def _reject_non_admin_wif_fields(
     wif_fields: tuple[str, ...],
     user_api_key_dict: UserAPIKeyAuth,
@@ -298,9 +317,10 @@ def _resolve_deployment_credentials(llm_router: litellm.Router | None, model_id:
             status_code=500,
             detail="LLM router not found. Please ensure you have a valid router instance.",
         )
-    if llm_router.get_deployment(model_id) is None:
+    registry: Final = llm_router.registry()
+    if registry.deployment(model_id) is None:
         raise HTTPException(status_code=404, detail="Model not found")
-    credential_values: Final = llm_router.get_deployment_credentials(model_id)
+    credential_values: Final = registry.credentials(model_id)
     if credential_values is None:
         raise HTTPException(status_code=404, detail="Model not found")
     return _CREDENTIAL_DICT_ADAPTER.validate_python(credential_values)
@@ -323,7 +343,7 @@ async def create_credential(
     Stores credential in DB.
     Reloads credentials in memory.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
         if prisma_client is None:
@@ -349,6 +369,7 @@ async def create_credential(
             credential_info,
         )
         _reject_non_admin_wif_fields(server_owned_wif_fields_written(normalized_values), user_api_key_dict)
+        _validate_github_app_values(normalized_values)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )
@@ -364,21 +385,22 @@ async def create_credential(
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(credentials_dict)
         )
-        try:
-            await CredentialsRepository(prisma_client).create(
-                data={
-                    **credentials_dict_jsonified,
-                    "created_by": user_api_key_dict.user_id,
-                    "updated_by": user_api_key_dict.user_id,
-                }
-            )
-        except Exception as e:
-            if not is_unique_violation(e):
-                raise
-            raise HTTPException(status_code=409, detail=_credential_exists_detail(credential.credential_name))
+        async with DB_RECONCILE_LOCK:
+            try:
+                await CredentialsRepository(prisma_client).create(
+                    data={
+                        **credentials_dict_jsonified,
+                        "created_by": user_api_key_dict.user_id,
+                        "updated_by": user_api_key_dict.user_id,
+                    }
+                )
+            except Exception as e:
+                if not is_unique_violation(e):
+                    raise
+                raise HTTPException(status_code=409, detail=_credential_exists_detail(credential.credential_name))
 
-        ## ADD TO LITELLM ##
-        CredentialAccessor.upsert_credentials([processed_credential])
+            ## ADD TO LITELLM ##
+            CredentialAccessor.upsert_credentials([processed_credential])
 
         return {"success": True, "message": "Credential created successfully"}
     except Exception as e:
@@ -530,10 +552,11 @@ async def get_credential_by_model(
     try:
         if llm_router is None:
             raise HTTPException(status_code=500, detail="LLM router not found")
-        model: Final = llm_router.get_deployment(model_id)
+        registry: Final = llm_router.registry()
+        model: Final = registry.deployment(model_id)
         if model is None:
             raise HTTPException(status_code=404, detail="Model not found")
-        credential_values: Final = llm_router.get_deployment_credentials(model_id)
+        credential_values: Final = registry.credentials(model_id)
         if credential_values is None:
             raise HTTPException(status_code=404, detail="Model not found")
         masked_credential_values: Final = get_masked_values(
@@ -863,7 +886,7 @@ async def delete_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
         if prisma_client is None:
@@ -874,14 +897,17 @@ async def delete_credential(
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
         )
-        deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
-        if deleted is None:
-            raise _not_found_unless_config_defined(
-                credential_name, "Credential not found. Got credential name: " + credential_name
-            )
+        async with DB_RECONCILE_LOCK:
+            deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
+            if deleted is None:
+                raise _not_found_unless_config_defined(
+                    credential_name, "Credential not found. Got credential name: " + credential_name
+                )
 
-        ## DELETE FROM LITELLM ##
-        litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
+            ## DELETE FROM LITELLM ##
+            litellm.credential_list = [
+                cred for cred in litellm.credential_list if cred.credential_name != credential_name
+            ]
         await _purge_user_connections_for_credential(credential_name)
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
@@ -918,8 +944,6 @@ def update_db_credential(
     # update model info
     if encrypted_credential.credential_info:
         """Update credential info"""
-        if "credential_info" not in merged_credential.credential_info:
-            merged_credential.credential_info = {}
         merged_credential.credential_info.update(encrypted_credential.credential_info)
 
     return merged_credential
@@ -983,7 +1007,7 @@ async def update_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
         if credential.credential_name and credential.credential_name != credential_name:
@@ -1007,53 +1031,58 @@ async def update_credential(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
         credentials_repository: Final = CredentialsRepository(WriterPinnedClient(prisma_client.db))
-        db_credential: Final = await credentials_repository.find_by_name(credential_name)
-        if db_credential is None:
-            raise _not_found_unless_config_defined(credential_name, "Credential not found in DB.")
-        _reject_non_admin_wif_fields(_stored_wif_fields(db_credential), user_api_key_dict)
-        decrypted_stored_credential: Final = decrypted_credential(db_credential)
-        decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
-            decrypted_stored_credential.credential_values
-        )
-        incoming_values: Final = _without_masked_read_backs(requested_values, _stored_objects(decrypted_values))
-        patch: Final = CredentialItem(
-            credential_name=credential_name,
-            display_name=(
-                requested_display_name if "display_name" in credential.model_fields_set else db_credential.display_name
-            ),
-            credential_info=_CREDENTIAL_DICT_ADAPTER.validate_python(credential.credential_info),
-            credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(incoming_values),
-            credential_values_to_delete=credential.credential_values_to_delete,
-        )
-        stored_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
-            db_credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
-        )
-        patch_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
-            patch.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
-        )
-        effective_info: Final = {**stored_info, **patch_info}
-        normalized_patch: Final = (
-            patch.model_copy(
-                update={"credential_values": _normalized_github_copilot_values(incoming_values, effective_info)}
+        async with DB_RECONCILE_LOCK:
+            db_credential: Final = await credentials_repository.find_by_name(credential_name)
+            if db_credential is None:
+                raise _not_found_unless_config_defined(credential_name, "Credential not found in DB.")
+            _reject_non_admin_wif_fields(_stored_wif_fields(db_credential), user_api_key_dict)
+            decrypted_stored_credential: Final = decrypted_credential(db_credential)
+            decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+                decrypted_stored_credential.credential_values
             )
-            if incoming_values.get(GITHUB_COPILOT_HOST_KEY) is not None
-            else patch
-        )
-        merged_credential: Final = update_db_credential(db_credential, normalized_patch)
-        credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
-            "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
-        )
-        await credentials_repository.update_by_name(
-            credential_name,
-            data={
-                **credential_object_jsonified,
-                "display_name": merged_credential.display_name,
-                "updated_by": user_api_key_dict.user_id,
-            },
-        )
-
-        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        _sync_in_memory_credential(normalized_patch, credential_name)
+            incoming_values: Final = _without_masked_read_backs(requested_values, _stored_objects(decrypted_values))
+            patch: Final = CredentialItem(
+                credential_name=credential_name,
+                display_name=(
+                    requested_display_name
+                    if "display_name" in credential.model_fields_set
+                    else db_credential.display_name
+                ),
+                credential_info=_CREDENTIAL_DICT_ADAPTER.validate_python(credential.credential_info),
+                credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(incoming_values),
+                credential_values_to_delete=credential.credential_values_to_delete,
+            )
+            stored_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+                db_credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
+            )
+            patch_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+                patch.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
+            )
+            effective_info: Final = {**stored_info, **patch_info}
+            normalized_patch: Final = (
+                patch.model_copy(
+                    update={"credential_values": _normalized_github_copilot_values(incoming_values, effective_info)}
+                )
+                if incoming_values.get(GITHUB_COPILOT_HOST_KEY) is not None
+                else patch
+            )
+            merged_credential: Final = update_db_credential(db_credential, normalized_patch)
+            _validate_github_app_values(
+                _CREDENTIAL_DICT_ADAPTER.validate_python(decrypted_credential(merged_credential).credential_values)
+            )
+            credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
+                "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
+            )
+            await credentials_repository.update_by_name(
+                credential_name,
+                data={
+                    **credential_object_jsonified,
+                    "display_name": merged_credential.display_name,
+                    "updated_by": user_api_key_dict.user_id,
+                },
+            )
+            # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
+            _sync_in_memory_credential(normalized_patch, credential_name)
 
         from litellm.llms.github_copilot.github_host import normalized_github_host
 
