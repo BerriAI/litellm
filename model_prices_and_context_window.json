@@ -22092,6 +22092,7 @@
         "supports_forced_tool_use": false,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
+        "supports_mid_conversation_system": true,
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": false,
         "supports_output_config": true,
