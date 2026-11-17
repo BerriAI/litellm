@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient, ConnectError
 from pytest_mock import MockerFixture
 
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.utils import handle_exception_on_proxy
@@ -1142,9 +1143,11 @@ async def test_handle_existing_user_by_email_roster_add_already_member_repairs_u
     tx_context.__aenter__ = AsyncMock(return_value=tx)
     tx_context.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.tx = mocker.MagicMock(return_value=tx_context)
-    evict = mocker.patch(  # test-quality-ok: cache eviction is module-level, not injectable
-        "litellm.proxy.management_endpoints.scim.scim_v2.evict_and_broadcast",
-        AsyncMock(),
+    user_api_key_cache = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(key="uid", value={"user_id": "uid", "teams": []})
+    mocker.patch(  # test-quality-ok: the repair reads the proxy's process-wide cache, not an injected one
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        user_api_key_cache,
     )
     mocker.patch(  # test-quality-ok: the roster helpers resolve the proxy prisma client at module level
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -1189,7 +1192,7 @@ async def test_handle_existing_user_by_email_roster_add_already_member_repairs_u
         )
     else:
         tx.litellm_usertable.update_many.assert_not_awaited()
-    assert [call.kwargs["cache_keys"] for call in evict.await_args_list] == ([("uid",)] if repaired else [])
+    assert (await user_api_key_cache.async_get_cache(key="uid") is None) is repaired
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
 
