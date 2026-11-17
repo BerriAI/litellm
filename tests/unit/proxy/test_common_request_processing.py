@@ -15294,6 +15294,44 @@ async def test_openai_compatible_backend_400_redacts_secrets_and_internal_detail
         assert secret_or_internal not in str(payload["message"])
 
 
+_CONTENT_FILTERS: Final = (
+    {"blocked": True, "source_type": "prompt", "content_filter_results": {"jailbreak": {"detected": True}}},
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_relays_the_error_fields_beyond_openais_four(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering the content management policy.",
+            "type": "invalid_request_error",
+            "param": "prompt",
+            "code": "content_filter",
+            "content_filters": list(_CONTENT_FILTERS),
+            "innererror": {"code": "ResponsibleAIPolicyViolation"},
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert json.loads(json.dumps(relayed.value.to_dict()["provider_specific_fields"])) == {
+        "content_filters": list(_CONTENT_FILTERS),
+        "innererror": {"code": "ResponsibleAIPolicyViolation"},
+    }
+
+
 _ScenarioT = TypeVar("_ScenarioT")
 
 

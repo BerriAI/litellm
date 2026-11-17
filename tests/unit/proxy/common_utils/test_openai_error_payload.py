@@ -113,24 +113,7 @@ def test_the_default_status_stands_when_the_exception_carries_none(default: int)
 
 @pytest.mark.parametrize(
     "carried_status",
-    [
-        True,
-        False,
-        "slow down",
-        "",
-        None,
-        429.0,
-        200,
-        1301,
-        0,
-        "200",
-        "1301",
-        "0",
-        "0429",
-        " 429",
-        "\u0664\u0662\u0669",
-        "4" * 5000,
-    ],
+    [True, False, "slow down", "", None, 429.0, 200, 1301, 0, "200", "1301", "0", "0429", " 429", "\u0664\u0662\u0669", "4" * 5000],
 )
 def test_a_carried_status_that_is_not_an_error_status_falls_back_to_the_default(carried_status: object):
     """True is an int in Python but not an HTTP status, and answering a 200 or a 1301 either reads
@@ -274,9 +257,7 @@ def test_a_catch_all_handler_keeps_the_status_its_route_answered_with(raised_sta
 @pytest.mark.parametrize(
     "default_status_code, expected_type", [(400, "invalid_request_error"), (500, "internal_server_error")]
 )
-def test_an_exception_carrying_no_status_falls_back_to_the_routes_default(
-    default_status_code: int, expected_type: str
-) -> None:
+def test_an_exception_carrying_no_status_falls_back_to_the_routes_default(default_status_code: int, expected_type: str) -> None:
     wrapped: Final = proxy_exception_for(ValueError("boom"), default_status_code=default_status_code)
 
     assert (wrapped.code, wrapped.type) == (str(default_status_code), expected_type)
@@ -326,9 +307,7 @@ def test_the_wrapped_error_serializes_as_an_openai_error_object(exc: Exception) 
     "provider_failure, expected",
     [
         (
-            litellm.AuthenticationError(
-                message="invalid x-api-key", llm_provider="anthropic", model="claude-haiku-5-5"
-            ),
+            litellm.AuthenticationError(message="invalid x-api-key", llm_provider="anthropic", model="claude-haiku-5-5"),
             ("401", "authentication_error"),
         ),
         (

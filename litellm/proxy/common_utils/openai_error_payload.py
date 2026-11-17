@@ -36,6 +36,8 @@ _HTTP_ERROR_STATUSES: Final = range(status.HTTP_400_BAD_REQUEST, 600)
 
 _ERROR_BODY: Final = TypeAdapter(dict[str, object])
 
+_OPENAI_ERROR_OBJECT_FIELDS: Final = frozenset({"message", "type", "param", "code", "provider_specific_fields"})
+
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
 
 _FAILOVER_REFUSALS: Final = (
@@ -133,10 +135,16 @@ def relayed_provider_specific_fields(
     body: Final = attribute_of(exc, "body")
     if not isinstance(body, dict):
         return None
-    fields: Final = _ERROR_BODY.validate_python(body).get("provider_specific_fields")
-    if not isinstance(fields, dict):
+    error_object: Final = _ERROR_BODY.validate_python(body)
+    declared: Final = error_object.get("provider_specific_fields")
+    fields: Final = (
+        _ERROR_BODY.validate_python(declared)
+        if isinstance(declared, dict)
+        else {key: value for key, value in error_object.items() if key not in _OPENAI_ERROR_OBJECT_FIELDS}
+    )
+    if not fields:
         return None
-    return _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(_ERROR_BODY.validate_python(fields)))
+    return _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(fields))
 
 
 def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:
