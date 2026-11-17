@@ -44,6 +44,13 @@ def normalize_datadog_tag_value(value: object) -> str:
     return re.sub(r"_+", "_", normalized_value).strip("_")
 
 
+def get_datadog_global_tags() -> tuple[str, ...]:
+    """Split `DD_TAGS` into tags, on commas when it has any and on whitespace otherwise, like ddtrace."""
+    dd_tags: Final = os.getenv("DD_TAGS", "")
+    raw_tags: Final = dd_tags.split(",") if "," in dd_tags else dd_tags.split()
+    return tuple(stripped for tag in raw_tags if (stripped := tag.strip()))
+
+
 def get_datadog_tags(
     standard_logging_object: StandardLoggingPayload | None = None,
 ) -> list[str]:
@@ -62,10 +69,9 @@ def get_datadog_tags(
         "POD_NAME": get_datadog_pod_name(),
     }
 
-    custom_tags: Final = (tag.strip() for tag in os.getenv("DD_TAGS", "").split(","))
     tags: Final[list[str]] = [
         *(f"{k}:{v}" for k, v in base_tags.items()),
-        *(tag for tag in custom_tags if tag),
+        *get_datadog_global_tags(),
     ]
 
     if standard_logging_object:

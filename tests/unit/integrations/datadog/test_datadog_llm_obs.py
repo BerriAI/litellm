@@ -93,7 +93,7 @@ def build(logger: DataDogLLMObsLogger, **kwargs: Any) -> dict[str, Any]:
 
 def test_dd_tags_are_exported_on_llm_observability_spans(logger: DataDogLLMObsLogger) -> None:
     with patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}):
-        payload = build(logger)
+        payload: Final = build(logger)
 
     assert "cost_center:engineering" in payload["tags"]
     assert "team:platform" in payload["tags"]

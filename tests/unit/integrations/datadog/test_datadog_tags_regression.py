@@ -1,5 +1,6 @@
 import datetime
 import os
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +28,7 @@ class TestDatadogTagsRegression:
                 "DD_API_KEY": "mock-api-key",
                 "DD_APP_KEY": "mock-app-key",
                 "DD_SITE": "test.datadoghq.com",
+                "DD_TAGS": "",
             },
         ):
             yield
@@ -93,12 +95,12 @@ class TestDatadogTagsRegression:
         assert "request_tag:capability:p_t" in tags
         assert "team:67890" in tags
 
-    def test_dd_tags_are_exported_as_individual_tags_for_logs(self, mock_env_vars):
+    def test_dd_tags_are_exported_as_individual_tags_for_logs(self, mock_env_vars: None) -> None:
         with patch.dict(os.environ, {"DD_TAGS": " team:platform , cost_center:engineering ,, "}):
-            tags = get_datadog_tags()
+            tags: Final = get_datadog_tags()
             with patch("asyncio.create_task"):
-                logger = DataDogLogger()
-            log = logger.create_datadog_logging_payload(
+                logger: Final = DataDogLogger()
+            log: Final = logger.create_datadog_logging_payload(
                 kwargs={"standard_logging_object": StandardLoggingPayload(metadata=StandardLoggingMetadata())},
                 response_obj=None,
                 start_time=datetime.datetime(2026, 1, 1),
@@ -108,6 +110,25 @@ class TestDatadogTagsRegression:
         assert "env:test-env" in tags
         assert tags[-2:] == ["team:platform", "cost_center:engineering"]
         assert "cost_center:engineering" in log["ddtags"].split(",")
+
+    def test_space_separated_dd_tags_are_exported_as_individual_tags(self, mock_env_vars: None) -> None:
+        with patch.dict(os.environ, {"DD_TAGS": "  team:platform   cost_center:engineering\tregion:eu "}):
+            tags: Final = get_datadog_tags()
+
+        assert tags[-3:] == ["team:platform", "cost_center:engineering", "region:eu"]
+
+    def test_unset_dd_tags_adds_no_tags(self, mock_env_vars: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("DD_TAGS", raising=False)
+
+        tags: Final = get_datadog_tags()
+
+        assert tags == [
+            "env:test-env",
+            "service:test-service",
+            "version:1.0.0",
+            "HOSTNAME:test-host",
+            "POD_NAME:test-pod",
+        ]
 
     @pytest.mark.asyncio
     async def test_non_string_request_tag_still_emits_the_datadog_payload(self, mock_env_vars):
