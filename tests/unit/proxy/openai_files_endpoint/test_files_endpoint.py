@@ -1193,10 +1193,49 @@ def test_files_listed_from_a_mixed_azure_group_come_from_the_resource_batch_uplo
     listing: Final = client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key", **headers})
 
     assert listing.status_code == 200, listing.text
-    assert [listed["id"] for listed in listing.json()["data"]] == [f"file-on-{reached_sku}"]
+    assert [get_original_file_id(listed["id"]) for listed in listing.json()["data"]] == [f"file-on-{reached_sku}"]
     assert {sku: route.call_count for sku, route in list_routes.items()} == {
         sku: int(sku == reached_sku) for sku in _MIXED_GROUP_SKUS
     }
+
+
+@pytest.mark.parametrize(
+    ("headers", "query"),
+    [({"x-litellm-model": "gpt-mixed"}, "?purpose=batch"), ({}, "?target_model_names=gpt-mixed&purpose=batch")],
+    ids=["header", "target-model-names"],
+)
+def test_a_batch_file_listed_from_a_mixed_azure_group_opens_on_the_resource_it_was_listed_from(
+    mixed_azure_group: respx.MockRouter, headers: dict[str, str], query: str
+):
+    listed_file: Final = {
+        "id": "file-listed",
+        "object": "file",
+        "bytes": 1,
+        "created_at": 0,
+        "filename": "batch.jsonl",
+        "purpose": "batch",
+        "status": "processed",
+    }
+    for sku in _MIXED_GROUP_SKUS:
+        mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files$").mock(
+            return_value=httpx.Response(
+                200,
+                json={"object": "list", "data": [listed_file], "first_id": "file-listed", "last_id": "file-listed"},
+            )
+        )
+        mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files/file-listed/content$").mock(
+            return_value=httpx.Response(200, content=f"rows from {sku}".encode())
+        )
+    caller_headers: Final = {"Authorization": "Bearer test-key", **headers}
+
+    listing: Final = client.get(f"/v1/files{query}", headers=caller_headers).json()
+    listed_ids: Final = [listed["id"] for listed in listing["data"]]
+    contents: Final = [
+        client.get(f"/v1/files/{file_id}/content", headers=caller_headers).content for file_id in listed_ids
+    ]
+
+    assert contents == [b"rows from batch-sku"]
+    assert (listing["first_id"], listing["last_id"]) == (listed_ids[0], listed_ids[-1])
 
 
 def _batch_row(custom_id: str, model: str) -> bytes:

@@ -938,6 +938,37 @@ def test_batch_deployment_is_none_when_the_group_needs_no_batch_override(model_l
     assert batch_deployment_id(Router(model_list=model_list), "gpt-mixed") is None
 
 
+@pytest.mark.parametrize(
+    ("model_list", "expected"),
+    [
+        (
+            [
+                _azure_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+                {
+                    "model_name": "gpt-mixed",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "dummy-key"},
+                    "model_info": {"id": "openai-chat-id"},
+                },
+                _azure_deployment("gpt-mixed", "batch-sku", "batch", id="batch-id"),
+            ],
+            "batch-id",
+        ),
+        (
+            [
+                _azure_deployment("gpt-mixed", "batch-sku", "batch", id="batch-id"),
+                _azure_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+            ],
+            None,
+        ),
+    ],
+    ids=["declared-batch-deployment-after-an-undeclared-one", "group-default-already-batch"],
+)
+def test_batch_deployment_names_the_declared_batch_deployment_only_when_group_routing_misses_it(
+    model_list: list[dict[str, object]], expected: str | None
+):
+    assert batch_deployment_id(Router(model_list=model_list), "gpt-mixed") == expected
+
+
 def test_batch_deployment_is_none_without_a_router():
     assert batch_deployment_id(None, "gpt-mixed", preferred_deployment_id="batch-id") is None
 

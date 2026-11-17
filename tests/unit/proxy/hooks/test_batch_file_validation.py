@@ -1192,6 +1192,61 @@ def test_should_skip_when_file_bound_provider_is_skip_listed():
     assert should_skip is True
 
 
+@pytest.mark.parametrize(
+    ("hinted_deployment_id", "expected_skip"),
+    [(None, False), ("openai-batch-id", False), ("azure-batch-id", True)],
+    ids=["group-name", "file-hinting-the-openai-deployment", "file-hinting-the-azure-batch-deployment"],
+)
+def test_provider_skip_follows_the_deployment_a_mixed_group_batch_runs_on(
+    hinted_deployment_id: str | None, expected_skip: bool
+):
+    from litellm import Router
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    azure_params: Final = {"api_key": "dummy-key", "api_version": "2025-04-01-preview"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-mixed",
+                "litellm_params": {"model": "azure/chat-sku", "api_base": "https://chat.openai.azure.com", **azure_params},
+                "model_info": {"id": "chat-id", "mode": "chat"},
+            },
+            {
+                "model_name": "gpt-mixed",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "dummy-key"},
+                "model_info": {"id": "openai-batch-id", "mode": "batch"},
+            },
+            {
+                "model_name": "gpt-mixed",
+                "litellm_params": {"model": "azure/batch-sku", "api_base": "https://batch.openai.azure.com", **azure_params},
+                "model_info": {"id": "azure-batch-id", "mode": "batch"},
+            },
+        ]
+    )
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter.create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    data: Final = (
+        {"model": "gpt-mixed", "input_file_id": "file-abc"}
+        if hinted_deployment_id is None
+        else {"input_file_id": encode_file_id_with_model("file-abc", "gpt-mixed", deployment_id=hinted_deployment_id)}
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["azure"]},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", router),
+    ):
+        should_skip, _ = rate_limiter._should_skip_batch_input_file_processing(
+            data=data, user_api_key_dict=UserAPIKeyAuth(api_key="sk", models=["*"])
+        )
+
+    assert should_skip is expected_skip
+
+
 def test_warns_once_for_unsupported_model_skip_setting():
     """Operators who set the no-op per-model skip key get a single warning so a
     misconfigured deployment does not silently leave batch limits unenforced."""

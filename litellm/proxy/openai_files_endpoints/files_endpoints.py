@@ -87,6 +87,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     batch_row_model_for_deployment,
     deployment_drop_params,
     encode_file_id_with_model,
+    encode_listed_file_ids,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
     handle_model_based_routing,
@@ -2039,10 +2040,17 @@ async def list_files(
         elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(data=data, credentials=credentials)
-            response = await litellm.afile_list(
+            routed_files: Final = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
                 **data,
+            )
+            response = encode_listed_file_ids(
+                _as_file_list_page(routed_files),
+                model=model_used,
+                deployment_id=batch_deployment_id(llm_router, model_used)
+                if purpose == "batch" and model_used is not None
+                else None,
             )
 
             verbose_proxy_logger.debug("Listed files using model: %s", model_used)
@@ -2056,18 +2064,24 @@ async def list_files(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
+            list_deployment_id: Final = (
+                batch_deployment_id(llm_router, target_model_name) if purpose == "batch" else None
+            )
             credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=target_model_name,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
-                deployment_id=batch_deployment_id(llm_router, target_model_name) if purpose == "batch" else None,
+                deployment_id=list_deployment_id,
             )
             prepare_data_with_credentials(data=data, credentials=credentials)
-            response = await litellm.afile_list(
+            target_files: Final = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
                 **data,
+            )
+            response = encode_listed_file_ids(
+                _as_file_list_page(target_files), model=target_model_name, deployment_id=list_deployment_id
             )
         else:
             custom_llm_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)

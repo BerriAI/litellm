@@ -204,7 +204,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self._deployment_model_name: Final = deployment_model_name
         self._warned_unsupported_model_skip = False
 
-    def _get_file_bound_batch_model(self, data: dict) -> str | None:
+    def _get_file_bound_batch_model(self, data: Mapping[str, object]) -> str | None:
         """Resolve the model bound to the batch input file ID.
 
         ``create_batch`` routes a file-bound id (model-embedded ``file-...`` or
@@ -261,24 +261,18 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         runs on, the same one the upload rewrote the rows for.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            batch_deployment_id,
+            batch_routed_model_id,
             batch_row_model_for_deployment,
             get_credentials_for_model,
-            hinted_batch_deployment_id,
         )
         from litellm.proxy.proxy_server import llm_router
 
         if routing_alias is None or llm_router is None:
             return MappingProxyType({})
-        deployment_id: Final = (
-            hinted_batch_deployment_id(llm_router, routing_alias, hinted_file_id)
-            if hinted_file_id is not None
-            else batch_deployment_id(llm_router, routing_alias)
-        )
         try:
             credentials: Final = get_credentials_for_model(
                 llm_router=llm_router,
-                model_id=deployment_id or routing_alias,
+                model_id=batch_routed_model_id(llm_router, routing_alias, hinted_file_id),
                 operation_context="batch input file read (rate limiting)",
             )
         except HTTPException:
@@ -289,7 +283,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return MappingProxyType({})
         return MappingProxyType({batch_row_model_for_deployment(deployment_model, provider): routing_alias})
 
-    def _resolve_batch_provider(self, batch_model: str | None) -> str | None:
+    def _resolve_batch_provider(self, batch_model: str | None, hinted_file_id: str | None) -> str | None:
         """Resolve the provider from the deployment that serves ``batch_model``.
 
         The provider is read from trusted router credentials rather than the
@@ -300,6 +294,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return None
 
         from litellm.proxy.openai_files_endpoints.common_utils import (
+            batch_routed_model_id,
             get_credentials_for_model,
         )
         from litellm.proxy.proxy_server import llm_router
@@ -310,7 +305,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         try:
             credentials: Final = get_credentials_for_model(
                 llm_router=llm_router,
-                model_id=batch_model,
+                model_id=batch_routed_model_id(llm_router, batch_model, hinted_file_id),
                 operation_context="batch input file read (rate limiting)",
             )
         except HTTPException:
@@ -494,7 +489,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         skip_providers: Final = general_settings.get("skip_batch_input_file_rate_limiting_for_providers") or []
         if skip_providers:
-            batch_provider: Final = self._resolve_batch_provider(self._get_batch_routing_model(data))
+            body: Final = _BATCH_BODY_ADAPTER.validate_python(data)
+            input_file_id: Final = body.get("input_file_id")
+            batch_provider: Final = self._resolve_batch_provider(
+                self._get_batch_routing_model(data),
+                hinted_file_id=input_file_id
+                if isinstance(input_file_id, str) and self._get_file_bound_batch_model(body)
+                else None,
+            )
             if batch_provider and batch_provider in skip_providers:
                 verbose_proxy_logger.debug("Skipping batch input file processing for provider=%s", batch_provider)
                 return True, None

@@ -19,7 +19,7 @@ from typing import (
 )
 from urllib.parse import unquote, urlparse
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -27,10 +27,11 @@ from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import (
     batch_cost_is_final,
     batch_create_routing,
+    is_batch_capable,
     without_deployments_that_cannot_batch,
 )
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
@@ -394,6 +395,32 @@ def encode_batch_response_ids(response, model: str, deployment_id: str | None = 
             )
 
 
+def _hinted_listed_file(listed: object, model: str, deployment_id: str) -> object:
+    file_id: Final = attribute_or_none(listed, "id")
+    if not isinstance(listed, BaseModel) or not isinstance(file_id, str):
+        return listed
+    return listed.model_copy(
+        update={"id": encode_file_id_with_model(file_id=file_id, model=model, deployment_id=deployment_id)}
+    )
+
+
+def encode_listed_file_ids(page: object, model: str | None, deployment_id: str | None) -> object:
+    if model is None or deployment_id is None or not isinstance(page, BaseModel):
+        return page
+    cursors: Final = MappingProxyType({field: attribute_or_none(page, field) for field in ("first_id", "last_id")})
+    hinted_cursors: Final = MappingProxyType(
+        {
+            field: encode_file_id_with_model(file_id=cursor, model=model, deployment_id=deployment_id)
+            for field, cursor in cursors.items()
+            if isinstance(cursor, str)
+        }
+    )
+    listed: Final = as_object_list(attribute_or_none(page, "data")) or ()
+    return page.model_copy(
+        update={**hinted_cursors, "data": [_hinted_listed_file(file, model, deployment_id) for file in listed]}
+    )
+
+
 def _model_embedded_payload(encoded_id: object) -> str | None:
     if not isinstance(encoded_id, str):
         return None
@@ -659,12 +686,32 @@ def batch_deployment_id(
         return preferred_deployment_id
     if len(batch_ready) == len(group):
         return None
-    return next(iter(ready_ids), None)
+    declared_ids: Final = tuple(
+        deployment_id
+        for deployment_id in map(_unpaused_deployment_id, filter(is_batch_capable, batch_ready))
+        if deployment_id is not None
+    )
+    chosen: Final = next(iter(declared_ids or ready_ids), None)
+    return None if chosen == _group_default_deployment_id(llm_router, model) else chosen
+
+
+def _group_default_deployment_id(llm_router: "Router", model: str) -> str | None:
+    deployment: Final = llm_router.registry().credentials(model, form="deployment")
+    return deployment.model_info.id if deployment is not None else None
 
 
 def hinted_batch_deployment_id(llm_router: Optional["Router"], model: str, encoded_id: str) -> str | None:
     hint: Final = decode_deployment_from_file_id(encoded_id)
     return batch_deployment_id(llm_router, model, preferred_deployment_id=hint) if hint else None
+
+
+def batch_routed_model_id(llm_router: Optional["Router"], model: str, hinted_file_id: str | None) -> str:
+    deployment_id: Final = (
+        hinted_batch_deployment_id(llm_router, model, hinted_file_id)
+        if hinted_file_id is not None
+        else batch_deployment_id(llm_router, model)
+    )
+    return deployment_id or model
 
 
 def batch_row_model_for_deployment(deployment_model: str, custom_llm_provider: str) -> str:
