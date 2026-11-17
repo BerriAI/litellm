@@ -98,8 +98,9 @@ class GenerateContentToCompletionHandler:
         stream_options: Final = _adapter_stream_options(request_kwargs.get("stream_options")) if stream else None
         forwarded_kwargs: Final = _forwarded_request_kwargs(request_kwargs, custom_logging_obj)
         logging_obj: Final = forwarded_kwargs.get("litellm_logging_obj")
-        if isinstance(logging_obj, LiteLLMLoggingObj) and custom_logging_obj is None:
-            logging_obj.call_type = completion_call_type.value
+        plain_adapter_logging_obj: Final = logging_obj if custom_logging_obj is None else None
+        if isinstance(plain_adapter_logging_obj, LiteLLMLoggingObj):
+            plain_adapter_logging_obj.set_logged_call_type(completion_call_type.value)
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.update_messages(completion_request["messages"])
         if stream and isinstance(logging_obj, LiteLLMLoggingObj):
@@ -115,8 +116,8 @@ class GenerateContentToCompletionHandler:
             )
         )
         messages: Final = completion_kwargs.get("messages", ())
-        if isinstance(logging_obj, LiteLLMLoggingObj) and messages and Rules.has_pre_call_rules():
-            _run_pre_call_rules(logging_obj, messages, model)
+        if isinstance(plain_adapter_logging_obj, LiteLLMLoggingObj) and messages and Rules.has_pre_call_rules():
+            _run_pre_call_rules(plain_adapter_logging_obj, messages, model)
 
         return completion_kwargs
 

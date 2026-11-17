@@ -667,6 +667,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
+        self.logged_call_type: str | None = None
         self.relays_llm_passthrough: Final = call_type in (
             CallTypes.llm_passthrough_route.value,
             CallTypes.allm_passthrough_route.value,
@@ -1033,7 +1034,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "start_time": self.start_time,
                 "stream": self.stream,
                 "user": user,
-                "call_type": str(self.call_type),
+                "call_type": str(self.payload_call_type()),
                 "litellm_call_id": self.litellm_call_id,
                 "completion_start_time": self.completion_start_time,
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
@@ -2392,6 +2393,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled = True
         return True
 
+    def set_logged_call_type(self, call_type: str | None) -> None:
+        self.logged_call_type = call_type
+
+    def payload_call_type(self) -> str:
+        if self.logged_call_type is not None:
+            return self.logged_call_type
+        return self.call_type if isinstance(self.call_type, str) else str(self.call_type)
+
     def claim_sync_success_log(self) -> bool:
         if self._sync_success_scheduled:
             return False
@@ -3130,13 +3139,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
                         kwargs=call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
                 elif isinstance(callback, CustomLogger):
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
                         kwargs=call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
                 if not for_async_request:
                     self.model_call_details = call_details
@@ -3705,7 +3714,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
                 elif isinstance(callback, CustomLogger):
                     result = redact_message_input_output_from_custom_logger(
@@ -3714,7 +3723,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
             except Exception:  # noqa: BLE001  # one failing hook must not skip later callbacks (slot release)
                 verbose_logger.error(

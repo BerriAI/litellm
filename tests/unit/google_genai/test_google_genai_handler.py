@@ -1103,6 +1103,42 @@ async def test_generate_content_adapter_prompt_is_masked_by_a_logging_only_guard
     assert logged.inputs == [[{"role": "user", "content": "My card is <CREDIT_CARD>"}]]
 
 
+@pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
+@pytest.mark.asyncio
+async def test_generate_content_adapter_leaves_post_call_guardrails_the_endpoint_call_type(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str, stream: bool
+):
+    from litellm.litellm_core_utils.rules import Rules
+    from litellm.utils import function_setup
+
+    logged: Final = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    contents: Final = [{"role": "user", "parts": [{"text": "Hello"}]}]
+    proxy_logging_obj, _ = function_setup(
+        entrypoint,
+        Rules(),
+        datetime.datetime.now(),
+        model="grok-group",
+        contents=contents,
+        litellm_call_id=_ADAPTER_CALL_ID,
+    )
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream))
+        response: Final = await getattr(_adapter_router(), entrypoint)(
+            model="grok-group",
+            contents=contents,
+            litellm_call_id=_ADAPTER_CALL_ID,
+            litellm_logging_obj=proxy_logging_obj,
+        )
+        if stream:
+            await _drain(response)
+    await await_until(lambda: bool(logged.events), message="the request's success was logged")
+
+    assert proxy_logging_obj.call_type == entrypoint
+    assert logged.events == [("success", "acompletion", _ADAPTER_CALL_ID, "grok-group")]
+
+
 _GEMINI_INPUT_COST_PER_TOKEN: Final = 0.004
 _GEMINI_OUTPUT_COST_PER_TOKEN: Final = 0.008
 
