@@ -185,3 +185,55 @@ async def test_basic_rerank(case: _Case, sync_mode: bool, respx_mock: MockRouter
         assert cost == 0.0
     else:
         assert cost > 0
+
+
+def test_unsupported_provider_rerank_config_returns_none() -> None:
+    """Issue #52252: Ensure providers without dedicated rerank config return None instead of CohereRerankConfig."""
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    cfg_together = ProviderConfigManager.get_provider_rerank_config(
+        model="together_ai/my-reranker",
+        provider=LlmProviders.TOGETHER_AI,
+        api_base=None,
+        present_version_params=[],
+    )
+    assert cfg_together is None
+
+    cfg_ollama = ProviderConfigManager.get_provider_rerank_config(
+        model="ollama/mxbai-rerank",
+        provider=LlmProviders.OLLAMA,
+        api_base=None,
+        present_version_params=[],
+    )
+    assert cfg_ollama is None
+
+
+def test_cohere_and_proxy_rerank_config() -> None:
+    """Cohere and LiteLLM proxy should continue resolving CohereRerankConfig."""
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    cfg_cohere = ProviderConfigManager.get_provider_rerank_config(
+        model="rerank-english-v3.0",
+        provider=LlmProviders.COHERE,
+        api_base=None,
+        present_version_params=[],
+    )
+    assert isinstance(cfg_cohere, (litellm.CohereRerankConfig, litellm.CohereRerankV2Config))
+
+    cfg_proxy = ProviderConfigManager.get_provider_rerank_config(
+        model="rerank-english-v3.0",
+        provider=LlmProviders.LITELLM_PROXY,
+        api_base=None,
+        present_version_params=[],
+    )
+    assert isinstance(cfg_proxy, (litellm.CohereRerankConfig, litellm.CohereRerankV2Config))
+
+
+def test_rerank_unsupported_provider_raises_error() -> None:
+    """Calling litellm.rerank with an unsupported provider raises ValueError."""
+    with pytest.raises(Exception) as exc_info:
+        litellm.rerank(model="ollama/mxbai-rerank", query="test query", documents=["doc 1"], top_n=1)
+    assert "Unsupported provider: ollama" in str(exc_info.value)
+

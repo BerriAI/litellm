@@ -3050,12 +3050,15 @@ def rerank_cost(
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
 
     try:
-        config: Final = ProviderConfigManager.get_provider_rerank_config(
+        config: Final[BaseRerankConfig | None] = ProviderConfigManager.get_provider_rerank_config(
             model=model,
             api_base=None,
             present_version_params=[],
             provider=LlmProviders(custom_llm_provider),
         )
+
+        if config is None:
+            return 0.0, 0.0
 
         try:
             model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
