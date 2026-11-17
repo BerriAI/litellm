@@ -54,12 +54,13 @@ const resolveBudgetDecimals = (
   budgetDecimals: number | undefined,
 ): number => {
   if (budgetDecimals !== undefined) return budgetDecimals;
-  if (budget === null) return 0;
-  if (budget > 0 && budget < 0.01) {
-    return Math.min(8, Math.max(5, Math.ceil(-Math.log10(budget))));
-  }
-  if (!Number.isInteger(budget)) return 2;
-  return 0;
+  if (budget === null || !Number.isFinite(budget) || Number.isInteger(budget)) return 0;
+  const str = budget.toString();
+  const expMatch = /e-(\d+)$/i.exec(str);
+  const sigDecimals = expMatch
+    ? Number(expMatch[1]) + (str.split("e")[0].split(".")[1]?.length ?? 0)
+    : (str.split(".")[1]?.length ?? 0);
+  return Math.min(8, Math.max(2, sigDecimals));
 };
 
 export function SpendBudgetCell({
