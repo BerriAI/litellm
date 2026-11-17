@@ -4351,6 +4351,23 @@ class TestShadowEvalRubricResults:
         assert (await get_shadow_eval_rubric_results("job-1", ADMIN)).rubric == RUBRIC
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("caller", [ADMIN, VIEWER], ids=["admin", "viewer"])
+    async def test_rubric_results_without_a_database_report_it_is_not_connected(
+        self, monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth
+    ):
+        from litellm.proxy._types import CommonProxyErrors
+
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+        with pytest.raises(HTTPException) as unavailable:
+            await get_shadow_eval_rubric_results("job-1", caller)
+
+        assert (unavailable.value.status_code, unavailable.value.detail) == (
+            500,
+            CommonProxyErrors.db_not_connected_error.value,
+        )
+
+    @pytest.mark.asyncio
     async def test_the_regular_job_detail_of_a_rubric_job_keeps_its_legacy_shape(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(legs=[_rubric_leg()]))
 
