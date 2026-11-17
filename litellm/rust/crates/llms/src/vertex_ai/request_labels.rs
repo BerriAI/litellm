@@ -4,9 +4,7 @@
 
 use base64::{Engine, engine::general_purpose};
 use litellm_python_compat::{
-    Value as PyValue,
     base64::b64decode_validate,
-    json as python_json,
     unicode::{category, isspace},
 };
 use litellm_router_types::ExtraParams;
@@ -236,15 +234,11 @@ fn header_value(labels: Vec<Label>) -> Option<String> {
     if labels.is_empty() {
         return None;
     }
-    let object = PyValue::Dict(
-        labels
-            .into_iter()
-            .map(|(key, value)| (PyValue::Str(key), PyValue::Str(value)))
-            .collect(),
-    );
-    python_json::dumps(&object)
-        .ok()
-        .map(|json| general_purpose::STANDARD.encode(json))
+    let object: serde_json::Map<String, Value> = labels
+        .into_iter()
+        .map(|(key, value)| (key, Value::String(value)))
+        .collect();
+    Some(general_purpose::STANDARD.encode(Value::Object(object).to_string()))
 }
 
 fn is_labels_header(name: &str) -> bool {
@@ -308,7 +302,15 @@ mod tests {
         general_purpose::STANDARD.encode(json)
     }
 
-    fn sent_labels(headers: &[(&str, String)], params: Value) -> Option<String> {
+    fn labels_in_order(json: &str) -> Vec<(String, Value)> {
+        serde_json::from_str::<Map<String, Value>>(json)
+            .unwrap()
+            .into_iter()
+            .collect()
+    }
+
+    /// The labels the sent header holds, in their order.
+    fn sent_labels(headers: &[(&str, String)], params: Value) -> Option<Vec<(String, Value)>> {
         let headers = headers
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
@@ -322,7 +324,7 @@ mod tests {
         labels.first().map(|(name, value)| {
             assert_eq!(name, LABELS_HEADER);
             let decoded = general_purpose::STANDARD.decode(value).unwrap();
-            String::from_utf8(decoded).unwrap()
+            labels_in_order(std::str::from_utf8(&decoded).unwrap())
         })
     }
 
@@ -398,7 +400,21 @@ mod tests {
         #[case] params: Value,
         #[case] expected: Option<&str>,
     ) {
-        assert_eq!(sent_labels(&headers, params).as_deref(), expected);
+        assert_eq!(sent_labels(&headers, params), expected.map(labels_in_order));
+    }
+
+    #[rstest]
+    fn the_header_is_compact_utf8_json() {
+        let value = header_value(vec![
+            ("team".into(), "équipe".into()),
+            ("env".into(), "prod".into()),
+        ])
+        .unwrap();
+        let decoded = general_purpose::STANDARD.decode(value).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&decoded).unwrap(),
+            r#"{"team":"équipe","env":"prod"}"#
+        );
     }
 
     #[rstest]
@@ -423,10 +439,9 @@ mod tests {
             }),
         )
         .unwrap();
-        let labels: Map<String, Value> = serde_json::from_str(&sent).unwrap();
-        assert_eq!(labels.len(), 32);
-        assert_eq!(labels.keys().next().unwrap(), "user_api_key_user_id");
-        assert_eq!(labels.keys().next_back().unwrap(), "k30");
+        assert_eq!(sent.len(), 32);
+        assert_eq!(sent.first().unwrap().0, "user_api_key_user_id");
+        assert_eq!(sent.last().unwrap().0, "k30");
     }
 
     #[rstest]
