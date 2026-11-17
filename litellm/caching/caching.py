@@ -173,6 +173,7 @@ class Cache:
         semantic_cache_embedding_max_input_tokens: int | None = None,
         semantic_cache_embedding_timeout: float | None = None,
         semantic_cache_scope: str = SemanticCacheScope.KEY.value,
+        semantic_cache_allow_tools: bool = False,
         max_messages: int | None = 4,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
@@ -354,6 +355,7 @@ class Cache:
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
         self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
+        self.semantic_cache_allow_tools: bool = semantic_cache_allow_tools
         self.max_messages: int | None = max_messages
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
@@ -666,6 +668,21 @@ class Cache:
                     )  # Convert string to dictionary
             except Exception:
                 cached_response = _DECODED_LITERAL.validate_python(ast.literal_eval(cached_response))
+            if (
+                self._is_semantic_cache()
+                and not getattr(self, "semantic_cache_allow_tools", False)
+                and isinstance(cached_response, dict)
+            ):
+                choices = cached_response.get("choices")
+                if choices and isinstance(choices, list) and len(choices) > 0:
+                    first_choice = choices[0]
+                    if isinstance(first_choice, dict):
+                        message = first_choice.get("message", {})
+                        if isinstance(message, dict) and (message.get("tool_calls") or message.get("function_call")):
+                            verbose_logger.debug(
+                                "get_cache_logic: Rejecting cached response containing tool_calls/function_call from semantic cache."
+                            )
+                            return None
             return cached_response
         return cached_result
 
@@ -1027,6 +1044,15 @@ class Cache:
         Always False once the request carries more than `max_messages` messages
         """
         if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
+            return False
+        if (
+            self._is_semantic_cache()
+            and (kwargs.get("tools") or kwargs.get("functions"))
+            and not getattr(self, "semantic_cache_allow_tools", False)
+        ):
+            verbose_logger.debug(
+                "should_use_cache: Bypassing semantic cache because tools/functions are present in request."
+            )
             return False
         if self.mode == CacheMode.default_on:
             return True
