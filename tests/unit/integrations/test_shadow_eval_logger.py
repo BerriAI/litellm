@@ -2567,8 +2567,6 @@ class TestSamplingFunnel:
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
 
 
-
-
 _FAR_FUTURE: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
 _SETTLE_GUARD_SECONDS: Final = 5
 
