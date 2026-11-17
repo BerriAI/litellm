@@ -75,6 +75,15 @@ pub trait BaseMessagesConfig: Sync {
         false
     }
 
+    /// The requested params the call logs as its model parameters.
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        _context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        Ok(params)
+    }
+
     fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
         ToolCustomField::Keep
     }

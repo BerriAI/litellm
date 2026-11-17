@@ -335,7 +335,9 @@ async fn provider_call(
     let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
     let without_keys = without_additional_drop_params(sanitized, &dropped_keys)?;
     let requested = requested_optional_params(without_keys, provider, &transform_context)?;
-    let requested_params = serde_json::to_value(&requested.params).map_err(serialize_failure)?;
+    let requested_params =
+        serde_json::to_value(config.logged_params(requested.params.clone(), &transform_context)?)
+            .map_err(serialize_failure)?;
     let trimmed =
         without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 

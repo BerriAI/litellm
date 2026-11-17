@@ -44,6 +44,7 @@ use super::invoke_transformations::{
     request::{
         BEDROCK_INVOKE_REQUEST_SETTINGS, InvokeRequestSettings,
         clamp_adaptive_reasoning_effort_for_bedrock, transform_anthropic_messages_request,
+        with_logged_tools,
     },
 };
 
@@ -431,6 +432,14 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
         with_zero_usage(response)
+    }
+
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        with_logged_tools(params, context)
     }
 
     fn wire_body(&self, body: Value) -> Value {
