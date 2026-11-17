@@ -13792,6 +13792,31 @@ class TestInheritAuthGuardrails:
         assert merged["metadata"]["guardrails"] == ["key-guard", "model-guard"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", [5, 0, False, True, [], ["gpt-4o"], {}])
+    async def test_key_policies_apply_when_the_body_model_is_not_a_string(
+        self, model: object, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+        from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+        policy_registry: Final = get_policy_registry()
+        monkeypatch.setattr(
+            policy_registry, "_policies", {"baseline": Policy(guardrails=PolicyGuardrails(add=["policy-guard"]))}
+        )
+        monkeypatch.setattr(policy_registry, "_initialized", True)
+
+        response, pre_call, _ = await self._run_with_response(
+            self._chat_body(model=model),
+            inherit=True,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata={"policies": ["baseline"]}),
+            guardrails=(self._guardrail("policy-guard", GuardrailEventHooks.pre_call),),
+        )
+
+        assert response.status_code == 200
+        assert pre_call[0]["model"] == model
+        assert pre_call[0]["metadata"]["guardrails"] == ["policy-guard"]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("settings", [{}, True])
     async def test_guardrail_a_client_names_in_the_dict_form_stays_after_the_keys(self, settings: object):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
