@@ -22,6 +22,7 @@ import json
 import random
 import re
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -554,23 +555,25 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
-def _conversation_content_characters(content: object) -> int:
-    if isinstance(content, str):
-        return len(content)
-    if isinstance(content, list):
-        parts: Final = cast(Sequence[object], content)  # cast-ok: every list element is an object
-        return sum(_conversation_content_characters(part) for part in parts)
-    if isinstance(content, Mapping):
-        block: Final = cast(Mapping[object, object], content)  # cast-ok: mapping keys and values are objects
-        if block.get("type") == "text":
-            return _conversation_content_characters(block.get("text"))
-        if block.get("type") == "tool_result":
-            return _conversation_content_characters(block.get("content"))
-    return 0
+def _conversation_text_lengths(content: object) -> Iterator[int]:
+    pending: Final[deque[object]] = deque((content,))  # mutable-ok: explicit stack avoids recursive content traversal
+    while pending:
+        part = pending.pop()
+        if isinstance(part, str):
+            yield len(part)
+        elif isinstance(part, list):
+            parts = cast(Sequence[object], part)  # cast-ok: every list element is an object
+            pending.extend(parts)
+        elif isinstance(part, Mapping):
+            block = cast(Mapping[object, object], part)  # cast-ok: mapping keys and values are objects
+            if block.get("type") == "text":
+                pending.append(block.get("text"))
+            elif block.get("type") == "tool_result":
+                pending.append(block.get("content"))
 
 
 def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
-    return sum(_conversation_content_characters(message.get("content")) // 4 for message in messages or ())
+    return sum(sum(_conversation_text_lengths(message.get("content"))) // 4 for message in messages or ())
 
 
 def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:

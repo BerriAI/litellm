@@ -43,7 +43,7 @@ import {
   buildComplexityRouterConfig,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
-  getHeuristicFirstContextLimitError,
+  getHeuristicFirstConfigError,
   getReminderMarkersError,
   getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
@@ -346,7 +346,7 @@ const ExistingEditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
       getClassifierModelError(complexityRouterConfig) ??
       getHeuristicV2SuccessThresholdError(complexityRouterConfig.heuristic_v2_success_threshold) ??
-      getHeuristicFirstContextLimitError(complexityRouterConfig.heuristic_first_max_context_tokens) ??
+      getHeuristicFirstConfigError(complexityRouterConfig) ??
       getForecastConfigError(complexityRouterConfig) ??
       (heuristicScoringRole(complexityRouterConfig) === "decides"
         ? customDimensionsError(complexityRouterConfig.custom_dimensions)
@@ -487,7 +487,7 @@ const ExistingEditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const classifierError =
         getClassifierModelError(complexityRouterConfig) ??
         getHeuristicV2SuccessThresholdError(complexityRouterConfig.heuristic_v2_success_threshold) ??
-        getHeuristicFirstContextLimitError(complexityRouterConfig.heuristic_first_max_context_tokens) ??
+        getHeuristicFirstConfigError(complexityRouterConfig) ??
         getReminderMarkersError(complexityRouterConfig.reminder_markers) ??
         getClassifierPluginTimeoutError(
           complexityRouterConfig.classifier_type,

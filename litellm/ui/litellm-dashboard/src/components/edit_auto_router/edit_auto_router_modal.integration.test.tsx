@@ -221,6 +221,39 @@ describe("EditAutoRouterModal keyword matching", () => {
     else expect(savedConfig().heuristic_v2_success_threshold).toBe(0);
   });
 
+  it("saves custom tiers after an invalid conversation limit becomes hidden", async () => {
+    testQueryClient.clear();
+    vi.mocked(apiClient.post).mockResolvedValue({ allowances: [], error: null });
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            classifier_type: "heuristic_first",
+            heuristic_first_max_tier: "SIMPLE",
+            classifier_llm_config: { model: "gpt-4o-mini" },
+            heuristic_first_max_context_tokens: 8000,
+          },
+        },
+      },
+    });
+    openAutoRouterAdvanced("Classification Method");
+    fireEvent.change(screen.getByRole("textbox", { name: "Max conversation tokens before judge" }), {
+      target: { value: "invalid" },
+    });
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Edit tiers" }));
+    fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Short requests" } });
+    expect(screen.queryByRole("textbox", { name: "Max conversation tokens before judge" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig().classifier_type).toBe("llm");
+    expect(savedConfig()).not.toHaveProperty("heuristic_first_max_context_tokens");
+  });
+
   it("saves a legacy heuristic-first router with a v2 chain and an edited success threshold", async () => {
     renderModal({
       modelData: {

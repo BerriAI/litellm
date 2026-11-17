@@ -407,6 +407,11 @@ export const getHeuristicFirstContextLimitError = (limit: number | undefined): s
     : i18n.t("addModel.buildComplexityRouterConfig.contextLimitPositiveInteger");
 };
 
+export const getHeuristicFirstConfigError = (config: ComplexityRouterConfigValue): string | null =>
+  effectiveClassifierType(config) === "heuristic_first"
+    ? getHeuristicFirstContextLimitError(config.heuristic_first_max_context_tokens)
+    : null;
+
 export const getHeuristicV2SuccessThresholdError = (
   threshold: number | undefined,
   t: TFunction = i18n.t.bind(i18n),
