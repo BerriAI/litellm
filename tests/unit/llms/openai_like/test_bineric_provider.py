@@ -231,22 +231,21 @@ def test_bineric_per_request_model_without_a_cost_row_still_routes(
     usage_extra: Mapping[str, float],
     expected_cost: float | None,
 ):
-    assert "bineric/speech-to-text" not in litellm.model_cost
     completion: Final = {
         **_CHAT_COMPLETION,
-        "model": "speech-to-text",
+        "model": "unpriced-transcriber",
         "usage": {**_CHAT_COMPLETION["usage"], **usage_extra},
     }
     with respx.mock() as upstream:
         route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=completion)
         response: Final = litellm.completion(
-            model="bineric/speech-to-text",
+            model="bineric/unpriced-transcriber",
             messages=[{"role": "user", "content": "Transcribe this"}],
             api_key="bineric-test-key",
         )
 
     assert route.call_count == 1
-    assert json.loads(route.calls.last.request.content)["model"] == "speech-to-text"
+    assert json.loads(route.calls.last.request.content)["model"] == "unpriced-transcriber"
     if expected_cost is None:
         assert response._hidden_params["response_cost"] is None
     else:
