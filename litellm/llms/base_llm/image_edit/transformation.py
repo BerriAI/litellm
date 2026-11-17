@@ -141,6 +141,14 @@ class BaseImageEditConfig(ABC):
     ) -> ImageResponse:
         pass
 
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        """
+        Number of identical upstream requests the handler sends and merges into one response.
+
+        Override for providers that return one image per call, so a caller's `n` still yields `n` images.
+        """
+        return 1
+
     def use_multipart_form_data(self) -> bool:
         """
         Return True if the provider uses multipart/form-data for image edit requests.

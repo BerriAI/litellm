@@ -10,7 +10,7 @@ from litellm_proxy_extras.request_log_indexes import (
     filter_request_log_index_diff,
 )
 
-PACKAGE: Final = Path(__file__).resolve().parents[3] / "litellm-proxy-extras" / "litellm_proxy_extras"
+PACKAGE: Final = Path(__file__).resolve().parents[3] / "litellm" / "proxy-extras" / "litellm_proxy_extras"
 SCHEMA: Final = PACKAGE / "schema.prisma"
 INERT_MIGRATIONS: Final = (
     "20260823000000_add_spend_logs_api_key_starttime_index",

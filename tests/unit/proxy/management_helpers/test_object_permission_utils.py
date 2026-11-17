@@ -1054,6 +1054,26 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
     assert result == {"server-a"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_tool_permissions", ["[]", "null", '"server-2"'], ids=["array", "null", "string"])
+@patch(
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_allowed_mcp_servers_rejects_stored_tool_permissions_that_are_not_an_object(
+    mock_access_groups,
+    stored_tool_permissions: str,
+):
+    mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    mock_perm.mcp_servers = ["server-1"]
+    mock_perm.mcp_access_groups = []
+    mock_perm.mcp_tool_permissions = stored_tool_permissions
+
+    with pytest.raises(AttributeError, match="object has no attribute 'keys'"):
+        await _resolve_team_allowed_mcp_servers(mock_perm)
+
+
 # ---- Tests for the all-proxy-mcpservers sentinel (team scoped to every server) ----
 
 

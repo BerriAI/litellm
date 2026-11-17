@@ -19,7 +19,7 @@ payload (name + arguments) so we just build the tool definition.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
 from mcp.types import Tool as MCPTool
@@ -139,7 +139,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict[str, Any],
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, object]:
@@ -154,10 +154,12 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
 
         # Convert MCP input via transform_mcp_tool_to_openai_tool, then map to litellm
         # ChatCompletionToolParam (openai SDK type has incompatible strict/cache_control).
-        mcp_tool: Final = MCPTool(
-            name=mcp_tool_name,
-            description=mcp_tool_description or "",
-            input_schema=dict(mcp_input_schema) if isinstance(mcp_input_schema, Mapping) else {},
+        mcp_tool: Final = MCPTool.model_validate(
+            {
+                "name": mcp_tool_name,
+                "description": mcp_tool_description or "",
+                "input_schema": dict(mcp_input_schema) if isinstance(mcp_input_schema, Mapping) else {},
+            }
         )
         openai_tool: Final = transform_mcp_tool_to_openai_tool(mcp_tool)
         fn: Final = openai_tool["function"]

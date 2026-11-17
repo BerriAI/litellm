@@ -28,11 +28,10 @@ from dataclasses import dataclass
 from typing import Final
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
-
 from e2e_config import OTEL_QUERY_URL, POLL_INTERVAL, POLL_TIMEOUT
 from e2e_http import URL, NetworkError, NoBody, Result, Success, get
 from e2e_metadata import step
+from pydantic import BaseModel, ConfigDict, Field
 
 #: OTEL resource service.name the proxy exports under (OTEL_SERVICE_NAME default).
 JAEGER_SERVICE = "litellm"
@@ -118,9 +117,15 @@ def _ticks() -> Iterator[None]:
         time.sleep(POLL_INTERVAL)
 
 
-def _settled(trace: JaegerTrace, names: set[str], prefixes: set[str]) -> bool:
-    present = set(trace.span_names())
-    return names.issubset(present) and all(any(name.startswith(prefix) for name in present) for prefix in prefixes)
+def trace_settled(trace: JaegerTrace, names: set[str], prefixes: set[str]) -> bool:
+    root: Final = root_span(trace)
+    present: Final = frozenset(trace.span_names())
+    return (
+        root is not None
+        and root.kind == "server"
+        and names.issubset(present)
+        and all(any(name.startswith(prefix) for name in present) for prefix in prefixes)
+    )
 
 
 def root_span(trace: JaegerTrace) -> JaegerSpan | None:
@@ -172,7 +177,7 @@ class _Observation:
 
     def settled(self, names: set[str], prefixes: set[str]) -> bool:
         hits: Final = self.traces.hits
-        return self.unreachable is None and len(hits) == 1 and not self.missing and _settled(hits[0], names, prefixes)
+        return self.unreachable is None and len(hits) == 1 and not self.missing and trace_settled(hits[0], names, prefixes)
 
 
 @dataclass(frozen=True, slots=True)
