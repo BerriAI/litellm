@@ -790,7 +790,6 @@ async def test_a_bedrock_claude_deployment_places_cache_points_by_the_cache_poin
                     "aws_access_key_id": "bedrock-test-key",
                     "aws_secret_access_key": "bedrock-test-secret",
                     "aws_region_name": "us-east-1",
-                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
                 },
                 "model_info": {"id": "claude-id", **model_info},
             }
@@ -800,7 +799,10 @@ async def test_a_bedrock_claude_deployment_places_cache_points_by_the_cache_poin
 
     await router.acompletion(
         model="claude",
-        messages=[dict(message) for message in _MARKED_TOOL_CONVERSATION],
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "stable", "cache_control": _CACHE_MARK}]},
+            {"role": "user", "content": [{"type": "text", "text": "Weather in Paris?", "cache_control": _CACHE_MARK}]},
+        ],
         tools=[_MARKED_WEATHER_TOOL],
     )
 
