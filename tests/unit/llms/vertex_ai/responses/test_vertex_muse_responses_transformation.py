@@ -591,6 +591,11 @@ def test_muse_accepts_the_global_location(location: str | None, respx_mock: resp
         ("https://vertex-gateway.example/google-vertex?tenant=a", "https://vertex-gateway.example/google-vertex"),
         (GATEWAY_ENDPOINT.removesuffix("/responses"), "https://vertex-gateway.example"),
         (GATEWAY_ENDPOINT, "https://vertex-gateway.example"),
+        (ENDPOINT.removesuffix("/publishers/meta/v1/responses"), "https://aiplatform.googleapis.com"),
+        (
+            "https://vertex-gateway.example/google-vertex/v1/projects/unit-project/locations/global/endpoints/openapi/",
+            "https://vertex-gateway.example/google-vertex",
+        ),
     ],
 )
 def test_muse_sends_a_custom_api_base_to_the_meta_responses_path(

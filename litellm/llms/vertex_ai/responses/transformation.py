@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
@@ -34,6 +35,7 @@ _MUSE_TOOL_TYPES: Final = frozenset({"function", "namespace"})
 _NO_NAMESPACES: Final[Mapping[str, frozenset[str]]] = MappingProxyType({})
 _MUSE_PUBLISHER_PATH: Final = "/publishers/meta/v1"
 _MUSE_RESPONSES_PATH: Final = f"{_MUSE_PUBLISHER_PATH}/responses"
+_VERTEX_LOCATION_PATH: Final = re.compile(r".*/projects/[^/]+/locations/[^/]+")
 MUSE_CHAT_PARAMS: Final = (
     "max_tokens",
     "max_completion_tokens",
@@ -280,6 +282,9 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return api_base
         if api_base_path.endswith(_MUSE_PUBLISHER_PATH):
             return parsed_api_base._replace(path=api_base_path + "/responses").geturl()
+        location_path: Final = _VERTEX_LOCATION_PATH.match(api_base_path)
+        if location_path is not None:
+            return parsed_api_base._replace(path=location_path.group() + _MUSE_RESPONSES_PATH).geturl()
         if api_base_path.endswith(("/v1", "/v1beta1")):
             return graft_default_vertex_path(api_base, default_url)
         return parsed_api_base._replace(path=api_base_path + urlparse(default_url).path).geturl()
