@@ -33,7 +33,7 @@ from litellm.exceptions import (
     CallerCredentialAuthenticationError,
     DeploymentCredentialAuthenticationError,
     MalformedRequestFieldError,
-    logged_class_name,
+    reported_class_names,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -4033,7 +4033,7 @@ class PrometheusLogger(CustomLogger):
         if len(exception_class_name) >= 1:
             exception_class_name = exception_class_name[0].upper() + exception_class_name[1:] + "."
 
-        exception_class_name += logged_class_name(exception)
+        exception_class_name += reported_class_names(exception)[0]
         return exception_class_name
 
     @staticmethod

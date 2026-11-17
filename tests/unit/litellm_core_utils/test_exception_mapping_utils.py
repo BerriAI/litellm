@@ -13,10 +13,11 @@ from openai import AsyncOpenAI, OpenAI
 import litellm
 from litellm import completion
 from litellm.exceptions import (
-    ConflictBadRequestError,
     GuardrailRaisedException,
+    OpenAIConflictBadRequestError,
+    OpenAIServerErrorBadRequestError,
     OpenAIServiceUnavailableError,
-    UnprocessableEntityBadRequestError,
+    OpenAIUnprocessableEntityError,
     logged_class_name,
     reported_class_names,
 )
@@ -1407,7 +1408,12 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
     assert message in excinfo.value.message
 
 
-_OPENAI_INVALID_REQUEST_CLASS: Final = {409: ConflictBadRequestError, 422: UnprocessableEntityBadRequestError}
+_OPENAI_INVALID_REQUEST_CLASS: Final = {
+    409: OpenAIConflictBadRequestError,
+    422: OpenAIUnprocessableEntityError,
+    500: OpenAIServerErrorBadRequestError,
+    503: OpenAIServerErrorBadRequestError,
+}
 
 
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
@@ -1530,7 +1536,7 @@ STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
 
 OPENAI_MAPPED: Final = {
     402: (litellm.APIError, 402),
-    422: (UnprocessableEntityBadRequestError, 422),
+    422: (OpenAIUnprocessableEntityError, 422),
     503: (OpenAIServiceUnavailableError, 503),
 }
 
@@ -3578,7 +3584,7 @@ def test_openai_error_keeps_its_litellm_class_status_message_and_reported_names(
     assert reported_class_names(litellm_error) == reported_names
 
 
-@pytest.mark.parametrize("reply", [409, 422])
+@pytest.mark.parametrize("reply", [409, 422, 500, 502, 503, 504])
 def test_openai_invalid_request_error_is_also_the_sdk_class_and_stays_a_bad_request(reply: int) -> None:
     sdk_error: Final = _sdk_error(reply, "invalid_request_error")
     litellm_error: Final = _litellm_error(reply, "invalid_request_error")
@@ -3611,6 +3617,7 @@ _SENT: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions
         (_wrapped_500(openai.APITimeoutError(request=_SENT)), False),
         (_wrapped_500(httpx.ReadTimeout("slow", request=_SENT)), False),
         (_wrapped_500(ValueError("not a transport failure")), False),
+        (_wrapped_500(litellm.APIConnectionError(message="mapped elsewhere", llm_provider="openai", model="m")), False),
         (
             _wrapped_500(
                 httpx.ConnectError("refused", request=_SENT),

@@ -7,14 +7,15 @@ import pytest
 
 import litellm
 from litellm.exceptions import (
-    ConflictBadRequestError,
-    ConflictError,
-    GatewayTimeoutError,
     MidStreamFallbackError,
     OpenAIBadGatewayError,
+    OpenAIConflictBadRequestError,
+    OpenAIConflictError,
+    OpenAIConnectionError,
+    OpenAIGatewayTimeoutError,
+    OpenAIServerErrorBadRequestError,
     OpenAIServiceUnavailableError,
-    UnprocessableEntityBadRequestError,
-    UpstreamConnectionError,
+    OpenAIUnprocessableEntityError,
     logged_class_name,
     reported_class_names,
 )
@@ -41,7 +42,9 @@ _BODY: Final = {"message": "upstream", "type": "upstream_type", "code": "c", "pa
 
 _PARITY_CASES: Final = (
     (
-        ConflictError(message="APIError: OpenAIException - conflict", llm_provider="openai", model="m", num_retries=2),
+        OpenAIConflictError(
+            message="APIError: OpenAIException - conflict", llm_provider="openai", model="m", num_retries=2
+        ),
         litellm.APIError(
             status_code=409,
             message="APIError: OpenAIException - conflict",
@@ -52,7 +55,7 @@ _PARITY_CASES: Final = (
         openai.ConflictError,
     ),
     (
-        ConflictBadRequestError(
+        OpenAIConflictBadRequestError(
             message="OpenAIException - conflict", model="m", llm_provider="openai", response=_reply(409), body=_BODY
         ),
         litellm.BadRequestError(
@@ -61,7 +64,16 @@ _PARITY_CASES: Final = (
         openai.ConflictError,
     ),
     (
-        UnprocessableEntityBadRequestError(
+        OpenAIServerErrorBadRequestError(
+            message="OpenAIException - overloaded", model="m", llm_provider="openai", response=_reply(503), body=_BODY
+        ),
+        litellm.BadRequestError(
+            message="OpenAIException - overloaded", model="m", llm_provider="openai", response=_reply(503), body=_BODY
+        ),
+        openai.InternalServerError,
+    ),
+    (
+        OpenAIUnprocessableEntityError(
             message="OpenAIException - bad", model="m", llm_provider="openai", response=_reply(422), body=_BODY
         ),
         litellm.BadRequestError(
@@ -84,7 +96,7 @@ _PARITY_CASES: Final = (
         openai.InternalServerError,
     ),
     (
-        GatewayTimeoutError(
+        OpenAIGatewayTimeoutError(
             message="Timeout Error: OpenAIException - slow",
             model="m",
             llm_provider="openai",
@@ -101,7 +113,7 @@ _PARITY_CASES: Final = (
         openai.InternalServerError,
     ),
     (
-        UpstreamConnectionError(
+        OpenAIConnectionError(
             message="InternalServerError: OpenAIException - Connection error.", model="m", llm_provider="openai"
         ),
         litellm.InternalServerError(

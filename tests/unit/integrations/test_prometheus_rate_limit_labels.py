@@ -21,16 +21,17 @@ import litellm
 import pytest
 
 from litellm.exceptions import (
-    ConflictBadRequestError,
-    ConflictError,
-    GatewayTimeoutError,
     OpenAIBadGatewayError,
+    OpenAIConflictBadRequestError,
+    OpenAIConflictError,
+    OpenAIConnectionError,
+    OpenAIGatewayTimeoutError,
+    OpenAIServerErrorBadRequestError,
     OpenAIServiceUnavailableError,
+    OpenAIUnprocessableEntityError,
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
-    UnprocessableEntityBadRequestError,
-    UpstreamConnectionError,
 )
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -227,20 +228,21 @@ def test_should_preserve_exception_class_name_for_unrelated_exceptions():
 @pytest.mark.parametrize(
     ("error", "label"),
     [
-        (ConflictError(message="409", llm_provider="openai", model="m"), "Openai.APIError"),
+        (OpenAIConflictError(message="409", llm_provider="openai", model="m"), "Openai.APIError"),
         (
-            UnprocessableEntityBadRequestError(message="422", llm_provider="openai", model="m"),
+            OpenAIUnprocessableEntityError(message="422", llm_provider="openai", model="m"),
             "Openai.BadRequestError",
         ),
-        (ConflictBadRequestError(message="409", llm_provider="openai", model="m"), "Openai.BadRequestError"),
+        (OpenAIConflictBadRequestError(message="409", llm_provider="openai", model="m"), "Openai.BadRequestError"),
+        (OpenAIServerErrorBadRequestError(message="500", llm_provider="openai", model="m"), "Openai.BadRequestError"),
         (OpenAIBadGatewayError(message="502", llm_provider="openai", model="m"), "Openai.BadGatewayError"),
         (
             OpenAIServiceUnavailableError(message="503", llm_provider="openai", model="m"),
             "Openai.ServiceUnavailableError",
         ),
-        (GatewayTimeoutError(message="504", llm_provider="openai", model="m"), "Openai.Timeout"),
+        (OpenAIGatewayTimeoutError(message="504", llm_provider="openai", model="m"), "Openai.Timeout"),
         (
-            UpstreamConnectionError(message="refused", llm_provider="openai", model="m"),
+            OpenAIConnectionError(message="refused", llm_provider="openai", model="m"),
             "Openai.InternalServerError",
         ),
     ],

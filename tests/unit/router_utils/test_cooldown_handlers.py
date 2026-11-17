@@ -21,12 +21,12 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.exceptions import (
-    ConflictBadRequestError,
-    GatewayTimeoutError,
     OpenAIBadGatewayError,
+    OpenAIConflictBadRequestError,
+    OpenAIConnectionError,
+    OpenAIGatewayTimeoutError,
     OpenAIServiceUnavailableError,
-    UnprocessableEntityBadRequestError,
-    UpstreamConnectionError,
+    OpenAIUnprocessableEntityError,
 )
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.redis.stores.connection import connect
@@ -220,24 +220,26 @@ _SENT_REQUEST: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/com
     [
         (
             litellm.Timeout("504", "gpt-5.6", "openai", exception_status_code=504),
-            GatewayTimeoutError("504", "gpt-5.6", "openai", exception_status_code=504),
+            OpenAIGatewayTimeoutError("504", "gpt-5.6", "openai", exception_status_code=504),
             "TimeoutErrorAllowedFails",
         ),
         (
             litellm.InternalServerError("refused", "openai", "gpt-5.6"),
-            UpstreamConnectionError("refused", "openai", "gpt-5.6"),
+            OpenAIConnectionError("refused", "openai", "gpt-5.6"),
             "InternalServerErrorAllowedFails",
         ),
         (
             litellm.BadRequestError("422", "gpt-5.6", "openai", response=httpx.Response(422, request=_SENT_REQUEST)),
-            UnprocessableEntityBadRequestError(
+            OpenAIUnprocessableEntityError(
                 "422", "gpt-5.6", "openai", response=httpx.Response(422, request=_SENT_REQUEST)
             ),
             "BadRequestErrorAllowedFails",
         ),
         (
             litellm.BadRequestError("409", "gpt-5.6", "openai", response=httpx.Response(409, request=_SENT_REQUEST)),
-            ConflictBadRequestError("409", "gpt-5.6", "openai", response=httpx.Response(409, request=_SENT_REQUEST)),
+            OpenAIConflictBadRequestError(
+                "409", "gpt-5.6", "openai", response=httpx.Response(409, request=_SENT_REQUEST)
+            ),
             "BadRequestErrorAllowedFails",
         ),
         (

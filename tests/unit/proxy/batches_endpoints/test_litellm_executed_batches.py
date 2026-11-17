@@ -14,13 +14,14 @@ from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFil
 from openai.types.batch_request_counts import BatchRequestCounts
 
 from litellm.exceptions import (
-    ConflictBadRequestError,
-    ConflictError,
-    GatewayTimeoutError,
     OpenAIBadGatewayError,
+    OpenAIConflictBadRequestError,
+    OpenAIConflictError,
+    OpenAIConnectionError,
+    OpenAIGatewayTimeoutError,
+    OpenAIServerErrorBadRequestError,
     OpenAIServiceUnavailableError,
-    UnprocessableEntityBadRequestError,
-    UpstreamConnectionError,
+    OpenAIUnprocessableEntityError,
 )
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -864,16 +865,22 @@ _SENT: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions
 @pytest.mark.parametrize(
     ("failure", "reported_type"),
     [
-        (ConflictError("APIError: OpenAIException - conflict", "openai", "gpt-5.6"), "APIError"),
+        (OpenAIConflictError("APIError: OpenAIException - conflict", "openai", "gpt-5.6"), "APIError"),
         (
-            ConflictBadRequestError(
+            OpenAIConflictBadRequestError(
                 "OpenAIException - conflict", "gpt-5.6", "openai", response=httpx.Response(409, request=_SENT)
             ),
             "BadRequestError",
         ),
         (
-            UnprocessableEntityBadRequestError(
+            OpenAIUnprocessableEntityError(
                 "OpenAIException - bad", "gpt-5.6", "openai", response=httpx.Response(422, request=_SENT)
+            ),
+            "BadRequestError",
+        ),
+        (
+            OpenAIServerErrorBadRequestError(
+                "OpenAIException - overloaded", "gpt-5.6", "openai", response=httpx.Response(503, request=_SENT)
             ),
             "BadRequestError",
         ),
@@ -882,8 +889,8 @@ _SENT: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions
             OpenAIServiceUnavailableError("ServiceUnavailableError: OpenAIException - x", "openai", "gpt-5.6"),
             "ServiceUnavailableError",
         ),
-        (GatewayTimeoutError("Timeout Error: OpenAIException - slow", "gpt-5.6", "openai"), "Timeout"),
-        (UpstreamConnectionError("Connection error.", "openai", "gpt-5.6"), "InternalServerError"),
+        (OpenAIGatewayTimeoutError("Timeout Error: OpenAIException - slow", "gpt-5.6", "openai"), "Timeout"),
+        (OpenAIConnectionError("Connection error.", "openai", "gpt-5.6"), "InternalServerError"),
     ],
 )
 async def test_error_file_reports_an_openai_sdk_parity_error_under_the_class_it_replaced(
