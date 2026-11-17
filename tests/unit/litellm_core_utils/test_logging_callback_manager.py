@@ -5,6 +5,8 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
+from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 
 
@@ -143,6 +145,7 @@ def test_remove_callback_from_all_lists():
 
     obj = TestLogger()
     manager.add_litellm_callback(obj)
+    manager.add_litellm_input_callback(obj)
     manager.add_litellm_success_callback(obj)
     manager.add_litellm_failure_callback(obj)
     manager.add_litellm_async_success_callback(obj)
@@ -151,6 +154,7 @@ def test_remove_callback_from_all_lists():
     manager.remove_callback_from_all_lists(obj)
 
     assert obj not in litellm.callbacks
+    assert obj not in litellm.input_callback
     assert obj not in litellm.success_callback
     assert obj not in litellm.failure_callback
     assert obj not in litellm._async_success_callback
@@ -303,9 +307,7 @@ async def test_generic_api_callback_settings_retry_config():
     }
 
     try:
-        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
-            callback_name
-        )
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(callback_name)
 
         assert isinstance(result, GenericAPILogger)
         assert result.endpoint == "https://example.com/api/logs"
@@ -316,3 +318,83 @@ async def test_generic_api_callback_settings_retry_config():
     finally:
         litellm.callback_settings.pop(callback_name, None)
         _generic_api_logger_cache.pop(callback_name, None)
+
+
+def test_duplicate_langfuse_logger_test():
+    manager = LoggingCallbackManager()
+    for _ in range(10):
+        langfuse_logger = LangfusePromptManagement()
+        manager.add_litellm_success_callback(langfuse_logger)
+    assert len(litellm.success_callback) == 1
+
+
+def test_duplicate_multiple_loggers_test():
+    manager = LoggingCallbackManager()
+    for _ in range(10):
+        langfuse_logger = LangfusePromptManagement()
+        otel_logger = OpenTelemetry()
+        manager.add_litellm_success_callback(langfuse_logger)
+        manager.add_litellm_success_callback(otel_logger)
+    assert len(litellm.success_callback) == 2
+
+    langfuse_count = sum(1 for callback in litellm.success_callback if isinstance(callback, LangfusePromptManagement))
+    otel_count = sum(1 for callback in litellm.success_callback if isinstance(callback, OpenTelemetry))
+
+    assert langfuse_count == 1, "Should have exactly one LangfusePromptManagement instance"
+    assert otel_count == 1, "Should have exactly one OpenTelemetry instance"
+
+
+def test_get_callbacks_by_type_treats_both_failure_lists_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    for callback_list in (
+        "callbacks",
+        "success_callback",
+        "_async_success_callback",
+        "failure_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, callback_list, [])
+    manager = LoggingCallbackManager()
+    manager.add_litellm_callback("general_logger")
+    manager.add_litellm_success_callback("sync_success_logger")
+    manager.add_litellm_async_success_callback("async_success_logger")
+    manager.add_litellm_failure_callback("sync_failure_logger")
+    manager.add_litellm_async_failure_callback("async_failure_logger")
+    manager.add_litellm_success_callback("sync_success_and_async_failure_logger")
+    manager.add_litellm_async_failure_callback("sync_success_and_async_failure_logger")
+
+    callbacks_by_type = manager.get_callbacks_by_type()
+
+    assert set(callbacks_by_type["success"]) == {"sync_success_logger", "async_success_logger"}
+    assert set(callbacks_by_type["failure"]) == {"sync_failure_logger", "async_failure_logger"}
+    assert set(callbacks_by_type["success_and_failure"]) == {"general_logger", "sync_success_and_async_failure_logger"}
+
+
+def test_a_v2_callback_is_added_to_every_event_list_once_per_logger_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Hook, on
+
+    class Observer(CustomLoggerV2):
+        def __init__(self, bucket: str) -> None:
+            self.bucket = bucket
+
+        @on(Hook.attempt_ended)
+        def attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
+            return None
+
+    for callback_list in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    manager = LoggingCallbackManager()
+    first, twin, second = Observer("a"), Observer("a"), Observer("b")
+
+    for callback in (first, first, twin, second):
+        manager.add_litellm_success_callback(callback)
+        manager.add_litellm_failure_callback(callback)
+        manager.add_litellm_async_success_callback(callback)
+        manager.add_litellm_async_failure_callback(callback)
+
+    for callback_list in (
+        litellm.success_callback,
+        litellm._async_success_callback,
+        litellm.failure_callback,
+        litellm._async_failure_callback,
+    ):
+        assert callback_list == [first, second]

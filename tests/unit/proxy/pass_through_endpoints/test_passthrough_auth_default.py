@@ -26,6 +26,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException
@@ -137,3 +138,15 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
     )
 
     assert isinstance(result, UserAPIKeyAuth)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/extra", "/eu_jev/v1/systemone2"])
+async def test_no_eu_jev_route_reads_the_litellm_user_api_key_header(route: str) -> None:
+    request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-from-header")]})
+
+    result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request, route=route, pass_through_endpoints=None, api_key="sk-from-bearer"
+    )
+
+    assert result == "sk-from-bearer"

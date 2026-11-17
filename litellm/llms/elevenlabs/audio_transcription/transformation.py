@@ -4,13 +4,14 @@ Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-
 
 import math
 from collections.abc import Iterable, Mapping
-from typing import Final
+from typing import Final, Protocol
 
 from httpx import Headers, Response
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -27,6 +28,17 @@ from ..common_utils import ElevenLabsException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
 _FORM_OPENAI_PARAMS: Final = frozenset({"language", "temperature"})
 
 
@@ -170,7 +182,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transforms the raw response from ElevenLabs to the TranscriptionResponse format
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _json_body(raw_response)
             response_object: Final = _JSON_OBJECT.validate_python(response_json)
 
             # Extract the main transcript text
@@ -199,12 +211,12 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 response["duration"] = duration
 
             # Store full response in hidden params
-            response.hidden_params = response_json
+            response.hidden_params = _HIDDEN_PARAMS.validate_python(response_json)
 
             return response
 
         except Exception as e:
-            raise ValueError(f"Error transforming ElevenLabs response: {e}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming ElevenLabs response: {e}") from None
 
     def get_complete_url(
         self,
@@ -217,12 +229,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> str:
         if api_base is None:
             api_base = get_secret_str("ELEVENLABS_API_BASE") or "https://api.elevenlabs.io"
-        api_base = api_base.rstrip("/")  # Remove trailing slash if present
-
-        # ElevenLabs speech-to-text endpoint
-        url: Final = f"{api_base}/v1/speech-to-text"
-
-        return url
+        return join_api_base(api_base, "v1/speech-to-text")
 
     def validate_environment(
         self,

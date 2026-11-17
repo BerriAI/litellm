@@ -13,6 +13,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -110,7 +111,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "language": optional_params.get("language", self.DEFAULT_LANGUAGE),
             "format": self._get_azure_response_format(optional_params.get("response_format")),
         }
-        return f"{base_url}{self.STT_ENDPOINT_PATH}?{urlencode(query_params)}"
+        return f"{join_api_base(base_url, self.STT_ENDPOINT_PATH)}?{urlencode(query_params)}"
 
     def transform_audio_transcription_request(
         self,
@@ -153,7 +154,6 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         )
 
     def _resolve_stt_base_url(self, api_base: str) -> str:
-        api_base = api_base.rstrip("/")
         parsed_url: Final = urlparse(api_base)
         hostname: Final = parsed_url.hostname or ""
 

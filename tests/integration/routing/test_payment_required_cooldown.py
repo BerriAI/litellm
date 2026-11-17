@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import itertools
 import json
 import re
-import signal
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +14,6 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import GATEWAY_LIMITS, Gateway, Scenario, eventually, gateway_from_environment
@@ -45,7 +44,7 @@ from integration.routing.test_payment_required_mapping import (
 from pydantic import JsonValue
 from redis import Redis
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 COOLDOWN_SECONDS: Final = 300
 RELOAD_SECONDS: Final = 2
@@ -54,7 +53,6 @@ COOLED_DOWN: Final = "litellm_deployment_cooled_down_total"
 PRIMARY_GROUP: Final = new_group()
 FALLBACK_GROUP: Final = new_group()
 MARKER: Final = re.compile(rb"pr402-[0-9a-f]{32}(?:-\d+)?")
-WORKER_PID: Final = re.compile(r"Started server process \[(\d+)\]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +391,79 @@ def test_a_router_allowed_fails_policy_cools_a_lone_402_deployment_past_its_coun
         assert markers_received(refusing) == (first.marker, second.marker)
 
 
+def failing_reply(request: Request) -> Reply:
+    return model_list_reply() if is_model_info_probe(request) else anthropic_error(500, "upstream down")
+
+
+def assert_failed(outcome: Outcome) -> None:
+    assert outcome.status == 500, (outcome.status, outcome.detail)
+    assert "upstream down" in outcome.detail, outcome.detail
+
+
+@pytest.mark.timeout(900)
+def test_a_router_allowed_fails_count_leaves_a_lone_deployment_warm_but_benches_one_with_a_sibling_or_fallback(
+    tmp_path: Path,
+) -> None:
+    lone_group: Final = new_group()
+    pair_group: Final = new_group()
+    primary_group: Final = new_group()
+    backup_group: Final = new_group()
+    with ExitStack() as stack:
+        upstream: Final = stack.enter_context(gateway_from_environment())
+        cache: Final = stack.enter_context(owned_redis(tmp_path))
+        settings: Final = router_settings(cache, allowed_fails=1, fallbacks=[{primary_group: [backup_group]}])
+        owned: Final = stack.enter_context(
+            owned_proxy_process(
+                upstream,
+                tmp_path,
+                {},
+                config=cooldown_config(tmp_path, settings),
+                remove_environment=("PROMETHEUS_MULTIPROC_DIR",),
+            )
+        )
+        failing: Final = stack.enter_context(wire_server(failing_reply))
+        healthy: Final = stack.enter_context(wire_server(healthy_reply))
+        scenario: Final = stack.enter_context(owned.gateway.scenario())
+        lone_id: Final = deployment(scenario, lone_group, anthropic_params(failing))
+        failed: Final = tuple(raw_chat(owned.gateway, lone_group, new_marker()) for _ in range(4))
+        for outcome in failed:
+            assert_failed(outcome)
+        assert not cooled(cache, lone_id)
+        assert markers_received(failing) == markers(failed)
+
+        paired_id: Final = two_deployments(scenario, pair_group, failing, healthy)
+        history: Final = tuple(
+            itertools.takewhile(
+                lambda outcome: not cooled(cache, paired_id),
+                (raw_chat(owned.gateway, pair_group, new_marker()) for _ in range(40)),
+            )
+        )
+        assert cooled(cache, paired_id), [(outcome.status, outcome.detail[:80]) for outcome in history]
+        assert sum(outcome.status == 500 for outcome in history) == 1
+        served: Final = tuple(raw_chat(owned.gateway, pair_group, new_marker()) for _ in range(10))
+        assert_served(served, chat_identity)
+        assert markers_received(healthy) == (*markers(o for o in history if o.status == 200), *markers(served))
+
+        primary_id: Final = deployment(scenario, primary_group, anthropic_params(failing))
+        deployment(scenario, backup_group, openai_params(healthy))
+        failing.drain()
+        healthy.drain()
+        fell_back: Final = tuple(
+            itertools.takewhile(
+                lambda outcome: not cooled(cache, primary_id),
+                (raw_chat(owned.gateway, primary_group, new_marker()) for _ in range(40)),
+            )
+        )
+        assert cooled(cache, primary_id) and fell_back, [(o.status, o.detail[:80]) for o in fell_back]
+        assert_served(fell_back, chat_identity)
+        backed: Final = tuple(raw_chat(owned.gateway, primary_group, new_marker()) for _ in range(4))
+        assert_served(backed, chat_identity)
+        received: Final = markers_received(failing)
+        assert received[: len(fell_back)] == markers(fell_back)
+        assert len(received) <= len(fell_back) + 1, received
+        assert {*markers(fell_back), *markers(backed)} <= set(markers_received(healthy))
+
+
 def test_a_deployment_allowed_fails_policy_cools_a_lone_402_deployment(rig: CooldownRig) -> None:
     group: Final = new_group()
     policy: Final = {"allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}}
@@ -506,10 +577,6 @@ def burst_call(group: str, index: int) -> Call:
             return Call(marker, "/v1/responses", {"model": group, "input": marker, "stream": stream})
 
 
-def worker_pids(log: Path) -> tuple[int, ...]:
-    return tuple(int(pid) for pid in WORKER_PID.findall(log.read_text()))
-
-
 def ready_workers(log: Path) -> int:
     return log.read_text().count("Application startup complete.")
 
@@ -552,12 +619,7 @@ def test_chaos_burst_cooldown_holds_across_both_workers_and_a_worker_kill(tmp_pa
         assert_served(warm, chat_identity)
         assert markers_received(refusing) == ()
         assert markers_received(healthy) == markers(warm)
-        victim: Final = next(pid for pid in sorted(worker_pids(owned.log)) if psutil.pid_exists(pid))
-        ready_before: Final = ready_workers(owned.log)
-        psutil.Process(victim).send_signal(signal.SIGKILL)
-        eventually(
-            lambda: ready_workers(owned.log), lambda ready: ready > ready_before, seconds=graceful_stop_seconds()
-        )
+        owned.kill_worker(min(owned.worker_pids()))
         after_kill: Final = tuple(raw_chat(patient, group, new_marker()) for _ in range(20))
         assert_served(after_kill, chat_identity)
         assert markers_received(refusing) == ()

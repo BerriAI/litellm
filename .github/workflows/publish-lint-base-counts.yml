@@ -3,7 +3,7 @@ name: Publish lint base counts
 # Every commit on main can become a future merge-base.
 # Publishing its per-rule counts for each lint gate (strict ruff, type discipline,
 # test quality, basedpyright) as an artifact lets the gates download them through
-# scripts/lint_base_counts.py in seconds instead of scanning the merge-base tree in
+# litellm/scripts/lint_base_counts.py in seconds instead of scanning the merge-base tree in
 # a throwaway worktree on every fresh checkout or moved merge-base.
 # No concurrency group on purpose: runs must never cancel each other, because
 # every sha's artifact matters (any of them can become a merge-base).
@@ -30,13 +30,15 @@ jobs:
       matrix:
         include:
           - checker: ruff-strict
-            script: scripts/ruff_strict_gate.py
+            script: litellm/scripts/ruff_strict_gate.py
           - checker: type-discipline
-            script: scripts/type_discipline_gate.py
+            script: litellm/scripts/type_discipline_gate.py
           - checker: test-quality
-            script: scripts/test_quality_gate.py
+            script: litellm/scripts/test_quality_gate.py
+          - checker: openapi-docs
+            script: litellm/scripts/openapi_docs_gate.py
           - checker: basedpyright
-            script: scripts/type_check_gate.py
+            script: litellm/scripts/type_check_gate.py
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -60,15 +62,23 @@ jobs:
         uses: ./.github/actions/cache-cargo-build
 
       - name: Cache Prisma binaries
-        if: matrix.checker == 'basedpyright'
+        if: matrix.checker == 'basedpyright' || matrix.checker == 'openapi-docs'
         uses: ./.github/actions/cache-prisma-binaries
 
-      # The three source scanners only need the pinned dev tools (ruff and the
+      # The source scanners only need the pinned dev tools (ruff and the
       # stdlib checkers), the same versions test-linting.yml's python job runs.
       - name: Install the dev tools
-        if: matrix.checker != 'basedpyright'
+        if: matrix.checker != 'basedpyright' && matrix.checker != 'openapi-docs'
         run: |
           uv sync --frozen --only-group dev --no-install-project
+
+      # The OpenAPI gate imports the proxy app, so it needs the same install the
+      # test-linting.yml python job uses, Prisma client included.
+      - name: Install the proxy
+        if: matrix.checker == 'openapi-docs'
+        run: |
+          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Emit ${{ matrix.checker }} counts for HEAD
         if: matrix.checker != 'basedpyright'
@@ -81,7 +91,7 @@ jobs:
       - name: Emit basedpyright counts for HEAD
         if: matrix.checker == 'basedpyright'
         run: |
-          python scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/lint-counts"
+          python litellm/scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/lint-counts"
 
       - name: Name the counts artifact
         run: |

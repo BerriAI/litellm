@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import socket
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
-from urllib.parse import urlsplit
 
 import httpx
-import psutil
 import pytest
 from _openinference_support import (
     CHAT_TOOLS,
@@ -44,7 +44,8 @@ from _openinference_support import (
     _sse_json_values,
 )
 from integration._support.client import Gateway, eventually
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.process import graceful_stop_seconds
+from integration._support.wire import Reply, Request, Wire, wire_server
 
 
 def _call(
@@ -249,11 +250,12 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
             _assert_response(response, marker, surface, stream, model_name)
 
     with ExitStack() as servers:
-        initial_stack: Final = servers.enter_context(ExitStack())
-        stopped_destination: Final = initial_stack.enter_context(wire_server(_owned_sink_handler(sink)))
-        sink_port: Final = urlsplit(stopped_destination.url).port
-        assert sink_port is not None, stopped_destination.url
-        initial_stack.close()
+        outage_socket: Final = servers.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+        outage_socket.bind(("127.0.0.1", 0))  # test-quality-ok: socket stays bound throughout the outage
+        sink_port: Final = outage_socket.getsockname()[1]
+        stopped_destination: Final = Wire(
+            f"http://127.0.0.1:{sink_port}", SimpleQueue(), SimpleQueue(), SimpleQueue(), SimpleQueue()
+        )
         with _rig(
             gateway,
             tmp_path,
@@ -272,6 +274,7 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
                 with httpx.Client(trust_env=False) as client, pytest.raises(httpx.ConnectError):
                     client.get(stopped_destination.url + "/health", timeout=2)
                 recovered_stack: Final = servers.enter_context(ExitStack())
+                outage_socket.close()
                 recovered_destination: Final = recovered_stack.enter_context(
                     wire_server(_owned_sink_handler(sink), port=sink_port)
                 )
@@ -333,6 +336,7 @@ def test_arize_otel_v2_f2_slow_sink_does_not_deadlock(gateway: Gateway, tmp_path
     _matching_marker_span(rig.destination, marker)
 
 
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: Path) -> None:
     markers: Final = tuple("f3-" + uuid.uuid4().hex for _ in range(8))
     release: Final = threading.Event()
@@ -356,11 +360,8 @@ def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: P
         destination_handler=sink,
         fresh_client_connections=True,
     ) as rig:
-        children: Final = psutil.Process(rig.owned.process.pid).children(recursive=True)
-        workers: Final = tuple(
-            child for child in children if child.is_running() and "resource_tracker" not in " ".join(child.cmdline())
-        )
-        assert len(workers) >= 2, tuple((worker.pid, worker.name()) for worker in workers)
+        workers: Final = rig.owned.worker_pids()
+        assert len(workers) >= 2, workers
         with ThreadPoolExecutor(max_workers=len(markers)) as executor:
             try:
                 futures: Final = tuple(
@@ -379,12 +380,12 @@ def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: P
                     seconds=10,
                 )
                 assert observed >= 2, observed
-                workers[0].kill()
-                assert eventually(lambda: not workers[0].is_running(), bool, seconds=10), workers[0]
-                release.set()
-                in_flight: Final = tuple(
-                    (marker, future.result(timeout=60)) for marker, future in zip(markers, futures, strict=True)
-                )
+                with rig.owned.replacing_worker(min(workers)) as kill:
+                    kill()
+                    release.set()
+                    in_flight: Final = tuple(
+                        (marker, future.result(timeout=60)) for marker, future in zip(markers, futures, strict=True)
+                    )
             finally:
                 release.set()
         survivor: Final = "f3-survivor-" + uuid.uuid4().hex

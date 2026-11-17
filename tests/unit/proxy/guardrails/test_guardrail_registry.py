@@ -649,6 +649,38 @@ def test_unchanged_db_params_do_not_register_as_changed():
     assert handler._has_guardrail_params_changed(gid, new) is False
 
 
+@pytest.mark.parametrize("field", ("api_key", "api_base"))
+def test_db_poll_does_not_rebuild_a_guardrail_whose_secret_field_is_an_env_reference(monkeypatch, field):
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    built_with: Final[list[str | None]] = []
+
+    def _initializer(litellm_params, guardrail):
+        built_with.append(getattr(litellm_params, field))
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"], event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+    monkeypatch.setitem(registry_module.guardrail_initializer_registry, "env_ref_test", _initializer)
+    monkeypatch.setenv("ENV_REF_TEST_VALUE", "resolved-value")
+    row: Final = {
+        "guardrail_id": "env-ref",
+        "guardrail_name": "env-ref",
+        "litellm_params": {
+            "guardrail": "env_ref_test",
+            "mode": "pre_call",
+            field: "os.environ/ENV_REF_TEST_VALUE",
+        },
+    }
+    handler: Final = InMemoryGuardrailHandler()
+    handler.initialize_guardrail(guardrail=dict(row), source="db")
+
+    handler.sync_guardrail_from_db(dict(row))
+    handler.sync_guardrail_from_db(dict(row))
+
+    assert built_with == ["resolved-value"]
+
+
 def test_db_poll_does_not_reinitialize_config_guardrail_without_default_on():
     handler = InMemoryGuardrailHandler()
     guardrail_id: Final = "config-default-on-guardrail"
@@ -1273,6 +1305,7 @@ class TestLoggingOnlyScopeValidation:
         callback_type: type[CustomGuardrail] = _LoggingOnlyScopeSupportedGuardrail,
         reject_invalid_logging_only_scope: bool = False,
         assert_registered: bool = False,
+        continue_on_input_failure: bool | None = None,
     ) -> CustomGuardrail:
         import litellm
         from litellm.proxy.guardrails import guardrail_registry as registry_module
@@ -1306,6 +1339,7 @@ class TestLoggingOnlyScopeValidation:
                         "guardrail": guardrail_type,
                         "mode": mode,
                         "logging_only_scope": scope,
+                        "logging_only_continue_on_input_failure": continue_on_input_failure,
                     },
                 },
                 reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
@@ -1377,14 +1411,16 @@ class TestLoggingOnlyScopeValidation:
             "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
         )
 
-    def test_both_scope_accepted_when_guardrail_owns_logging_hook(self) -> None:
+    def test_continue_flag_accepted_when_guardrail_owns_logging_hook(self) -> None:
         callback: Final = self._initialize(
             mode="logging_only",
-            scope="both",
+            scope=None,
+            continue_on_input_failure=True,
             callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
         )
 
-        assert callback.logging_only_scope == "both"
+        assert callback.logging_only_scope is None
+        assert callback.logging_only_continue_on_input_failure is True
 
     def test_output_scope_accepted_for_native_lifecycle_guardrail(self) -> None:
         callback: Final = self._initialize(
@@ -1395,9 +1431,10 @@ class TestLoggingOnlyScopeValidation:
 
         assert callback.logging_only_scope == "output"
 
-    def test_invalid_scope_fails_litellm_params_validation(self) -> None:
+    @pytest.mark.parametrize("scope", ("request", "both"))
+    def test_invalid_scope_fails_litellm_params_validation(self, scope: str) -> None:
         with pytest.raises(ValidationError):
-            LitellmParams(guardrail="test", mode="logging_only", logging_only_scope="request")
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_scope=scope)
 
     def test_invalid_scope_literal_keeps_content_filter_registered_and_blocking(self) -> None:
         import litellm
@@ -1437,6 +1474,85 @@ class TestLoggingOnlyScopeValidation:
             )
 
         assert all(callback_list == snapshot for callback_list, snapshot in zip(callback_lists, callback_snapshots))
+
+    @pytest.mark.parametrize(
+        ("scope", "continue_on_input_failure", "expected_direction", "expected_continue"),
+        (
+            (None, None, None, False),
+            (None, True, None, True),
+            (None, False, None, False),
+            ("input", True, "input", False),
+            ("output", True, "output", False),
+            ("input", None, "input", False),
+        ),
+    )
+    def test_logging_only_settings_table(
+        self,
+        scope: LoggingOnlyScope | None,
+        continue_on_input_failure: bool | None,
+        expected_direction: str | None,
+        expected_continue: bool,
+    ) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope=scope,
+            continue_on_input_failure=continue_on_input_failure,
+        )
+
+        assert callback.logging_only_scope == expected_direction
+        assert callback.logging_only_continue_on_input_failure is expected_continue
+
+    def test_continue_flag_without_logging_only_mode_is_ignored_at_load(self) -> None:
+        callback: Final = self._initialize(
+            mode="pre_call", continue_on_input_failure=True, scope=None, assert_registered=True
+        )
+
+        assert callback.logging_only_scope is None
+        assert callback.logging_only_continue_on_input_failure is False
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+
+    def test_continue_flag_without_logging_only_mode_is_rejected_for_api_writes(self) -> None:
+        with pytest.raises(ValueError, match="logging_only_continue_on_input_failure is set") as exc_info:
+            self._initialize(
+                mode="pre_call",
+                scope=None,
+                continue_on_input_failure=True,
+                reject_invalid_logging_only_scope=True,
+            )
+
+        assert str(exc_info.value) == (
+            "Guardrail logging-only-scope-guardrail: logging_only_continue_on_input_failure is set, but mode "
+            "does not include logging_only, so it would never apply. Add logging_only to mode or remove "
+            "logging_only_continue_on_input_failure."
+        )
+
+    def test_continue_flag_is_accepted_when_guardrail_owns_logging_hook(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope=None,
+            continue_on_input_failure=True,
+            callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+        )
+
+        assert callback.logging_only_scope is None
+        assert callback.logging_only_continue_on_input_failure is True
+
+    def test_invalid_continue_flag_is_tolerated_by_parse_tolerant(self) -> None:
+        params: Final = {
+            "guardrail": "litellm_content_filter",
+            "mode": "logging_only",
+            "logging_only_continue_on_input_failure": "banana",
+        }
+
+        parsed: Final = parse_tolerant_litellm_params(params, "invalid-flag-test")
+
+        assert parsed.logging_only_continue_on_input_failure is None
+
+    def test_invalid_continue_flag_raises_without_tolerance(self) -> None:
+        with pytest.raises(ValidationError):
+            LitellmParams(
+                guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana"
+            )
 
     def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
         with pytest.raises(ValidationError):

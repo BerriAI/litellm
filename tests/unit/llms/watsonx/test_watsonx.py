@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import importlib
 import json
 from typing import Final, Optional, cast
@@ -9,7 +10,8 @@ import pytest
 
 import litellm
 from litellm import completion, embedding
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -370,6 +372,105 @@ def test_watsonx_tool_choice(sync_mode: bool, monkeypatch: pytest.MonkeyPatch) -
     assert len(response.choices) == 1
 
 
+async def test_watsonx_async_streamed_tool_choice_reaches_the_stream_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+    stream_chunks: Final = (
+        {
+            "id": "chatcmpl-watsonx",
+            "object": "chat.completion.chunk",
+            "created": 1760000000,
+            "model": "ibm/granite-3-8b-instruct",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "chatcmpl-tool-weather",
+                                "type": "function",
+                                "function": {"name": "get_current_weather", "arguments": ""},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-watsonx",
+            "object": "chat.completion.chunk",
+            "created": 1760000000,
+            "model": "ibm/granite-3-8b-instruct",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{"index": 0, "function": {"arguments": '{"location": "San Francisco, CA"}'}}]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-watsonx",
+            "object": "chat.completion.chunk",
+            "created": 1760000000,
+            "model": "ibm/granite-3-8b-instruct",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
+    )
+    body: Final = "".join(
+        f"id: {index}\nevent: message\ndata: {json.dumps(chunk)}\n\n" for index, chunk in enumerate(stream_chunks)
+    )
+    requests: Final[list[httpx.Request]] = []
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    response: Final = await litellm.acompletion(
+        model="watsonx/ibm/granite-3-8b-instruct",
+        messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        tool_choice="auto",
+        stream=True,
+        client=client,
+    )
+    chunks: Final = [chunk async for chunk in response]
+    tool_calls: Final = tuple(
+        chunk.choices[0].delta.tool_calls[0] for chunk in chunks if chunk.choices[0].delta.tool_calls
+    )
+    request_body: Final = cast(dict[str, object], json.loads(requests[0].content))
+
+    assert len(requests) == 1
+    assert requests[0].url.path == "/ml/v1/text/chat_stream"
+    assert request_body["tool_choice_option"] == "auto"
+    assert request_body["stream"] is True
+    assert tool_calls[0].id == "chatcmpl-tool-weather"
+    assert tool_calls[0].function.name == "get_current_weather"
+    assert json.loads("".join(tool_call.function.arguments or "" for tool_call in tool_calls)) == {
+        "location": "San Francisco, CA"
+    }
+    assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_chat_completions_endpoint_space_id(monkeypatch, watsonx_chat_completion_call):
     my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"
@@ -443,3 +544,43 @@ def test_watsonx_deployment_space_id_embedding(monkeypatch, watsonx_embedding_ca
 
     # nor space_id or project_id is required by wx.ai API when inferencing deployment
     assert "project_id" not in json_data and "space_id" not in json_data
+
+
+def _strict_weather_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def test_watsonx_chat_tools_are_rewritten_without_touching_the_callers_tool() -> None:
+    tools: Final = [_strict_weather_tool()]
+    tools_before: Final = copy.deepcopy(tools)
+
+    optional_params: Final = IBMWatsonXChatConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="ibm/granite-4-h-small", drop_params=False
+    )
+
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    assert tools == tools_before

@@ -26,23 +26,24 @@ from litellm.constants import (
     OTLP_RETRY_AFTER_SECONDS,
     TRACE_READ_RETRY_AFTER_SECONDS,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
-from litellm.rust_bridge.trace.errors import TraceChanged
-from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
-from litellm.rust_bridge.trace.generated.requests import (
+from litellm.tracing import TraceReceiver
+from litellm.tracing.errors import TraceChanged
+from litellm.tracing.generated.models import TraceQueryHelp
+from litellm.tracing.generated.requests import (
     TraceDetailRequest,
     TraceErrorPageRequest,
     TraceListRequest,
     TraceQueryRequest,
     TraceSpanRequest,
 )
-from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
-from litellm.rust_bridge.trace.generated.types import (
+from litellm.tracing.generated.responses import TraceSQLResponse
+from litellm.tracing.generated.types import (
     AllQueryScope,
     OwnedQueryScope,
     QueryScope,
@@ -52,9 +53,8 @@ from litellm.rust_bridge.trace.generated.types import (
     TracePage,
     TraceScope,
 )
-from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
-from litellm.tracing import TraceReceiver
 from litellm.tracing.otlp_http import encode_otlp_response
+from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import TraceAgentList
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -71,7 +71,6 @@ async def current_time_ms() -> int:
 class TraceAccessContext:
     receiver: TraceReceiver | None
     read_scope: ReadScope | None
-    write_tenant: Tenant | None
 
     def reader(self) -> tuple[TraceReceiver, TraceScope]:
         tracing: Final = require_receiver(self.receiver)
@@ -79,23 +78,14 @@ class TraceAccessContext:
             raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
         return tracing, _trace_scope(self.read_scope)
 
-    def writer(self) -> tuple[TraceReceiver, Tenant]:
-        if self.write_tenant is None:
-            raise HTTPException(status_code=403, detail="Not allowed to ingest agent traces")
-        return require_receiver(self.receiver), self.write_tenant
-
 
 async def provide_trace_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     log_team_lookup: LogTeamLookupDependency,
 ) -> TraceAccessContext:
-    tenant: Final = Tenant(
-        team_id=auth.team_id or "", api_key_hash=auth.token or "", org_id=auth.org_id or "", user_id=auth.user_id or ""
-    )
-    write_tenant: Final = None if auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY else tenant
     read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
-    return TraceAccessContext(tracing, read_scope, write_tenant)
+    return TraceAccessContext(tracing, read_scope)
 
 
 def _trace_scope(scope: ReadScope) -> TraceScope:
@@ -230,7 +220,7 @@ async def list_trace_agents(
 
 @dataclass(frozen=True, slots=True)
 class TraceQueryAccess:
-    storage: ClickHouseStorage
+    storage: LensTraceStorage
     scope: ReadScope
     secret: str
 

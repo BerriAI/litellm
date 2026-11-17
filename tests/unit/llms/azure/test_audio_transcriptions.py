@@ -4,7 +4,8 @@ from typing import Final
 
 import httpx
 import pytest
-from openai import AzureOpenAI
+import respx
+from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm.cost_calculator import completion_cost
@@ -107,3 +108,123 @@ async def test_azure_transcribe_model_mapping():
         assert response._hidden_params["model"] == "whisper-1"
         assert response._hidden_params["custom_llm_provider"] == "azure"
         assert response.text is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response_format", "body", "content_type", "expected_text"),
+    [
+        ("json", b'{"text":"Four score and seven years ago"}', "application/json", "Four score and seven years ago"),
+        (
+            "vtt",
+            b"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nFour score and seven years ago",
+            "text/vtt",
+            "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nFour score and seven years ago",
+        ),
+        (
+            "verbose_json",
+            b'{"task":"transcribe","language":"English","duration":2.0,"text":"Four score and seven years ago"}',
+            "application/json",
+            "Four score and seven years ago",
+        ),
+    ],
+)
+async def test_azure_transcription_parses_response_formats(
+    response_format: str,
+    body: bytes,
+    content_type: str,
+    expected_text: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            content=body,
+            headers={"content-type": content_type},
+        )
+
+    async with AsyncAzureOpenAI(
+        api_key="test-key",
+        api_version="2024-06-01",
+        azure_endpoint="https://example.cognitiveservices.azure.com",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    ) as client:
+        response = await litellm.atranscription(
+            model="azure/whisper-1",
+            file=_audio_file(),
+            api_base="https://example.openai.azure.com",
+            api_key="test-key",
+            api_version="2024-06-01",
+            response_format=response_format,
+            timestamp_granularities=["word"] if response_format == "verbose_json" else None,
+            client=client,
+            drop_params=True,
+        )
+
+    assert response.text == expected_text
+
+
+@pytest.mark.parametrize("api_version", ["2024-06-01", "2025-03-01-preview", "v1", "latest", "preview"])
+async def test_azure_router_transcription_sends_the_default_api_version(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    api_version: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {
+                    "model": "azure/gpt-transcribe",
+                    "api_key": "test-key",
+                    "api_base": "https://transcribe-route.openai.azure.com",
+                    "api_version": api_version,
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.atranscription(model="transcriber", file=_audio_file())
+
+    sent_url: Final = route.calls.last.request.url
+    assert sent_url.path == "/openai/deployments/gpt-transcribe/audio/transcriptions"
+    assert sent_url.params.get("api-version") == litellm.AZURE_DEFAULT_API_VERSION
+    assert response.text == "hello"
+
+
+@pytest.mark.parametrize(
+    ("api_version", "expected_api_version"),
+    [
+        ("v1", litellm.AZURE_DEFAULT_API_VERSION),
+        ("latest", litellm.AZURE_DEFAULT_API_VERSION),
+        ("preview", litellm.AZURE_DEFAULT_API_VERSION),
+        ("2025-03-01-preview", "2025-03-01-preview"),
+    ],
+)
+def test_azure_sync_transcription_uses_the_deployments_route(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    api_version: str,
+    expected_api_version: str,
+) -> None:
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    response: Final = litellm.transcription(
+        model="azure/gpt-transcribe",
+        file=_audio_file(),
+        api_key="test-key",
+        api_base="https://transcribe-route.openai.azure.com",
+        api_version=api_version,
+    )
+
+    sent_url: Final = route.calls.last.request.url
+    assert sent_url.path == "/openai/deployments/gpt-transcribe/audio/transcriptions"
+    assert sent_url.params.get("api-version") == expected_api_version
+    assert response.text == "hello"

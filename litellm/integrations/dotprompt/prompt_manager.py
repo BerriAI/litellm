@@ -5,12 +5,14 @@ Based on Google's GenAI Kit dotprompt implementation: https://google.github.io/d
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 import yaml
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 
 
 class _PromptFileJson(TypedDict):
@@ -18,6 +20,19 @@ class _PromptFileJson(TypedDict):
 
     content: ReadOnly[NotRequired[str]]
     metadata: ReadOnly[NotRequired[dict[str, object]]]
+
+
+class PromptJsonEntry(TypedDict):
+    content: ReadOnly[str]
+    metadata: ReadOnly[dict[str, object]]
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _metadata_section(metadata: Mapping[str, object], name: str) -> _SupportsGet:
+    return require_attributes(metadata.get(name, {}), _SupportsGet, "get")
 
 
 def strip_version_suffix(prompt_id: str) -> str | None:
@@ -44,8 +59,8 @@ class PromptTemplate:
         restricted_keys: Final = ["model", "input", "output"]
         self.model = self.metadata.get("model")
         self.input_schema = self.metadata.get("input", {}).get("schema", {})
-        self.output_format = self.metadata.get("output", {}).get("format")
-        self.output_schema = self.metadata.get("output", {}).get("schema", {})
+        self.output_format = _metadata_section(self.metadata, "output").get("format")
+        self.output_schema = _metadata_section(self.metadata, "output").get("schema", {})
         self.optional_params = {}
         for key in self.metadata:
             if key not in restricted_keys:
@@ -70,7 +85,7 @@ class PromptManager:
         self,
         prompt_id: str | None = None,
         prompt_directory: str | None = None,
-        prompt_data: dict[str, dict[str, Any]] | None = None,
+        prompt_data: dict[str, dict[str, object]] | None = None,
         prompt_file: str | None = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
@@ -358,20 +373,26 @@ class PromptManager:
 
         return f"---\n{frontmatter_yaml}---\n{content}"
 
-    def get_all_prompts_as_json(self) -> dict[str, dict[str, Any]]:
+    def get_all_prompts_as_json(self) -> dict[str, PromptJsonEntry]:
         """Get all loaded prompts in JSON format.
 
         Returns:
             Dictionary mapping prompt_id to prompt data
         """
-        result: Final = {}
-        for prompt_id, template in self.prompts.items():
-            result[prompt_id] = {
+        return {
+            prompt_id: {
                 "content": template.content,
                 "metadata": template.metadata,
             }
-        return result
+            for prompt_id, template in self.prompts.items()
+        }
 
-    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, Any]]) -> None:
-        """Load additional prompts from JSON data (merges with existing prompts)."""
-        self._load_prompts_from_json(prompt_data)
+    def load_prompts_from_json_data(self, prompt_data: Mapping[str, object]) -> None:
+        """Load additional prompts from JSON data (merges with existing prompts). Entries that are not
+        mappings are skipped, the same as a malformed entry inside the loader."""
+        entries: Final = {
+            prompt_id: dict(entry)
+            for prompt_id, raw in prompt_data.items()
+            if (entry := as_str_mapping(raw)) is not None
+        }
+        self._load_prompts_from_json(entries)

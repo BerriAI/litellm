@@ -1,11 +1,16 @@
 import json
+from collections.abc import Mapping
+from typing import Final
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
 MODEL = "us.amazon.nova-pro-v1:0"
@@ -115,3 +120,82 @@ def test_tool_config_injection_point_is_neither_placed_nor_credited(local_model_
     assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["f"]
     assert "cachePoint" not in json.dumps(request)
     assert GATEWAY_INJECTED_CACHE_METADATA_KEY not in metadata
+
+
+@pytest.mark.parametrize("value", ["b c", "bad!"], ids=["nbsp", "outside-bedrock-charset"])
+def test_caller_request_metadata_is_ignored_because_invoke_model_has_no_field_for_it(local_model_cost_map, value):
+    caller_metadata = {"ticket": value}
+    optional_params = AmazonInvokeNovaConfig().map_openai_params(
+        non_default_params={"max_tokens": 8, "requestMetadata": caller_metadata},
+        optional_params={},
+        model=MODEL,
+        drop_params=False,
+    )
+
+    request = _transform_request(
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={**optional_params, "requestMetadata": caller_metadata},
+    )
+
+    assert "requestMetadata" not in request
+    assert request["inferenceConfig"] == {"maxTokens": 8}
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "sent_tier"),
+    [("priority", "priority"), ("flex", "flex"), ("reserved", "reserved"), ("Standard", "default"), ("auto", None)],
+)
+def test_invoke_sends_the_service_tier_in_the_header_invoke_model_takes(service_tier: str, sent_tier: str | None):
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+
+    litellm.completion(
+        model=f"bedrock/invoke/{MODEL}",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        service_tier=service_tier,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    request: Final = send.call_args.args[0]
+    assert request.headers.get("X-Amzn-Bedrock-Service-Tier") == sent_tier
+    assert "serviceTier" not in json.loads(request.content)
+
+
+@pytest.mark.parametrize(("requested_tier", "served_tier"), [("priority", "flex"), ("flex", "priority")])
+def test_invoke_reports_and_bills_the_tier_bedrock_served_over_the_tier_requested(
+    requested_tier: str, served_tier: str
+) -> None:
+    reply: Final = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000},
+    }
+
+    def invoke(tier: Mapping[str, object]) -> litellm.ModelResponse:
+        send: Final = MagicMock(
+            return_value=httpx.Response(200, json=reply, headers={"X-Amzn-Bedrock-Service-Tier": served_tier})
+        )
+        return litellm.completion(
+            model=f"bedrock/invoke/{MODEL}",
+            messages=[{"role": "user", "content": "hi"}],
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send))),
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            **tier,
+        )
+
+    native_requested: Final = invoke({"serviceTier": {"type": requested_tier}})
+    openai_requested: Final = invoke({"service_tier": requested_tier})
+    openai_served: Final = invoke({"service_tier": served_tier})
+
+    assert native_requested.service_tier == openai_requested.service_tier == served_tier
+    assert (
+        native_requested._hidden_params["response_cost"]
+        == openai_requested._hidden_params["response_cost"]
+        == openai_served._hidden_params["response_cost"]
+    )

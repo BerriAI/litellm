@@ -1,12 +1,17 @@
+import copy
 import json
-from collections.abc import Iterator
-from typing import Final
+from collections.abc import AsyncIterator, Iterator
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk, ChatCompletionMessage
+from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -14,13 +19,17 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.databricks.common_utils import DatabricksException
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
     _sanitize_empty_content,
 )
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponseStream, StreamingChoices
 import asyncio
 from unittest.mock import Mock
 from litellm._version import version
@@ -32,6 +41,25 @@ DATABRICKS_API_BASE: Final = "https://my.workspace.cloud.databricks.com/serving-
 DATABRICKS_API_KEY: Final = "dapimykey"
 DATABRICKS_CHAT_COMPLETIONS_URL: Final = f"{DATABRICKS_API_BASE}/chat/completions"
 DATABRICKS_EMBEDDINGS_URL: Final = f"{DATABRICKS_API_BASE}/embeddings"
+JSON_SCHEMA_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "P",
+        "strict": True,
+        "schema": {
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                }
+            },
+            "type": "object",
+            "properties": {"p": {"$ref": "#/$defs/Person"}},
+            "required": ["p"],
+        },
+    },
+}
 
 
 @pytest.fixture()
@@ -310,6 +338,44 @@ def test_transform_choices_with_citations():
     }
 
 
+def _databricks_reasoning_chunk(chunk_id: str, summaries: list[dict[str, str]], text: str | None = None) -> dict:
+    content: Final = [{"type": "reasoning", "summary": summaries}] + ([{"type": "text", "text": text}] if text else [])
+    return {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "databricks-qwen",
+        "choices": [{"delta": {"role": "assistant", "content": content}, "index": 0, "finish_reason": None}],
+    }
+
+
+def test_streamed_reasoning_summaries_accumulate_in_the_openai_sdk_stream_state():
+    """`client.chat.completions.stream()` runs every delta through the OpenAI SDK's `ChatCompletionStreamState`,
+    which raises `RuntimeError: Expected list delta entry to have an \`index\` key` on the second chunk unless each
+    streamed `thinking_blocks` entry carries its list position"""
+    iterator: Final = DatabricksChatResponseIterator(None, sync_stream=True)
+    chunks: Final = (
+        _databricks_reasoning_chunk("c1", [{"type": "summary_text", "text": "Step 1. "}]),
+        _databricks_reasoning_chunk("c1", [{"type": "summary_text", "text": "Step 2.", "signature": "sig-a"}]),
+        _databricks_reasoning_chunk(
+            "c1",
+            [{"type": "summary_text", "text": "", "signature": ""}, {"type": "summary_text", "text": "Step 3."}],
+            text="391",
+        ),
+    )
+
+    state: Final = ChatCompletionStreamState()
+    for chunk in chunks:
+        state.handle_chunk(ChatCompletionChunk.model_validate(iterator.chunk_parser(chunk).model_dump()))
+    message: Final = state.get_final_completion().choices[0].message.model_dump()
+
+    assert message["content"] == "391"
+    assert message["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "Step 1. Step 2.", "signature": "sig-a", "index": 0},
+        {"type": "thinking", "thinking": "Step 3.", "signature": "", "index": 1},
+    ]
+
+
 def test_chunk_parser_with_citation():
     iterator = DatabricksChatResponseIterator(None, sync_stream=True)
     chunk = {
@@ -398,6 +464,21 @@ def test_transform_messages_sanitizes_empty_content():
     assert result[1]["content"] == "Hi"
 
 
+def test_transform_messages_drops_the_prefill_prefix_flag():
+    """Databricks rejects unknown message keys, so a continuation prefill reaches Claude without ``prefix``."""
+    messages = [
+        {"role": "user", "content": "How do transformers work?"},
+        {"role": "assistant", "content": "Transformers use", "prefix": True},
+    ]
+
+    result = DatabricksConfig().transform_messages(
+        messages=messages, model="databricks-claude-sonnet-4-6", is_async=False
+    )
+
+    assert result[-1] == {"role": "assistant", "content": "Transformers use"}
+    assert messages[-1]["prefix"] is True
+
+
 def test_transform_request_preserves_unity_model_service_name():
     config = DatabricksConfig()
     result = config.transform_request(
@@ -409,6 +490,389 @@ def test_transform_request_preserves_unity_model_service_name():
     )
 
     assert result["model"] == "system.ai.kimi-k3"
+
+
+@pytest.mark.parametrize(
+    "model,messages,optional_params,expected_content",
+    [
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="user",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "system", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="system",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "assistant", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="assistant",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "text", "text": "Reply in JSON"}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="tool",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+            id="cache-control",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Reply in JSON"},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                    ],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            [
+                {"type": "text", "text": "Reply in JSON"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            ],
+            id="text-and-image",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": "Reply in JSON"}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="plain-string",
+        ),
+        pytest.param(
+            "databricks-claude-sonnet-5",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply in JSON"}],
+            id="claude",
+        ),
+    ],
+)
+def test_transform_request_collapses_single_plain_text_block_for_non_claude_models(
+    model: str,
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    expected_content: object,
+) -> None:
+    config: Final[DatabricksConfig] = DatabricksConfig()
+    result: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+        config.transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+    )
+    outgoing_messages: Final[list[dict[str, object]]] = TypeAdapter(list[dict[str, object]]).validate_python(
+        result["messages"]
+    )
+
+    assert outgoing_messages == [{**messages[0], "content": expected_content}]
+
+
+_TWO_TEXT_BLOCKS: Final = [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]
+_JSON_OBJECT: Final = {"response_format": {"type": "json_object"}}
+_IMAGE_BLOCK: Final = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+_CACHED_BLOCK: Final = {"type": "text", "text": " in JSON", "cache_control": {"type": "ephemeral"}}
+
+
+def _outgoing_messages(
+    model: str, messages: list[AllMessageValues], optional_params: dict[str, object], drop_params: bool = False
+) -> list[dict[str, object]]:
+    request: Final = TypeAdapter(dict[str, object]).validate_python(
+        DatabricksConfig().transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={"drop_params": True} if drop_params else {},
+            headers={},
+        )
+    )
+    return TypeAdapter(list[dict[str, object]]).validate_python(request["messages"])
+
+
+@pytest.mark.parametrize(
+    "model,messages,optional_params,expected_content",
+    [
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            "Reply in JSON",
+            id="json-object-two-blocks-joined",
+        ),
+        pytest.param(
+            "databricks-qwen35-122b-a10b",
+            [{"role": "user", "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B json"}] * 2}],
+            _JSON_OBJECT,
+            "AB jsonAB json",
+            id="json-object-four-blocks-joined-as-sent",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            {},
+            _TWO_TEXT_BLOCKS,
+            id="no-response-format-stays-list",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "r", "schema": {"type": "object"}}}},
+            _TWO_TEXT_BLOCKS,
+            id="json-schema-stays-list",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, _CACHED_BLOCK]}],
+            _JSON_OBJECT,
+            [{"type": "text", "text": "Reply"}, _CACHED_BLOCK],
+            id="json-object-cache-control-stays-list",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+            _JSON_OBJECT,
+            [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+            id="json-object-message-cache-control-stays-block",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}, _IMAGE_BLOCK]}],
+            _JSON_OBJECT,
+            [{"type": "text", "text": "Reply in JSON"}, _IMAGE_BLOCK],
+            id="json-object-text-and-image-stays-list",
+        ),
+        pytest.param(
+            "databricks-claude-sonnet-5",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            _TWO_TEXT_BLOCKS,
+            id="json-object-claude-stays-list",
+        ),
+        pytest.param(
+            "system.ai.deepseek-v4-flash-0731",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            "Reply in JSON",
+            id="json-object-ai-gateway-model-joined",
+        ),
+        pytest.param(
+            "openai-gpt-external",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            _TWO_TEXT_BLOCKS,
+            id="json-object-external-endpoint-stays-list",
+        ),
+    ],
+)
+def test_transform_request_joins_plain_text_blocks_only_for_hosted_non_claude_json_object(
+    model: str,
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    expected_content: object,
+) -> None:
+    assert _outgoing_messages(model, messages, optional_params) == [{"role": "user", "content": expected_content}]
+
+
+@pytest.mark.parametrize("response_format", [None, {"type": "json_object"}], ids=["no-response-format", "json-object"])
+def test_transform_request_rejects_a_text_block_whose_text_is_a_truthy_non_string(
+    response_format: dict[str, str] | None,
+) -> None:
+    with pytest.raises(DatabricksException) as error:
+        _outgoing_messages(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}, {"type": "text", "text": 7}]}],
+            {} if response_format is None else {"response_format": response_format},
+        )
+
+    assert error.value.status_code == 400
+
+
+def test_transform_request_accepts_an_openai_message_object_in_history() -> None:
+    earlier_answer: Final = ChatCompletionMessage(role="assistant", content="Earlier answer")
+
+    outgoing: Final = _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct",
+        [
+            {"role": "user", "content": "Earlier question"},
+            cast(AllMessageValues, earlier_answer),  # cast-ok: SDK callers pass response messages back as history
+            {"role": "user", "content": "Next question"},
+        ],
+        {},
+    )
+
+    assert [message.get("content") for message in outgoing] == ["Earlier question", "Earlier answer", "Next question"]
+
+
+def test_transform_request_json_object_keeps_earlier_turns_as_sent() -> None:
+    earlier_turn: Final[AllMessageValues] = {
+        "role": "user",
+        "content": [{"type": "text", "text": "Code: A"}, {"type": "text", "text": "BC"}],
+    }
+    reply: Final[AllMessageValues] = {"role": "assistant", "content": "Got it."}
+
+    assert _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct",
+        [earlier_turn, reply, {"role": "user", "content": _TWO_TEXT_BLOCKS}],
+        _JSON_OBJECT,
+    ) == [earlier_turn, reply, {"role": "user", "content": "Reply in JSON"}]
+
+
+def test_transform_request_json_object_joins_a_trailing_system_run_and_keeps_its_break() -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "Say hi"},
+        {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+        {"role": "system", "content": _TWO_TEXT_BLOCKS},
+    ]
+
+    assert _outgoing_messages("databricks-meta-llama-3-3-70b-instruct", messages, _JSON_OBJECT) == [
+        {"role": "user", "content": "Say hi"},
+        {"role": "system", "content": "Alpha rule.\n\nReply in JSON"},
+    ]
+
+
+_CACHED_TEXT_AND_IMAGE: Final = [{**_CACHED_BLOCK, "text": "Reply in JSON"}, _IMAGE_BLOCK]
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        pytest.param(
+            {"role": "user", "content": [{"type": "text", "text": "Reply"}, _CACHED_BLOCK]},
+            {"role": "user", "content": "Reply in JSON"},
+            id="block-cache-control-dropped-and-joined",
+        ),
+        pytest.param(
+            {"role": "user", "content": "Reply in JSON", "cache_control": {"type": "ephemeral"}},
+            {"role": "user", "content": "Reply in JSON"},
+            id="message-cache-control-dropped",
+        ),
+        pytest.param(
+            {"role": "user", "content": _CACHED_TEXT_AND_IMAGE},
+            {"role": "user", "content": _CACHED_TEXT_AND_IMAGE},
+            id="image-keeps-cache-control",
+        ),
+    ],
+)
+def test_transform_request_json_object_drops_last_message_cache_control_under_drop_params(
+    message: AllMessageValues, expected: dict[str, object]
+) -> None:
+    assert _outgoing_messages("databricks-meta-llama-3-3-70b-instruct", [message], _JSON_OBJECT, drop_params=True) == [
+        expected
+    ]
+
+
+_THINKING_BLOCK: Final = {"type": "thinking", "thinking": "Plan the reply.", "signature": "sig"}
+
+
+@pytest.mark.parametrize(
+    "dropped_turn",
+    [
+        pytest.param({"role": "assistant", "content": "", "thinking_blocks": [_THINKING_BLOCK]}, id="thinking-only"),
+        pytest.param({"role": "assistant", "content": None, "reasoning_content": "Plan."}, id="reasoning-only"),
+        pytest.param({"role": "assistant", "content": [{"type": "text", "text": " "}]}, id="blank-text-part"),
+    ],
+)
+def test_transform_request_json_object_joins_the_message_before_a_dropped_assistant_turn(
+    dropped_turn: AllMessageValues,
+) -> None:
+    assert _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct",
+        [{"role": "user", "content": _TWO_TEXT_BLOCKS}, dropped_turn],
+        _JSON_OBJECT,
+    ) == [{"role": "user", "content": "Reply in JSON"}]
+
+
+def test_transform_request_json_object_joins_a_system_run_split_by_a_dropped_assistant_turn() -> None:
+    earlier_turn: Final[AllMessageValues] = {
+        "role": "user",
+        "content": [{"type": "text", "text": "Say"}, {"type": "text", "text": " hi"}],
+    }
+    messages: Final[list[AllMessageValues]] = [
+        earlier_turn,
+        {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+        {"role": "assistant", "content": "", "thinking_blocks": [_THINKING_BLOCK]},
+        {"role": "system", "content": _TWO_TEXT_BLOCKS},
+    ]
+
+    assert _outgoing_messages("databricks-meta-llama-3-3-70b-instruct", messages, _JSON_OBJECT) == [
+        earlier_turn,
+        {"role": "system", "content": "Alpha rule.\n\nReply in JSON"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "content,expected_content",
+    [
+        pytest.param(
+            [{"type": "text", "text": "Reply in JSON"}, {"type": "text", "text": "\n\n"}],
+            "Reply in JSON",
+            id="one-non-blank-part-goes-out-as-before",
+        ),
+        pytest.param(
+            [{"type": "text", "text": "Reply"}, {"type": "text", "text": " "}, {"type": "text", "text": "in JSON"}],
+            "Reply in JSON",
+            id="blank-separator-between-parts-kept",
+        ),
+    ],
+)
+def test_transform_request_json_object_joins_only_two_or_more_non_blank_parts(
+    content: list[object], expected_content: str
+) -> None:
+    assert _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct", [{"role": "user", "content": content}], _JSON_OBJECT
+    ) == [{"role": "user", "content": expected_content}]
+
+
+def test_transform_request_json_object_keeps_message_cache_control_parts_as_sent_without_drop_params() -> None:
+    message: Final[AllMessageValues] = {
+        "role": "user",
+        "content": _TWO_TEXT_BLOCKS,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    assert _outgoing_messages("databricks-meta-llama-3-3-70b-instruct", [message], {}) == _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct", [message], _JSON_OBJECT
+    )
+
+
+def test_transform_request_json_object_reads_the_global_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    assert _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct",
+        [{"role": "user", "content": [{"type": "text", "text": "Reply"}, _CACHED_BLOCK]}],
+        _JSON_OBJECT,
+    ) == [{"role": "user", "content": "Reply in JSON"}]
 
 
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():
@@ -1968,13 +2432,13 @@ def mock_chat_response_nonanthropic_prompt_caching() -> Dict[str, Any]:
 def mock_http_handler_chat_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    def mock_iter_lines():
+    def mock_iter_text() -> Iterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
-                yield line
+                yield f"{line}\n"
 
     mock_response = MagicMock()
-    mock_response.iter_lines.side_effect = mock_iter_lines
+    mock_response.iter_text.side_effect = mock_iter_text
     mock_response.status_code = 200
 
     return mock_response
@@ -1983,13 +2447,13 @@ def mock_http_handler_chat_streaming_response() -> MagicMock:
 def mock_http_handler_chat_async_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    async def mock_iter_lines():
+    async def mock_aiter_text() -> AsyncIterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
-                yield line
+                yield f"{line}\n"
 
     mock_response = MagicMock()
-    mock_response.aiter_lines.return_value = mock_iter_lines()
+    mock_response.aiter_text.return_value = mock_aiter_text()
     mock_response.status_code = 200
 
     return mock_response
@@ -2088,3 +2552,686 @@ def mock_chat_streaming_response_chunks() -> List[str]:
             }
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "databricks-meta-llama-3-3-70b-instruct",
+        "databricks-qwen35-122b-a10b",
+        "databricks-gpt-oss-120b",
+        "system.ai.deepseek-v4-1-flash",
+    ),
+)
+def test_databricks_non_claude_json_schema_preserves_refs(model: str) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert optional_params["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+
+
+def test_databricks_claude_json_schema_preserves_refs_in_tool_parameters() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-haiku-4-5",
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert "response_format" not in optional_params
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "json_tool_call",
+                "parameters": JSON_SCHEMA_RESPONSE_FORMAT["json_schema"]["schema"],
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "forced"),
+    (
+        ("databricks-claude-opus-5", {}, False),
+        ("databricks-claude-opus-4-8", {"thinking": {"type": "adaptive"}}, False),
+        ("databricks-claude-opus-5-5", {}, False),
+        ("databricks-claude-opus-4-8", {}, True),
+        ("databricks-claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+    ),
+    ids=(
+        "opus-5-default-thinking",
+        "opus-4-8-adaptive",
+        "opus-5-5-without-forced-tools",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+    ),
+)
+def test_databricks_claude_json_tool_is_forced_only_when_the_model_will_not_think(
+    local_model_cost_map: None, model: str, thinking_params: dict[str, object], forced: bool
+) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+        **thinking_params,
+    )
+    request: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+        DatabricksConfig().transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=[{"role": "user", "content": "Name the capital of France."}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+    )
+
+    assert (
+        request.get("tool_choice") == {"type": "function", "function": {"name": "json_tool_call"}}
+    ) is forced
+    assert optional_params["tools"][0]["function"].get("description") == (
+        None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
+    )
+
+
+def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:
+    class Person(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        name: str
+
+    class Order(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        person: Person
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-meta-llama-3-3-70b-instruct",
+        custom_llm_provider="databricks",
+        response_format=Order,
+    )
+    schema: Final = optional_params["response_format"]["json_schema"]["schema"]
+
+    assert schema["properties"]["person"] == {"$ref": "#/$defs/Person"}
+    assert schema["$defs"]["Person"] == {
+        "additionalProperties": False,
+        "properties": {"name": {"title": "Name", "type": "string"}},
+        "required": ["name"],
+        "title": "Person",
+        "type": "object",
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_with_prompt_caching_anthropic_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    route: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_databricks_anthropic_cache_response(cache_read_input_tokens=0, cache_creation_input_tokens=1545),
+        )
+    )
+    cached_block: Final = {"type": "text", "text": "example text" * 512, "cache_control": {"type": "ephemeral"}}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant that explains the content of the given text."}
+            ],
+        },
+        {"role": "user", "content": [cached_block]},
+    ]
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        temperature=0.5,
+    )
+
+    _assert_databricks_request(route.calls.last.request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "databricks-claude-3-7-sonnet"
+    assert "stream" not in request_body
+    assert request_body["messages"][1]["content"] == [cached_block]
+    assert response.model == "databricks/claude-3-7-sonnet"
+    assert response.usage.prompt_tokens == 1549
+    assert response.usage.completion_tokens == 117
+    assert response.usage.total_tokens == 1666
+    assert response.usage.cache_read_input_tokens == 0
+    assert response.usage.cache_creation_input_tokens == 1545
+
+
+def test_get_optional_params_keeps_service_tier_for_databricks() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-opus-5",
+        custom_llm_provider="databricks",
+        service_tier="priority",
+        drop_params=True,
+    )
+
+    assert optional_params["service_tier"] == "priority"
+
+
+@pytest.mark.parametrize("served_tier", ["priority", "default", None])
+def test_transform_response_carries_served_service_tier(served_tier: str | None) -> None:
+    raw_response: Final = MagicMock()
+    raw_response.json.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "dbrx",
+        **({"service_tier": served_tier} if served_tier is not None else {}),
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    result: Final = DatabricksConfig().transform_response(
+        model="databricks/dbrx",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.to_dict().get("service_tier") == served_tier
+
+
+_DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH: Final = [
+    {"type": "tool_search", "execution": "server"},
+    {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "defer_loading": True,
+    },
+]
+
+
+def test_databricks_claude_answers_400_for_the_openai_tool_search_tool_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DatabricksConfig().map_openai_params(
+            non_default_params={"tools": _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+
+
+def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["tools"] == [
+        {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
+    ]
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_databricks_chat_drops_beta_gated_thinking_fields_only_under_drop_params(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": thinking},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=drop_params,
+    )
+    assert mapped["thinking"] == ({"type": "adaptive"} if drop_params else thinking)
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_databricks_chat_keeps_ungated_thinking_display_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive", "display": "summarized"}},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
+_JSON_TOOL_ARGUMENT_FRAGMENTS: Final = ("", "", '{"name": ', '"Ada"', ', "met', 'a": ', "{}", ', "tags": []}')
+_RECORD_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "Record",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "meta": {"type": "object"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["name", "meta", "tags"],
+        },
+    },
+}
+
+
+def _json_tool_call_frame(delta: dict[str, object], finish_reason: str | None = None) -> bytes:
+    chunk: Final = {
+        "id": "msg_1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "databricks-claude-haiku-5-5",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk)}\n\n".encode()
+
+
+_GET_WEATHER_ARGUMENTS: Final = '{"city": "Paris"}'
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+def _tool_call_opening(index: int, name: str, arguments: str) -> dict[str, object]:
+    tool_call: Final = {"index": index, "id": f"toolu_{index}", "type": "function"}
+    return {"tool_calls": [{**tool_call, "function": {"name": name, "arguments": arguments}}]}
+
+
+def _tool_call_fragment(index: int, fragment: str) -> dict[str, object]:
+    return {"tool_calls": [{"index": index, "type": "function", "function": {"arguments": fragment}}]}
+
+
+def _json_tool_call_deltas(index: int) -> tuple[dict[str, object], ...]:
+    fragments: Final = tuple(_tool_call_fragment(index, fragment) for fragment in _JSON_TOOL_ARGUMENT_FRAGMENTS[1:])
+    return (_tool_call_opening(index, "json_tool_call", _JSON_TOOL_ARGUMENT_FRAGMENTS[0]), *fragments)
+
+
+def _sse_stream(deltas: tuple[dict[str, object], ...], finish_reason: str) -> bytes:
+    frames: Final = tuple(_json_tool_call_frame(delta) for delta in deltas)
+    return b"".join((*frames, _json_tool_call_frame({}, finish_reason=finish_reason), b"data: [DONE]\n\n"))
+
+
+def _completion(content: str | None, tool_calls: tuple[tuple[str, str], ...], finish_reason: str) -> dict[str, object]:
+    message_tool_calls: Final = [
+        {"id": f"toolu_{index}", "type": "function", "function": {"name": name, "arguments": arguments}}
+        for index, (name, arguments) in enumerate(tool_calls)
+    ]
+    return {
+        "id": "msg_1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "databricks-claude-haiku-5-5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content, "tool_calls": message_tool_calls or None},
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+    }
+
+
+_JSON_ANSWER: Final = "".join(_JSON_TOOL_ARGUMENT_FRAGMENTS)
+_PROSE_FRAGMENTS: Final = ("I picked ", "Ada with empty ", "meta and tags.")
+_PROSE_DELTAS: Final = tuple({"content": fragment} for fragment in _PROSE_FRAGMENTS)
+_TEXT_ANSWER_DELTAS: Final = tuple({"content": fragment} for fragment in _JSON_TOOL_ARGUMENT_FRAGMENTS)
+
+
+async def _collect_async_stream(request: dict[str, object]) -> list[ModelResponseStream]:
+    return [chunk async for chunk in await litellm.acompletion(**request, stream=True)]
+
+
+def _stream_chunks(request: dict[str, object], call: str) -> list[ModelResponseStream]:
+    if call == "completion":
+        return list(litellm.completion(**request, stream=True))
+    return asyncio.run(_collect_async_stream(request))
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+@pytest.mark.parametrize(
+    ("completion", "stream"),
+    [
+        pytest.param(
+            _completion(None, (("json_tool_call", _JSON_ANSWER),), "tool_calls"),
+            _sse_stream(_json_tool_call_deltas(0), "tool_calls"),
+            id="json-tool-only",
+        ),
+        pytest.param(
+            _completion("".join(_PROSE_FRAGMENTS), (("json_tool_call", _JSON_ANSWER),), "tool_calls"),
+            _sse_stream((*_PROSE_DELTAS, *_json_tool_call_deltas(0)), "tool_calls"),
+            id="prose-before-json-tool",
+        ),
+        pytest.param(
+            _completion(_JSON_ANSWER, (), "stop"),
+            _sse_stream(_TEXT_ANSWER_DELTAS, "stop"),
+            id="answer-as-text",
+        ),
+        pytest.param(
+            _completion(_JSON_ANSWER, (("json_tool_call", _JSON_ANSWER),), "tool_calls"),
+            _sse_stream((*_TEXT_ANSWER_DELTAS, *_json_tool_call_deltas(0)), "tool_calls"),
+            id="answer-as-text-and-json-tool",
+        ),
+    ],
+)
+def test_claude_json_schema_stream_returns_the_non_stream_answer(
+    respx_mock: respx.MockRouter, call: str, completion: dict[str, object], stream: bytes
+) -> None:
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=completion),
+            httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"}),
+        ]
+    )
+    request: Final[dict[str, object]] = {
+        "model": "databricks/databricks-claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Return name Ada, an empty meta object, and empty tags."}],
+        "response_format": _RECORD_RESPONSE_FORMAT,
+        "api_base": DATABRICKS_API_BASE,
+        "api_key": DATABRICKS_API_KEY,
+    }
+
+    answer: Final = litellm.completion(**request).choices[0]
+    choices: Final = tuple(chunk.choices[0] for chunk in _stream_chunks(request, call) if chunk.choices)
+
+    assert answer.message.content == _JSON_ANSWER
+    assert "".join(choice.delta.content or "" for choice in choices) == answer.message.content
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
+    assert not any(choice.delta.tool_calls for choice in choices)
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+@pytest.mark.parametrize("json_tool_first", [False, True], ids=["user-tool-first", "json-tool-first"])
+@pytest.mark.parametrize("leading_prose", [(), _PROSE_DELTAS], ids=["no-prose", "prose-first"])
+def test_claude_json_schema_stream_keeps_the_user_tool_call_to_run(
+    respx_mock: respx.MockRouter, call: str, json_tool_first: bool, leading_prose: tuple[dict[str, object], ...]
+) -> None:
+    json_index: Final = 0 if json_tool_first else 1
+    user_tool_deltas: Final = (
+        _tool_call_opening(1 - json_index, "get_weather", ""),
+        _tool_call_fragment(1 - json_index, '{"city": '),
+        _tool_call_fragment(1 - json_index, '"Paris"}'),
+    )
+    tool_calls: Final = (("get_weather", _GET_WEATHER_ARGUMENTS), ("json_tool_call", _JSON_ANSWER))
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_completion(
+                    "".join(_PROSE_FRAGMENTS) if leading_prose else None,
+                    tool_calls[::-1] if json_tool_first else tool_calls,
+                    "tool_calls",
+                ),
+            ),
+            httpx.Response(
+                200,
+                content=_sse_stream(
+                    (
+                        (*leading_prose, *_json_tool_call_deltas(json_index), *user_tool_deltas)
+                        if json_tool_first
+                        else (*leading_prose, *user_tool_deltas, *_json_tool_call_deltas(json_index))
+                    ),
+                    "tool_calls",
+                ),
+                headers={"content-type": "text/event-stream"},
+            ),
+        ]
+    )
+    request: Final[dict[str, object]] = {
+        "model": "databricks/databricks-claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Check the weather in Paris, then return the record."}],
+        "tools": [_GET_WEATHER_TOOL],
+        "response_format": _RECORD_RESPONSE_FORMAT,
+        "api_base": DATABRICKS_API_BASE,
+        "api_key": DATABRICKS_API_KEY,
+    }
+
+    answer: Final = litellm.completion(**request).choices[0]
+    state: Final = ChatCompletionStreamState()
+    for chunk in _stream_chunks(request, call):
+        state.handle_chunk(ChatCompletionChunk.model_validate(chunk.model_dump()))
+    streamed: Final = state.get_final_completion().choices[0]
+
+    assert answer.message.content == _JSON_ANSWER
+    assert [tool_call.function.name for tool_call in answer.message.tool_calls or ()] == ["get_weather"]
+    assert answer.finish_reason == "tool_calls"
+    assert streamed.message.content == answer.message.content
+    streamed_tool_calls: Final = tuple(
+        (tool_call.function.name, tool_call.function.arguments) for tool_call in streamed.message.tool_calls or ()
+    )
+    assert streamed_tool_calls == (("get_weather", _GET_WEATHER_ARGUMENTS),)
+    assert streamed.finish_reason == answer.finish_reason
+
+
+def _json_schema_stream_choices(respx_mock: respx.MockRouter, call: str, stream: bytes) -> tuple[StreamingChoices, ...]:
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"})
+    )
+    request: Final[dict[str, object]] = {
+        "model": "databricks/databricks-claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Check the weather in Paris, then return the record."}],
+        "tools": [_GET_WEATHER_TOOL],
+        "response_format": _RECORD_RESPONSE_FORMAT,
+        "api_base": DATABRICKS_API_BASE,
+        "api_key": DATABRICKS_API_KEY,
+    }
+    return tuple(chunk.choices[0] for chunk in _stream_chunks(request, call) if chunk.choices)
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+def test_claude_json_schema_stream_sends_a_text_answer_as_it_arrives(respx_mock: respx.MockRouter, call: str) -> None:
+    choices: Final = _json_schema_stream_choices(respx_mock, call, _sse_stream(_TEXT_ANSWER_DELTAS, "stop"))
+
+    assert [choice.delta.content for choice in choices if choice.delta.content] == [
+        fragment for fragment in _JSON_TOOL_ARGUMENT_FRAGMENTS if fragment
+    ]
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+def test_claude_json_schema_stream_sends_prose_before_the_user_tool_call(respx_mock: respx.MockRouter, call: str) -> None:
+    user_tool_opening: Final = _tool_call_opening(0, "get_weather", _GET_WEATHER_ARGUMENTS)
+    choices: Final = _json_schema_stream_choices(
+        respx_mock, call, _sse_stream((*_PROSE_DELTAS, user_tool_opening), "tool_calls")
+    )
+    first_tool_call_at: Final = next(position for position, choice in enumerate(choices) if choice.delta.tool_calls)
+
+    assert "".join(choice.delta.content or "" for choice in choices[: first_tool_call_at + 1]) == "".join(
+        _PROSE_FRAGMENTS
+    )
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["tool_calls"]
+
+
+@pytest.mark.usefixtures("_databricks_httpx_transport")
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_finish_reason(
+    respx_mock: respx.MockRouter, call: str
+) -> None:
+    halves: Final = ('{"name": "Ada"}', '{"meta": {}, "tags": []}')
+    respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200, json=_completion(None, tuple(("json_tool_call", half) for half in halves), "tool_calls")
+        )
+    )
+    answer: Final = litellm.completion(
+        model="databricks/databricks-claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Return name Ada, an empty meta object, and empty tags."}],
+        response_format=_RECORD_RESPONSE_FORMAT,
+        api_base=DATABRICKS_API_BASE,
+        api_key=DATABRICKS_API_KEY,
+    ).choices[0]
+    split_stream: Final = _sse_stream(
+        tuple(_tool_call_opening(index, "json_tool_call", half) for index, half in enumerate(halves)), "tool_calls"
+    )
+    choices: Final = _json_schema_stream_choices(respx_mock, call, split_stream)
+
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def test_databricks_claude_answers_400_for_a_hosted_mcp_tool_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DatabricksConfig().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "databricks-claude-opus-5-5 on databricks " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+def test_databricks_claude_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = DatabricksConfig().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=True,
+        )
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather"]
+    assert any(
+        "`deepwiki`" in record.getMessage() and " on databricks (" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_databricks_claude_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "tool_choice" not in mapped
+
+
+def test_databricks_claude_still_sends_max_completion_tokens_as_max_tokens_when_dropping_a_hosted_mcp_tool(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL], "max_completion_tokens": 64},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["max_tokens"] == 64
+    assert "max_completion_tokens" not in mapped
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [("databricks-claude-haiku-5-5", None), ("support-bot-endpoint", "databricks/databricks-claude-haiku-5-5")],
+    ids=["claude_in_the_endpoint_name", "claude_named_only_by_base_model"],
+)
+def test_databricks_claude_request_over_the_cache_control_cap_keeps_the_newest_four_hints_under_drop_params(
+    model: str, base_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "system", "content": "system prompt", "cache_control": hint},
+        {"role": "user", "content": "turn 1", "cache_control": hint},
+        {"role": "assistant", "content": "answer 1", "cache_control": hint},
+        {"role": "user", "content": "turn 2", "cache_control": hint},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": "turn 3", "cache_control": hint},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = DatabricksConfig().transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks", "base_model": base_model},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(body["messages"][0])
+    assert json.dumps(body["messages"]).count('"cache_control"') == 4
+    assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{"cache_control": {"type": "ephemeral"}}, {"extra_body": {"cache_control": {"type": "ephemeral"}}}],
+    ids=["top_level_cache_control", "extra_body_cache_control"],
+)
+def test_databricks_claude_cache_control_cap_keeps_room_for_a_top_level_cache_control_under_drop_params(
+    optional_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "user", "content": "turn 1", "cache_control": hint},
+        {"role": "assistant", "content": "answer 1", "cache_control": hint},
+        {"role": "user", "content": "turn 2", "cache_control": hint},
+        {"role": "assistant", "content": "answer 2", "cache_control": hint},
+        {"role": "user", "content": "turn 3"},
+    ]
+
+    body: Final = DatabricksConfig().transform_request(
+        model="databricks-claude-haiku-5-5",
+        messages=messages,
+        optional_params=copy.deepcopy(optional_params),
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks"},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(body["messages"][0])
+    assert json.dumps(body["messages"]).count('"cache_control"') == 3
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("databricks-claude-sonnet-5", {"type": "disabled"}),
+        ("databricks-claude-haiku-4-5", None),
+        ("databricks-claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final = _map_reasoning_effort(model, "none")
+    assert params.get("thinking") == expected
+    assert "output_config" not in params
+    assert "reasoning_effort" not in params

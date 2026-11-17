@@ -19,8 +19,6 @@ serving the group with one deployment until the next resync.
 
 import asyncio
 import json
-import re
-import signal
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
@@ -34,7 +32,6 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 from integration._support.client import (
     JSON_OBJECT,
@@ -45,12 +42,15 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
+from integration._support.database import read_rows, scratch_database
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, SseResponse, StoredResponse
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 ORDER_ONE_BLOB: Final = "gAAAAA-minted-by-order-1"
 ORDER_TWO_BLOB: Final = "gAAAAA-minted-by-order-2"
@@ -303,7 +303,7 @@ def scenario_api_base(scenario: Scenario, scenario_id: str, response: StoredResp
 def deployment(
     scenario: Scenario,
     group: str,
-    api_base: str,
+    api_base: str | None,
     *,
     order: int | None,
     model: str = RESPONSES_MODEL,
@@ -316,7 +316,7 @@ def deployment(
             "litellm_params": {
                 "model": model,
                 "api_key": PROVIDER_KEY,
-                "api_base": api_base,
+                **({} if api_base is None else {"api_base": api_base}),
                 **({} if order is None else {"order": order}),
                 **extra_params,
             },
@@ -863,12 +863,36 @@ def test_hop_inside_one_encryption_boundary_keeps_the_reasoning(gateway: Gateway
         assert [body.get("input") for body in bodies] == [history(mark), history(mark)], bodies
 
 
-def configured_fallback(scenario: Scenario, source: str, target: str) -> None:
-    gateway: Final = scenario.gateway
-    original: Final = router_setting(gateway, "fallbacks")
-    restored: Final = original if isinstance(original, list) else []
-    scenario.cleanups.callback(lambda: gateway.post("/config/update", {"router_settings": {"fallbacks": restored}}))
-    gateway.post("/config/update", {"router_settings": {"fallbacks": [*restored, {source: [target]}]}})
+def test_hop_between_same_key_deployments_on_the_providers_default_endpoint_keeps_the_reasoning(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    shared: Final = f"default-{uuid.uuid4().hex[:12]}"
+    with (
+        scratch_database() as database,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database, "OPENAI_BASE_URL": f"{gateway.upstream_url}/{shared}"},
+            remove_environment=("DIRECT_URL", "DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE"),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        owned.gateway.post("/config/update", {"router_settings": {"num_retries": 0}})
+        one: Final = scenario_api_base(scenario, f"{shared}-o1", failing()).rsplit("/", 1)[-1]
+        two: Final = scenario_api_base(scenario, f"{shared}-o2", healthy_json()).rsplit("/", 1)[-1]
+        order_one: Final = deployment(
+            scenario, shared, None, order=1, extra_params={"extra_headers": {"x-scripted-scenario": one}}
+        )
+        order_two: Final = deployment(
+            scenario, shared, None, order=2, extra_params={"extra_headers": {"x-scripted-scenario": two}}
+        )
+        mark: Final = marker()
+        answer: Final = responses_answer(
+            owned.gateway, HTTPX, Target(shared, frozenset({order_one, order_two})), history(mark)
+        )
+        assert_served_by(answer, order_two)
+        bodies: Final = bodies_for(observed(owned.gateway), shared)
+        assert [body.get("input") for body in bodies] == [history(mark), history(mark)], bodies
 
 
 def assert_cross_group_hop_stripped(gateway: Gateway, source_scenario: str, target_scenario: str, mark: str) -> None:
@@ -877,20 +901,28 @@ def assert_cross_group_hop_stripped(gateway: Gateway, source_scenario: str, targ
     assert [body.get("input") for body in bodies_for(records, target_scenario)] == [stripped_history(mark)], records
 
 
-def test_configured_fallbacks_entry_hop_strips_the_source_groups_reasoning(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
+def test_configured_fallbacks_entry_hop_strips_the_source_groups_reasoning(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        scratch_database() as database,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database},
+            remove_environment=("DIRECT_URL", "DATABASE_URL_READ_REPLICA"),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
         source: Final = f"src-{uuid.uuid4().hex[:12]}"
         target: Final = f"dst-{uuid.uuid4().hex[:12]}"
         source_id: Final = deployment(scenario, source, scenario_api_base(scenario, source, failing()), order=None)
         target_id: Final = deployment(scenario, target, scenario_api_base(scenario, target, healthy_json()), order=None)
-        configured_fallback(scenario, source, target)
+        owned.gateway.post("/config/update", {"router_settings": {"num_retries": 0, "fallbacks": [{source: [target]}]}})
         mark: Final = marker()
         answer: Final = responses_answer(
-            gateway, HTTPX, Target(source, frozenset({source_id, target_id})), history(mark)
+            owned.gateway, HTTPX, Target(source, frozenset({source_id, target_id})), history(mark)
         )
         assert_served_by(answer, target_id)
-        assert_cross_group_hop_stripped(gateway, source, target, mark)
-    assert source not in json.dumps(router_setting(gateway, "fallbacks")), router_setting(gateway, "fallbacks")
+        assert_cross_group_hop_stripped(owned.gateway, source, target, mark)
 
 
 def test_client_fallbacks_entry_hop_strips_the_source_groups_reasoning(gateway: Gateway) -> None:
@@ -1217,10 +1249,10 @@ def test_order_one_outage_mid_burst_hops_stripped_and_recovers_after_restart(gat
         order_two: Final = deployment(
             scenario, name, scenario_api_base(scenario, two_scenario, healthy_json()), order=2
         )
-        with wire_server(peer_reply) as peer:
+        port: Final = allocate_port()
+        with wire_server(peer_reply, port=port) as peer:
             order_one: Final = deployment(scenario, name, peer.url, order=1)
             target: Final = Target(name, frozenset({order_one, order_two}))
-            port: Final = int(peer.url.rsplit(":", 1)[-1])
             warm: Final = marker()
             assert served_by_order_one(responses_answer(gateway, HTTPX, target, history(warm)), order_one), warm
             assert [json.loads(request.body)["input"] for request in peer.drain()] == [history(warm)]
@@ -1247,13 +1279,6 @@ def test_order_one_outage_mid_burst_hops_stripped_and_recovers_after_restart(gat
                 recovered
             )
             assert [json.loads(request.body)["input"] for request in restarted.drain()] == [history(recovered)]
-
-
-WORKER_PID: Final = re.compile(r"Started server process \[(\d+)\]")
-
-
-def worker_pids(log: Path) -> tuple[int, ...]:
-    return tuple(int(match) for match in WORKER_PID.findall(log.read_text()))
 
 
 def assert_completed_shots_hopped_stripped(
@@ -1283,17 +1308,18 @@ def test_worker_killed_mid_burst_leaves_the_survivor_hopping_stripped(tmp_path: 
             owned.gateway.post("/config/update", {"router_settings": {"num_retries": 0}})
             with owned.gateway.scenario() as scenario:
                 groups: Final = burst_groups(scenario)
-                workers: Final = eventually(lambda: worker_pids(owned.log), lambda pids: len(pids) == 2, seconds=60)
+                workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=60)
                 shots: Final = tuple((BURST_KINDS[index % len(BURST_KINDS)], marker()) for index in range(30))
-                with lanes(owned.gateway, [group.target for group in groups.values()], 30) as pinned:
-                    with ThreadPoolExecutor(max_workers=30) as pool:
-                        futures: Final = [
-                            pool.submit(fire, lane, groups, kind, mark)
-                            for lane, (kind, mark) in zip(pinned, shots, strict=True)
-                        ]
-                        psutil.Process(workers[0]).send_signal(signal.SIGKILL)
-                        fired: Final = tuple(future.result() for future in futures)
-                assert_completed_shots_hopped_stripped(owned.gateway, groups, fired)
-                probes: Final = tuple(fire(owned.gateway, groups, kind, marker()) for kind in BURST_KINDS)
-                assert all(probe.status == 200 for probe in probes), probes
-                assert_burst_hopped_stripped(owned.gateway, groups, probes)
+                with owned.replacing_worker(min(workers)) as kill:
+                    with lanes(owned.gateway, [group.target for group in groups.values()], 30) as pinned:
+                        with ThreadPoolExecutor(max_workers=30) as pool:
+                            futures: Final = [
+                                pool.submit(fire, lane, groups, kind, mark)
+                                for lane, (kind, mark) in zip(pinned, shots, strict=True)
+                            ]
+                            kill()
+                            fired: Final = tuple(future.result() for future in futures)
+                    assert_completed_shots_hopped_stripped(owned.gateway, groups, fired)
+                    probes: Final = tuple(fire(owned.gateway, groups, kind, marker()) for kind in BURST_KINDS)
+                    assert all(probe.status == 200 for probe in probes), probes
+                    assert_burst_hopped_stripped(owned.gateway, groups, probes)

@@ -1,6 +1,7 @@
 import io
 import json
 import re
+import traceback
 import wave
 from collections.abc import Iterator
 from typing import Final
@@ -8,6 +9,7 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -349,24 +351,35 @@ def test_transform_audio_transcription_response_without_words_key_has_no_word_li
 @pytest.mark.parametrize(
     "payload",
     [
-        ["not", "an", "object"],
-        "plain text",
-        7,
-        {"text": ["not", "text"]},
-        {"text": "t", "words": None},
-        {"text": "t", "words": 7},
-        {"text": "t", "words": "not a list"},
-        {"text": "t", "words": ["not an object"]},
-        {"text": "t", "words": [{"type": "word", "text": "ok"}, None]},
+        ["sensitive", "an", "object"],
+        "sensitive text",
+        {"text": ["sensitive", "text"]},
+        {"text": "sensitive", "words": None},
+        {"text": "sensitive", "words": 7},
+        {"text": "sensitive", "words": "not a list"},
+        {"text": "sensitive", "words": ["not an object"]},
+        {"text": "sensitive", "words": [{"type": "word", "text": "ok"}, None]},
     ],
 )
-def test_transform_audio_transcription_response_wraps_malformed_payloads_with_the_raw_body(payload: object):
+def test_transform_audio_transcription_response_keeps_the_body_out_of_malformed_payload_errors(payload: object):
     raw_response = httpx.Response(200, json=payload)
 
     with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
         ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
 
-    assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+    assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
+
+
+def test_transform_audio_transcription_response_names_the_failing_lookup_of_a_malformed_payload():
+    raw_response = httpx.Response(200, json={"text": "sensitive", "words": [None]})
+
+    with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
+        ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
+
+    failing_lookup: Final = exc_info.value.__context__
+    assert isinstance(failing_lookup, ValidationError)
+    assert str(exc_info.value) == f"Error transforming ElevenLabs response: {failing_lookup}"
+    assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
 
 
 def _silent_wav(seconds: int) -> bytes:
@@ -666,9 +679,7 @@ class TestElevenLabsAudioTranscription:
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = (
-            '{"text": "Four score and seven years ago", "language_code": "en"}'
-        )
+        mock_response.text = '{"text": "Four score and seven years ago", "language_code": "en"}'
         mock_response.json.return_value = {
             "text": "Four score and seven years ago",
             "language_code": "en",
@@ -721,39 +732,29 @@ class TestElevenLabsAudioTranscription:
 
                 # Check basic required parameters
                 assert "model_id" in form_data, "model_id should be in form data"
-                assert (
-                    form_data["model_id"] == "scribe_v1"
-                ), f"Expected model_id 'scribe_v1', got {form_data['model_id']}"
+                assert form_data["model_id"] == "scribe_v1", (
+                    f"Expected model_id 'scribe_v1', got {form_data['model_id']}"
+                )
 
                 # Check that diarize parameter is passed through
-                assert (
-                    "diarize" in form_data
-                ), f"diarize should be in form data. Got: {list(form_data.keys())}"
-                assert (
-                    form_data["diarize"] == "True"
-                ), f"Expected diarize='True', got {form_data['diarize']}"
+                assert "diarize" in form_data, f"diarize should be in form data. Got: {list(form_data.keys())}"
+                assert form_data["diarize"] == "True", f"Expected diarize='True', got {form_data['diarize']}"
 
                 # Check that OpenAI language parameter is mapped correctly
-                assert (
-                    "language_code" in form_data
-                ), "language_code should be in form data"
-                assert (
-                    form_data["language_code"] == "en"
-                ), f"Expected language_code='en', got {form_data['language_code']}"
+                assert "language_code" in form_data, "language_code should be in form data"
+                assert form_data["language_code"] == "en", (
+                    f"Expected language_code='en', got {form_data['language_code']}"
+                )
 
                 # Check that temperature is passed through
                 assert "temperature" in form_data, "temperature should be in form data"
-                assert (
-                    form_data["temperature"] == "0.5"
-                ), f"Expected temperature='0.5', got {form_data['temperature']}"
+                assert form_data["temperature"] == "0.5", f"Expected temperature='0.5', got {form_data['temperature']}"
 
                 # Check that custom parameters are passed through
-                assert (
-                    "custom_param" in form_data
-                ), "custom_param should be in form data"
-                assert (
-                    form_data["custom_param"] == "test_value"
-                ), f"Expected custom_param='test_value', got {form_data['custom_param']}"
+                assert "custom_param" in form_data, "custom_param should be in form data"
+                assert form_data["custom_param"] == "test_value", (
+                    f"Expected custom_param='test_value', got {form_data['custom_param']}"
+                )
 
                 # Check that files are included
                 files = captured_request_data["files"]
@@ -788,10 +789,7 @@ class TestElevenLabsTextToSpeechTransformation:
 
         assert mapped_voice == config.VOICE_MAPPINGS["alloy"]
         assert mapped_params["voice_settings"]["speed"] == pytest.approx(1.25)
-        assert (
-            kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY]["output_format"]
-            == "mp3_44100_128"
-        )
+        assert kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY]["output_format"] == "mp3_44100_128"
 
     def test_transform_request_and_url(self, config):
         kwargs: Dict[str, Any] = {}
@@ -800,9 +798,7 @@ class TestElevenLabsTextToSpeechTransformation:
             optional_params={
                 "response_format": "pcm",
                 "model_id": "eleven_multilingual_v2",
-                "pronunciation_dictionary_locators": [
-                    {"pronunciation_dictionary_id": "dict_1"}
-                ],
+                "pronunciation_dictionary_locators": [{"pronunciation_dictionary_id": "dict_1"}],
             },
             voice="alloy",
             kwargs=kwargs,
@@ -810,14 +806,10 @@ class TestElevenLabsTextToSpeechTransformation:
 
         litellm_params: Dict[str, Any] = {
             config.ELEVENLABS_VOICE_ID_KEY: voice_id,
-            config.ELEVENLABS_QUERY_PARAMS_KEY: kwargs[
-                config.ELEVENLABS_QUERY_PARAMS_KEY
-            ],
+            config.ELEVENLABS_QUERY_PARAMS_KEY: kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY],
         }
 
-        headers = config.validate_environment(
-            headers={}, model="eleven_multilingual_v2", api_key="test-key"
-        )
+        headers = config.validate_environment(headers={}, model="eleven_multilingual_v2", api_key="test-key")
 
         request_data = config.transform_text_to_speech_request(
             model="eleven_multilingual_v2",
@@ -841,4 +833,4 @@ class TestElevenLabsTextToSpeechTransformation:
         )
 
         assert voice_id in url
-        assert "output_format=pcm_44100" in url
+        assert "output_format=pcm_24000" in url

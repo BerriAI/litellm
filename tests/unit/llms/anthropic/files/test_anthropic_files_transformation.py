@@ -6,7 +6,9 @@ OpenAI-compatible file operations and Anthropic's Files API format.
 """
 
 import asyncio
+import datetime
 import io
+import json
 import threading
 import time
 
@@ -16,6 +18,7 @@ from openai.types.file_deleted import FileDeleted
 from pydantic import ValidationError
 from unittest.mock import Mock, patch
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.files.transformation import (
     AnthropicFilesConfig,
     ANTHROPIC_FILES_API_BASE,
@@ -663,3 +666,151 @@ class TestProviderConfigRegistration:
         )
         assert config is not None
         assert isinstance(config, AnthropicFilesConfig)
+
+
+def _listed_files(body: bytes) -> list[OpenAIFileObject]:
+    logging_obj = Logging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="file_list",
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+    return AnthropicFilesConfig().transform_list_files_response(
+        raw_response=httpx.Response(200, content=body), logging_obj=logging_obj, litellm_params={}
+    )
+
+
+def _anthropic_file(index: int) -> dict[str, object]:
+    return {
+        "id": f"file-{index}",
+        "type": "file",
+        "filename": f"doc-{index}.pdf",
+        "mime_type": "application/pdf",
+        "size_bytes": index,
+        "created_at": "2025-01-01T00:00:00Z",
+        "downloadable": False,
+    }
+
+
+def test_list_files_response_maps_every_anthropic_file_in_provider_order() -> None:
+    result = _listed_files(
+        json.dumps(
+            {
+                "data": [
+                    _anthropic_file(100),
+                    {"id": "file-b", "filename": "b.jsonl", "bytes": 200, "created_at": "2025-01-02T00:00:00Z"},
+                    {"id": "file-c", "filename": "c.jsonl", "size_bytes": "300", "purpose": "batch", "created_at": ""},
+                ],
+                "has_more": False,
+                "first_id": "file-100",
+                "last_id": "file-c",
+            }
+        ).encode()
+    )
+
+    assert [(listed.id, listed.filename, listed.bytes, listed.purpose) for listed in result] == [
+        ("file-100", "doc-100.pdf", 100, "messages"),
+        ("file-b", "b.jsonl", 200, "messages"),
+        ("file-c", "c.jsonl", 300, "batch"),
+    ]
+    assert [type(listed.bytes) for listed in result] == [int, int, int]
+    assert [listed.created_at for listed in result[:2]] == [1735689600, 1735776000]
+    assert result[0] == OpenAIFileObject(
+        id="file-100",
+        bytes=100,
+        created_at=1735689600,
+        filename="doc-100.pdf",
+        object="file",
+        purpose="messages",
+        status="uploaded",
+        status_details=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"{}",
+        b'{"has_more": false}',
+        b'{"data": []}',
+        b'{"data": ""}',
+        b'{"data": {}}',
+        b'{"data": [], "unknown": [1, {"nested": null}]}',
+    ],
+)
+def test_list_files_response_without_any_file_is_an_empty_list(body: bytes) -> None:
+    assert _listed_files(body) == []
+
+
+@pytest.mark.parametrize("body", [b'["file-abc123"]', b'"file-abc123"', b"null", b"7"])
+def test_list_files_response_rejects_a_body_that_is_not_a_json_object(body: bytes) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _listed_files(body)
+
+    assert [error["type"] for error in exc_info.value.errors()] == ["dict_type"]
+
+
+@pytest.mark.parametrize("body", [b'{"data": null}', b'{"data": 7}', b'{"data": 0}', b'{"data": true}'])
+def test_list_files_response_rejects_data_that_cannot_be_iterated(body: bytes) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _listed_files(body)
+
+    assert [error["type"] for error in exc_info.value.errors()] == ["iterable_type"]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        ["file-abc123"],
+        [None],
+        [7],
+        [["file-abc123"]],
+        [_anthropic_file(0), "file-abc123"],
+        "file-abc123",
+        {"file-abc123": _anthropic_file(0)},
+    ],
+)
+def test_list_files_response_rejects_a_listed_file_that_is_not_a_json_object(data: object) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _listed_files(json.dumps({"data": data}).encode())
+
+    assert [(error["type"], error["loc"]) for error in exc_info.value.errors()] == [("dict_type", ())]
+
+
+def test_list_files_response_error_for_a_late_malformed_file_does_not_name_its_position() -> None:
+    files = [_anthropic_file(index) for index in range(403)]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _listed_files(json.dumps({"data": [*files, "file-abc123"]}).encode())
+
+    assert "403" not in str(exc_info.value)
+    assert "429" not in str(exc_info.value)
+    assert "file-abc123" not in str(exc_info.value)
+
+
+def test_list_files_response_reports_every_invalid_field_of_a_listed_file() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _listed_files(b'{"data": [{"id": null, "filename": 7, "size_bytes": "many", "purpose": "unknown"}]}')
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [("id",), ("bytes",), ("filename",), ("purpose",)]
+    assert "many" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "data, expected_errors",
+    [
+        ([{"id": None}, "file-abc123"], [("string_type", ("id",))]),
+        (["file-abc123", {"id": None}], [("dict_type", ())]),
+        ([{"id": None}, {"filename": 7}], [("string_type", ("id",))]),
+    ],
+)
+def test_list_files_response_reports_only_the_first_bad_file_in_provider_order(
+    data: object, expected_errors: object
+) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _listed_files(json.dumps({"data": data}).encode())
+
+    assert [(error["type"], error["loc"]) for error in exc_info.value.errors()] == expected_errors
