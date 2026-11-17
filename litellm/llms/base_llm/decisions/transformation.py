@@ -13,6 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import prompt_cache_breakpoint_within
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -54,6 +55,7 @@ from litellm.types.decisions import (
     OpenAIDecisionInputImage,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
+    OpenAIDecisionPromptCacheBreakpointFields,
     ScoreAnswer,
     ScoreQuestion,
     UnsupportedDecisionsRequest,
@@ -248,6 +250,9 @@ def without_prompt_cache_breakpoints(
 
 _RAW_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _RAW_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_PROMPT_CACHE_BREAKPOINT_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheBreakpointFields]] = TypeAdapter(
+    OpenAIDecisionPromptCacheBreakpointFields
+)
 
 
 def _raw_entries(value: object) -> tuple[object, ...] | None:
@@ -271,19 +276,37 @@ def _raw_part_without_breakpoint(part: object) -> object:
     return {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
 
 
-def _raw_message_without_breakpoints(message: object) -> object:
+def _raw_part_with_readable_breakpoint(part: object) -> object:
+    fields: Final = _raw_fields(part)
+    marker: Final = None if fields is None else fields.get("prompt_cache_breakpoint")
+    if fields is None or marker is None:
+        return part
+    readable: Final = prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT_ADAPTER, marker)
+    without_breakpoint: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    return without_breakpoint if readable is None else {**without_breakpoint, "prompt_cache_breakpoint": readable}
+
+
+def _raw_message_with_parts(message: object, raw_part: Callable[[object], object]) -> object:
     fields: Final = _raw_fields(message)
     parts: Final = None if fields is None else _raw_entries(fields.get("content"))
     if fields is None or parts is None:
         return message
-    return {**fields, "content": tuple(map(_raw_part_without_breakpoint, parts))}
+    return {**fields, "content": tuple(map(raw_part, parts))}
 
 
-def without_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+def _raw_input_with_parts(decision_input: object, raw_part: Callable[[object], object]) -> object:
     messages: Final = _raw_entries(decision_input)
     if messages is None:
         return decision_input
-    return tuple(map(_raw_message_without_breakpoints, messages))
+    return tuple(_raw_message_with_parts(message, raw_part) for message in messages)
+
+
+def without_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+    return _raw_input_with_parts(decision_input, _raw_part_without_breakpoint)
+
+
+def with_readable_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+    return _raw_input_with_parts(decision_input, _raw_part_with_readable_breakpoint)
 
 
 def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:

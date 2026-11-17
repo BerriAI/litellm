@@ -36,6 +36,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
+    with_readable_raw_prompt_cache_breakpoints,
     without_prompt_cache_breakpoints,
     without_raw_prompt_cache_breakpoints,
 )
@@ -87,6 +88,10 @@ _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAda
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
+_PROMPT_CACHE_KEY_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_PROMPT_CACHE_OPTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheOptions | None]] = TypeAdapter(
+    OpenAIDecisionPromptCacheOptions | None
+)
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
@@ -131,6 +136,20 @@ def _valid_image(image: object) -> DecisionsImage | None:
         return None
 
 
+def _valid_prompt_cache_key(prompt_cache_key: object) -> str | None:
+    try:
+        return _PROMPT_CACHE_KEY_ADAPTER.validate_python(prompt_cache_key)
+    except ValidationError:
+        return None
+
+
+def _valid_prompt_cache_options(prompt_cache_options: object) -> OpenAIDecisionPromptCacheOptions | None:
+    try:
+        return _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python(prompt_cache_options)
+    except ValidationError:
+        return None
+
+
 def _image_entries(images: object) -> tuple[object, ...]:
     try:
         return _IMAGE_ENTRIES_ADAPTER.validate_python(images)
@@ -167,6 +186,14 @@ def _request_assets(assets: object, drops_params: bool) -> Mapping[str, Decision
         dict(entry for entry in map(_valid_asset, _asset_entries(assets).items()) if entry is not None)
     )
     return valid or None
+
+
+def _request_input(decision_input: object, *, keeps_breakpoints: bool, drops_params: bool) -> object:
+    if not keeps_breakpoints:
+        return without_raw_prompt_cache_breakpoints(decision_input)
+    if drops_params:
+        return with_readable_raw_prompt_cache_breakpoints(decision_input)
+    return decision_input
 
 
 def _request_images(images: object, drops_params: bool) -> tuple[DecisionsImage, ...]:
@@ -210,17 +237,21 @@ class OpenAIDecisionRequestFields:
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
             {
-                "input": (
-                    self.input
-                    if self.keeps_prompt_cache_breakpoints
-                    else without_raw_prompt_cache_breakpoints(self.input)
+                "input": _request_input(
+                    self.input, keeps_breakpoints=self.keeps_prompt_cache_breakpoints, drops_params=drops_params
                 ),
                 "questions": self.questions,
                 "safety_identifier": safety_identifier,
                 "audio": self.audio,
                 "videos": self.videos,
-                "prompt_cache_key": self.prompt_cache_key,
-                "prompt_cache_options": self.prompt_cache_options,
+                "prompt_cache_key": (
+                    _valid_prompt_cache_key(self.prompt_cache_key) if drops_params else self.prompt_cache_key
+                ),
+                "prompt_cache_options": (
+                    _valid_prompt_cache_options(self.prompt_cache_options)
+                    if drops_params
+                    else self.prompt_cache_options
+                ),
             }
         )
 

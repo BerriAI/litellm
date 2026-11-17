@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import AfterValidator, ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -282,6 +282,12 @@ class OpenAIDecisionPromptCacheBreakpoint(LiteLLMPydanticObjectBase):
     ttl: str | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
+
+
+@with_config(ConfigDict(extra="allow"))
+class OpenAIDecisionPromptCacheBreakpointFields(TypedDict):
+    mode: ReadOnly[Literal["explicit"]]
+    ttl: NotRequired[ReadOnly[str | None]]
 
 
 class OpenAIDecisionPromptCacheOptions(LiteLLMPydanticObjectBase):

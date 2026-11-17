@@ -2715,11 +2715,10 @@ def test_malformed_prompt_cache_breakpoints_are_ignored_by_a_provider_without_pr
     }
 
 
-@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
 def test_malformed_prompt_cache_breakpoints_are_refused_for_openai(
-    drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(litellm, "drop_params", drop_params)
+    monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)

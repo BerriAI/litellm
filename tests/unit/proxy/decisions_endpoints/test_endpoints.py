@@ -1189,28 +1189,105 @@ def test_malformed_prompt_cache_breakpoints_are_ignored_by_a_deployment_without_
     }
 
 
-def test_malformed_prompt_cache_breakpoints_are_refused_by_an_openai_deployment(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+def _policy_message_marked(prompt_cache_breakpoint: object) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": _CACHE_POLICY, "prompt_cache_breakpoint": prompt_cache_breakpoint}],
+    }
+
+
+_UNMARKED_POLICY_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "role": "user",
+    "content": [{"type": "input_text", "text": _CACHE_POLICY}],
+}
+_PROMPT_CACHE_FIELDS: Final[Mapping[str, object]] = {
+    "prompt_cache_key": "defect-review",
+    "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
+}
+_MALFORMED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], str, Mapping[str, object]], ...]] = (
+    (
+        {"input": [_MALFORMED_BREAKPOINT_MESSAGE, _IMAGE_TEXT_MESSAGE], **_PROMPT_CACHE_FIELDS},
+        "prompt_cache_breakpoint",
+        {"input": [_UNMARKED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE], **_PROMPT_CACHE_FIELDS},
+    ),
+    (
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": 30}), _IMAGE_TEXT_MESSAGE]},
+        "prompt_cache_breakpoint",
+        {"input": [_policy_message_marked({"mode": "explicit"}), _IMAGE_TEXT_MESSAGE]},
+    ),
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": 7},
+        "prompt_cache_key",
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": _PROMPT_CACHE_FIELDS["prompt_cache_options"]},
+    ),
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": "explicit"},
+        "prompt_cache_options",
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
+    ),
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "always"}},
+        "prompt_cache_options",
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
+    ),
+)
+_MALFORMED_PROMPT_CACHE_IDS: Final = (
+    "breakpoint_mode",
+    "breakpoint_ttl",
+    "non_string_key",
+    "string_options",
+    "options_mode",
+)
+_OPENAI_DECISION_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": _OPENAI_FORMAT_ANSWERS[:1],
+    "usage": {
+        "input_tokens": _INPUT_TOKENS,
+        "output_tokens": _OUTPUT_TOKENS,
+        "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+    },
+}
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+@pytest.mark.parametrize(
+    ("request_fields", "field_name", "wire_fields"), _MALFORMED_PROMPT_CACHE_REQUESTS, ids=_MALFORMED_PROMPT_CACHE_IDS
+)
+def test_malformed_prompt_cache_values_are_refused_unless_the_openai_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+    request_fields: Mapping[str, object],
+    field_name: str,
+    wire_fields: Mapping[str, object],
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    _route_decider_to(monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k"})
-    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json={})
+    _route_decider_to(
+        monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k", "drop_params": deployment_drops_params}
+    )
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_DECISION_RESPONSE)
 
     response: Final = client.post(
-        "/v1/decisions",
-        json={
-            "model": "decider",
-            "input": [_MALFORMED_BREAKPOINT_MESSAGE, _IMAGE_TEXT_MESSAGE],
-            "questions": [_PREDICATE],
-        },
+        "/v1/decisions", json={"model": "decider", "questions": [_PREDICATE], **request_fields}
     )
 
-    assert response.status_code == 400, response.text
-    assert "prompt_cache_breakpoint" in response.json()["error"]["message"]
-    assert not upstream.called
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert field_name in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "questions": [_PREDICATE],
+        **wire_fields,
+    }
 
 
 @pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
