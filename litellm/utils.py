@@ -4808,7 +4808,7 @@ def _map_params_with_provider_config(
     model: str,
     drop_params: bool,
     base_model: str | None,
-    allowed_openai_params: Collection[str],
+    allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
@@ -4817,7 +4817,7 @@ def _map_params_with_provider_config(
             model=model,
             drop_params=drop_params,
             base_model=base_model,
-            allowed_openai_params=allowed_openai_params,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     return provider_config.map_openai_params(
         non_default_params=non_default_params,
