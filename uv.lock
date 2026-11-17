@@ -5593,7 +5593,7 @@ source = { editable = "litellm/packaging/litellm-proxy" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.117"
+version = "0.4.118"
 source = { editable = "litellm/proxy-extras" }
 dependencies = [
     { name = "psycopg" },
