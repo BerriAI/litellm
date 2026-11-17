@@ -122,7 +122,7 @@ pub(crate) fn configure(
     let options = CacheOptions {
         policy: CachePolicy {
             no_cache: boolean("no-cache")? || skips_read,
-            no_store: boolean("no-store")?,
+            no_store: boolean("no-store")? || skips_read,
             ..CachePolicy::default()
         },
         ..CacheOptions::new(CacheScope::Shared)

@@ -905,6 +905,20 @@ def _normalize_cache_ttl(val: object) -> int | float | None:
     return None
 
 
+def deployment_has_explicit_cache_policy(deployment: Mapping[str, object]) -> bool:
+    """Whether a deployment declares an explicit cache enablement, restriction, or TTL."""
+    model_info: Final = as_dict(deployment.get("model_info"))
+    litellm_params: Final = as_dict(deployment.get("litellm_params"))
+    return (
+        model_info.get("response_cache") is not None
+        or litellm_params.get("response_cache") is not None
+        or model_info.get("cache") is not None
+        or litellm_params.get("cache") is not None
+        or model_info.get("cache_ttl") is not None
+        or litellm_params.get("cache_ttl") is not None
+    )
+
+
 def _resolve_deployment_cache_policy(
     deployment: Mapping[str, object],
     global_caching: bool,
@@ -991,13 +1005,16 @@ def _resolve_deployment_cache_policy(
     caching: bool = global_caching
     if response_cache is False or kwargs.get("caching") is False:
         caching = False
+    elif response_cache is True:
+        caching = True
+
+    if not caching:
         kwargs["caching"] = False
         cache_dict: Final = as_dict(kwargs.get("cache"))
         cache_dict["no-cache"] = True
         cache_dict["no-store"] = True
         kwargs["cache"] = cache_dict
-    elif response_cache is True:
-        caching = True
+    else:
         kwargs["caching"] = True
 
     # Enforce deployment-level fine-grained restrictions regardless of whether
@@ -2730,6 +2747,7 @@ __all__ = [
     "attempt_call",
     "clean_realtime_session_deployment",
     "compacted_attempt",
+    "deployment_has_explicit_cache_policy",
     "endpoint_names",
     "failover_fields",
     "generic_plan",

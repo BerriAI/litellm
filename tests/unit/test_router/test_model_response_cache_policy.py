@@ -734,3 +734,57 @@ def test_attempt_call_speech_attaches_caching():
         requested="tts-model",
     )
     assert call.kwargs["caching"] is False
+
+
+def test_inherited_cache_disabled_enforces_no_store_and_no_cache():
+    """When global cache is disabled, an unconfigured deployment must have no-store and no-cache enforced."""
+    deployment = {
+        "model_name": "plain-model",
+        "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"},
+    }
+    kwargs: dict[str, object] = {}
+    caching = _resolve_deployment_cache_policy(deployment, global_caching=False, kwargs=kwargs)
+    assert caching is False
+    assert kwargs["caching"] is False
+    assert kwargs["cache"]["no-cache"] is True
+    assert kwargs["cache"]["no-store"] is True
+
+
+def test_attempt_call_inherited_cache_disabled_sets_no_store_for_native_bridge():
+    """attempt_call on an unconfigured model under cache_responses=False forwards no-store/no-cache to native bridge."""
+    from litellm.router_rust.invoke.endpoints import PLANS, attempt_call
+
+    core = MagicMock()
+    core.shaping.cache_responses = False
+    core.shaping.default_litellm_params = {}
+    core.router_usage = None
+
+    deployment = {
+        "model_name": "claude-model",
+        "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"},
+    }
+
+    call = attempt_call(
+        core,
+        PLANS["acompletion"],
+        {"messages": [{"role": "user", "content": "hi"}]},
+        deployment,
+        group="claude-model",
+        requested="claude-model",
+    )
+    assert call.kwargs["caching"] is False
+    assert call.kwargs["cache"]["no-cache"] is True
+    assert call.kwargs["cache"]["no-store"] is True
+
+
+def test_deployment_has_explicit_cache_policy():
+    """Verify explicit cache policy detection for prompt management."""
+    from litellm.router_rust.invoke.endpoints import deployment_has_explicit_cache_policy
+
+    assert not deployment_has_explicit_cache_policy({"model_name": "clean"})
+    assert deployment_has_explicit_cache_policy({"model_info": {"response_cache": False}})
+    assert deployment_has_explicit_cache_policy({"litellm_params": {"response_cache": True}})
+    assert deployment_has_explicit_cache_policy({"model_info": {"cache": {"no-store": True}}})
+    assert deployment_has_explicit_cache_policy({"litellm_params": {"cache": False}})
+    assert deployment_has_explicit_cache_policy({"model_info": {"cache_ttl": 60}})
+
