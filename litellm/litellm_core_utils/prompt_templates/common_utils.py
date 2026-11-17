@@ -430,12 +430,12 @@ def _insert_user_continue_message(
         return messages
 
     result_messages: Final = messages.copy()  # Don't modify the input list
-    continue_message: Final = (user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE).copy()
+    continue_message: Final = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
 
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
-        result_messages.insert(0, continue_message)
+        result_messages.insert(0, continue_message.copy())
 
     # Handle consecutive assistant messages in the counted sequence
     i = 1
@@ -446,7 +446,7 @@ def _insert_user_continue_message(
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
-                result_messages.insert(i, continue_message)
+                result_messages.insert(i, continue_message.copy())
                 i += 2
                 inserted_continue_message = True
             else:
@@ -455,7 +455,7 @@ def _insert_user_continue_message(
                     previous_message = result_messages[j]
                     if _counts_for_alternation(previous_message):
                         if previous_message["role"] == "assistant":
-                            result_messages.insert(i, continue_message)
+                            result_messages.insert(i, continue_message.copy())
                             i += 2
                             inserted_continue_message = True
                         break
@@ -466,7 +466,7 @@ def _insert_user_continue_message(
     # Handle final message — append user_continue after any trailing assistant,
     # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
-        result_messages.append(continue_message)
+        result_messages.append(continue_message.copy())
 
     return result_messages
 
@@ -485,7 +485,7 @@ def _insert_assistant_continue_message(
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    continue_message: Final = (assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE).copy()
+    continue_message: Final = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
     # Find indexes where assistant_continue should be inserted (before that index)
     insert_before_indexes: Final[set] = set()
@@ -506,7 +506,7 @@ def _insert_assistant_continue_message(
     modified_messages: Final[list[AllMessageValues]] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
-            modified_messages.append(continue_message)
+            modified_messages.append(continue_message.copy())
         modified_messages.append(message)
 
     return modified_messages
@@ -529,12 +529,7 @@ def get_completion_messages(
         return messages.copy()
 
     ## INSERT USER CONTINUE MESSAGE
-    filled_messages: Final = (
-        [*messages[:-1], (user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE).copy()]
-        if messages and is_empty_user_message(messages[-1])
-        else messages
-    )
-    messages = _insert_user_continue_message(filled_messages, user_continue_message, ensure_alternating_roles)
+    messages = _insert_user_continue_message(messages, user_continue_message, ensure_alternating_roles)
 
     ## INSERT ASSISTANT CONTINUE MESSAGE
     messages = _insert_assistant_continue_message(messages, assistant_continue_message, ensure_alternating_roles)

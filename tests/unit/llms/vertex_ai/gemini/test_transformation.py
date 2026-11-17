@@ -1,7 +1,7 @@
 
 import json
 import uuid
-from typing import Final
+from typing import Final, cast
 from unittest.mock import Mock
 
 import httpx
@@ -497,6 +497,25 @@ def test_an_empty_trailing_user_message_still_ends_the_request_on_a_user_turn(
         {"role": "user", "parts": [{"text": "Hi"}]},
         {"role": "model", "parts": [{"text": "Hello! How can I help?"}]},
         {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.parametrize("malformed_content", [pytest.param(0, id="int"), pytest.param({}, id="object")])
+def test_a_trailing_user_message_with_malformed_content_gets_no_blank_user_turn(malformed_content: object) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        cast(
+            list[openai.AllMessageValues],
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "user", "content": malformed_content},
+            ],
+        )
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
     ]
 
 
