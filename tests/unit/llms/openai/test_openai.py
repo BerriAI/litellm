@@ -2834,7 +2834,7 @@ def test_non_string_organization_is_a_bad_request_and_sends_nothing(
     route_kwargs: Mapping[str, object],
     organization: object,
 ) -> None:
-    with pytest.raises(litellm.BadRequestError, match="organization must be a string"):
+    with pytest.raises(litellm.MalformedRequestFieldError, match="organization must be a string"):
         route(api_key=f"sk-{uuid4()}", organization=organization, **route_kwargs)
 
     assert recording_openai.headers is None

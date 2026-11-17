@@ -507,7 +507,7 @@ def openai_client_organization(headers: Mapping[str, object] | None, organizatio
 
 def caller_or_deployment_openai_organization(headers: Mapping[str, object] | None, organization: object) -> str | None:
     if organization is not None and not isinstance(organization, str):
-        raise litellm.BadRequestError(
+        raise litellm.MalformedRequestFieldError(
             message=f"organization must be a string, got {type(organization).__name__}",
             model=None,
             llm_provider="openai",
