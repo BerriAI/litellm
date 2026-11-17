@@ -12,7 +12,6 @@ All /customer management endpoints
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
@@ -28,9 +27,9 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
@@ -42,7 +41,10 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     handle_update_object_permission_common,
     set_object_permission,
 )
+from litellm.proxy.management_helpers.utils import validate_scalar_budget_attachment
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import EndUserRepository
@@ -233,7 +235,7 @@ async def unblock_user(data: BlockUsers):
     ```
     """
     try:
-        from enterprise.enterprise_hooks.blocked_user_list import (
+        from litellm.enterprise.enterprise_hooks.blocked_user_list import (
             ENTERPRISE_BlockedUserList,
         )
     except ImportError:
@@ -285,9 +287,7 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
         budget_request: Final = BudgetNewRequest.model_validate(budget_kv_pairs)
         validate_budget_duration(budget_request.budget_duration)
         if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
-            budget_request.budget_reset_at = datetime.utcnow() + timedelta(
-                seconds=duration_in_seconds(duration=budget_request.budget_duration)
-            )
+            budget_request.budget_reset_at = get_budget_reset_time(budget_duration=budget_request.budget_duration)
         return budget_request
     return None
 
@@ -351,12 +351,13 @@ async def new_end_user(
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-    - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+    - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+    - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -383,7 +384,7 @@ async def new_end_user(
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
-            "allowed_region": "eu",
+            "allowed_model_region": "eu",
             "budget_id": "free_tier",
             "models": ["gpt-4o-mini"],
             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -453,7 +454,7 @@ async def new_end_user(
             try:
                 budget_record: Final = await _typed_table(BudgetRepository(prisma_client)).create(
                     data={
-                        **_new_budget.model_dump(exclude_unset=True),
+                        **prisma_client.jsonify_object(_new_budget.model_dump(exclude_unset=True)),
                         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     }
@@ -463,6 +464,7 @@ async def new_end_user(
 
             new_end_user_obj["budget_id"] = budget_record.budget_id
         elif data.budget_id is not None:
+            await validate_scalar_budget_attachment(prisma_client, data.budget_id)
             new_end_user_obj["budget_id"] = data.budget_id
 
         _user_data: Final = _STR_OBJECT_DICT.validate_python(data.dict(exclude_none=True))
@@ -676,6 +678,7 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
+        await validate_scalar_budget_attachment(prisma_client, data.budget_id)
         sent_fields: Final = data.fields_set()
         non_default_values: Final[dict[str, object]] = {
             k: v for k, v in data_json.items() if _should_update_field(k, v, sent_fields)
@@ -812,7 +815,12 @@ async def delete_end_user(
     See below for all params 
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        invalidate_spend_counter,
+        prisma_client,
+        set_spend_counter_with_floor_and_broadcast,
+        spend_counter_store,
+    )
 
     try:
         if prisma_client is None:
@@ -842,6 +850,11 @@ async def delete_end_user(
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+            counter_keys: Final = tuple(end_user_counter(user_id) for user_id in data.user_ids)
+            for counter_key in counter_keys:
+                await invalidate_spend_counter(counter_key=counter_key)
+                await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+            await drop_committed_spend(spend_counter_store, counter_keys)
 
             return DeleteCustomersResponse(
                 deleted_customers=response,
@@ -951,6 +964,7 @@ async def get_customer_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_end_user_ids: str | None = None,
+    team_ids: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -994,4 +1008,5 @@ async def get_customer_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+        team_ids=tuple(team_ids.split(",")) if team_ids else None,
     )

@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import base64
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid4
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
 from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -31,11 +32,28 @@ from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterable
+
     from litellm import Router
 
 
 class RAGIngestBadRequestError(ValueError):
     status_code: Final = 400
+
+
+class _OcrRouter(Protocol):
+    @property
+    def aocr(self) -> Callable[..., Awaitable[object]]: ...
+
+
+class _OcrPages(Protocol):
+    @property
+    def pages(self) -> Iterable[object]: ...
+
+
+class _OcrPage(Protocol):
+    @property
+    def markdown(self) -> str: ...
 
 
 class BaseRAGIngestion(ABC):
@@ -168,7 +186,8 @@ class BaseRAGIngestion(ABC):
 
         # Use router if available
         if self.router is not None:
-            ocr_response = await self.router.aocr(
+            ocr_router: Final = require_attributes(self.router, _OcrRouter, "aocr")
+            ocr_response = await ocr_router.aocr(
                 model=ocr_model,
                 document={"type": doc_type, url_key: data_url},
             )
@@ -179,8 +198,10 @@ class BaseRAGIngestion(ABC):
             )
 
         # Extract text from pages
-        if hasattr(ocr_response, "pages") and ocr_response.pages:
-            return "\n\n".join(page.markdown for page in ocr_response.pages if hasattr(page, "markdown"))
+        if has_attributes(ocr_response, _OcrPages, "pages") and ocr_response.pages:
+            return "\n\n".join(
+                page.markdown for page in ocr_response.pages if has_attributes(page, _OcrPage, "markdown")
+            )
 
         return None
 

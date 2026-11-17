@@ -73,8 +73,8 @@ _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
-    headers: dict[str, str] | None,  # mutable-ok: returned as-is when there is nothing to add
-) -> dict[str, str] | None:  # mutable-ok: becomes the request's outbound headers
+    headers: dict[str, object] | None,  # mutable-ok: returned as-is when there is nothing to add
+) -> dict[str, object] | None:  # mutable-ok: becomes the request's outbound headers
     """
     `headers` plus any attribution header the caller didn't already set (names
     compared case-insensitively). Builds a new dict; `headers` is never mutated.
@@ -513,6 +513,9 @@ class BaseConfig(ABC):
 
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return False
+
+    def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
         return False
 
     def post_stream_processing(self, stream: object) -> object:

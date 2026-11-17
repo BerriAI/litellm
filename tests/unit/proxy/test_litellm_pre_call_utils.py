@@ -6,19 +6,21 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from botocore.credentials import Credentials
 from fastapi import Request
+from fastapi.routing import APIRoute
 from opentelemetry.trace import INVALID_SPAN, NonRecordingSpan, SpanContext
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+from litellm.caching.caching import Cache, CacheMode
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -27,8 +29,11 @@ from litellm.constants import (
     SERVER_STREAMING_CLASSIFICATION_MARKER,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
 )
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.ecb_reference_rates import EcbReferenceRates
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -40,9 +45,11 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
+    _add_otel_traceparent_to_data,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
     _get_enforced_params,
@@ -60,10 +67,14 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_dynamic_logging_metadata,
     get_metadata_variable_name,
     move_guardrails_to_metadata,
+    resolve_tenant_otel_destinations,
 )
+from litellm.proxy.pricing_currency import ReferenceRateLookup
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def test_check_if_token_is_service_account():
@@ -112,7 +123,8 @@ class TestGetMetadataVariableName:
         assert get_metadata_variable_name(request) == "litellm_metadata"
 
     @pytest.mark.parametrize(
-        "path", ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"]
+        "path",
+        ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"],
     )
     def test_returns_litellm_metadata_for_interactions_routes(self, path):
         request = self._make_request(path)
@@ -808,7 +820,9 @@ async def test_interactions_spend_logs_metadata_survives_the_router_metadata_buc
 
     # The router then adds its deployment fields to the same bucket, and the spend log
     # resolves that bucket.
-    data["litellm_metadata"].update({"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"})
+    data["litellm_metadata"].update(
+        {"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"}
+    )
     resolved = get_litellm_metadata_from_kwargs(
         {"litellm_params": {"metadata": data.get("metadata") or {}, "litellm_metadata": data["litellm_metadata"]}}
     )
@@ -926,6 +940,38 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields(
         "secret_fields must be excluded from proxy_server_request['body'] "
         "to prevent Authorization tokens from leaking into spend logs"
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_body_field_named_request_headers_stays_in_the_logged_body():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    client_field: Final = {"x-client-trace": "client-supplied"}
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"authorization", b"Bearer sk-litellm-key")],
+        }
+    )
+
+    enriched: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "request_headers": client_field,
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+
+    assert enriched["proxy_server_request"]["body"]["request_headers"] == client_field
 
 
 @pytest.mark.asyncio
@@ -2776,7 +2822,7 @@ def test_key_dynamic_logging_settings():
         team_metadata={},
     )
     result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_arize)
-    assert result == [{"callback_name": "arize", "callback_type": "success"}]
+    assert result == ({"callback_name": "arize", "callback_type": "success"},)
 
     # Test with langfuse logging
     key_with_langfuse = UserAPIKeyAuth(
@@ -2785,7 +2831,7 @@ def test_key_dynamic_logging_settings():
         team_metadata={},
     )
     result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_langfuse)
-    assert result == [{"callback_name": "langfuse", "callback_type": "success"}]
+    assert result == ({"callback_name": "langfuse", "callback_type": "success"},)
 
     # Test with no logging metadata
     key_without_logging = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={})
@@ -2907,6 +2953,22 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars is not None
     assert result.callback_vars["arize_api_key"] == "test_arize_api_key"
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
+
+
+@pytest.mark.parametrize(
+    "logging_value",
+    [
+        pytest.param({"callback_name": "langsmith"}, id="object"),
+        pytest.param("langsmith", id="string"),
+        pytest.param(["langsmith"], id="list-with-string"),
+        pytest.param([None], id="list-with-null"),
+    ],
+)
+def test_non_object_team_logging_metadata_fails_as_a_server_error_not_a_bad_request(logging_value: object) -> None:
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={"logging": logging_value})
+
+    with pytest.raises(TypeError):
+        get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
 
 
 def test_add_team_callback_rejects_env_reference():
@@ -3759,53 +3821,87 @@ async def test_spend_log_caller_session_stays_out_of_requester_metadata(monkeypa
     "surface,headers,body,child_id,trace_id",
     [
         (
-            "chat/completions", {"X-Session-Id": "child-01"}, {"metadata": {"session_id": "body-001"}},
-            "child-01", "parent-01",
+            "chat/completions",
+            {"X-Session-Id": "child-01"},
+            {"metadata": {"session_id": "body-001"}},
+            "child-01",
+            "parent-01",
         ),
         ("responses", {"x-vendor-session-id": "child-01"}, {}, "child-01", "parent-01"),
         ("messages", {"session-id": "child-01", "user-agent": "codex_cli_rs/1.0"}, {}, "child-01", "parent-01"),
         ("chat/completions", {"x-litellm-session-id": "short", "x-session-id": "child-01"}, {}, "short", "short"),
         ("responses", {"x-litellm-trace-id": "trace-01", "x-session-id": "child-01"}, {}, "child-01", "trace-01"),
         (
-            "messages", {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
-            {}, "child-01", "trace-01",
+            "messages",
+            {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
+            {},
+            "child-01",
+            "trace-01",
         ),
         ("responses", {}, {"metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("messages", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("chat/completions", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("messages", {"baggage": "session.id=child-01"}, {}, "child-01", "parent-01"),
         (
-            "responses", {"baggage": "session.id=child-01"}, {"metadata": {"session_id": "body-001"}},
-            "body-001", "parent-01",
+            "responses",
+            {"baggage": "session.id=child-01"},
+            {"metadata": {"session_id": "body-001"}},
+            "body-001",
+            "parent-01",
         ),
         (
-            "chat/completions", {}, {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
-            "root-001", "parent-01",
+            "chat/completions",
+            {},
+            {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
+            "root-001",
+            "parent-01",
         ),
         (
-            "responses", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
-            "active-1", "parent-01",
+            "responses",
+            {},
+            {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
+            "active-1",
+            "parent-01",
         ),
         (
-            "chat/completions", {},
+            "chat/completions",
+            {},
             {"metadata": {"session_id": "active-1"}, "litellm_metadata": {"session_id": "body-001"}},
-            "active-1", "parent-01",
+            "active-1",
+            "parent-01",
         ),
         (
-            "chat/completions", {}, {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
-            None, "parent-01",
+            "chat/completions",
+            {},
+            {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
+            None,
+            "parent-01",
         ),
         (
-            "messages", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
-            None, "parent-01",
+            "messages",
+            {},
+            {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
+            None,
+            "parent-01",
         ),
         (
-            "messages", {}, {"litellm_session_id": "root-001", "litellm_metadata": {"session_id": "active-1"},
-            "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"}},
-            "anthro-1", "parent-01",
+            "messages",
+            {},
+            {
+                "litellm_session_id": "root-001",
+                "litellm_metadata": {"session_id": "active-1"},
+                "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"},
+            },
+            "anthro-1",
+            "parent-01",
         ),
-        ("messages", {"x-session-id": "child-01"}, {"metadata": {"user_id": {"session_id": "body-001"}}},
-         "child-01", "parent-01"),
+        (
+            "messages",
+            {"x-session-id": "child-01"},
+            {"metadata": {"user_id": {"session_id": "body-001"}}},
+            "child-01",
+            "parent-01",
+        ),
         ("chat/completions", {}, {}, None, "parent-01"),
         ("responses", {"x-session-id": "bad"}, {}, None, "parent-01"),
         ("messages", {}, {"metadata": {"session_id": 123}}, None, "parent-01"),
@@ -3856,6 +3952,41 @@ async def test_non_child_requests_cannot_forge_a_child_tier_identity(surface: st
         assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata
         assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
     assert updated[get_metadata_variable_name(request)]["session_id"] == "child-01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "agent_id,session_id,child_id",
+    [
+        (
+            "a7256c04dfd99c9b9",
+            "11111111-2222-3333-4444-555555555555",
+            "11111111-2222-3333-4444-555555555555:a7256c04dfd99c9b9",
+        ),
+        (None, "11111111-2222-3333-4444-555555555555", None),
+        ("short", "11111111-2222-3333-4444-555555555555", None),
+        ("agent id with spaces", "11111111-2222-3333-4444-555555555555", None),
+        ("a7256c04dfd99c9b9", "bad", None),
+    ],
+)
+async def test_claude_code_subagents_get_their_own_tier_identity_under_the_parent_session(
+    agent_id: str | None, session_id: str, child_id: str | None
+) -> None:
+    headers: Final = {
+        "x-claude-code-session-id": session_id,
+        **({"x-claude-code-agent-id": agent_id} if agent_id is not None else {}),
+    }
+    request: Final = _make_request_mock("/v1/messages", headers)
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "test-router", "messages": []},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    metadata: Final = updated[get_metadata_variable_name(request)]
+    assert metadata.get(COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY) == child_id
+    assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
 
 
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
@@ -4347,9 +4478,7 @@ def _bedrock_passthrough_data(
         ),
     ],
 )
-def test_bedrock_request_metadata_thread_id_becomes_session_id(
-    headers: dict[str, str], client_body: dict[str, object]
-):
+def test_bedrock_request_metadata_thread_id_becomes_session_id(headers: dict[str, str], client_body: dict[str, object]):
     sent_body: Final = copy.deepcopy(client_body)
     data: Final = _bedrock_passthrough_data(client_body)
 
@@ -4429,7 +4558,9 @@ def test_bedrock_request_metadata_without_usable_session_id_sets_no_session(
 @pytest.mark.parametrize(
     ("body_tags", "header_tags", "expected"),
     [
-        pytest.param({"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"),
+        pytest.param(
+            {"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"
+        ),
         pytest.param({"sessionId": "body-session"}, {"sessionId": "header-session"}, "body-session", id="body_wins"),
     ],
 )
@@ -7352,6 +7483,48 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
     return request_mock
 
 
+_TRACEPARENT: Final = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+@pytest.mark.parametrize(
+    ("extra_headers", "forwarded"),
+    (
+        ("X-Foo: bar", "X-Foo: bar"),
+        (["X-Foo: bar"], ["X-Foo: bar"]),
+        (None, {"traceparent": _TRACEPARENT}),
+        ({"X-Kept": "yes"}, {"X-Kept": "yes", "traceparent": _TRACEPARENT}),
+        ({"traceparent": "caller-set"}, {"traceparent": "caller-set"}),
+    ),
+    ids=("string", "list", "null", "object", "caller_traceparent"),
+)
+def test_traceparent_forwarding_leaves_non_object_extra_headers_for_the_endpoint_to_check(
+    extra_headers: object, forwarded: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers}
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["extra_headers"] == forwarded
+
+
+@pytest.mark.parametrize("extra_headers", ({}, {"X-Kept": "yes"}), ids=("empty_object", "object"))
+def test_forwarded_traceparent_shows_in_the_logged_request_body(
+    extra_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers, "proxy_server_request": {"body": None}}
+    refresh_proxy_server_request_body_snapshot(data)
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["proxy_server_request"]["body"]["extra_headers"]["traceparent"] == _TRACEPARENT
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_agent, request_drop_params, operator_settings, expected_drop_params",
@@ -8046,6 +8219,7 @@ async def test_add_litellm_data_to_request_refuses_a_model_config_credential_hol
         ("API-Key", True),
         ("Cookie", True),
         ("Proxy-Authorization", True),
+        ("X-Amz-Security-Token", True),
         ("anthropic-version", False),
         ("user-agent", False),
     ],
@@ -8253,6 +8427,159 @@ async def test_key_level_callback_vars_survive_the_strip():
 
     assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "key-dd-key", "dd_site": "us5.datadoghq.com"}
     assert updated["dd_site"] == "us5.datadoghq.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_cache, request_cache, expected_cache, uses_cache_when_default_off",
+    [
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "namespace": "team-a"},
+            {"use-cache": True, "namespace": "team-a", "ttl": 600},
+            True,
+            id="key-control-added-to-request-opt-in",
+        ),
+        pytest.param(
+            {"no-store": True},
+            {"use-cache": True, "no-store": False},
+            {"use-cache": True, "no-store": True},
+            True,
+            id="key-control-wins-over-request",
+        ),
+        pytest.param(
+            {"use-cache": True, "namespace": "key-ns"},
+            None,
+            {},
+            False,
+            id="unsupported-key-controls-ignored",
+        ),
+        pytest.param(None, {"use-cache": True}, {}, False, id="non-dict-key-cache-still-wipes-request"),
+        pytest.param(
+            {"no-cache": True},
+            {"use-cache": True, "ttl": 60},
+            {"no-cache": True},
+            False,
+            id="key-no-cache-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"use-cache": False},
+            {"use-cache": True, "ttl": 60},
+            {},
+            False,
+            id="key-use-cache-false-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"use-cache": True},
+            {"use-cache": True},
+            {"use-cache": True},
+            True,
+            id="key-use-cache-true-leaves-the-request-opt-in",
+        ),
+        pytest.param(
+            {"no-cache": "true"},
+            {"use-cache": True},
+            {"no-cache": "true"},
+            False,
+            id="key-non-boolean-no-cache-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"no-cache": False},
+            {"use-cache": True},
+            {"use-cache": True, "no-cache": False},
+            True,
+            id="key-no-cache-false-leaves-the-request-opt-in",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"no-cache": True, "namespace": "team-a"},
+            {"ttl": 600},
+            False,
+            id="request-without-opt-in-is-still-replaced",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": "true", "no-store": True},
+            {"ttl": 600},
+            False,
+            id="request-non-boolean-use-cache-is-still-replaced",
+        ),
+        pytest.param(
+            {"s-maxage": 1},
+            {"use-cache": True, "s-max-age": 100000},
+            {"use-cache": True, "s-maxage": 1},
+            True,
+            id="key-s-maxage-overrides-the-request-s-max-age-alias",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "s-max-age": 5},
+            {"use-cache": True, "s-max-age": 5, "ttl": 600},
+            True,
+            id="request-s-max-age-kept-when-the-key-has-no-s-maxage",
+        ),
+    ],
+)
+async def test_key_cache_controls_merge_into_request_cache_controls(
+    key_cache: dict[str, object] | None,
+    request_cache: dict[str, object] | None,
+    expected_cache: dict[str, object],
+    uses_cache_when_default_off: bool,
+):
+    key: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"cache": key_cache})
+    data: Final = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        **({} if request_cache is None else {"cache": request_cache}),
+    }
+
+    updated: Final = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["cache"] == expected_cache
+    opt_in_cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+    assert opt_in_cache.should_use_cache(**updated) is uses_cache_when_default_off
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_cache_controls, request_cache, expected_cache",
+    [
+        pytest.param(["no-store"], {"use-cache": True}, {"ttl": 600}, id="opt-in-not-allowed-is-replaced"),
+        pytest.param(
+            ["use-cache"], {"use-cache": True, "no-store": True}, {"ttl": 600}, id="any-disallowed-control-is-replaced"
+        ),
+        pytest.param(["use-cache"], {"use-cache": True}, {"use-cache": True, "ttl": 600}, id="allowed-opt-in-is-kept"),
+        pytest.param([], {"use-cache": True}, {"use-cache": True, "ttl": 600}, id="empty-list-allows-the-opt-in"),
+    ],
+)
+async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
+    allowed_cache_controls: list[str],
+    request_cache: dict[str, object],
+    expected_cache: dict[str, object],
+):
+    key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"cache": {"ttl": 600}},
+        allowed_cache_controls=allowed_cache_controls,
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}], "cache": request_cache},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["cache"] == expected_cache
 
 
 class TestPromotedTraceControlFields:
@@ -9090,10 +9417,12 @@ def _reserved_stamp_key(key_metadata: dict | None = None) -> UserAPIKeyAuth:
 _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
     "original_model_group": "spoofed-group",
+    "rate_limit_fallback": {"original_model_group": "spoofed-group", "descriptor_key": "model_per_key"},
     "request_retry_count": -100,
     "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: 10**9,
     "client_key": "client_value",
 }
 
@@ -9124,10 +9453,12 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "litellm_metadata" not in updated
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
+    assert "rate_limit_fallback" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
     assert "previous_models" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
+    assert USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
 
@@ -9183,6 +9514,129 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
+
+
+def _eur_rates() -> ReferenceRateLookup:
+    def now() -> datetime:
+        return datetime(2026, 11, 13, 16, tzinfo=timezone.utc)
+
+    async def fetch() -> bytes:
+        return (
+            "<gesmes:Envelope xmlns:gesmes='http://www.gesmes.org/xml/2002-08-01'"
+            " xmlns='http://www.ecb.int/vocabulary/2002-08-01/eurofxref'><Cube><Cube time='2026-11-13'>"
+            "<Cube currency='USD' rate='1.25'/></Cube></Cube></gesmes:Envelope>"
+        ).encode()
+
+    return ReferenceRateLookup(EcbReferenceRates(clock=now), fetch)
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "body", "expected"),
+    [
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"pricing_currency": "EUR", "input_cost_per_token": 0.5},
+            {"input_cost_per_token": 0.625},
+            id="trusted-eur-input-only",
+        ),
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            id="trusted-omitted-currency-stays-usd",
+        ),
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"pricing_currency": None, "input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            id="trusted-null-currency-stays-usd",
+        ),
+        pytest.param({}, {"pricing_currency": "EUR", "input_cost_per_token": 0.5}, {}, id="untrusted-stripped"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_for_trusted_keys(
+    key_metadata: Mapping[str, object], body: Mapping[str, object], expected: Mapping[str, float]
+) -> None:
+    data: Final[dict[str, object]] = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], **body}
+    updated: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        await add_litellm_data_to_request(
+            data=data,
+            request=_reserved_stamp_request("/v1/chat/completions"),
+            user_api_key_dict=_reserved_stamp_key(dict(key_metadata)),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+    )
+
+    assert "pricing_currency" not in updated
+    assert {
+        field: updated[field] for field in ("input_cost_per_token", "output_cost_per_token") if field in updated
+    } == expected
+
+
+def _routed_request(template: str, path: str) -> MagicMock:
+    request: Final = _reserved_stamp_request(path)
+    request.scope = {"type": "http", "path": path, "root_path": "", "route": APIRoute(template, endpoint=lambda: None)}
+    return request
+
+
+@pytest.mark.parametrize(
+    ("template", "path"),
+    [
+        ("/v1/chat/completions", "/v1/chat/completions"),
+        ("/chat/completions", "/chat/completions"),
+        ("/engines/{model:path}/chat/completions", "/engines/gpt-5.4-mini/chat/completions"),
+        ("/openai/deployments/{model:path}/chat/completions", "/openai/deployments/gpt-5.4-mini/chat/completions"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_prices_every_chat_completions_alias_in_usd(template: str, path: str) -> None:
+    data: Final[dict[str, object]] = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "pricing_currency": "EUR",
+        "input_cost_per_token": 0.5,
+    }
+    updated: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        await add_litellm_data_to_request(
+            data=data,
+            request=_routed_request(template, path),
+            user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+    )
+
+    assert "pricing_currency" not in updated
+    assert updated["input_cost_per_token"] == 0.625
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_rejects_pricing_currency_outside_chat_completions() -> None:
+    data: Final[dict[str, object]] = {
+        "model": "text-embedding-3-small",
+        "input": "hi",
+        "pricing_currency": "EUR",
+        "input_cost_per_token": 0.5,
+    }
+    with pytest.raises(ProxyException) as rejected:
+        await add_litellm_data_to_request(
+            data=data,
+            request=_reserved_stamp_request("/v1/embeddings"),
+            user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
 
 
 @pytest.mark.asyncio
@@ -10190,6 +10644,48 @@ def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monk
 
         assert [d.protocol for d in destinations] == ["otlp_http"]
         assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_a_key_referencing_a_credential_routes_to_that_credential_with_its_own_excluded_services(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "https://arize.internal.example/v1/traces")
+    monkeypatch.delenv("ARIZE_API_KEY", raising=False)
+    monkeypatch.delenv("ARIZE_SPACE_ID", raising=False)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="space-a",
+                credential_values={"arize_api_key": "k", "arize_space_id": "s"},
+                credential_info={},
+            )
+        ],
+    )
+    is_otel_v2_enabled.cache_clear()
+    try:
+        auth = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "litellm_credential_name": "space-a",
+                        "callback_vars": {"excluded_services": "redis,postgres"},
+                    }
+                ]
+            },
+            team_metadata={},
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [(d.headers, d.excluded_db_systems) for d in destinations] == [
+            ({"arize-space-id": "s", "api_key": "k"}, frozenset({"redis", "postgresql"}))
+        ]
     finally:
         is_otel_v2_enabled.cache_clear()
 
@@ -11226,9 +11722,7 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
-    )
+    load = AsyncMock(return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}})
     monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
@@ -11281,9 +11775,7 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
-    )
+    load = AsyncMock(return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}})
     monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
@@ -11443,3 +11935,110 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/chat/completions", "/v1/responses"))
+@pytest.mark.parametrize("assigned", (False, True))
+async def test_customer_window_policy_is_stamped_from_auth_not_requester_metadata(path, assigned):
+    from litellm.models.budget import BudgetLimit
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.auth.customer_hierarchy import (
+        CustomerHierarchyAuth,
+        CustomerScopeAuth,
+        customer_budget_scopes_from_request,
+        customer_budget_scopes_metadata,
+    )
+
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="admitted-org",
+        scopes=(
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="admitted-org",
+                budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+            ),
+        ),
+    )
+    forged: Final = {
+        "user_api_key_customer_org_id": "admitted-org",
+        "user_api_key_customer_budget_scopes": customer_budget_scopes_metadata(
+            hierarchy.model_copy(
+                update={
+                    "scopes": (
+                        CustomerScopeAuth(
+                            key="customer_org",
+                            entity_id="admitted-org",
+                            budget_limits=(BudgetLimit(budget_duration="12mo", max_budget=9999),),
+                        ),
+                    )
+                }
+            )
+        ),
+    }
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4o-mini", "metadata": dict(forged), "litellm_metadata": dict(forged)},
+        request=_make_request_mock(path, {}),
+        user_api_key_dict=UserAPIKeyAuth(customer_hierarchy=hierarchy if assigned else None),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert customer_budget_scopes_from_request({"litellm_params": updated}) == (hierarchy.scopes if assigned else None)
+
+
+@pytest.mark.parametrize(
+    ("model", "global_aliases", "key_aliases", "group_alias", "expected"),
+    [
+        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-then-key-then-router"),
+        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
+        pytest.param("a", {"a": "b"}, {}, None, "b", id="global-only"),
+        pytest.param("a", {}, {}, None, "a", id="no-alias"),
+    ],
+)
+def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    global_aliases: dict[str, str],
+    key_aliases: dict[str, str],
+    group_alias: object,
+    expected: str,
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import pre_call_served_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", global_aliases)
+
+    assert pre_call_served_model(model, UserAPIKeyAuth(aliases=key_aliases), group_alias) == expected
+
+
+@pytest.mark.parametrize(
+    ("token_fields", "expected"),
+    [
+        pytest.param({"aliases": {"requested": 7}}, "requested", id="non-string-key-alias"),
+        pytest.param({"team_model_aliases": {"requested": 7}}, "requested", id="non-string-team-alias"),
+        pytest.param({"aliases": {"mid": 7}, "team_model_aliases": {"requested": "mid"}}, "mid", id="after-team"),
+    ],
+)
+def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
+    token_fields: dict[str, object], expected: str
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import request_served_model
+
+    valid_token: Final = UserAPIKeyAuth(**token_fields)
+    prepared: Final[dict[str, object]] = {"model": "requested"}  # mutable-ok: the rewrite functions edit the body
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        _update_model_if_team_alias_exists(data=prepared, user_api_key_dict=valid_token)
+    _update_model_if_key_alias_exists(data=prepared, user_api_key_dict=valid_token)
+
+    assert request_served_model("requested", valid_token, None, None) == prepared["model"] == expected
+
+
+def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_ENABLE_TEAM_STALE_ALIAS_BYPASS", None)
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+    first: Final = pre_call_utils._stale_team_alias_bypass_enabled()
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
+
+    assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)

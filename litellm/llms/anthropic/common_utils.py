@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_file_ids_from_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    anthropic_tool_search_result,
     find_anthropic_server_tool_result,
     message_field,
     parts_of,
@@ -64,10 +65,12 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
     AnthropicThinkingParam,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -754,7 +757,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             case _:
                 return False
 
-    def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
+    def thinking_betas(self, thinking: object) -> tuple[str, ...]:
         return (
             *(
                 (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
@@ -1918,6 +1921,113 @@ def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_t
     return messages
 
 
+def _assistant_blocks(message: AllAnthropicPassThroughMessageValues) -> tuple[object, ...]:
+    return parts_of(message["content"]) if message["role"] == "assistant" else ()
+
+
+def _results_with_unloaded_tools(
+    messages: Sequence[AllAnthropicPassThroughMessageValues], tool_names: frozenset[str]
+) -> tuple[AnthropicToolSearchToolResultBlock, ...]:
+    blocks: Final = chain.from_iterable(map(_assistant_blocks, messages))
+    results: Final = (result for result in map(anthropic_tool_search_result, blocks) if result is not None)
+    return tuple(result for result in results if not tool_names.issuperset(result.tool_names))
+
+
+def _is_stale_tool_search_block(block: object, stale_ids: frozenset[str]) -> bool:
+    match message_field(block, "type"):
+        case "server_tool_use":
+            return message_field(block, "id") in stale_ids
+        case "tool_search_tool_result":
+            return message_field(block, "tool_use_id") in stale_ids
+        case _:
+            return False
+
+
+def _with_loaded_tool_references_only(block: object, tool_names: frozenset[str]) -> object:
+    result: Final = anthropic_tool_search_result(block)
+    fields: Final = as_str_mapping(block)
+    if result is None or fields is None or tool_names.issuperset(result.tool_names):
+        return block
+    content: Final = as_str_mapping(fields.get("content")) or MappingProxyType({})
+    references: Final = parts_of(content.get("tool_references"))
+    loaded: Final = [reference for reference in references if message_field(reference, "tool_name") in tool_names]
+    return {**fields, "content": {**content, "tool_references": loaded}}
+
+
+def _with_loaded_tool_searches_only(
+    message: AllAnthropicPassThroughMessageValues, stale_ids: frozenset[str], tool_names: frozenset[str]
+) -> AllAnthropicPassThroughMessageValues | None:
+    if message["role"] != "assistant":
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return message
+    blocks: Final = list(content)
+    kept: Final = [
+        _with_loaded_tool_references_only(block, tool_names)
+        for block in blocks
+        if not _is_stale_tool_search_block(block, stale_ids)
+    ]
+    if kept == blocks:
+        return message
+    return {**message, "content": kept} if kept else None
+
+
+def _tool_reference_renamed(reference: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(reference)
+    name: Final = fields.get("tool_name") if fields is not None else None
+    if fields is None or not isinstance(name, str) or name not in name_map:
+        return reference
+    return {**fields, "tool_name": name_map[name]}
+
+
+def tool_search_content_renamed(content: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(content)
+    if fields is None or "tool_references" not in fields:
+        return content
+    references: Final = parts_of(fields["tool_references"])
+    return {**fields, "tool_references": [_tool_reference_renamed(reference, name_map) for reference in references]}
+
+
+def tool_search_result_renamed(block: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") != "tool_search_tool_result":
+        return block
+    return {**fields, "content": tool_search_content_renamed(fields.get("content"), name_map)}
+
+
+def replays_tool_search(messages: object) -> bool:
+    contents: Final = (message_field(message, "content") for message in parts_of(messages))
+    blocks: Final = chain.from_iterable(map(parts_of, contents))
+    return any(anthropic_tool_search_result(block) is not None for block in blocks)
+
+
+def without_stale_tool_search_results(
+    messages: Sequence[AllAnthropicPassThroughMessageValues], tools: Sequence[object]
+) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
+    """
+    Leave out the tools a replayed tool search found that are no longer in ``tools``,
+    and the whole search, its ``server_tool_use`` and its ``tool_search_tool_result``,
+    when none of them are left. Anthropic rejects such a history with "Tool reference
+    '<name>' not found in available tools", for example after a follow-up turn removes
+    a tool or sends none.
+    """
+    tool_names: Final = frozenset(name for tool in tools if isinstance(name := message_field(tool, "name"), str))
+    unloaded: Final = _results_with_unloaded_tools(messages, tool_names)
+    if not unloaded:
+        return tuple(messages)
+    litellm.verbose_logger.debug(
+        "Leaving out the tools a replayed tool search found that this request no longer sends: %s",
+        sorted(frozenset(chain.from_iterable(result.tool_names for result in unloaded)) - tool_names),
+    )
+    stale_ids: Final = frozenset(result.tool_use_id for result in unloaded if tool_names.isdisjoint(result.tool_names))
+    return tuple(
+        kept
+        for message in messages
+        if (kept := _with_loaded_tool_searches_only(message, stale_ids, tool_names)) is not None
+    )
+
+
 def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     """
     Detect Anthropic 400 errors caused by invalid thinking blocks in replayed
@@ -2460,7 +2570,7 @@ def changed_server_tool_call_arguments(
 
 
 def write_anthropic_hosted_web_call_arguments(holder: Message | Delta, arguments_by_tool_id: Mapping[str, str]) -> None:
-    fields: Final = holder.provider_specific_fields
+    fields: Final[Mapping[str, object]] = holder.provider_specific_fields or {}
     if not arguments_by_tool_id or not fields or fields.get("web_search_calls") is None:
         return
     holder.provider_specific_fields = {  # rebind-ok: the hosted copy of a rewritten call must not keep its old input
@@ -2488,7 +2598,7 @@ def _jsonable_hosted_web_call(item: object, arguments_by_tool_id: Mapping[str, s
     call: Final = _with_hosted_web_call_arguments(item, arguments_by_tool_id)
     if not isinstance(call, ResponseFunctionWebSearch):
         return call
-    return _WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True)
+    return _DECODED_JSON.validate_python(_WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True))
 
 
 def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[str, str]) -> object:
@@ -2503,7 +2613,7 @@ def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[
 
 
 def without_anthropic_server_tool_calls(holder: Message, tool_ids: frozenset[str]) -> None:
-    fields: Final = holder.provider_specific_fields or {}
+    fields: Final[Mapping[str, object]] = holder.provider_specific_fields or {}
     holder.provider_specific_fields = {  # rebind-ok: a denied call must leave every copy of the message it was on
         **fields,
         "server_tool_calls": [
