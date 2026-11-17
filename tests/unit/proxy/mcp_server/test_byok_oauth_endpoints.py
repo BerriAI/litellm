@@ -2000,6 +2000,8 @@ class _SharedStore:
         return any(operation == op and key.startswith(prefix) for op, prefix in self.down)
 
     async def async_set_cache(self, key: str, value: str, ttl: int) -> bool | None:
+        if self._fails("set_raise", key):
+            raise ConnectionError("circuit open")
         if self._fails("set", key):
             return None
         self.values[key] = value
@@ -2164,8 +2166,11 @@ async def test_a_failed_delete_after_the_claim_still_stores_the_key_and_issues_a
     assert _stored_credential(credentials) == "sk-supersecretkey"
 
 
-def test_no_code_is_handed_out_when_the_shared_store_drops_the_write(client: TestClient, salted: None) -> None:
-    shared: Final = _SharedStore(down={("set", _SHARED_CODE)})
+@pytest.mark.parametrize("fault", ["set", "set_raise"], ids=["write dropped", "write raised"])
+def test_no_code_is_handed_out_when_the_shared_store_drops_the_write(
+    client: TestClient, salted: None, fault: str
+) -> None:
+    shared: Final = _SharedStore(down={(fault, _SHARED_CODE)})
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         resp: Final = _authorize_as("user-123")
     assert resp.status_code == 503
@@ -2230,3 +2235,52 @@ def test_a_full_in_memory_code_store_refuses_new_codes_without_redis(client: Tes
     assert resp.status_code == 503
     assert resp.json()["detail"] == "Too many pending authorization flows"
     assert held == _AUTH_CODES_MAX_SIZE
+
+
+def _sealed(record: dict[str, object]) -> str:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    return encrypt_value_helper(json.dumps(record))
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [None, "not-a-sealed-record", "malformed"],
+    ids=["unknown code", "undecryptable record", "record missing fields"],
+)
+@pytest.mark.asyncio
+async def test_a_shared_code_without_a_valid_record_is_invalid_grant(
+    client: TestClient, salted: None, stored: str | None
+) -> None:
+    shared: Final = _SharedStore()
+    if stored is not None:
+        shared.values[_SHARED_CODE + "code-1"] = _sealed({"api_key": "sk-x"}) if stored == "malformed" else stored
+    credentials: Final = _CredentialTable()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        result: Final = await _redeem("code-1", credentials)
+    assert result.status_code == 400
+    assert json.loads(result.body)["error"] == "invalid_grant"
+    assert credentials.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_an_expired_shared_code_is_invalid_grant_and_removed(client: TestClient, salted: None) -> None:
+    shared: Final = _SharedStore()
+    shared.values[_SHARED_CODE + "code-1"] = _sealed(
+        {
+            "api_key": "sk-supersecretkey",
+            "server_id": "server-xyz",
+            "code_challenge": _make_challenge(_VERIFIER),
+            "redirect_uri": "http://127.0.0.1:3000/callback",
+            "client_id": "user-123",
+            "user_id": "user-123",
+            "expires_at": 0.0,
+        }
+    )
+    credentials: Final = _CredentialTable()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        result: Final = await _redeem("code-1", credentials)
+    assert result.status_code == 400
+    assert json.loads(result.body)["error"] == "invalid_grant"
+    assert shared.values == {}
+    assert credentials.rows == {}
