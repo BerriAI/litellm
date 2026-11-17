@@ -3794,8 +3794,12 @@ def test_openai_error_never_mentions_the_copilot_app_permission(monkeypatch):
     ],
 )
 def test_a_mapped_provider_error_keeps_the_providers_own_status_beside_its_public_one(
-    provider, provider_status, mapped_error, public_status, quiet_exception_mapping
-):
+    provider: str,
+    provider_status: int,
+    mapped_error: type[litellm.InternalServerError | litellm.RateLimitError | litellm.APIError],
+    public_status: int,
+    quiet_exception_mapping: None,
+) -> None:
     with pytest.raises(mapped_error, match="upstream failure") as raised:
         exception_type(
             model="model-under-test",
@@ -3807,7 +3811,7 @@ def test_a_mapped_provider_error_keeps_the_providers_own_status_beside_its_publi
     assert (raised.value.status_code, provider_origin_status(raised.value)) == (public_status, provider_status)
 
 
-def test_an_error_litellm_raised_itself_carries_no_provider_status(quiet_exception_mapping):
+def test_an_error_litellm_raised_itself_carries_no_provider_status(quiet_exception_mapping: None) -> None:
     synthetic: Final = litellm.RateLimitError(message="deployment at capacity", llm_provider="", model="m")
 
     returned: Final = exception_type(model="m", original_exception=synthetic, custom_llm_provider="openai")
@@ -3816,7 +3820,9 @@ def test_an_error_litellm_raised_itself_carries_no_provider_status(quiet_excepti
     assert provider_origin_status(returned) is None
 
 
-def test_a_status_litellm_made_up_for_a_provider_error_is_not_kept_as_the_providers(quiet_exception_mapping):
+def test_a_status_litellm_made_up_for_a_provider_error_is_not_kept_as_the_providers(
+    quiet_exception_mapping: None,
+) -> None:
     made_up: Final = BaseLLMException(status_code=429, message="no status upstream", status_code_is_synthesized=True)
 
     with pytest.raises(litellm.RateLimitError, match="no status upstream") as raised:
