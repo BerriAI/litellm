@@ -64,6 +64,7 @@ _UNIONS: Final[tuple[tuple[str, JsonValue, JsonValue], ...]] = (
         {"anyOf": [{"type": "integer", "nullable": True}, {"type": "string", "nullable": True}]},
     ),
     ("null-empty", {"anyOf": [_NULL, {}]}, {"anyOf": [{"type": "object", "nullable": True}]}),
+    ("true-null", {"anyOf": [True, _NULL]}, {"anyOf": [{"type": "object", "nullable": True}]}),
     ("empty-only", {"anyOf": [{}]}, {"anyOf": [{"type": "object"}]}),
     ("empty-list", {"anyOf": []}, {"anyOf": []}),
     ("object-anyof", {"anyOf": _STRING}, {"anyOf": _STRING}),
@@ -327,11 +328,7 @@ def test_a_google_rejection_of_a_folded_union_reaches_the_caller(gateway: Gatewa
         assert _sent_declarations(_body(requests[0])) == [_declaration(description, _NULLABLE_STRING)]
 
 
-@pytest.mark.parametrize(
-    ("union", "sent"),
-    (({"anyOf": [True, _NULL]}, {"anyOf": [True]}), ({"anyOf": [_NULL, 5]}, {"anyOf": [5]})),
-    ids=("true-null", "null-int"),
-)
+@pytest.mark.parametrize(("union", "sent"), (({"anyOf": [_NULL, 5]}, {"anyOf": [5]}),), ids=("null-int",))
 @pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
 def test_a_union_branch_that_is_not_an_object_reaches_google_and_its_400_reaches_the_caller(
     gateway: Gateway, provider: Provider, union: JsonValue, sent: JsonValue
