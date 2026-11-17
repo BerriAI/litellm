@@ -92,6 +92,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_litellm_params import parse_control_options
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     is_registered_custom_provider,
@@ -309,7 +310,7 @@ from litellm.router_utils.routing_groups import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
-from litellm.types.litellm_params import RoutingStrategyName
+from litellm.types.litellm_params import ControlOptions, RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
@@ -445,6 +446,14 @@ RouterStrategySelector: TypeAlias = (
     | LowestTPMLoggingHandler
     | LowestTPMLoggingHandler_v2
 )
+
+
+def _requests_fake_stream(*params_by_precedence: Mapping[str, object]) -> bool:
+    fake_stream: Final = next(
+        (params["fake_stream"] for params in params_by_precedence if "fake_stream" in params), None
+    )
+    control: Final = parse_control_options({"fake_stream": fake_stream})
+    return isinstance(control, ControlOptions) and control.fake_stream is True
 
 
 def _cost_value_as_float(value: str | float | None) -> float | None:
@@ -4512,33 +4521,12 @@ class Router:
 
         kwargs["model_info"] = model_info
 
-        if function_name == "_ageneric_api_call_with_fallbacks":
-            from litellm.passthrough.timeout_utils import (
-                resolve_llm_passthrough_timeout,
-            )
-
-            _router_timeout: Final = (
-                self.request_timeout
-                if self.request_timeout is not None
-                else float(self._explicit_timeout)
-                if isinstance(self._explicit_timeout, (int, float))
-                else None
-            )
-            _router_stream_timeout: Final = (
-                self.stream_timeout
-                if self.stream_timeout is not None
-                else self.request_timeout
-                if self.request_timeout is not None
-                else self.default_litellm_params.get("stream_timeout")
-            )
-            kwargs["timeout"] = resolve_llm_passthrough_timeout(
-                kwargs=kwargs,
-                litellm_params=deployment["litellm_params"],
-                router_timeout=_router_timeout,
-                router_stream_timeout=_router_stream_timeout,
-            )
-        else:
-            kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
+        call_timeout, replay_timeout = self._call_timeouts(
+            kwargs=kwargs, litellm_params=deployment["litellm_params"], function_name=function_name
+        )
+        kwargs["timeout"] = call_timeout
+        if replay_timeout is not None:
+            kwargs["request_timeout"] = replay_timeout
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
@@ -4600,16 +4588,56 @@ class Router:
         )
         return timeout
 
-    def _get_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_timeout(self, kwargs: dict[str, object], data: dict[str, object]) -> float | int | None:
         """Helper to get timeout from kwargs or deployment params"""
-        timeout: float | int | None = None
-        if kwargs.get("stream", False):
-            timeout = self._get_stream_timeout(kwargs=kwargs, data=data)
-        if timeout is None:
-            timeout = self._get_non_stream_timeout(
-                kwargs=kwargs, data=data
-            )  # default to this if no stream specific timeout set
-        return timeout
+        return self._call_timeouts(kwargs=kwargs, litellm_params=data, function_name=None)[0]
+
+    def _call_timeouts(
+        self, kwargs: dict[str, object], litellm_params: dict[str, object], function_name: str | None
+    ) -> tuple[float | int | None, float | int | None]:
+        replays: Final = bool(kwargs.get("stream")) and _requests_fake_stream(
+            kwargs, self.default_litellm_params, litellm_params
+        )
+        request_timeout: Final = self._get_non_stream_timeout(kwargs=kwargs, data=litellm_params)
+        if function_name == "_ageneric_api_call_with_fallbacks":
+            return (
+                self._passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params),
+                (
+                    request_timeout
+                    if isinstance(request_timeout, httpx.Timeout)
+                    else self._passthrough_timeout(kwargs={**kwargs, "stream": False}, litellm_params=litellm_params)
+                )
+                if replays
+                else None,
+            )
+        stream_timeout: Final = (
+            self._get_stream_timeout(kwargs=kwargs, data=litellm_params) if kwargs.get("stream") else None
+        )
+        return (request_timeout if stream_timeout is None else stream_timeout), (request_timeout if replays else None)
+
+    def _passthrough_timeout(self, kwargs: Mapping[str, object], litellm_params: Mapping[str, object]) -> float:
+        from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+
+        router_timeout: Final = (
+            self.request_timeout
+            if self.request_timeout is not None
+            else float(self._explicit_timeout)
+            if isinstance(self._explicit_timeout, (int, float))
+            else None
+        )
+        router_stream_timeout: Final = (
+            self.stream_timeout
+            if self.stream_timeout is not None
+            else self.request_timeout
+            if self.request_timeout is not None
+            else self.default_litellm_params.get("stream_timeout")
+        )
+        return resolve_llm_passthrough_timeout(
+            kwargs=kwargs,
+            litellm_params=litellm_params,
+            router_timeout=router_timeout,
+            router_stream_timeout=router_stream_timeout,
+        )
 
     async def abatch_completion(
         self,
