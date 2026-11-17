@@ -1082,6 +1082,31 @@ async def test_acompletion_fallback_whose_prompt_template_picks_another_provider
 
 @pytest.mark.timeout(30, method="thread")
 @pytest.mark.asyncio
+async def test_acompletion_fallback_behind_a_prompt_prefix_never_reaches_the_provider_under_its_prefixed_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=(_model_unavailable(), httpx.Response(200, json=ANTHROPIC_ANSWER))
+    )
+
+    with contextlib.suppress(Exception):
+        _ = await python_acompletion(
+            model="claude-no-such-model",
+            custom_llm_provider="anthropic",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="anthropic-key",
+            fallbacks=["litellm_agent/anthropic/claude-haiku-5-5"],
+        )
+
+    sent_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert sent_models[0] == "claude-no-such-model"
+    assert not any(model.startswith("litellm_agent/") for model in sent_models)
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
 async def test_acompletion_fallback_to_an_unprefixed_model_keeps_the_requests_provider_and_credentials(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

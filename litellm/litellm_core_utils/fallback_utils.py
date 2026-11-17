@@ -134,7 +134,10 @@ def _inherited_kwargs(
     original_provider: Final = _provider_of(original_model, requested_provider)
     provider: Final = _provider_of(model, custom_llm_provider) or _provider_of(model, requested_provider)
     switches_provider: Final = original_provider is None or original_provider != provider
-    dropped: Final = (_MODEL_BOUND_PARAMS | _PROVIDER_BOUND_PARAMS) if switches_provider else _MODEL_BOUND_PARAMS
+    model_bound: Final = (
+        _MODEL_BOUND_PARAMS | {"custom_llm_provider"} if routes_through_a_prompt_manager(model) else _MODEL_BOUND_PARAMS
+    )
+    dropped: Final = (model_bound | _PROVIDER_BOUND_PARAMS) if switches_provider else model_bound
     return {key: value for key, value in base_kwargs.items() if key not in dropped}
 
 
