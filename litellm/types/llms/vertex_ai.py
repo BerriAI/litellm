@@ -320,16 +320,16 @@ class PromptTokensDetails(TypedDict):
 
 
 class UsageMetadata(TypedDict, total=False):
-    promptTokenCount: int
-    totalTokenCount: int
-    candidatesTokenCount: int
-    responseTokenCount: int
-    cachedContentTokenCount: int
-    toolUsePromptTokenCount: int
+    promptTokenCount: int | None
+    totalTokenCount: int | None
+    candidatesTokenCount: int | None
+    responseTokenCount: int | None
+    cachedContentTokenCount: int | None
+    toolUsePromptTokenCount: int | None
     toolUsePromptTokensDetails: list[PromptTokensDetails]
     promptTokensDetails: list[PromptTokensDetails]
     cacheTokensDetails: list[PromptTokensDetails]
-    thoughtsTokenCount: int
+    thoughtsTokenCount: int | None
     responseTokensDetails: list[PromptTokensDetails]
     candidatesTokensDetails: list[PromptTokensDetails]  # Alternative key name used in some responses
 

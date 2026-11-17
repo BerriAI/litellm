@@ -2565,12 +2565,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             raw_token_count: Final = detail.get("tokenCount", detail.get("token_count", 0))
             return raw_token_count if isinstance(raw_token_count, int) else 0
 
+        def _get_usage_token_count(field_name: str) -> int:
+            raw_token_count: Final = usage_metadata.get(field_name)
+            return raw_token_count if isinstance(raw_token_count, int) else 0
+
         if "cachedContentTokenCount" in usage_metadata:
-            cached_tokens = usage_metadata["cachedContentTokenCount"]
+            cached_token_count: Final = usage_metadata["cachedContentTokenCount"]
+            cached_tokens = cached_token_count if isinstance(cached_token_count, int) else None
 
         ## GEMINI LIVE API ONLY PARAMS ##
         if "responseTokenCount" in usage_metadata:
-            response_tokens = usage_metadata["responseTokenCount"]
+            response_token_count: Final = usage_metadata["responseTokenCount"]
+            response_tokens = response_token_count if isinstance(response_token_count, int) else None
         if "responseTokensDetails" in usage_metadata:
             response_tokens_details = CompletionTokensDetailsWrapper()
             for detail in usage_metadata["responseTokensDetails"]:
@@ -2605,7 +2611,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
         # candidatesTokenCount includes all modalities, so: text = total - (image + audio + video)
-        candidates_token_count: Final = usage_metadata.get("candidatesTokenCount", 0)
+        candidates_token_count: Final = _get_usage_token_count("candidatesTokenCount")
         if candidates_token_count > 0:
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
@@ -2668,7 +2674,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             prompt_video_tokens = prompt_video_tokens - cached_video_tokens
 
         if "thoughtsTokenCount" in usage_metadata:
-            reasoning_tokens = usage_metadata["thoughtsTokenCount"]
+            thoughts_token_count: Final = usage_metadata["thoughtsTokenCount"]
+            reasoning_tokens = thoughts_token_count if isinstance(thoughts_token_count, int) else None
             # Also add reasoning tokens to response_tokens_details
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
@@ -2714,11 +2721,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage: Final = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0)
-            + billable_tool_use_prompt_tokens
-            + cache_creation_tokens,
+            prompt_tokens=(
+                _get_usage_token_count("promptTokenCount") + billable_tool_use_prompt_tokens + cache_creation_tokens
+            ),
             completion_tokens=completion_tokens,
-            total_tokens=usage_metadata.get("totalTokenCount", 0) + cache_creation_tokens,
+            total_tokens=_get_usage_token_count("totalTokenCount") + cache_creation_tokens,
             prompt_tokens_details=prompt_tokens_details,
             cache_read_input_tokens=cached_tokens,
             cache_creation_input_tokens=cache_creation_tokens or None,
