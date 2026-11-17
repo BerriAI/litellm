@@ -2070,12 +2070,22 @@ async def _small_preflight_failure_json(request: Request) -> Mapping[str, object
     }
 
 
+def _is_bodyless_get(request: Request) -> bool:
+    return (
+        request.scope.get("method") == "GET"
+        and request.headers.get("content-length", "0") == "0"
+        and request.headers.get("transfer-encoding") is None
+    )
+
+
 async def _reject_from_headers_before_reading_body(
     request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
 ) -> None:
     """Refuse a request its headers already condemn, a blocked key or an exhausted key limit, before reading its body.
 
     Only a key already in the cache is considered, so a miss changes nothing and the full auth path still runs.
+    The limit is only checked where a body is declared and the route is metered, because model listing, token
+    counting and other GET discovery routes never reach the limiter and must keep answering an exhausted key.
     A retry flood of large payloads against a limited key used to buffer every payload just to answer 429.
     """
     if not RouteChecks.is_llm_api_route(route=route):
@@ -2084,6 +2094,9 @@ async def _reject_from_headers_before_reading_body(
     from litellm.proxy.common_request_processing import proxy_exception_from_http_exception
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _is_unbilled_route,  # pyright: ignore[reportPrivateUsage]  # share the unbilled route classification
+    )
 
     configured_header: Final = proxy_server.general_settings_view().get("litellm_key_header_name")
     bearer_token: Final = (
@@ -2124,6 +2137,8 @@ async def _reject_from_headers_before_reading_body(
             resolved_identity=cached_key,
             dispatched_call_type=str(request_data["call_type"]) if request_data["call_type"] is not None else None,
         )
+        return
+    if _is_unbilled_route(route) or _is_bodyless_get(request):
         return
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
