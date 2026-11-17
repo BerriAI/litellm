@@ -21,6 +21,7 @@ from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     attribute_or_none,
     get_metadata_variable_name_from_kwargs,
     has_attributes,
@@ -33,7 +34,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import PROMPT_CARRYING_GUARDRAIL_FIELDS, StandardCallbackDynamicParams
 from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS
 
 if TYPE_CHECKING:
@@ -247,6 +248,42 @@ def _redact_choice_content(choice):
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
+
+
+_NUMERIC_COMPRESSION_STAT_KEYS: Final = frozenset(
+    {"tokens_before", "tokens_after", "tokens_saved", "compression_ratio"}
+)
+
+
+def numeric_compression_stats(guardrail_entry: Mapping[str, object]) -> dict[str, int | float] | None:
+    fields: Final = _as_mapping(guardrail_entry.get("guardrail_response"))
+    if fields is None:
+        return None
+    stats: Final = {
+        key: value
+        for key, value in fields.items()
+        if key in _NUMERIC_COMPRESSION_STAT_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    return stats or None
+
+
+def _guardrail_entry_without_prompt_text(entry: object) -> object:
+    fields: Final = _as_mapping(entry)
+    if fields is None:
+        return entry
+    redacted: Final = {
+        field: REDACTED_BY_LITELLM if field in PROMPT_CARRYING_GUARDRAIL_FIELDS and value is not None else value
+        for field, value in fields.items()
+    }
+    stats: Final = numeric_compression_stats(fields)
+    return redacted if stats is None else {**redacted, "guardrail_response": stats}
+
+
+def _guardrail_information_without_prompt_text(guardrail_information: object) -> object:
+    entries: Final = as_object_list(guardrail_information)
+    if entries is None:
+        return _guardrail_entry_without_prompt_text(guardrail_information)
+    return [_guardrail_entry_without_prompt_text(entry) for entry in entries]
 
 
 def _redact_provider_specific_fields(message: object) -> None:
@@ -502,32 +539,34 @@ def _redacted_responses_api_response(
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
     """
-    Return a copy of a ``StandardLoggingPayload`` with its messages and response redacted.
-
-    The success path redacts through ``perform_redaction`` before a callback ever sees the
-    payload, but the failure path does not, so a callback that batches both has to redact
-    the ones it is handed.
+    Return a copy of a ``StandardLoggingPayload`` with its messages, response and guardrail
+    prompt text redacted.
     """
     return _redact_standard_logging_object(payload)
 
 
 def _redact_standard_logging_object(
-    payload: Mapping[str, object], *, redact_instructions: bool = True
+    payload: Mapping[str, object], *, redact_shared_fields: bool = True
 ) -> dict[str, object]:
     standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
+    guardrail_information: Final = standard_logging_object.get("guardrail_information")
+    if guardrail_information is not None and redact_shared_fields:
+        standard_logging_object["guardrail_information"] = _guardrail_information_without_prompt_text(
+            guardrail_information
+        )
     model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
-    if model_parameters is not None and redact_instructions:
+    if model_parameters is not None and redact_shared_fields:
         standard_logging_object["model_parameters"] = _with_redacted_request_fields(model_parameters)
 
     response: Final = standard_logging_object.get("response")
     if response is not None:
         if isinstance(response, dict) and "output" in response:
             standard_logging_object["response"] = _redacted_responses_api_response(
-                response, redact_instructions=redact_instructions
+                response, redact_instructions=redact_shared_fields
             )
             redact_vertex_ai_metadata_from_logged_object(standard_logging_object["response"])
         elif isinstance(response, dict) and "choices" in response:
@@ -639,8 +678,8 @@ def perform_redaction(model_call_details: dict[str, object], result, redact_stre
     redact_streaming_responses=False skips the in-place redaction of the shared streaming
     response entries; per-callback redaction hands each opted-out callback its own redacted
     copy via redacted_model_call_details_for_custom_logger instead. It also leaves the shared
-    request instructions, proxy request body and hidden provider fields as they are, since the
-    spend log and the other callbacks read them.
+    request instructions, guardrail prompt text, proxy request body and hidden provider fields
+    as they are, since the spend log and the other callbacks read them.
     """
     # Redact model_call_details
     params: Final = _as_mapping(model_call_details.get("litellm_params"))
@@ -665,7 +704,7 @@ def perform_redaction(model_call_details: dict[str, object], result, redact_stre
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
         model_call_details["standard_logging_object"] = _redact_standard_logging_object(
-            standard_logging_object, redact_instructions=redact_streaming_responses
+            standard_logging_object, redact_shared_fields=redact_streaming_responses
         )
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 

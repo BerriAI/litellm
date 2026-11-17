@@ -337,11 +337,14 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         })))
         .mount(&upstream)
         .await;
-    let config = Config::from_yaml(&format!(
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.yaml");
+    std::fs::write(&path, format!(
         "environment_variables:\n  SYSTEM_PROMPT: Answer in French.\n  MCP_TOKEN: mcp-token\nmodel_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n{deployment_params}general_settings:\n  master_key: gateway-key\n",
         upstream.uri()
     ))
     .unwrap();
+    let config = litellm_gateway::load_config(&path).await.unwrap();
     let mut body = json!({
         "model": "public-model",
         "max_tokens": 8,

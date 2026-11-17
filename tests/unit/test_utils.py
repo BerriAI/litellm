@@ -485,6 +485,28 @@ def test_supports_video_input_reads_its_own_cost_map_flag(
     assert litellm.get_model_info(model)["supports_video_input"] is video_input
 
 
+@pytest.mark.parametrize("openai_breakpoint", [True, False])
+def test_get_model_info_reports_the_openai_breakpoint_and_bedrock_cache_point_flags_apart(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, openai_breakpoint: bool
+) -> None:
+    model: Final = "bedrock/split-cache-flags-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "supports_openai_prompt_cache_breakpoint": openai_breakpoint,
+            "supports_bedrock_converse_cache_point": not openai_breakpoint,
+        },
+    )
+    info: Final = litellm.get_model_info(model)
+    assert (info["supports_openai_prompt_cache_breakpoint"], info["supports_bedrock_converse_cache_point"]) == (
+        openai_breakpoint,
+        not openai_breakpoint,
+    )
+
+
 @pytest.mark.parametrize("continuation", [True, False])
 def test_supports_continuation_reads_its_own_cost_map_flag(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, continuation: bool
@@ -1227,6 +1249,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_pdf_input": {"type": "boolean"},
             "prompt_cache_min_tokens": {"type": "number"},
             "supports_prompt_cache_breakpoint": {"type": "boolean"},
+            "supports_bedrock_converse_cache_point": {"type": "boolean"},
+            "supports_openai_prompt_cache_breakpoint": {"type": "boolean"},
             "supports_thinking_cache_preservation": {"type": "boolean"},
             "supports_prompt_caching": {"type": "boolean"},
             "supports_response_schema": {"type": "boolean"},
@@ -11105,6 +11129,36 @@ def test_check_valid_key_returns_false_for_http_unauthorized() -> None:
         assert valid_key is False
         assert invalid_key_route.called
         assert upstream.calls.last.request.headers["Authorization"] == "Bearer invalid-test-key"
+
+
+def test_check_valid_key_never_counts_a_global_fallback_answer_as_a_valid_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", ["anthropic/claude-haiku-5-5"])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+    upstream: Final[respx.MockRouter]
+
+    with respx.mock(assert_all_called=False) as upstream:
+        _ = upstream.post("https://api.openai.com/v1/chat/completions").respond(
+            401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+        )
+        fallback_route: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+        valid_key: Final = check_valid_key(model="gpt-5-mini", api_key="invalid-test-key")
+
+    assert valid_key is False
+    assert not fallback_route.called
 
 
 def test_check_valid_key_returns_true_for_successful_completion() -> None:

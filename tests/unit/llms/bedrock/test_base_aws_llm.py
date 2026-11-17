@@ -34,6 +34,11 @@ from litellm.llms.bedrock.base_aws_llm import (
 )
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_SESSION_POLICY,
+    S3_LOGGING_SESSION_POLICY,
+    session_policy_document,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -310,6 +315,37 @@ def test_web_identity_token_oidc_reference_still_resolved():
             )
 
     assert exc.value.status_code == 401
+
+
+def test_configured_web_identity_policies_isolate_sts_permissions_and_cached_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UNIT_WEB_IDENTITY_TOKEN", "policy-test-token")
+    sts: Final = MagicMock()
+    sts.assume_role_with_web_identity.side_effect = tuple(
+        {
+            "Credentials": {"AccessKeyId": key, "SecretAccessKey": "test-secret", "SessionToken": "test-session"},
+            "PackedPolicySize": 1,
+        }
+        for key in ("s3-key", "bedrock-key")
+    )
+    s3: Final = BaseAWSLLM(web_identity_session_policy=S3_LOGGING_SESSION_POLICY)
+    bedrock: Final = BaseAWSLLM()
+    with patch("boto3.client", return_value=sts):
+        credentials: Final = tuple(
+            helper.get_credentials(
+                aws_web_identity_token="oidc/env/UNIT_WEB_IDENTITY_TOKEN",
+                aws_role_name="arn:aws:iam::123456789012:role/policy-test",
+                aws_session_name="policy-test",
+                aws_region_name="eu-west-1",
+            )
+            for helper in (s3, bedrock, s3)
+        )
+    assert tuple(item.access_key for item in credentials) == ("s3-key", "bedrock-key", "s3-key")
+    assert tuple(call.kwargs["Policy"] for call in sts.assume_role_with_web_identity.call_args_list) == (
+        session_policy_document(S3_LOGGING_SESSION_POLICY),
+        session_policy_document(BEDROCK_SESSION_POLICY),
+    )
 
 
 def test_web_identity_credentials_cached_in_iam_cache():
@@ -3218,6 +3254,35 @@ class TestGetBedrockModelIdArnHandling:
         ), f"'bedrock/' prefix not stripped; got: {model_id}"
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "bedrock/invoke/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "invoke/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ],
+    )
+    def test_region_path_segment_selects_the_region_and_leaves_the_model_id(self, model: str, monkeypatch):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"):
+            monkeypatch.delenv(name, raising=False)
+
+        assert (self._call(model), BaseAWSLLM()._get_aws_region_name(optional_params={}, model=model)) == (
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us-gov-west-1",
+        )
+
+    def test_explicit_region_beats_the_region_path_segment(self):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        model: Final = "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0"
+        assert (
+            BaseAWSLLM()._get_aws_region_name(optional_params={"aws_region_name": "us-gov-east-1"}, model=model)
+            == "us-gov-east-1"
+        )
 
     def test_bare_arn_is_encoded(self):
         """Direct ARN without routing prefix must also be URL-encoded."""

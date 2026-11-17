@@ -10,6 +10,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
 import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -519,14 +520,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.timestamp", { date: dateStr, time: timeStr });
   };
 
-  const canModifyKey =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
-    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+  const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
