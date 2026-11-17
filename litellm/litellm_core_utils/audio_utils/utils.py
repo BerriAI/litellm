@@ -424,6 +424,23 @@ def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
 
 
 _PCM16_WAV_SHAPE: Final = (1, 2, 24000)
+_WAV_MEDIA_TYPES: Final = frozenset({FILE_MIME_TYPES[FileType.WAV], "audio/x-wav", "audio/wave", "audio/vnd.wave"})
+_WAV_HEADER_BASE64_CHARS: Final = 4096
+
+
+def _strict_b64decode(data: str) -> bytes | None:
+    try:
+        return base64.b64decode(data, validate=True)
+    except ValueError:
+        return None
+
+
+def _wav_shape(audio: bytes) -> tuple[int, int, int] | None:
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            return (wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+    except (wave.Error, EOFError, RuntimeError):
+        return None
 
 
 def _pcm16_wav_frames(audio: bytes) -> bytes | None:
@@ -436,11 +453,11 @@ def _pcm16_wav_frames(audio: bytes) -> bytes | None:
 
 
 def as_raw_pcm16_base64(media_type: str, audio_base64: str) -> str:
-    if media_type.partition(";")[0].strip().lower() != FILE_MIME_TYPES[FileType.WAV]:
+    if media_type.partition(";")[0].strip().lower() not in _WAV_MEDIA_TYPES:
         return audio_base64
-    try:
-        audio: Final = base64.b64decode(audio_base64, validate=True)
-    except ValueError:
+    header: Final = _strict_b64decode(audio_base64[:_WAV_HEADER_BASE64_CHARS])
+    if header is None or _wav_shape(header) not in (None, _PCM16_WAV_SHAPE):
         return audio_base64
-    frames: Final = _pcm16_wav_frames(audio)
+    audio: Final = _strict_b64decode(audio_base64)
+    frames: Final = _pcm16_wav_frames(audio) if audio is not None else None
     return base64.b64encode(frames).decode("ascii") if frames else audio_base64

@@ -1734,7 +1734,7 @@ def test_gemini_finish_reason(respx_mock: respx.MockRouter) -> None:
     assert response.choices[0].finish_reason == "length"
 
 
-GEMINI_TTS_PCM16_FRAMES: Final = bytes(range(256)) * 8
+GEMINI_TTS_PCM16_FRAMES: Final = bytes(range(256)) * 32
 PCM16_FRAMES_WITH_URL_SAFE_BASE64_CHARS: Final = bytes(4) + b"\xfb\xef\xbe" + bytes(2041)
 
 
@@ -1793,8 +1793,33 @@ def _mock_gemini_part(
         ("audio/WAV ; rate=24000", _gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
         ("audio/L16;codec=pcm;rate=24000", GEMINI_TTS_PCM16_FRAMES),
         ("audio/wav", GEMINI_TTS_PCM16_FRAMES),
+        ("audio/x-wav", _gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
+        ("audio/wave", _gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
+        ("audio/vnd.wave", _gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
+        (
+            "audio/wav",
+            b"RIFF"
+            + struct.pack("<I", 4 + len(GEMINI_TTS_PCM16_FMT_CHUNK) + 8 + 4000 + 8 + len(GEMINI_TTS_PCM16_FRAMES))
+            + b"WAVE"
+            + GEMINI_TTS_PCM16_FMT_CHUNK
+            + b"LIST"
+            + struct.pack("<I", 4000)
+            + bytes(4000)
+            + b"data"
+            + struct.pack("<I", len(GEMINI_TTS_PCM16_FRAMES))
+            + GEMINI_TTS_PCM16_FRAMES,
+        ),
     ],
-    ids=["wav", "wav-label-with-params", "l16", "pcm-labeled-wav"],
+    ids=[
+        "wav",
+        "wav-label-with-params",
+        "l16",
+        "pcm-labeled-wav",
+        "x-wav-label",
+        "wave-label",
+        "vnd-wave-label",
+        "long-metadata-before-data",
+    ],
 )
 def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
     respx_mock: respx.MockRouter, mime_type: str, provider_audio: bytes
@@ -1811,6 +1836,36 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
     )
 
     assert base64.b64decode(response.choices[0].message.audio.data) == GEMINI_TTS_PCM16_FRAMES
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("mime_type", ["AUDIO_WAV", "AUDIO_L16"])
+@pytest.mark.parametrize("sends_data_uri", [False, True], ids=["inline-data", "data-uri"])
+def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
+    respx_mock: respx.MockRouter, mime_type: str, sends_data_uri: bool
+) -> None:
+    wav_base64: Final = _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
+    route: Final = _mock_gemini_part(
+        respx_mock,
+        {"text": f"data:audio/wav;base64,{wav_base64}"}
+        if sends_data_uri
+        else {"inlineData": {"mimeType": "audio/wav", "data": wav_base64}},
+    )
+
+    response: Final = completion(
+        model="gemini/gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore"},
+        responseFormat={"audio": {"mimeType": mime_type}},
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls.last.request.content)["generationConfig"]["responseFormat"] == {
+        "audio": {"mimeType": mime_type}
+    }
+    assert response.choices[0].message.audio.data == wav_base64
 
 
 @pytest.mark.respx(assert_all_called=True)
