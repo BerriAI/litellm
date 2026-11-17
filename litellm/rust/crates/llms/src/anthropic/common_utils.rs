@@ -424,6 +424,40 @@ fn is_non_string_text_block(block: &ContentBlock) -> bool {
             .is_some_and(|text| !is_python_str_text(text))
 }
 
+pub fn has_non_string_user_text(messages: &[Recognized<Message>]) -> bool {
+    messages.iter().any(|message| match message {
+        Recognized::Known(message) => {
+            message.role == USER
+                && matches!(&message.content, MessageContent::Blocks(blocks) if blocks.iter().any(has_non_string_text))
+        }
+        Recognized::Unrecognized(message) => {
+            is_raw_user_message(message)
+                && message
+                    .get(CONTENT)
+                    .and_then(Value::as_array)
+                    .is_some_and(|blocks| blocks.iter().any(has_non_string_raw_text))
+        }
+    })
+}
+
+fn has_non_string_text(block: &ContentBlock) -> bool {
+    is_non_string_text_block(block)
+        || (block.is_type(ContentBlockType::ToolResult)
+            && block.content.as_ref().is_some_and(has_non_string_text_part))
+}
+
+fn has_non_string_raw_text(block: &Value) -> bool {
+    is_non_string_raw_text(block)
+        || (raw_block_type(block) == Some("tool_result")
+            && block.get(CONTENT).is_some_and(has_non_string_text_part))
+}
+
+fn has_non_string_text_part(content: &Value) -> bool {
+    content
+        .as_array()
+        .is_some_and(|parts| parts.iter().any(is_non_string_raw_text))
+}
+
 fn without_non_string_tool_result_texts(block: ContentBlock) -> ContentBlock {
     if !block.is_type(ContentBlockType::ToolResult) {
         return block;

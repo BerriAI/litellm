@@ -6,13 +6,17 @@ from typing import TYPE_CHECKING, Final, cast, get_type_hints
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
 )
-from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_texts, reject_emptied_messages
+from litellm.llms.anthropic.messages.convertible_blocks import (
+    drop_non_string_texts,
+    malformed_text_error,
+    reject_emptied_messages,
+)
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
     MESSAGE_THREAD_NOT_FOUND_ERROR_CODE,
@@ -258,10 +262,20 @@ def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, obje
     )
 
 
+def native_messages_to_send(
+    messages: Sequence[object], drop_params: object
+) -> list[dict[str, object]]:  # mutable-ok: cache-control injection and token counters take list[dict]
+    if not drops_unsupported_params(drop_params) and malformed_text_error(messages) is not None:
+        return flatten_unencrypted_web_search_results_in_anthropic_messages(
+            sanitize_tool_use_ids_in_anthropic_messages(messages)
+        )
+    return list(drop_non_string_texts(normalize_native_messages(messages), drop_params))
+
+
 def cleaned_native_messages(
     messages: Sequence[object], drop_params: object, *, model: str, custom_llm_provider: str | None
 ) -> list[dict[str, object]]:  # mutable-ok: maybe_inject_cache_control takes these messages as list[dict]
-    cleaned: Final = list(drop_non_string_texts(normalize_native_messages(messages), drop_params))
+    cleaned: Final = native_messages_to_send(messages, drop_params)
     reject_emptied_messages(messages, cleaned, model, custom_llm_provider)
     return cleaned
 

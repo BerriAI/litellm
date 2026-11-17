@@ -1019,6 +1019,12 @@ def _prompt_with_text(text: object) -> list[dict[str, object]]:
 
 
 _CLEAN_PROMPT: Final = [{"role": "user", "content": [{"type": "text", "text": _PROMPT}]}]
+_BLANK_BEFORE_NULL_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": ""}, {"type": "text", "text": None}, {"type": "text", "text": _PROMPT}],
+    }
+]
 
 
 async def _bridge_rejection(
@@ -1038,6 +1044,7 @@ async def _bridge_rejection(
         pytest.param(
             [{"role": "user", "content": [{"type": "text", "text": None}]}], "messages.0.content.0.text", id="only-null"
         ),
+        pytest.param(_BLANK_BEFORE_NULL_PROMPT, "messages.0.content.1.text", id="blank-before-null"),
     ),
 )
 async def test_mixed_openai_azure_group_answers_the_same_400_for_a_non_string_user_text_on_either_deployment(
@@ -1152,6 +1159,15 @@ async def test_native_anthropic_forwards_a_non_string_user_text_without_drop_par
     assert sent["messages"] == _prompt_with_text(text)
 
 
+@pytest.mark.asyncio
+async def test_native_anthropic_keeps_a_blank_text_in_place_beside_a_non_string_user_text_without_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    sent: Final = await _native_body_sent(respx_mock, _BLANK_BEFORE_NULL_PROMPT, {})
+
+    assert sent["messages"] == _BLANK_BEFORE_NULL_PROMPT
+
+
 _DROP_PARAMS_SOURCES: Final = (
     pytest.param({"drop_params": True}, {}, False, id="deployment"),
     pytest.param({}, {"drop_params": True}, False, id="request"),
@@ -1182,6 +1198,22 @@ async def test_native_anthropic_drop_params_drops_a_non_string_user_text_from_ev
 
     assert dropped["messages"] == _CLEAN_PROMPT
     assert only_null["messages"] == _CLEAN_PROMPT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("deployment_params", "request_params", "drop_globally"), _DROP_PARAMS_SOURCES)
+async def test_native_anthropic_drop_params_strips_a_blank_text_beside_a_dropped_user_text_from_every_source(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+
+    sent: Final = await _native_body_sent(respx_mock, _BLANK_BEFORE_NULL_PROMPT, deployment_params, **request_params)
+
+    assert sent["messages"] == _CLEAN_PROMPT
 
 
 @pytest.mark.asyncio

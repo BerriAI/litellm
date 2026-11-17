@@ -11,9 +11,10 @@ use crate::{
     Error,
     anthropic::common_utils::{
         flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
-        map_messages, map_messages_rejecting_emptied, sanitize_raw_tool_use_ids,
-        sanitize_tool_use_ids, strip_empty_content_blocks, strip_empty_raw_content_blocks,
-        strip_provider_specific_fields, strip_raw_provider_specific_fields,
+        has_non_string_user_text, map_messages, map_messages_rejecting_emptied,
+        sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
+        strip_empty_raw_content_blocks, strip_provider_specific_fields,
+        strip_raw_provider_specific_fields,
     },
     base_llm::messages::context::MessagesShapeOptions,
 };
@@ -27,6 +28,12 @@ pub fn shape_anthropic_messages_request(
             request.messages,
             strip_provider_specific_fields,
             strip_raw_provider_specific_fields,
+        )
+    } else if !options.drops_unsupported_params && has_non_string_user_text(&request.messages) {
+        map_messages(
+            request.messages,
+            sanitize_anthropic_message_blocks,
+            sanitize_raw_anthropic_message_blocks,
         )
     } else {
         map_messages_rejecting_emptied(
@@ -55,14 +62,21 @@ pub fn shape_anthropic_messages_request(
 }
 
 fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
+    sanitize_anthropic_message_blocks(strip_empty_content_blocks(messages))
+}
+
+fn sanitize_anthropic_message_blocks(messages: Vec<Message>) -> Vec<Message> {
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(
-        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
+        sanitize_tool_use_ids(messages),
     ))
 }
 
 fn sanitize_raw_anthropic_message(message: Value) -> Option<Value> {
-    strip_empty_raw_content_blocks(message)
-        .and_then(sanitize_raw_tool_use_ids)
+    strip_empty_raw_content_blocks(message).and_then(sanitize_raw_anthropic_message_blocks)
+}
+
+fn sanitize_raw_anthropic_message_blocks(message: Value) -> Option<Value> {
+    sanitize_raw_tool_use_ids(message)
         .and_then(flatten_unencrypted_raw_web_search_results)
         .and_then(strip_raw_provider_specific_fields)
 }
@@ -329,6 +343,7 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: true,
                 presanitized: false,
+                drops_unsupported_params: false,
             },
         )
         .unwrap();
@@ -384,6 +399,7 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: false,
                 presanitized,
+                drops_unsupported_params: true,
             },
         )
         .unwrap();
@@ -402,12 +418,42 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: false,
                 presanitized: false,
+                drops_unsupported_params: false,
             },
         );
         assert!(matches!(
             shaped,
             Err(Error::InvalidRequest(crate::ErrorDetail::EmptiedMessages))
         ));
+    }
+
+    #[rstest]
+    #[case::text_block(json!({"type": "text", "text": null}))]
+    #[case::tool_result_part(json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+        {"type": "text", "text": 5}
+    ]}))]
+    fn a_user_s_non_string_text_keeps_every_block_in_place_without_drop_params(
+        #[case] malformed: Value,
+    ) {
+        let content =
+            json!([{"type": "text", "text": ""}, malformed, {"type": "text", "text": "hi"}]);
+        let shape = |drops_unsupported_params| {
+            let shaped = shape_anthropic_messages_request(
+                request(json!({"model": "m", "messages": [{"role": "user", "content": content}]})),
+                MessagesShapeOptions {
+                    reasoning_auto_summary: false,
+                    presanitized: false,
+                    drops_unsupported_params,
+                },
+            )
+            .unwrap();
+            serde_json::to_value(shaped).unwrap()["messages"][0]["content"].clone()
+        };
+        assert_eq!(shape(false), content);
+        assert_eq!(
+            shape(true),
+            json!([malformed, {"type": "text", "text": "hi"}])
+        );
     }
 
     #[test]
@@ -421,6 +467,7 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: false,
                 presanitized: true,
+                drops_unsupported_params: false,
             },
         )
         .unwrap();

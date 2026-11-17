@@ -257,6 +257,7 @@ mod tests {
     fn default_shaping_preserves_provider_policy_inputs(
         #[values(false, true)] reasoning_auto_summary: bool,
         #[values(false, true)] presanitized: bool,
+        #[values(false, true)] drops_unsupported_params: bool,
     ) {
         let request: MessagesRequest = serde_json::from_value(serde_json::json!({
             "model": "test-model",
@@ -271,6 +272,7 @@ mod tests {
                 MessagesShapeOptions {
                     reasoning_auto_summary,
                     presanitized,
+                    drops_unsupported_params,
                 }
             ),
             Ok(request)

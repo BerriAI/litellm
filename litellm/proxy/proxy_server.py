@@ -427,11 +427,10 @@ from litellm.llms.anthropic.messages.context_management.inference_view import (
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
-    drop_non_string_texts,
     emptied_messages_error,
     malformed_text_count_error,
 )
-from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+from litellm.llms.anthropic.messages.native.utils import native_messages_to_send
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
@@ -15758,7 +15757,7 @@ def _counted_request_messages(
         return None
     if messages_format != "anthropic":
         return list(messages)
-    kept: Final = list(drop_non_string_texts(normalize_native_messages(messages), deployment_drops_params(deployment)))
+    kept: Final = native_messages_to_send(messages, deployment_drops_params(deployment))
     emptied_error: Final = emptied_messages_error(messages, kept)
     if emptied_error is not None:
         raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)

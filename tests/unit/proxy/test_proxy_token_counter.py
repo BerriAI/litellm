@@ -1700,6 +1700,13 @@ _CLEAN_PROMPT: Final[list[dict[str, JsonValue]]] = [
     {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
 ]
 
+_BLANK_BEFORE_NULL_PROMPT: Final[list[dict[str, JsonValue]]] = [
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": ""}, {"type": "text", "text": None}, {"type": "text", "text": "run the build"}],
+    }
+]
+
 
 async def _messages_sent_to_anthropic_count(
     monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], deployment_params: Mapping[str, object]
@@ -1769,11 +1776,14 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    (_prompt_beside({"type": "text", "text": None}), _BLANK_BEFORE_NULL_PROMPT),
+    ids=("null-beside-text", "blank-before-null"),
+)
 async def test_anthropic_count_tokens_on_a_claude_deployment_forwards_a_non_string_user_text_without_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, JsonValue]]
 ) -> None:
-    messages: Final = _prompt_beside({"type": "text", "text": None})
-
     sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": messages}, {})
 
     assert sent == messages
@@ -1786,8 +1796,9 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_forwards_a_non_stri
         (_prompt_beside({"type": "text", "text": None}), "messages.0.content.1.text"),
         (_prompt_beside({"type": "text", "text": 5}), "messages.0.content.1.text"),
         ([{"role": "user", "content": [{"type": "text", "text": None}]}], "messages.0.content.0.text"),
+        (_BLANK_BEFORE_NULL_PROMPT, "messages.0.content.1.text"),
     ),
-    ids=("null-beside-text", "number-beside-text", "only-null"),
+    ids=("null-beside-text", "number-beside-text", "only-null", "blank-before-null"),
 )
 async def test_count_tokens_without_a_count_api_rejects_a_non_string_user_text(
     monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, JsonValue]], field: str

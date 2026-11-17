@@ -120,6 +120,7 @@ impl MessagesSettings {
         MessagesShapeOptions {
             reasoning_auto_summary: self.reasoning_auto_summary,
             presanitized: self.presanitized,
+            drops_unsupported_params: self.drops_unsupported_params,
         }
     }
 
