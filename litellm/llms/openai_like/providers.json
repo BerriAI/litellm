@@ -326,5 +326,10 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "agentgates": {
+    "base_url": "https://api.agentgates.ai/api/inference/v1",
+    "api_key_env": "AGENTGATES_API_KEY",
+    "api_base_env": "AGENTGATES_API_BASE"
   }
 }
