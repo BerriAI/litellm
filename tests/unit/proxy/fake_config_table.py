@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 
@@ -30,15 +30,43 @@ class ConfigRows:
         return json.loads(self.serialized_rows[name])
 
 
+def _status_matches(status: str | None, condition: object) -> bool:
+    if isinstance(condition, Mapping) and "in" in condition:
+        return status in condition["in"]
+    if isinstance(condition, Mapping) and "not" in condition:
+        return status is not None and status != condition["not"]
+    return status == condition
+
+
+def _any_status_matches(status: str | None, conditions: object) -> bool:
+    assert isinstance(conditions, Sequence)
+    return any(_status_matches(status, condition["approval_status"]) for condition in conditions)
+
+
 class RowsWithIds:
 
-    def __init__(self, id_field: str, ids: Iterable[str]) -> None:
+    def __init__(
+        self, id_field: str, ids: Iterable[str], *, approval_statuses: Mapping[str, str] = MappingProxyType({})
+    ) -> None:
         self._id_field: Final = id_field
         self._ids: Final = frozenset(ids)
+        self._approval_statuses: Final = approval_statuses
 
-    async def find_many(self, *, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[SimpleNamespace]:
-        requested: Final = where[self._id_field]["in"]
-        return [SimpleNamespace(**{self._id_field: row_id}) for row_id in requested if row_id in self._ids]
+    def _row_matches(self, row_id: str, where: Mapping[str, object]) -> bool:
+        status: Final = self._approval_statuses.get(row_id)
+        return (
+            row_id in self._ids
+            and ("OR" not in where or _any_status_matches(status, where["OR"]))
+            and ("approval_status" not in where or _status_matches(status, where["approval_status"]))
+        )
+
+    async def find_many(self, *, where: Mapping[str, object]) -> list[SimpleNamespace]:
+        id_filter: Final = where[self._id_field]
+        assert isinstance(id_filter, Mapping)
+        requested: Final = id_filter["in"]
+        if not all(isinstance(row_id, str) for row_id in requested):
+            raise ValueError(f"Invalid argument type. `{self._id_field}.in` should be a list of String")
+        return [SimpleNamespace(**{self._id_field: row_id}) for row_id in requested if self._row_matches(row_id, where)]
 
 
 class SectionLockedTransaction:

@@ -11,7 +11,7 @@ Follows the A2A Spec.
 import asyncio
 import os
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Annotated, Final, NamedTuple, TypedDict
 
@@ -1189,9 +1189,11 @@ def _set_public_agent_groups(public_agent_groups: tuple[str, ...]) -> None:
 
 
 async def _missing_agent_ids(
-    prisma_client: PrismaClient, registry: AgentRegistry, agent_ids: Sequence[str]
+    prisma_client: PrismaClient, registry: AgentRegistry, agent_ids: Iterable[object]
 ) -> frozenset[str]:
-    unregistered: Final = frozenset(a for a in agent_ids if registry.get_agent_by_id(agent_id=a) is None)
+    unregistered: Final = frozenset(
+        a for a in agent_ids if isinstance(a, str) and registry.get_agent_by_id(agent_id=a) is None
+    )
     if not unregistered:
         return unregistered
     stored: Final = await find_many_in(agents_table(prisma_client), "agent_id", unregistered)

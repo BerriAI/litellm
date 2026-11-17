@@ -2264,6 +2264,20 @@ async def test_update_useful_links_from_the_dashboard_keeps_a_link_another_admin
             {"B": {"url": "https://b.example.com", "index": 1}},
             id="a stale rename of a link another admin removed keeps it removed",
         ),
+        pytest.param(
+            {
+                "Documentation": {"url": "https://docs.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {
+                "Docs": {"url": "https://docs.example.com", "index": 0},
+                "Documentation": {"url": "https://docs.example.com", "index": 1},
+                "B": {"url": "https://b.example.com", "index": 2},
+            },
+            {"Guide": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            {"Guide": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            id="a stale rename of two same-url links keeps the one still stored",
+        ),
     ],
 )
 @pytest.mark.asyncio

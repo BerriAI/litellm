@@ -1708,13 +1708,17 @@ async def test_delete_agent_still_deletes_when_the_stored_public_list_cannot_be_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "listed", [["agent-1"], ["agent-gone", 7]], ids=["agents-listed", "a-deleted-agent-and-a-number-listed"]
+)
 async def test_make_agents_public_without_previous_agent_ids_replaces_the_stored_list(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, listed: list[str | int]
 ) -> None:
     import litellm
     from litellm.proxy import proxy_server
 
     _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+    monkeypatch.setattr(litellm, "public_agent_groups", listed)
     saved_configs: Final = []
     monkeypatch.setattr(
         proxy_server.proxy_config, "get_config", AsyncMock(return_value={"litellm_settings": {"drop_params": True}})

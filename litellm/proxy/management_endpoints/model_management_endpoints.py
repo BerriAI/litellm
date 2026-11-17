@@ -3815,8 +3815,12 @@ def _names_with_url(names: tuple[str, ...], links: Mapping[str, JsonValue], url:
     return tuple(name for name in names if _link_url(links[name]) == url)
 
 
-def _renamed_links(requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue]) -> Mapping[str, str]:
-    removed: Final = tuple(name for name in previous if name not in requested)
+def _renamed_links(
+    requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue], stored: Mapping[str, JsonValue]
+) -> Mapping[str, str]:
+    removed: Final = tuple(
+        sorted((name for name in previous if name not in requested), key=lambda name: name not in stored)
+    )
     added: Final = tuple(name for name in requested if name not in previous)
     removed_urls: Final = frozenset(
         url for url in (_link_url(previous[name]) for name in removed) if isinstance(url, str)
@@ -3834,7 +3838,7 @@ def _renamed_links(requested: Mapping[str, JsonValue], previous: Mapping[str, Js
 def _merged_useful_links(
     stored: Mapping[str, JsonValue], *, requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue]
 ) -> Mapping[str, JsonValue]:
-    renamed_from: Final = _renamed_links(requested, previous)
+    renamed_from: Final = _renamed_links(requested, previous, stored)
     renamed: Final = {
         name: _at_index(stored[old_name], _link_index(requested[name]))
         for name, old_name in renamed_from.items()

@@ -19,7 +19,7 @@ import functools
 import importlib
 import json
 import os
-from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -133,6 +133,14 @@ def _set_public_mcp_servers(public_mcp_servers: tuple[str, ...]) -> None:
     litellm.public_mcp_servers = list(public_mcp_servers)
 
 
+def _unregistered_server_ids(
+    server_ids: Iterable[object], registered: Callable[[str], object | None]
+) -> frozenset[str]:
+    return frozenset(
+        server_id for server_id in server_ids if isinstance(server_id, str) and registered(server_id) is None
+    )
+
+
 DEFAULT_MCP_REGISTRY_VERSION: Final = "1.0.0"
 
 if TYPE_CHECKING:
@@ -222,7 +230,6 @@ if MCP_AVAILABLE:
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
-        existing_mcp_server_ids,
         get_all_mcp_servers,
         get_draft_mcp_server,
         get_mcp_server,
@@ -239,6 +246,7 @@ if MCP_AVAILABLE:
         oauth_credentials_for_upstream_edit,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
+        served_mcp_server_ids,
         set_mcp_server_pinned_tools,
         stale_mcp_auth_fields,
         store_user_credential,
@@ -3396,15 +3404,14 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            unregistered: Final = frozenset(
-                server_id
-                for server_id in (*request.mcp_server_ids, *(litellm.public_mcp_servers or ()))
-                if global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id) is None
+            unregistered: Final = _unregistered_server_ids(
+                (*request.mcp_server_ids, *(litellm.public_mcp_servers or ())),
+                global_mcp_server_manager.get_mcp_server_by_id,
             )
             missing: Final = (
                 unregistered
                 if prisma_client is None or not unregistered
-                else unregistered.difference(await existing_mcp_server_ids(prisma_client, unregistered))
+                else unregistered.difference(await served_mcp_server_ids(prisma_client, unregistered))
             )
             previously_listed: Final = frozenset(request.previous_mcp_server_ids or ())
             unknown: Final = next(
