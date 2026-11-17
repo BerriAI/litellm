@@ -154,6 +154,10 @@ pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.mess
 const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
 /// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
 const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
+const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
+const REPLAYED_CREDENTIAL_FAILURE: &str = "replay";
+/// No usable credentials, which the host raises as botocore's `NoCredentialsError` unless an STS call failed.
+const UNAVAILABLE_CREDENTIALS: &str = "unavailable";
 pub(super) const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(
@@ -961,7 +965,16 @@ impl MessagesPythonHost {
                 native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
             }
             if let Some(model) = self.mantle_model(py)? {
-                native.value(py).setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                // The Mantle routes map a credential Rust could not acquire from a fixed class
+                // list, never by running Python's signing again.
+                if value
+                    .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)?
+                    .is_some_and(|kind| kind.eq(REPLAYED_CREDENTIAL_FAILURE).unwrap_or(false))
+                {
+                    value.setattr(MESSAGES_CREDENTIAL_FAILURE, UNAVAILABLE_CREDENTIALS)?;
+                }
             }
             Ok(self.map_failure(py, native))
         })

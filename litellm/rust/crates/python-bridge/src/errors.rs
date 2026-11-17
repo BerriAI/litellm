@@ -44,9 +44,6 @@ const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
 /// Python's provider config raises the refusal as litellm's `BadRequestError`.
 const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
-/// Python's `get_llm_provider` raised the refusal while resolving the provider, which it wraps
-/// into its own `BadRequestError`.
-const MESSAGES_PROVIDER_RESOLUTION: &str = "messages_provider_resolution";
 /// Why the STS call made for the credentials failed, as `(kind, operation, code, message)`.
 const MESSAGES_STS_FAILURE: &str = "messages_sts_failure";
 /// The `scheme://host:port` of a provider the call could not connect to.
@@ -54,7 +51,8 @@ const MESSAGES_CONNECT_ORIGIN: &str = "messages_connect_origin";
 /// The provider replied with a body litellm refuses to read, which Python raises as `APIError` 500.
 const MESSAGES_REFUSED_REPLY: &str = "messages_refused_reply";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
-/// when only running Python's signing again gives its exception.
+/// when the Bedrock invoke host runs Python's signing again for its exception. The Mantle routes
+/// turn `replay` into `unavailable`, which maps from a fixed class list.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
 
 struct ProviderRejection {
@@ -273,15 +271,6 @@ pub(crate) fn route_failure(
                 Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
-            }
-            if matches!(
-                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::InvalidMantleRegion {
-                    check: litellm_llms::MantleRegionCheck::ProviderResolution,
-                    ..
-                })
-            ) {
-                value.setattr(MESSAGES_PROVIDER_RESOLUTION, true)?;
             }
             if let Some(provider) = provider_rejection(rejection) {
                 value.setattr(MESSAGES_PROVIDER_REJECTION, provider.text)?;
@@ -804,7 +793,6 @@ mod tests {
                 "Invalid AWS region format: 'US-EAST-1'. Region names must contain only lowercase letters, digits, and hyphens."
             );
             let flagged = |name: &str| value.getattr_opt(name).unwrap().is_some();
-            assert_eq!(flagged(MESSAGES_PROVIDER_RESOLUTION), resolving_provider);
             assert_eq!(flagged(MESSAGES_REQUEST_ERROR), resolving_provider);
             assert_eq!(flagged(MESSAGES_PYTHON_RAISED), !resolving_provider);
             assert_eq!(flagged(MESSAGES_LATE_REJECTION), !resolving_provider);
