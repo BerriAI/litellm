@@ -99,18 +99,22 @@ def _priced_only_as_router(short_name: str) -> bool:
     )
 
 
+def _is_router_short_name(short_name: str) -> bool:
+    return (
+        short_name.endswith("-fast")
+        or short_name in ROUTER_SHORT_NAMES
+        or short_name.startswith(f"{FIREROUTER}/")
+        or _priced_only_as_router(short_name)
+    )
+
+
 def resolve_fireworks_resource_name(model: str) -> str:
     stripped: Final = model.removeprefix("fireworks_ai/")
     if stripped.startswith(("accounts/", AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX)) or "#" in stripped:
         return stripped
     if stripped.startswith(("routers/", "models/")):
         return f"accounts/fireworks/{stripped}"
-    if (
-        stripped.endswith("-fast")
-        or stripped in ROUTER_SHORT_NAMES
-        or stripped.startswith(f"{FIREROUTER}/")
-        or _priced_only_as_router(stripped)
-    ):
+    if _is_router_short_name(stripped):
         return f"accounts/fireworks/routers/{stripped}"
     return f"accounts/fireworks/models/{stripped}"
 
