@@ -25,7 +25,7 @@ describe("UsefulLinksManagement", () => {
       litellm_version: "1.0.0",
       useful_links: {},
     });
-    mockedUpdateUsefulLinksCall.mockResolvedValue({});
+    mockedUpdateUsefulLinksCall.mockImplementation(async (_accessToken, useful_links) => ({ useful_links }));
     mockedGetProxyBaseUrl.mockReturnValue("https://proxy.example.com");
   });
 
@@ -89,6 +89,37 @@ describe("UsefulLinksManagement", () => {
         { Docs: { url: "https://docs.example.com", index: 0 } },
       ),
     );
+  });
+
+  it("should show the links the proxy kept after a save from a stale list", async () => {
+    const user = userEvent.setup();
+    const hubInfoInStaleTab = {
+      docs_title: "Docs",
+      custom_docs_description: null,
+      litellm_version: "1.0.0",
+      useful_links: {
+        "qa-one": { url: "https://example.com/one", index: 0 },
+        "qa-two": { url: "https://example.com/two", index: 1 },
+        "qa-three": { url: "https://example.com/three", index: 2 },
+      },
+    };
+    mockedGetPublicModelHubInfo.mockResolvedValue(hubInfoInStaleTab);
+    const keptByProxy = { "qa-three": { url: "https://example.com/three-v2", index: 1 } };
+    mockedUpdateUsefulLinksCall.mockResolvedValueOnce({ useful_links: keptByProxy });
+
+    render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
+    expect(await screen.findByText("qa-one")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("delete-link-0-qa-one"));
+
+    expect(await screen.findByText("https://example.com/three-v2")).toBeInTheDocument();
+    expect(screen.queryByText("qa-one")).not.toBeInTheDocument();
+    expect(screen.queryByText("qa-two")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://example.com/three")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("delete-link-0-qa-three"));
+
+    await waitFor(() => expect(mockedUpdateUsefulLinksCall).toHaveBeenLastCalledWith("token", {}, keptByProxy));
   });
 
   it("should rearrange links and save the new order", async () => {

@@ -1856,9 +1856,9 @@ export const updateUsefulLinksCall = async (
   accessToken: string,
   useful_links: Record<string, string | { url: string; index: number }>,
   previous_useful_links: Record<string, string | { url: string; index: number }>,
-) => {
+): Promise<Pick<PublicModelHubInfo, "useful_links">> => {
   try {
-    return await apiClient.post(`/model_hub/update_useful_links`, {
+    return await apiClient.post<Pick<PublicModelHubInfo, "useful_links">>(`/model_hub/update_useful_links`, {
       accessToken,
       body: { useful_links, previous_useful_links },
     });
