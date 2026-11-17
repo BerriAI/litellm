@@ -6,6 +6,7 @@ from typing import Final, Literal, overload
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import single_log_line
 from litellm.litellm_core_utils.model_cost_table import published
 from litellm.types.cost_map_configs import (
     AnthropicModelOnAnthropicProvider,
@@ -40,7 +41,7 @@ def _is_unbilled_price(key: str, value: object) -> bool:
 
 @lru_cache(maxsize=1024)
 def _warn_once(message: str, config: str, model: str, fields: tuple[str, ...]) -> None:
-    verbose_logger.warning(message, config, model, ", ".join(fields))
+    verbose_logger.warning(message, config, single_log_line(model), single_log_line(", ".join(fields)))
 
 
 def _catalog_row(model: str, custom_llm_provider: str) -> Mapping[str, object]:

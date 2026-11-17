@@ -97,3 +97,10 @@ def test_router_registered_model_does_not_warn(deployment_model, provider, caplo
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         typed_model_config(model, provider)
     assert not caplog.records
+
+
+def test_warning_stays_on_one_log_line(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        typed_model_config("gpt-5.4-mini\nWARNING forged", "openai", {"supports_x\r\nforged": True})
+    assert caplog.records
+    assert not any(char in record.getMessage() for record in caplog.records for char in "\r\n")
