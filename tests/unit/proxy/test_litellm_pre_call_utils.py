@@ -10772,6 +10772,24 @@ class TestResolveUserProviderCredentials:
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
 
     @pytest.mark.asyncio
+    async def test_failed_lookup_still_names_the_calling_user(self, monkeypatch):
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        monkeypatch.setattr(
+            "litellm.proxy.credential_endpoints.user_provider_credentials.aget_user_provider_credentials",
+            AsyncMock(side_effect=RuntimeError("credential lookup failed")),
+        )
+        data = {"model": "copilot-chat", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=self._router(),
+        )
+        assert data["secret_fields"] == {"user_provider_credentials_user_id": "user-a"}, data["secret_fields"]
+
+    @pytest.mark.asyncio
     async def test_service_key_cannot_override_a_per_user_credential(self, monkeypatch):
         """Keys with no user_id must still hit the body check: discovery ran before the
         missing-user return, so a litellm_credential_name override is a 400."""

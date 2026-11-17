@@ -634,7 +634,7 @@ def _connect_error(credential_name: str, problem: str | None = None) -> CallerCr
     return CallerCredentialAuthenticationError(
         message=(
             f"{reason}Connect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials), "
-            f"or run: lite --api-key <this key> credentials connect {credential_name}"
+            f"or run: lite --base-url <proxy URL> --api-key <this key> credentials connect {credential_name}"
         ),
         llm_provider=_LLM_PROVIDER,
         model="",
@@ -675,6 +675,15 @@ def _caller_connection(
         raise _connect_error(
             credential_name,
             "This LiteLLM key is not assigned to a LiteLLM user. Use a key that belongs to your own user.",
+        )
+    if credentials is None:
+        raise CallerCredentialAuthenticationError(
+            message=(
+                f"LiteLLM could not load the stored GitHub Copilot connections for user '{user_id}'. "
+                "Check the proxy logs for the database error and retry."
+            ),
+            llm_provider=_LLM_PROVIDER,
+            model="",
         )
     if not isinstance(token, str) or not token:
         raise _connect_error(

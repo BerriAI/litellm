@@ -497,8 +497,22 @@ def test_attach_sync_injects_session(per_user_credential):
 
 _CONNECT_STEP: Final = (
     "Connect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials), "
-    "or run: lite --api-key <this key> credentials connect copilot-cred"
+    "or run: lite --base-url <proxy URL> --api-key <this key> credentials connect copilot-cred"
 )
+
+
+def test_attach_per_user_when_connections_failed_to_load_does_not_blame_the_key(per_user_credential):
+    kwargs = {
+        "litellm_credential_name": "copilot-cred",
+        "secret_fields": {"user_provider_credentials_user_id": "user-a"},
+    }
+    with pytest.raises(CallerCredentialAuthenticationError) as exc:
+        attach_github_copilot_user_session(kwargs)
+    assert exc.value.status_code == 401
+    assert (
+        "LiteLLM could not load the stored GitHub Copilot connections for user 'user-a'. "
+        "Check the proxy logs for the database error and retry."
+    ) in str(exc.value), str(exc.value)
 
 
 @pytest.mark.parametrize(
