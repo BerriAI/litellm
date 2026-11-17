@@ -1748,29 +1748,36 @@ def test_gemini_finish_reason(respx_mock: respx.MockRouter) -> None:
 GEMINI_TTS_PCM16_FRAMES: Final = bytes(range(256)) * 8
 
 
-def _gemini_tts_wav_with_trailing_chunk(frames: bytes) -> bytes:
+def _gemini_wav_with_trailing_chunk(frames: bytes, channels: int = 1, frame_rate: int = 24000) -> bytes:
     buffer: Final = io.BytesIO()
     with wave.open(buffer, "wb") as wav:
-        wav.setnchannels(1)
+        wav.setnchannels(channels)
         wav.setsampwidth(2)
-        wav.setframerate(24000)
+        wav.setframerate(frame_rate)
         wav.writeframes(frames)
     with_trailing_chunk: Final = buffer.getvalue() + b"C2PA" + struct.pack("<I", 8) + b"manifest"
     return b"RIFF" + struct.pack("<I", len(with_trailing_chunk) - 8) + with_trailing_chunk[8:]
 
 
-def _mock_gemini_tts_audio(respx_mock: respx.MockRouter, mime_type: str, audio: bytes) -> respx.Route:
+GEMINI_TTS_PCM16_FMT_CHUNK: Final = b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 24000, 48000, 2, 16)
+
+
+def _b64(audio: bytes) -> str:
+    return base64.b64encode(audio).decode()
+
+
+def _mock_gemini_audio(
+    respx_mock: respx.MockRouter, mime_type: str, audio_base64: str, model: str = "gemini-3.8-flash-tts"
+) -> respx.Route:
     return respx_mock.post(
-        url__regex=r"https://generativelanguage\.googleapis\.com/v1\w*/models/gemini-3\.8-flash-tts:generateContent.*"
+        url__regex=rf"https://generativelanguage\.googleapis\.com/v1\w*/models/{re.escape(model)}:generateContent.*"
     ).mock(
         return_value=httpx.Response(
             200,
             json={
                 "candidates": [
                     {
-                        "content": {
-                            "parts": [{"inlineData": {"mimeType": mime_type, "data": base64.b64encode(audio).decode()}}]
-                        },
+                        "content": {"parts": [{"inlineData": {"mimeType": mime_type, "data": audio_base64}}]},
                         "finishReason": "STOP",
                     }
                 ],
@@ -1784,16 +1791,17 @@ def _mock_gemini_tts_audio(respx_mock: respx.MockRouter, mime_type: str, audio: 
 @pytest.mark.parametrize(
     ("mime_type", "provider_audio"),
     [
-        ("audio/wav", _gemini_tts_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
+        ("audio/wav", _gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
+        ("audio/WAV ; rate=24000", _gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)),
         ("audio/L16;codec=pcm;rate=24000", GEMINI_TTS_PCM16_FRAMES),
         ("audio/wav", GEMINI_TTS_PCM16_FRAMES),
     ],
-    ids=["wav", "l16", "pcm-labeled-wav"],
+    ids=["wav", "wav-label-with-params", "l16", "pcm-labeled-wav"],
 )
 def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
     respx_mock: respx.MockRouter, mime_type: str, provider_audio: bytes
 ) -> None:
-    _mock_gemini_tts_audio(respx_mock, mime_type, provider_audio)
+    _mock_gemini_audio(respx_mock, mime_type, _b64(provider_audio))
 
     response: Final = completion(
         model="gemini/gemini-3.8-flash-tts",
@@ -1811,7 +1819,7 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
 def test_gemini_tts_speech_wav_holds_only_the_pcm_frames_when_gemini_answers_wav(
     respx_mock: respx.MockRouter,
 ) -> None:
-    _mock_gemini_tts_audio(respx_mock, "audio/wav", _gemini_tts_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
+    _mock_gemini_audio(respx_mock, "audio/wav", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)))
 
     response: Final = litellm.speech(
         model="gemini/gemini-3.8-flash-tts",
@@ -1823,6 +1831,78 @@ def test_gemini_tts_speech_wav_holds_only_the_pcm_frames_when_gemini_answers_wav
 
     with wave.open(io.BytesIO(response.content), "rb") as wav:
         assert wav.readframes(wav.getnframes()) == GEMINI_TTS_PCM16_FRAMES
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("mime_type", "provider_audio_base64"),
+    [
+        ("audio/L16;codec=pcm;rate=24000", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))),
+        ("audio/wav", _b64(b"RIFF")),
+        ("audio/wav", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)).rstrip("=")),
+        (
+            "audio/wav",
+            _b64(
+                b"RIFF"
+                + struct.pack("<I", 36)
+                + b"WAVE"
+                + GEMINI_TTS_PCM16_FMT_CHUNK
+                + b"LIST"
+                + struct.pack("<I", 26)
+                + bytes(26)
+                + b"data"
+                + struct.pack("<I", len(GEMINI_TTS_PCM16_FRAMES))
+                + GEMINI_TTS_PCM16_FRAMES
+            ),
+        ),
+        (
+            "audio/wav",
+            _b64(
+                b"RIFF"
+                + struct.pack("<I", 36 + len(GEMINI_TTS_PCM16_FRAMES))
+                + b"WAVE"
+                + GEMINI_TTS_PCM16_FMT_CHUNK
+                + b"data"
+                + struct.pack("<I", 0)
+                + GEMINI_TTS_PCM16_FRAMES
+            ),
+        ),
+    ],
+    ids=["wav-under-l16-label", "truncated-header", "unpadded-base64", "chunk-past-riff-size", "data-size-placeholder"],
+)
+def test_gemini_tts_chat_audio_passes_through_audio_it_cannot_unwrap(
+    respx_mock: respx.MockRouter, mime_type: str, provider_audio_base64: str
+) -> None:
+    _mock_gemini_audio(respx_mock, mime_type, provider_audio_base64)
+
+    response: Final = completion(
+        model="gemini/gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore", "format": "pcm16"},
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.audio.data == provider_audio_base64
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_music_wav_keeps_its_header_when_it_is_not_pcm16(respx_mock: respx.MockRouter) -> None:
+    stereo_48khz_wav: Final = _b64(
+        _gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES, channels=2, frame_rate=48000)
+    )
+    _mock_gemini_audio(respx_mock, "audio/wav", stereo_48khz_wav, model="lyria-3.5")
+
+    response: Final = completion(
+        model="gemini/lyria-3.5",
+        messages=[{"role": "user", "content": "A short piano loop"}],
+        modalities=["audio"],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.audio.data == stereo_48khz_wav
 
 
 @pytest.mark.respx(assert_all_called=True)

@@ -423,16 +423,24 @@ def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
     return _mpeg_audio_frame_media_type(audio)
 
 
-def _wav_frames(audio: bytes) -> bytes | None:
+_PCM16_WAV_SHAPE: Final = (1, 2, 24000)
+
+
+def _pcm16_wav_frames(audio: bytes) -> bytes | None:
     try:
         with wave.open(io.BytesIO(audio), "rb") as wav:
-            return wav.readframes(wav.getnframes())
-    except (wave.Error, EOFError):
+            shape: Final = (wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+            return wav.readframes(wav.getnframes()) if shape == _PCM16_WAV_SHAPE else None
+    except (wave.Error, EOFError, RuntimeError):
         return None
 
 
 def as_raw_pcm16_base64(media_type: str, audio_base64: str) -> str:
     if media_type.partition(";")[0].strip().lower() != FILE_MIME_TYPES[FileType.WAV]:
         return audio_base64
-    frames: Final = _wav_frames(base64.b64decode(audio_base64))
-    return audio_base64 if frames is None else base64.b64encode(frames).decode("ascii")
+    try:
+        audio: Final = base64.b64decode(audio_base64)
+    except binascii.Error:
+        return audio_base64
+    frames: Final = _pcm16_wav_frames(audio)
+    return base64.b64encode(frames).decode("ascii") if frames else audio_base64
