@@ -261,6 +261,23 @@ async def test_generation__route_type_data_and_no_provider_default(harness):
 
 
 @pytest.mark.asyncio
+async def test_generation_preserves_first_class_video_fields(harness: Harness) -> None:
+    body: Final = {
+        "model": "queue-video/model",
+        "prompt": "a cat",
+        "duration": 8,
+        "aspect_ratio": "16:9",
+        "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+        "input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
+        "generate_audio": False,
+        "seed": 0,
+    }
+    response: Final = await call_generation(harness, body=body)
+    assert response is SENTINEL
+    assert harness.processor_data() == body
+
+
+@pytest.mark.asyncio
 async def test_generation__input_reference_attached(harness):
     body = {"model": "sora-2", "prompt": "a sunset"}
     upload = MagicMock(name="upload_file")

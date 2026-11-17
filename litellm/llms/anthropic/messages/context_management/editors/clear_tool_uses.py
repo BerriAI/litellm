@@ -74,6 +74,7 @@ class _ClearToolUsesFields(BaseModel):
     clear_tool_inputs: bool | tuple[str, ...] | None = None
 
 
+_BLOCK: Final = TypeAdapter(Mapping[str, object])
 _BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 # api.anthropic.com, measured 2026-10-19 and 2026-10-28: its wording for the shapes pydantic words differently
 _API_MESSAGES: Final = MappingProxyType(
@@ -317,12 +318,10 @@ def _clear_tool_results(
         new_blocks: list[object] = []
         mutated = False
         for block in content:
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "tool_result"
-                and block.get("tool_use_id") in ids_to_clear
-            ):
-                new_blocks.append(_cleared_result(block))
+            if (parsed := _parse(_BLOCK, block)) is not None and _block_id(
+                parsed, "tool_result", "tool_use_id"
+            ) in ids_to_clear:
+                new_blocks.append(_cleared_result(parsed))
                 mutated = True
                 cleared += 1
             else:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 import threading
@@ -811,6 +812,27 @@ def _ingest_signatures(prefix: str, api_key: str, store_id: str) -> tuple[Signat
     )
 
 
+def _ingested_file_id(response: httpx.Response) -> str:
+    return string_value(JSON_OBJECT.validate_json(response.content)["file_id"])
+
+
+def _provider_file_id(response: httpx.Response) -> str:
+    managed_file_id: Final = _ingested_file_id(response)
+    decoded: Final = base64.urlsafe_b64decode(managed_file_id + "=" * (-len(managed_file_id) % 4)).decode()
+    provider_file_id: Final = re.search(r";llm_output_file_id,([^;]+)", decoded)
+    assert provider_file_id is not None, decoded
+    return provider_file_id[1]
+
+
+def _registered_ingest_signatures(
+    prefix: str, api_key: str, store_id: str, response: httpx.Response
+) -> tuple[Signature, ...]:
+    return (
+        *_ingest_signatures(prefix, api_key, store_id),
+        (prefix, "GET", f"/v1/files/{_provider_file_id(response)}", f"Bearer {api_key}"),
+    )
+
+
 def _search_signature(prefix: str, api_key: str, store_id: str) -> Signature:
     return (prefix, "POST", f"/v1/vector_stores/{store_id}/search", f"Bearer {api_key}")
 
@@ -842,8 +864,9 @@ def _closed_url() -> str:
 
 def test_viewer_ingest_and_team_and_jwt_query_use_team_provider_credentials(rag_rig: RagRig) -> None:
     tenants: Final = rag_rig.tenants
-    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, tenants.viewer_key))
-    assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
+    ingested: Final = _ingest(rag_rig.gateway, tenants.viewer_key)
+    store_id: Final = _completed_store(rag_rig, ingested)
+    assert rag_rig.signatures() == _registered_ingest_signatures("team", TEAM_API_KEY, store_id, ingested)
 
     team_query: Final = _query(
         rag_rig.gateway, tenants.team_a_key, tenants.team_a_model, {**OPENAI, "vector_store_id": store_id}
@@ -898,10 +921,9 @@ def test_unreachable_credential_api_base_fails_ingest_without_saving_a_store(rag
 
 
 def test_rag_alias_ingest_and_query_use_the_team_wildcard_deployment(rag_rig: RagRig) -> None:
-    store_id: Final = _completed_store(
-        rag_rig, _ingest(rag_rig.gateway, rag_rig.tenants.team_w_key, path="/rag/ingest")
-    )
-    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
+    ingested: Final = _ingest(rag_rig.gateway, rag_rig.tenants.team_w_key, path="/rag/ingest")
+    store_id: Final = _completed_store(rag_rig, ingested)
+    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
     rows: Final = _store_rows(store_id)
     assert len(rows) == 1, rows
     assert WILDCARD_API_KEY not in json.dumps(rows), rows
@@ -924,9 +946,10 @@ def test_rag_alias_ingest_and_query_use_the_team_wildcard_deployment(rag_rig: Ra
 def test_jwt_team_member_ingest_uses_team_provider_credentials(rag_rig: RagRig) -> None:
     token: Final = rag_rig.jwt(rag_rig.tenants.jwt_member, rag_rig.tenants.team_a)
 
-    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, token))
+    ingested: Final = _ingest(rag_rig.gateway, token)
+    store_id: Final = _completed_store(rag_rig, ingested)
 
-    assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
+    assert rag_rig.signatures() == _registered_ingest_signatures("team", TEAM_API_KEY, store_id, ingested)
     rows: Final = _store_rows(store_id)
     assert [row["team_id"] for row in rows] == [rag_rig.tenants.team_a], rows
 
@@ -963,10 +986,9 @@ def test_caller_api_key_or_api_base_on_ingest_is_rejected_before_any_upstream_ca
 def test_blank_caller_credential_name_falls_back_to_the_team_deployment(rag_rig: RagRig, blank: str | None) -> None:
     tenants: Final = rag_rig.tenants
 
-    store_id: Final = _completed_store(
-        rag_rig, _ingest(rag_rig.gateway, tenants.team_a_key, {**OPENAI, "litellm_credential_name": blank})
-    )
-    assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
+    ingested: Final = _ingest(rag_rig.gateway, tenants.team_a_key, {**OPENAI, "litellm_credential_name": blank})
+    store_id: Final = _completed_store(rag_rig, ingested)
+    assert rag_rig.signatures() == _registered_ingest_signatures("team", TEAM_API_KEY, store_id, ingested)
 
     response: Final = _query(
         rag_rig.gateway, tenants.team_a_key, tenants.team_a_model, {**OPENAI, "vector_store_id": store_id}
@@ -1015,8 +1037,10 @@ def test_key_restricted_to_a_model_under_the_team_wildcard_uses_the_team_deploym
 ) -> None:
     key: Final = getattr(rag_rig.tenants, caller)
 
-    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, key))
+    ingested: Final = _ingest(rag_rig.gateway, key)
+    store_id: Final = _completed_store(rag_rig, ingested)
     assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
+    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
     rows: Final = _store_rows(store_id)
     assert [row["team_id"] for row in rows] == [rag_rig.tenants.team_w], rows
     assert WILDCARD_API_KEY not in json.dumps(rows), rows
@@ -1033,8 +1057,10 @@ def test_key_restricted_to_a_model_under_the_team_wildcard_uses_the_team_deploym
 def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and_chat(rag_rig: RagRig) -> None:
     tenants: Final = rag_rig.tenants
 
-    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, tenants.wildcard_global_key))
+    ingested: Final = _ingest(rag_rig.gateway, tenants.wildcard_global_key)
+    store_id: Final = _completed_store(rag_rig, ingested)
     assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
+    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
 
     response: Final = _query(
         rag_rig.gateway, tenants.wildcard_global_key, tenants.global_model, {**OPENAI, "vector_store_id": store_id}
@@ -1252,8 +1278,9 @@ def test_azure_query_never_receives_the_team_openai_key(rag_rig: RagRig) -> None
 
 def test_another_team_cannot_query_a_team_store(rag_rig: RagRig) -> None:
     tenants: Final = rag_rig.tenants
-    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, tenants.team_a_key))
-    assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
+    ingested: Final = _ingest(rag_rig.gateway, tenants.team_a_key)
+    store_id: Final = _completed_store(rag_rig, ingested)
+    assert rag_rig.signatures() == _registered_ingest_signatures("team", TEAM_API_KEY, store_id, ingested)
 
     response: Final = _query(
         rag_rig.gateway, tenants.team_w_key, WILDCARD_MODEL, {**OPENAI, "vector_store_id": store_id}
@@ -1380,8 +1407,12 @@ def _burst_names() -> tuple[str, ...]:
     return tuple(f"rag-burst-{uuid.uuid4().hex}" for _ in range(10))
 
 
-def _all_ingest_signatures(store_ids: Iterable[str]) -> list[Signature]:
-    return sorted(chain.from_iterable(_ingest_signatures("team", TEAM_API_KEY, store_id) for store_id in store_ids))
+def _all_ingest_signatures(ingests: Iterable[tuple[str, httpx.Response]]) -> list[Signature]:
+    return sorted(
+        chain.from_iterable(
+            _registered_ingest_signatures("team", TEAM_API_KEY, store_id, response) for store_id, response in ingests
+        )
+    )
 
 
 async def test_ingest_burst_during_a_provider_outage_fails_each_request_then_recovers(rag_rig: RagRig) -> None:
@@ -1401,7 +1432,7 @@ async def test_ingest_burst_during_a_provider_outage_fails_each_request_then_rec
 
     store_ids: Final = tuple(_completed_store(rag_rig, response) for response in recovered)
     assert len(frozenset(store_ids)) == 10, store_ids
-    assert sorted(rag_rig.signatures()) == _all_ingest_signatures(store_ids)
+    assert sorted(rag_rig.signatures()) == _all_ingest_signatures(zip(store_ids, recovered, strict=True))
     assert [[row["team_id"] for row in _store_rows(store_id)] for store_id in store_ids] == [
         [rag_rig.tenants.team_a]
     ] * 10
@@ -1502,19 +1533,19 @@ async def test_worker_sigkill_mid_query_burst_leaves_the_sibling_on_team_credent
 
 def _ingest_and_drain(
     gateway: Gateway, scenario: Scenario, key: str, upstream: Wire
-) -> tuple[str, tuple[Signature, ...]]:
+) -> tuple[str, httpx.Response, tuple[Signature, ...]]:
     upstream.drain()
     response: Final = _ingest(gateway, key)
     assert response.status_code == 200, response.text
     store_id: Final = string_value(object_value(response.json())["vector_store_id"])
     scenario.cleanups.callback(gateway.post, "/vector_store/delete", {"vector_store_id": store_id})
     calls: Final = tuple(_call(request) for request in upstream.drain())
-    return store_id, tuple(call.signature for call in calls if call.route != "/v1/models")
+    return store_id, response, tuple(call.signature for call in calls if call.route != "/v1/models")
 
 
 def _ingests_after_editing(
     gateway: Gateway, scenario: Scenario, key: str, upstream: Wire, model_id: str
-) -> tuple[tuple[str, tuple[Signature, ...]], ...]:
+) -> tuple[tuple[str, httpx.Response, tuple[Signature, ...]], ...]:
     edited: Final = gateway.request("PATCH", f"/model/{model_id}/update", {"litellm_params": {"timeout": 30}})
     assert edited.status_code == 200, edited.text
     return tuple(_ingest_and_drain(gateway, scenario, key, upstream) for _ in range(4))
@@ -1577,8 +1608,9 @@ def test_a_team_with_two_openai_deployments_keeps_ingesting_through_the_older_on
                 *_ingests_after_editing(gateway, owned_scenario, key, upstream, other_id),
             )
 
-            assert [calls for _, calls in ingests] == [
-                _ingest_signatures(picked_prefix, picked_key, store_id) for store_id, _ in ingests
+            assert [calls for _, _, calls in ingests] == [
+                _registered_ingest_signatures(picked_prefix, picked_key, store_id, response)
+                for store_id, response, _ in ingests
             ]
 
 
@@ -1604,9 +1636,13 @@ def test_ingest_into_a_managed_store_uses_its_own_key_else_the_team_key(
         assert response.status_code == 200, response.text
         assert object_value(response.json())["vector_store_id"] == store_id, response.text
         bearer: Final = f"Bearer {api_key}"
+        team_key_registration: Final = (
+            ((prefix, "GET", f"/v1/files/{_provider_file_id(response)}", bearer),) if stored == "null_key" else ()
+        )
         assert rag_rig.signatures() == (
             (prefix, "POST", "/v1/files", bearer),
             (prefix, "POST", f"/v1/vector_stores/{store_id}/files", bearer),
+            *team_key_registration,
         )
 
 

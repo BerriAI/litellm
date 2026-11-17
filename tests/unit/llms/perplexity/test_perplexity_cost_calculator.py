@@ -6,9 +6,12 @@ search queries, and reasoning tokens.
 """
 
 import json
+import logging
 import math
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -90,6 +93,45 @@ class TestPerplexityCostCalculator:
             assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
             assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
+    @pytest.mark.parametrize(
+        ("cache_read_rate", "expected_cached_rate"),
+        [
+            pytest.param(1e-07, 1e-07, id="cache_read_rate_set"),
+            pytest.param(0.0, 0.0, id="cache_read_rate_zero"),
+            pytest.param(None, 1e-06, id="no_cache_read_rate_keeps_input_rate"),
+        ],
+    )
+    def test_fallback_bills_cached_prompt_tokens_at_the_cache_read_rate(
+        self, monkeypatch: pytest.MonkeyPatch, cache_read_rate: float | None, expected_cached_rate: float
+    ):
+        """
+        Regression: with no usage.cost in the response, cached prompt tokens were billed at
+        input_cost_per_token and the model's cache_read_input_token_cost was never read.
+        """
+        model: Final = "sonar-cached-prompt-test"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"perplexity/{model}",
+            {
+                "litellm_provider": "perplexity",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 5e-06,
+                **({} if cache_read_rate is None else {"cache_read_input_token_cost": cache_read_rate}),
+            },
+        )
+        usage: Final = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            total_tokens=1010,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=900),
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=model, usage=usage)
+
+        assert math.isclose(prompt_cost, 100 * 1e-06 + 900 * expected_cached_rate, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 10 * 5e-06, rel_tol=1e-10)
+
     def test_uses_perplexity_provided_cost_when_available(self):
         """
         Test that when Perplexity provides pre-calculated cost in usage.cost.total_cost,
@@ -117,7 +159,8 @@ class TestPerplexityCostCalculator:
         assert completion_cost == 0.008
         assert prompt_cost + completion_cost == 0.008
 
-    def test_uses_perplexity_provided_cost_when_normalized_to_float(self):
+    @pytest.mark.parametrize("reported_cost", (0.0, 0.008))
+    def test_uses_perplexity_provided_cost_when_normalized_to_float(self, reported_cost: float):
         """
         Regression: for Responses API / Agent API models, `ResponseAPIUsage.parse_cost`
         (litellm/types/llms/openai.py) already flattens Perplexity's
@@ -133,12 +176,75 @@ class TestPerplexityCostCalculator:
         perplexity/openai/gpt-5.2 before rates existed).
         """
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-        usage.cost = 0.008
+        usage.cost = reported_cost
 
         prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
 
         assert prompt_cost == 0.0
-        assert completion_cost == 0.008
+        assert completion_cost == reported_cost
+
+    @pytest.mark.parametrize(
+        ("legacy_pricing", "expected_search_rate"),
+        (
+            pytest.param({}, 0.01, id="missing"),
+            pytest.param({"search_queries_cost_per_query": None}, 0.01, id="null"),
+            pytest.param({"search_queries_cost_per_query": 0.0}, 0.0, id="free"),
+            pytest.param({"search_queries_cost_per_query": 0.004}, 0.004, id="paid"),
+        ),
+    )
+    def test_search_cost_preserves_zero_and_defaults_only_when_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        legacy_pricing: Mapping[str, float | None],
+        expected_search_rate: float,
+    ) -> None:
+        model: Final = "perplexity/search-pricing-fixture"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {
+                "litellm_provider": "perplexity",
+                "mode": "chat",
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 8e-6,
+                "output_cost_per_reasoning_token": 3e-6,
+                "citation_cost_per_token": 2e-6,
+                "search_context_cost_per_query": {"search_context_size_low": 0.01},
+                **legacy_pricing,
+            },
+        )
+        usage: Final = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=10),
+            citation_tokens=25,
+        )
+
+        prompt_cost, completion_cost = litellm.cost_per_token(model=model, usage_object=usage)
+
+        assert prompt_cost == pytest.approx((100 + 25) * 2e-6)
+        assert completion_cost == pytest.approx(40 * 8e-6 + 10 * 3e-6 + 2 * expected_search_rate)
+
+    @pytest.mark.parametrize(
+        "reported_cost",
+        [float("nan"), float("inf"), {"total_cost": float("nan")}],
+        ids=["nan", "inf", "nan-total-cost-dict"],
+    )
+    def test_a_non_finite_perplexity_cost_is_priced_like_no_reported_cost_with_a_warning(
+        self, reported_cost: float | dict, caplog: pytest.LogCaptureFixture
+    ):
+        unreported: Final = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        reported: Final = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        reported.cost = reported_cost
+
+        token_priced: Final = perplexity_cost_per_token(model="sonar-pro", usage=unreported)
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            reported_priced: Final = perplexity_cost_per_token(model="sonar-pro", usage=reported)
+
+        assert sum(token_priced) > 0
+        assert reported_priced == token_priced
+        assert [record for record in caplog.records if "non-finite provider-reported cost" in record.getMessage()]
 
     OFF_PEAK_MODEL = "sonar-off-peak-test"
     OFF_PEAK_WINDOW = "14:00-00:00"
@@ -181,6 +287,47 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(peak_prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
         assert math.isclose(peak_completion_cost, 200 * 1e-06, rel_tol=1e-10)
+
+    @pytest.mark.parametrize(
+        ("off_peak_cache_read_rate", "expected_cached_rate"),
+        [
+            pytest.param(1e-08, 1e-08, id="off_peak_cache_read_rate_set"),
+            pytest.param(None, 1e-07, id="no_cache_read_rate_keeps_off_peak_input_rate"),
+        ],
+    )
+    def test_off_peak_cache_read_rate_applies_without_a_standard_cache_read_rate(
+        self, off_peak_cache_read_rate: float | None, expected_cached_rate: float
+    ):
+        """A model whose only cache read rate lives in off_peak_pricing bills cached prompt tokens
+        at it inside the window, and at the off-peak input rate when the block has none either."""
+        self._register_off_peak_model(
+            {
+                "hours_utc": self.OFF_PEAK_WINDOW,
+                "input_cost_per_token": 1e-07,
+                "output_cost_per_token": 2e-07,
+                **(
+                    {}
+                    if off_peak_cache_read_rate is None
+                    else {"cache_read_input_token_cost": off_peak_cache_read_rate}
+                ),
+            }
+        )
+        usage: Final = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=900),
+        )
+
+        prompt_cost, _ = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
+        )
+        peak_prompt_cost, _ = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, 100 * 1e-07 + 900 * expected_cached_rate, rel_tol=1e-10)
+        assert math.isclose(peak_prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
 
     def test_off_peak_rates_leave_citation_search_and_reasoning_fees_alone(self):
         """Inside the window only the plain input and output rates change: citation tokens, the
