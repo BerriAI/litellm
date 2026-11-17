@@ -5,7 +5,7 @@
 - Filters the caller's and derived betas through the `vertex_ai` row of `anthropic_beta_headers_config.json`, never derives `structured-outputs`, and strips `output_config.effort` for models that do not accept it
 - Always mints a Google token and sets it under Python's exact `Authorization` key, so a caller `Authorization` is replaced and an `authorization` in another casing is sent beside it
 - Folds an object `output_format` into `output_config.format` after the version check and refuses any other value with Python's `UnsupportedParamsError` text
-- Builds a custom `api_base` URL with Python's `urlparse` rules, including the doubled version for a base ending in `/v1` or `/v1beta1`
+- Builds a custom `api_base` URL with a narrow splitter that matches Python's URL for every realistic base (pinned by `testdata/python_urls.json`) and deliberately keeps the doubled version for a base ending in `/v1` or `/v1beta1`. Bases with `;params` or control characters differ from Python by owner ruling
 
 # references
 

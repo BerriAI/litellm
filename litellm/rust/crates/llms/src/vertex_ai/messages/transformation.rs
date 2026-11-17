@@ -296,6 +296,8 @@ pub fn complete_vertex_anthropic_url(
     };
     let default_url = join_api_base(custom, &route);
     let base_path = urlsplit(custom).path;
+    // The `/v1` / `/v1beta1` branch deliberately keeps Python's doubled version segment
+    // (`/v1/v1/projects/...`) so existing gateway setups keep working (owner ruling 2026-11-17).
     let url = if base_path.is_empty() || base_path == "/" {
         join_api_base(custom, urlsplit(&default_url).path)
     } else if matches!(base_path.trim_end_matches('/'), "/v1" | "/v1beta1")
