@@ -15,6 +15,31 @@ from litellm.llms.github_copilot.per_user_auth import (
 )
 
 
+@pytest.mark.parametrize("api_version", (None, "2026-08-01", "", " \t\n"))
+def test_messages_api_version_is_read_at_request_time(monkeypatch: pytest.MonkeyPatch, api_version: str | None) -> None:
+    config: Final = GithubCopilotAnthropicMessagesConfig()
+    session: Final = GithubCopilotUserSession(token="test-token", api_base="https://api.githubcopilot.com")
+    monkeypatch.delenv("GITHUB_COPILOT_API_VERSION", raising=False)
+    initial_headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-sonnet-5.5",
+        messages=[],
+        optional_params={},
+        litellm_params={GITHUB_COPILOT_USER_SESSION_KWARG_KEY: session},
+    )
+    assert initial_headers["x-github-api-version"] == "2026-06-01"
+    if api_version is not None:
+        monkeypatch.setenv("GITHUB_COPILOT_API_VERSION", api_version)
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-sonnet-5.5",
+        messages=[],
+        optional_params={},
+        litellm_params={GITHUB_COPILOT_USER_SESSION_KWARG_KEY: session},
+    )
+    assert headers["x-github-api-version"] == ((api_version or "").strip() or "2026-06-01")
+
+
 def test_github_copilot_anthropic_messages_get_complete_url():
     """get_complete_url builds the /v1/messages URL from the base it is handed.
 

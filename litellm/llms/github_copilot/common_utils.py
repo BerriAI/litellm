@@ -2,6 +2,7 @@
 Constants for Copilot integration
 """
 
+import os
 from collections.abc import MutableMapping
 from typing import Final
 from uuid import uuid4
@@ -62,7 +63,7 @@ def get_copilot_default_headers(
         "editor-plugin-version": EDITOR_PLUGIN_VERSION,
         "user-agent": USER_AGENT,
         "openai-intent": "conversation-panel",
-        "x-github-api-version": API_VERSION,
+        "x-github-api-version": os.getenv("GITHUB_COPILOT_API_VERSION", "").strip() or API_VERSION,
         "x-request-id": str(uuid4()),
         "x-vscode-user-agent-library-version": "electron-fetch",
     }
