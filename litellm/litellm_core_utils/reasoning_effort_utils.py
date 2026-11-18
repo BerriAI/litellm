@@ -124,16 +124,23 @@ _EFFORT_RANK_UNDER_A_BUDGET: Final = MappingProxyType(
 )
 
 
-def explicit_effort_fits_thinking_budget(explicit_effort: object, budget_effort: str | None) -> bool:
-    if explicit_effort == PROVIDER_DEFAULT_REASONING_EFFORT:
+def _whole_token_budget(thinking: Mapping[str, object]) -> int | float | None:
+    budget: Final = thinking.get("budget_tokens")
+    if isinstance(budget, bool) or not isinstance(budget, (int, float)):
+        return None
+    return budget if (isinstance(budget, int) or budget.is_integer()) and budget >= 1 else None
+
+
+def explicit_effort_fits_thinking_budget(explicit_effort: object, thinking: Mapping[str, object]) -> bool:
+    budget: Final = _whole_token_budget(thinking)
+    if explicit_effort == PROVIDER_DEFAULT_REASONING_EFFORT or budget is None:
         return False
     explicit_rank: Final = (
         _EFFORT_RANK_UNDER_A_BUDGET.get(explicit_effort) if isinstance(explicit_effort, str) else None
     )
-    if explicit_rank is None:
-        return True
-    budget_rank: Final = _EFFORT_RANK_UNDER_A_BUDGET.get(budget_effort) if budget_effort is not None else None
-    return budget_rank is not None and explicit_rank <= budget_rank
+    return explicit_rank is None or (
+        explicit_rank <= _EFFORT_RANK_UNDER_A_BUDGET[reasoning_effort_from_thinking_budget(budget)]
+    )
 
 
 def non_numeric_thinking_budget_error(budget: object) -> UnsupportedParamsError:

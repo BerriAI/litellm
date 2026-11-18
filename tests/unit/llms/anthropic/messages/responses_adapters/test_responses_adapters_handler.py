@@ -2200,3 +2200,76 @@ async def test_an_effort_the_request_model_info_declares_still_wins_below_the_th
     )
 
     assert json.loads(route.calls.last.request.read()).get("reasoning") == {"effort": "minimal"}
+
+
+NOT_A_WHOLE_TOKEN_COUNT: Final = (
+    pytest.param({"type": "enabled", "budget_tokens": float("inf")}, id="inf"),
+    pytest.param({"type": "enabled", "budget_tokens": float("nan")}, id="nan"),
+    pytest.param({"type": "enabled", "budget_tokens": -5}, id="negative"),
+    pytest.param({"type": "enabled", "budget_tokens": 0}, id="zero"),
+    pytest.param({"type": "enabled", "budget_tokens": 3.5}, id="fractional"),
+    pytest.param({"type": "enabled"}, id="missing"),
+    pytest.param({"type": "enabled", "budget_tokens": True}, id="bool"),
+)
+
+
+async def _bridged_outcome_and_drop_warnings(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, **params: object
+) -> tuple[object, list[str]]:
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        outcome: Final = await _bridged_outcome(respx_mock, monkeypatch, **params)
+    return outcome, _drop_warnings(caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("effort", ["none", "low"])
+@pytest.mark.parametrize("thinking", NOT_A_WHOLE_TOKEN_COUNT)
+@pytest.mark.parametrize(
+    "bridged_model, takes_none", [(BRIDGED_MODEL, True), (O_SERIES_MODEL, False)], ids=["gpt", "o-series"]
+)
+async def test_a_budget_that_is_not_a_whole_token_count_ignores_the_explicit_effort_on_the_responses_bridge(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    bridged_model: str,
+    takes_none: bool,
+    thinking: Mapping[str, object],
+    effort: str,
+    drop_params: bool,
+) -> None:
+    _with_effort_flags(monkeypatch, model=bridged_model, supports_none_reasoning_effort=takes_none)
+    budget_only: Final = await _bridged_outcome_and_drop_warnings(
+        respx_mock, monkeypatch, caplog, bridged_model=bridged_model, thinking=dict(thinking), drop_params=drop_params
+    )
+
+    explicit: Final = await _bridged_outcome_and_drop_warnings(
+        respx_mock,
+        monkeypatch,
+        caplog,
+        bridged_model=bridged_model,
+        thinking=dict(thinking),
+        output_config={"effort": effort},
+        drop_params=drop_params,
+    )
+
+    assert explicit == budget_only
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_tokens", [1, 1.0, 2048.0])
+async def test_an_explicit_effort_below_a_whole_token_budget_wins_however_the_count_is_written_on_the_responses_bridge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, budget_tokens: float
+) -> None:
+    _with_effort_flags(monkeypatch, supports_none_reasoning_effort=True)
+
+    sent: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        None,
+        thinking={"type": "enabled", "budget_tokens": budget_tokens},
+        output_config={"effort": "none"},
+    )
+
+    assert sent == {"effort": "none"}

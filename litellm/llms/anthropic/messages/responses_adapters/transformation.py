@@ -82,7 +82,7 @@ def _reasoning_effort(
             return explicit_effort or "medium"
         case "enabled":
             budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
-            if explicit_effort and explicit_effort_fits_thinking_budget(explicit_effort, budget_effort):
+            if explicit_effort and explicit_effort_fits_thinking_budget(explicit_effort, thinking):
                 return explicit_effort
             return budget_effort
         case _:
@@ -574,9 +574,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         Convert Anthropic thinking param to Responses API reasoning param.
 
         An explicit ``output_config.effort`` wins on adaptive thinking, and beside
-        ``thinking.budget_tokens`` only when it is at or below the budget's effort,
-        which the shared ``reasoning_effort_from_thinking_budget`` thresholds give.
-        Adaptive thinking defaults to medium.
+        ``thinking.budget_tokens`` only when the budget is a whole number of at least
+        one token and the effort is at or below the budget's effort, which the shared
+        ``reasoning_effort_from_thinking_budget`` thresholds give. Adaptive thinking
+        defaults to medium.
         """
         if not isinstance(thinking, dict):
             return None

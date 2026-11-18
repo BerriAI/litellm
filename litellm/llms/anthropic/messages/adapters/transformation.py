@@ -1362,7 +1362,6 @@ class LiteLLMAnthropicMessagesAdapter:
             if self._explicit_effort_applies(
                 thinking_config,
                 explicit_effort,
-                budget_effort=budget_effort,
                 model=model,
                 is_claude_target=is_claude_target,
                 custom_llm_provider=custom_llm_provider,
@@ -1394,7 +1393,6 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking: Mapping[str, object],
         explicit_effort: object,
         *,
-        budget_effort: str | None,
         model: str,
         is_claude_target: bool,
         custom_llm_provider: str | None,
@@ -1412,7 +1410,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 and not is_claude_target
                 and explicit_effort_goes_out_within_budget(
                     explicit_effort,
-                    budget_effort,
+                    thinking,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     deployment_model_info=deployment_model_info,

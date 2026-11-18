@@ -7303,3 +7303,69 @@ async def test_an_effort_the_request_model_info_declares_still_wins_below_the_th
     )
 
     assert target.sent_effort(json.loads(route.calls.last.request.read())) == "minimal"
+
+
+_NOT_A_WHOLE_TOKEN_COUNT: Final = (
+    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": float("inf")}), id="inf"),
+    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": float("nan")}), id="nan"),
+    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": -5}), id="negative"),
+    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": 0}), id="zero"),
+    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": 3.5}), id="fractional"),
+    pytest.param(MappingProxyType({"type": "enabled"}), id="missing"),
+    pytest.param(MappingProxyType({"type": "enabled", "budget_tokens": True}), id="bool"),
+)
+_TARGETS_BY_NONE_SUPPORT: Final = (
+    pytest.param(_OPENAI_WITH_STOP_SEQUENCES, True, id="openai-stop-sequences"),
+    pytest.param(_OPENAI_WITH_CHAT_COMPLETIONS_URL, True, id="openai-chat-completions-url"),
+    pytest.param(_AZURE_CHAT_COMPLETIONS, True, id="azure-chat-completions"),
+    pytest.param(_AZURE_O3_CHAT_COMPLETIONS, False, id="azure-o3"),
+    pytest.param(_OPENAI_O3_WITH_CHAT_COMPLETIONS_URL, False, id="openai-o3-chat-completions-url"),
+)
+
+
+async def _chat_adapter_outcome_and_drop_warnings(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: _ChatAdapterTarget,
+    **params: object,
+) -> tuple[object, list[str]]:
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        outcome: Final = await _chat_adapter_outcome(respx_mock, monkeypatch, target, **params)
+    return outcome, _chat_adapter_drop_warnings(caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("effort", ["none", "low"])
+@pytest.mark.parametrize("thinking", _NOT_A_WHOLE_TOKEN_COUNT)
+@pytest.mark.parametrize("target, takes_none", _TARGETS_BY_NONE_SUPPORT)
+async def test_a_budget_that_is_not_a_whole_token_count_ignores_the_explicit_effort_on_the_chat_adapter(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: _ChatAdapterTarget,
+    takes_none: bool,
+    thinking: Mapping[str, object],
+    effort: str,
+    drop_params: bool,
+) -> None:
+    _with_effort_flags(monkeypatch, target.model.removeprefix("azure/"))
+    _with_effort_flags(monkeypatch, target.model, supports_none_reasoning_effort=takes_none)
+    budget_only: Final = await _chat_adapter_outcome_and_drop_warnings(
+        respx_mock, monkeypatch, caplog, target, thinking=thinking, drop_params=drop_params
+    )
+
+    explicit: Final = await _chat_adapter_outcome_and_drop_warnings(
+        respx_mock,
+        monkeypatch,
+        caplog,
+        target,
+        thinking=thinking,
+        output_config={"effort": effort},
+        drop_params=drop_params,
+    )
+
+    assert explicit == budget_only

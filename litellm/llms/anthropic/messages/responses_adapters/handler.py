@@ -30,9 +30,6 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     drops_explicit_reasoning_effort,
     model_group_from_metadata,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import (
-    reasoning_effort_from_thinking_silently,
-)
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
@@ -344,7 +341,7 @@ def _deployment_output_config(
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
     if explicit_effort_goes_out_within_budget(
         output_config.get("effort"),
-        reasoning_effort_from_thinking_silently(thinking, drop_params=True),
+        thinking,
         model=model,
         custom_llm_provider=provider if isinstance(provider, str) else None,
         deployment_model_info=forwarded_kwargs.get("model_info"),

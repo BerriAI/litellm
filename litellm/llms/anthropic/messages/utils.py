@@ -296,7 +296,7 @@ def normalize_reasoning_effort_value(
 
 def explicit_effort_goes_out_within_budget(
     explicit_effort: object,
-    budget_effort: str | None,
+    thinking: Mapping[str, object],
     *,
     model: str,
     custom_llm_provider: str | None,
@@ -312,7 +312,7 @@ def explicit_effort_goes_out_within_budget(
         if isinstance(explicit_effort, str)
         else explicit_effort
     )
-    return explicit_effort_fits_thinking_budget(outgoing_effort, budget_effort)
+    return explicit_effort_fits_thinking_budget(outgoing_effort, thinking)
 
 
 def reasoning_chat_config(model: str, custom_llm_provider: str, base_model: str | None) -> "BaseConfig | None":
