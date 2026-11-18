@@ -1345,7 +1345,9 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
-    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
+        _get_proxy_server_request_for_spend_logs_payload,
+    )
 
     monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
     messages: Final = [{"role": "user", "content": "email probe@example.invalid"}]

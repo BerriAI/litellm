@@ -17,8 +17,33 @@ use crate::{Error, MAX_DEPTH, Value, repr::float_repr};
 
 /// `json.dumps(value)`.
 pub fn dumps(value: &Value) -> Result<String, Error> {
+    dumps_with(value, DEFAULT_SEPARATORS)
+}
+
+/// `json.dumps(value, separators=(",", ":"))`.
+pub fn dumps_compact(value: &Value) -> Result<String, Error> {
+    dumps_with(value, COMPACT_SEPARATORS)
+}
+
+/// The item and key separators `json.dumps` writes between values.
+#[derive(Clone, Copy)]
+struct Separators {
+    item: &'static str,
+    key: &'static str,
+}
+
+const DEFAULT_SEPARATORS: Separators = Separators {
+    item: ", ",
+    key: ": ",
+};
+const COMPACT_SEPARATORS: Separators = Separators {
+    item: ",",
+    key: ":",
+};
+
+fn dumps_with(value: &Value, separators: Separators) -> Result<String, Error> {
     let mut out = String::new();
-    write_value(&mut out, value)?;
+    write_value(&mut out, value, separators)?;
     Ok(out)
 }
 
@@ -393,7 +418,7 @@ pub fn to_json(value: &Value) -> Result<serde_json::Value, Error> {
     })
 }
 
-fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
+fn write_value(out: &mut String, value: &Value, separators: Separators) -> Result<(), Error> {
     match value {
         Value::None => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
@@ -407,9 +432,9 @@ fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
             out.push('[');
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
-                    out.push_str(", ");
+                    out.push_str(separators.item);
                 }
-                write_value(out, value)?;
+                write_value(out, value, separators)?;
             }
             out.push(']');
         }
@@ -417,11 +442,11 @@ fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
             out.push('{');
             for (index, (key, value)) in entries.iter().enumerate() {
                 if index > 0 {
-                    out.push_str(", ");
+                    out.push_str(separators.item);
                 }
                 write_string(out, &json_key(key)?);
-                out.push_str(": ");
-                write_value(out, value)?;
+                out.push_str(separators.key);
+                write_value(out, value, separators)?;
             }
             out.push('}');
         }
@@ -515,7 +540,7 @@ pub fn write_string(out: &mut impl Sink, text: &str) {
 mod tests {
     use rstest::rstest;
 
-    use super::{dumps, loads, type_name};
+    use super::{dumps, dumps_compact, loads, type_name};
     use crate::{Error, Value, repr::repr};
 
     #[rstest]
@@ -531,6 +556,16 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(type_name(&value), expected);
+    }
+
+    // Expected value is CPython json.dumps(value, separators=(",", ":"))
+    #[test]
+    fn compact_dumps_drops_the_spaces() {
+        let value = loads(r#"{"a": [1, "\u00e9", null], "b": {"c": 1.5}}"#).expect("parses");
+        assert_eq!(
+            dumps_compact(&value).expect("dumps"),
+            r#"{"a":[1,"\u00e9",null],"b":{"c":1.5}}"#
+        );
     }
 
     // Expected values are the repr of CPython 3.14 json.loads(text)

@@ -35,6 +35,7 @@ from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReserv
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.native_budgets import BudgetCheck
+from litellm.types.proxy.spend_log_rows import LedgerColumns, NativeSpendLogRow
 
 _T_co = TypeVar("_T_co", covariant=True)
 
@@ -810,9 +811,12 @@ class RustIdentity:
 
     @final
     class MappedJwtKey(RustIdentity):
-        __match_args__: tuple[
-            Literal["claims"], Literal["end_user_id"], Literal["user_email"], Literal["context"]
-        ] = ("claims", "end_user_id", "user_email", "context")
+        __match_args__: tuple[Literal["claims"], Literal["end_user_id"], Literal["user_email"], Literal["context"]] = (
+            "claims",
+            "end_user_id",
+            "user_email",
+            "context",
+        )
         def __new__(
             cls,
             claims: dict[str, object],
@@ -1815,6 +1819,7 @@ def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
 def auth_first_denied_route(forwarded_routes: Sequence[str], denied_sources: Sequence[object]) -> str | None: ...
 def auth_jwt_team_routes_grant(route: str, team_allowed_routes: object) -> bool: ...
 def auth_allowed_routes_grant(route: str, *, key: object, team: object) -> bool: ...
+
 @final
 class AuthObject:
     @staticmethod
@@ -2168,6 +2173,36 @@ class NativeTokenRedactor:
     def redact(self, text: str, replacement: str) -> str | None: ...
 
 @final
+class RustSpendLogRowBuilder:
+    def __new__(
+        cls,
+        *,
+        token_redactor: NativeTokenRedactor,
+        latest_turn_only: bool,
+        redact_tokens: bool,
+        drop_requester_ip_address: bool,
+        omit_missing_session_id: bool,
+        max_string_length_prompt_in_db: int,
+        disable_end_user_cost_tracking: bool,
+        request_correlation_in_logs: bool,
+        turn_off_message_logging: bool,
+    ) -> RustSpendLogRowBuilder: ...
+    def build_row(self, input_json: bytes) -> NativeSpendLogRow: ...
+    @staticmethod
+    def ledger_columns(
+        row: Mapping[str, object],
+        *,
+        billable_cost: float | None,
+        org_id: str | None,
+        team_id: str | None,
+        delivery_id: str,
+        entities: Sequence[tuple[str, str | None]],
+        model_access_groups: Sequence[str],
+        windows: Sequence[Mapping[str, object]],
+        savings: Mapping[str, float],
+    ) -> LedgerColumns: ...
+
+@final
 class NativeDiagnosticProcessor:
     def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
     def redact_text(self, text: str) -> str: ...
@@ -2473,6 +2508,7 @@ __all__ = [
     "RustPlan",
     "RustProjectRepository",
     "RustSpendLogRepository",
+    "RustSpendLogRowBuilder",
     "RustTagRepository",
     "RustTeamGrant",
     "RustTeamMembershipRepository",
