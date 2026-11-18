@@ -2686,6 +2686,26 @@ def _is_guardrail_block(original_exception: Exception) -> bool:
     return is_guardrail_intervention(original_exception)
 
 
+PROVIDER_ORIGIN_STATUS_ATTRIBUTE: Final = "litellm_provider_origin_status"
+
+
+def _attach_provider_origin_status(mapped: BaseException, original_exception: object) -> None:
+    """Keeps the HTTP status the provider itself answered with next to the mapped error, whose public
+    ``status_code`` may differ (an Anthropic 529 maps to a 500). A status litellm made up is not kept."""
+    status: Final = getattr(original_exception, "status_code", None)
+    if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
+        return
+    if getattr(original_exception, "status_code_is_synthesized", False):
+        return
+    setattr(mapped, PROVIDER_ORIGIN_STATUS_ATTRIBUTE, status)
+
+
+def provider_origin_status(error: BaseException) -> int | None:
+    """The provider's own HTTP status for an error mapped from its response, or None when litellm raised it."""
+    status: Final = getattr(error, PROVIDER_ORIGIN_STATUS_ATTRIBUTE, None)
+    return status if isinstance(status, int) and not isinstance(status, bool) else None
+
+
 def exception_type(
     model,
     original_exception,
@@ -3036,12 +3056,14 @@ def exception_type(
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)
             _attach_debug_info(e, request_debug_info)
+            _attach_provider_origin_status(e, mappable_exception)
             raise e
         else:
             for error_type in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, error_type):
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     _attach_debug_info(e, request_debug_info)
+                    _attach_provider_origin_status(e, mappable_exception)
                     raise e  # it's already mapped
             raised_exc: Final = APIConnectionError(
                 message=f"{original_exception}\n{redact_string(traceback.format_exc())}",
