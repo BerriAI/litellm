@@ -6,7 +6,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - `engine.rs` hands each `PriceQuery` kind to its handler module. A kind or case without a handler answers `Unpriced::NotPorted`, and only then may the caller price it the old way
 - `tokens.rs` and `tokens/` port the token path of `completion_cost`: `rule.rs` for what each provider branch of `cost_per_token` adds, `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
-- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`, `search.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
+- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`, `search.rs`, `video.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
   - Where main billed a call nothing on purpose (no row, no rate, no units) the core answers `Unpriced`, never 0.0, and the adapter maps it to each calculator's legacy return
 
 ## Parity fixtures
@@ -33,8 +33,11 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - A speech or transcription call priced per token, and a transcription whose usage reports tokens on a row that declares token rates, are `NotPorted` and bill through main's generic token path, which bills a row's synthesized zero token rates
 - Parallel AI bills each result past the ten a request includes at a fixed rate kept in `search.rs`, since no cost map row lists `cost_per_additional_result` (`PARALLEL_AI_ADDITIONAL_RESULT_COST`)
 - A search row priced by `max_results_range` tiers falls back to the last tier when the requested results fall below the first range. A row listing any `tiered_pricing` answers `NotPorted`, even beside a flat query rate main never reads then, since billing lowering leaves result tiers out, and the adapter keeps main's tier pick
+- A deployment's video table replaces the catalog row whole, so a deployment that prices only input images bills no video, and one that prices only per second never reads the catalog's clip table (`video_generation_cost`)
+- A video length of exactly half a second rounds to the even clip length, so 4.5s reads the `4s` cell (Python's `round` in `video_clip_cost`)
 
 ## Not copied from main
+- `video_generation_cost` read a catalog row through `get_model_info`, which drops every `output_cost_per_second_<resolution>` key but six. The core reads any resolution the row lists. No shipped row lists another
 
 - Main's stored breakdown raises on an unreadable speed or geo value, which fails the candidate when a logging object is attached. Rust leaves those uplifts out of the breakdown rates instead
 - A call whose web search price main would read off the served model's row answers `NotPorted`

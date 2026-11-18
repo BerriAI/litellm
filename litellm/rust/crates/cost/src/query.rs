@@ -19,6 +19,7 @@ pub use crate::search::SearchQuery;
 pub use crate::speech::SpeechQuery;
 pub use crate::transcription::TranscriptionQuery;
 pub use crate::vector_store::VectorStoreSearchQuery;
+pub use crate::video::VideoQuery;
 
 /// One call to price, tagged by `kind`
 #[derive(Clone, Debug, PartialEq)]
@@ -36,7 +37,7 @@ pub enum PriceQuery {
     Rerank(Box<RerankQuery>),
     Search(Box<SearchQuery>),
     VectorStoreSearch(Box<VectorStoreSearchQuery>),
-    Video(Header),
+    Video(Box<VideoQuery>),
     /// Realtime, Live and Responses websocket sessions
     Session(Header),
     BatchLine(Header),
