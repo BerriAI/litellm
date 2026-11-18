@@ -5010,6 +5010,7 @@ class ProviderSpecificHeader(TypedDict):
     claude_models_only: NotRequired[ReadOnly[bool]]
     non_claude_models_only: NotRequired[ReadOnly[bool]]
     yields_to_configured: NotRequired[ReadOnly[bool]]
+    configured_credential_only: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):

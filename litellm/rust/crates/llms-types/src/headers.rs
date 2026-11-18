@@ -13,6 +13,8 @@ pub struct ProviderSpecificHeader {
     pub non_claude_models_only: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub yields_to_configured: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub configured_credential_only: bool,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]

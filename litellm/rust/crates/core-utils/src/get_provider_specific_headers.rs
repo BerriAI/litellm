@@ -1,6 +1,8 @@
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
+const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "x-api-key", "api-key"];
+
 pub fn get_provider_specific_headers(
     provider_specific_header: Option<&ProviderSpecificHeaders>,
     custom_llm_provider: &str,
@@ -15,6 +17,9 @@ pub fn get_provider_specific_headers(
     entries
         .iter()
         .filter(|entry| applies_to_call(entry, custom_llm_provider, model))
+        .filter(|entry| {
+            !entry.configured_credential_only || configures_a_credential(configured_headers)
+        })
         .flat_map(|entry| contributed_headers(entry, configured_headers))
         .collect()
 }
@@ -27,6 +32,14 @@ fn applies_to_call(entry: &ProviderSpecificHeader, custom_llm_provider: &str, mo
             .custom_llm_provider
             .split(',')
             .any(|scoped| scoped.trim() == custom_llm_provider)
+}
+
+fn configures_a_credential(configured_headers: &Map<String, Value>) -> bool {
+    configured_headers.keys().any(|configured| {
+        CREDENTIAL_HEADERS
+            .iter()
+            .any(|credential| configured.eq_ignore_ascii_case(credential))
+    })
 }
 
 fn contributed_headers(
@@ -187,6 +200,31 @@ mod tests {
                 "anthropic",
                 "claude-haiku-5-5",
                 deployment.as_object().unwrap()
+            )),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::deployment_api_key(json!({"X-Api-Key": "sk-deployment"}), json!({"anthropic-user-profile-id": "uprof_pinned"}))]
+    #[case::deployment_bearer(json!({"authorization": "Bearer deployment"}), json!({"anthropic-user-profile-id": "uprof_pinned"}))]
+    #[case::no_deployment_credential(json!({"x-other": "deployment"}), json!({}))]
+    fn configured_credential_entries_apply_only_beside_a_configured_credential(
+        #[case] configured: Value,
+        #[case] expected: Value,
+    ) {
+        let pinned: ProviderSpecificHeaders = serde_json::from_value(json!({
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+            "configured_credential_only": true
+        }))
+        .unwrap();
+        assert_eq!(
+            Value::Object(get_provider_specific_headers(
+                Some(&pinned),
+                "anthropic",
+                "claude-haiku-5-5",
+                configured.as_object().unwrap()
             )),
             expected
         );

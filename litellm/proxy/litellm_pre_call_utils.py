@@ -5017,6 +5017,18 @@ def _user_profile_id_header(
     )
 
 
+def _pin_where_messages_sends_the_configured_credential(
+    providers: frozenset[str], user_profile_id: str | None
+) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(
+        custom_llm_provider=",".join(sorted(providers)),
+        extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+        claude_models_only=True,
+        native_anthropic_messages_only=True,
+        configured_credential_only=True,
+    )
+
+
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
@@ -5036,9 +5048,11 @@ def add_provider_specific_headers_to_request(
         value.startswith("Bearer ") for value in anthropic_oauth_credential_headers.values()
     )
     chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
-    caller_credential_providers: Final = (
+    caller_oauth_providers: Final = (
         ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_bearer_oauth else frozenset[str]()
-    ) | _providers_on_caller_credentials(_REQUEST_FIELDS.validate_python(data))
+    )
+    caller_api_key_providers: Final = _providers_on_caller_credentials(_REQUEST_FIELDS.validate_python(data))
+    caller_credential_providers: Final = caller_oauth_providers | caller_api_key_providers
     caller_profile: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER, caller_user_profile_id)
 
     typesafe_danger_zone_headers: Final = {
@@ -5064,6 +5078,9 @@ def add_provider_specific_headers_to_request(
                 yields_to_configured=user_profile_id is None,
             ),
             _user_profile_id_header(caller_credential_providers, caller_profile),
+            _pin_where_messages_sends_the_configured_credential(
+                caller_api_key_providers - caller_oauth_providers, user_profile_id
+            ),
             ProviderSpecificHeader(
                 custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
                 extra_headers=anthropic_oauth_credential_headers,
