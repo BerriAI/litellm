@@ -33,6 +33,7 @@ litellm-core-utils.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
 litellm-llms-types.workspace = true
+parking_lot.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 strum.workspace = true
@@ -43,7 +44,6 @@ tower-http = { version = "0.6.11", features = ["set-header"] }
 tracing.workspace = true
 
 [dev-dependencies]
-parking_lot.workspace = true
 litellm-gateway.workspace = true
 litellm-cache-memory.workspace = true
 tokio = { workspace = true, features = ["io-util"] }

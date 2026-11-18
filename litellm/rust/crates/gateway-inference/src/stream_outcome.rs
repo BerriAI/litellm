@@ -2,8 +2,12 @@
 //! served deferred: the router counted its request and hears the rest here, a success with the
 //! tokens the stream counted once it ends, or a failure the moment the stream breaks or carries
 //! the provider's error. A stream the client stops reading reports neither.
+//!
+//! A provider's error event is the failure the same error is before a stream opens, with the
+//! same status, so the cooldown rules read both alike. The Python proxy differs: it records a
+//! stream that goes out with an error event as served, unless another attempt took it over.
 
-use std::{future::Future, str::FromStr};
+use std::{future::Future, str::FromStr, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
 use futures_util::{
@@ -13,22 +17,28 @@ use futures_util::{
 use litellm_framer::sse::SseCodec;
 use litellm_inference::Error as InferenceError;
 use litellm_llms_types::formats::responses::streaming::ResponsesEventType;
-use litellm_router_core::{AttemptError, Deployment, FailureKind, FailureReport, SuccessReport};
+use litellm_router_core::{
+    AttemptError, Deployment, FailureKind, FailureReport, Router, RouterCache, SuccessReport,
+};
 use serde_json::{Map, Value};
 use tokio_util::codec::Decoder;
 
-use crate::{Gateway, routing};
+use crate::{
+    Gateway, routing,
+    stream_hold::{self, Peeked},
+};
 
-/// The status litellm gives a provider's error event, which arrives after a 200.
-const ERROR_EVENT_STATUS: u16 = 500;
+/// The status of a Responses error event, which names none.
+const RESPONSES_ERROR_STATUS: u16 = 500;
 
 /// What a stream's own events said so far.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Told {
     /// The usage the events carried, a later event's counts over an earlier one's.
     usage: Map<String, Value>,
-    /// The provider's error event, as it was sent.
-    error: Option<String>,
+    /// The provider's error event: the status the same error has before a stream, and the event
+    /// as it was sent.
+    error: Option<(u16, String)>,
 }
 
 impl Told {
@@ -47,9 +57,9 @@ impl Told {
         }
     }
 
-    fn with_error(self, event: &Map<String, Value>) -> Self {
+    fn with_error(self, status: u16, event: &Map<String, Value>) -> Self {
         Self {
-            error: Some(Value::Object(event.clone()).to_string()),
+            error: Some((status, Value::Object(event.clone()).to_string())),
             ..self
         }
     }
@@ -70,8 +80,10 @@ pub(crate) fn messages_event(told: Told, event: &Map<String, Value>) -> Told {
     match event_type(event) {
         "message_start" => told.with_usage(event.get("message").and_then(|m| m.get("usage"))),
         "message_delta" | "message_stop" => told.with_usage(event.get("usage")),
-        "error" => told.with_error(event),
-        _ => told,
+        _ => match stream_hold::messages_event(event) {
+            Peeked::Error(status) => told.with_error(status, event),
+            Peeked::Lifecycle | Peeked::Content => told,
+        },
     }
 }
 
@@ -82,7 +94,7 @@ pub(crate) fn responses_event(told: Told, event: &Map<String, Value>) -> Told {
             told.with_usage(event.get("response").and_then(|r| r.get("usage")))
         }
         Ok(ResponsesEventType::ResponseFailed | ResponsesEventType::Error) => {
-            told.with_error(event)
+            told.with_error(RESPONSES_ERROR_STATUS, event)
         }
         _ => told,
     }
@@ -165,13 +177,9 @@ where
             (Some(Ok(bytes)), Some(reading)) => {
                 let reading = reading.read(bytes, read);
                 match &reading.told.error {
-                    Some(sent) => (
+                    Some((status, sent)) => (
                         None,
-                        Some(Err(AttemptError::from_provider(
-                            ERROR_EVENT_STATUS,
-                            sent,
-                            None,
-                        ))),
+                        Some(Err(AttemptError::from_provider(*status, sent, None))),
                     ),
                     None => (Some(reading), None),
                 }
@@ -190,53 +198,64 @@ where
     .boxed()
 }
 
-/// `chunks` of a stream `deployment` serves, its outcome reported to the router.
-pub(crate) fn reporting_outcome<H: routing::Host>(
-    gateway: &Gateway<H>,
+/// A stream's failure after its attempt returned it, recorded against `deployment` as Python's
+/// `report_stream_failure` records it: counted, and cooled down by the rules for the
+/// deployment's own `cooldown_time`.
+async fn record_failure<C: RouterCache>(
+    router: &Router,
+    cache: &C,
     deployment: &Deployment,
-    chunks: BoxStream<'static, Result<Bytes, litellm_host_http::Error<InferenceError>>>,
-    read: Read,
-) -> BoxStream<'static, Result<Bytes, litellm_host_http::Error<InferenceError>>> {
-    let router = gateway.router.clone();
-    let routing = gateway.routing.clone();
-    let deployment_id = deployment.id.clone();
+    failure: &AttemptError,
+) {
     let cooldown_time = deployment.model_info.cooldown_time.or_else(|| {
         deployment
             .raw_params
             .get("cooldown_time")
             .and_then(Value::as_f64)
     });
+    let report = FailureReport {
+        deployment_cooldown: true,
+        cooldown_time,
+        ..FailureReport::default()
+    };
+    if let Err(error) = router
+        .report_failure(cache, &deployment.id, failure, report)
+        .await
+    {
+        tracing::warn!(deployment_id = %deployment.id, %error, "stream failure was not recorded");
+    }
+}
+
+/// `chunks` of a stream `deployment` serves, its outcome reported to the router.
+pub(crate) fn reporting_outcome<H: routing::Host>(
+    gateway: &Gateway<H>,
+    deployment: &Arc<Deployment>,
+    chunks: BoxStream<'static, Result<Bytes, litellm_host_http::Error<InferenceError>>>,
+    read: Read,
+) -> BoxStream<'static, Result<Bytes, litellm_host_http::Error<InferenceError>>> {
+    let router = gateway.router.clone();
+    let routing = gateway.routing.clone();
+    let deployment = deployment.clone();
     watched(chunks, read, broke, move |outcome: Outcome| {
-        let (router, routing, deployment_id) =
-            (router.clone(), routing.clone(), deployment_id.clone());
+        let (router, routing, deployment) = (router.clone(), routing.clone(), deployment.clone());
         async move {
-            let recorded = match outcome {
-                Ok(total_tokens) => router
-                    .report_success(
-                        &*routing,
-                        &deployment_id,
-                        total_tokens as f64,
-                        0.0,
-                        SuccessReport::default(),
-                    )
-                    .await
-                    .map(|_| ()),
-                Err(failure) => router
-                    .report_failure(
-                        &*routing,
-                        &deployment_id,
-                        &failure,
-                        FailureReport {
-                            deployment_cooldown: true,
-                            cooldown_time,
-                            ..FailureReport::default()
-                        },
-                    )
-                    .await
-                    .map(|_| ()),
+            let total_tokens = match outcome {
+                Ok(total_tokens) => total_tokens,
+                Err(failure) => {
+                    return record_failure(&router, &*routing, &deployment, &failure).await;
+                }
             };
+            let recorded = router
+                .report_success(
+                    &*routing,
+                    &deployment.id,
+                    total_tokens as f64,
+                    0.0,
+                    SuccessReport::default(),
+                )
+                .await;
             if let Err(error) = recorded {
-                tracing::warn!(%deployment_id, %error, "stream outcome was not recorded");
+                tracing::warn!(deployment_id = %deployment.id, %error, "stream outcome was not recorded");
             }
         }
     })
@@ -303,10 +322,10 @@ mod tests {
         vec![Ok(9)]
     )]
     #[case::a_stream_without_usage_counts_nothing(vec![Ok(STOP)], messages_event as Read, vec![Ok(0)])]
-    #[case::messages_error_event_fails_once(
+    #[case::an_overloaded_messages_provider_fails_once_as_its_529(
         vec![Ok(START), Ok(OVERLOADED), Ok(STOP)],
         messages_event as Read,
-        vec![Err((Some(500), FailureKind::InternalServer))]
+        vec![Err((Some(529), FailureKind::ServiceUnavailable))]
     )]
     #[case::responses_failed_event_fails(
         vec![Ok(FAILED)],

@@ -2,23 +2,34 @@
 //! then runs it through [`litellm_router_core::Router::call`], where the core picks a deployment,
 //! retries and falls back, and each attempt runs the request's own [`RouteAttempt`]. Every other
 //! hostcall the core makes is answered by the [`Host`] the gateway was built with. The route's
-//! typed outcome comes back with the routing facts, and the route renders it once.
+//! typed outcome comes back with the routing facts, and the route renders it once. A served
+//! stream is held until it sends content, so one the provider fails before that is answered by
+//! a retry or a fallback instead.
 
 use std::{future::Future, time::Duration};
 
+use futures_util::{StreamExt, future, stream};
 use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Permissions};
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, RouterHost,
-    RouterRequest, RouterResponse, Served, resolve,
+    Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, Router,
+    RouterHost, RouterRequest, RouterResponse, Served, call::StreamOrigin,
+    health::should_retry_status, resolve,
 };
 use litellm_router_types::Spelled;
+use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
 use crate::{
     Error, Gateway,
     error::{Ended, NoDeployments},
+    headers::Routing,
+    stream_hold::{self, Cause, Chunks, Held, Peek},
+    stream_outcome,
 };
+
+/// The chunks of a route's stream.
+pub type RouteChunks = Chunks<litellm_host_http::Error<InferenceError>>;
 
 /// The host the routes are served through. It answers router-core's hostcalls for one call, and
 /// the gateway crate attaches the native one.
@@ -45,6 +56,14 @@ pub trait RouteAttempt: Send + Sync {
         &self,
         attempt: &Attempt,
     ) -> impl Future<Output = Result<Served<Self::Outcome>, Error>> + Send;
+
+    /// The stream of a served outcome and how its events read, for a route whose stream another
+    /// attempt may answer in place of while it has sent no content. `None` for a complete
+    /// answer, and for a route whose streams are never taken over.
+    fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Peek)> {
+        let _ = outcome;
+        None
+    }
 }
 
 /// The litellm model of the first deployment the request's name resolves to for its caller,
@@ -165,6 +184,27 @@ fn caller_request(identity: &AuthenticatedRequest, model: &str) -> RouterRequest
     }
 }
 
+/// `route`, remembering the attempt the router ran last, which a stream's recovery starts from.
+struct Remembering<'a, A> {
+    route: &'a A,
+    last: Mutex<Option<Attempt>>,
+}
+
+impl<A> Remembering<'_, A> {
+    fn last(&self) -> Option<Attempt> {
+        self.last.lock().clone()
+    }
+}
+
+impl<A: RouteAttempt> RouteAttempt for Remembering<'_, A> {
+    type Outcome = A::Outcome;
+
+    async fn run(&self, attempt: &Attempt) -> Result<Served<A::Outcome>, Error> {
+        *self.last.lock() = Some(attempt.clone());
+        self.route.run(attempt).await
+    }
+}
+
 /// Authorize `model`, then serve it through the router: pick, run `route` on each attempt,
 /// retry and fall back. A call that ends on an attempt's error names the deployment the router
 /// says raised it.
@@ -182,8 +222,26 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
         model: model.to_owned(),
     })?;
     authorize(identity, model, first).await?;
-    let host = gateway.host.router_host(gateway, identity, route);
-    let ended = match gateway.router.call(&host, op, request).await {
+    let route = Remembering {
+        route,
+        last: Mutex::new(None),
+    };
+    let host = gateway.host.router_host(gateway, identity, &route);
+    let ended = gateway
+        .router
+        .call(&host, op.clone(), request.clone())
+        .await;
+    let routed = answered(gateway, path, ended).await?;
+    taken_over_while_held(&gateway.router, &host, &route, &op, &request, routed).await
+}
+
+/// How a call the router ran ended, as its route answers it.
+async fn answered<H: Host, O>(
+    gateway: &Gateway<H>,
+    path: &'static str,
+    ended: Result<RouterResponse<O>, Box<CallError<Error>>>,
+) -> Result<RouterResponse<O>, Ended> {
+    let ended = match ended {
         Ok(routed) => return Ok(routed),
         Err(ended) => ended,
     };
@@ -193,7 +251,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
             ..
         } => Ended {
             error: Box::new(raised.failure),
-            deployment_id: raised.deployment_id,
+            routing: raised.deployment_id.as_deref().map(Routing::failed_on),
         },
         CallError {
             error: litellm_router_core::Error::UnknownModel { model },
@@ -205,6 +263,158 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
         } => no_deployments(gateway, model).await.into(),
         CallError { error, .. } => Error::Routing(error).into(),
     })
+}
+
+/// `routed`, or the answer of the attempt that took its stream over. A stream is held while it
+/// has sent no content and a retry or a fallback could still answer in its place. One the
+/// provider fails there is retried in its group, then falls back, and the stream that answers
+/// is held the same way (`wrap_anthropic_stream`). A stream no attempt may answer for goes out
+/// as the provider sent it, and one whose take-over served nothing ends the call on its failure.
+async fn taken_over_while_held<A, RH>(
+    router: &Router,
+    host: &RH,
+    route: &Remembering<'_, A>,
+    op: &Op,
+    request: &RouterRequest,
+    routed: RouterResponse<A::Outcome>,
+) -> Result<RouterResponse<A::Outcome>, Ended>
+where
+    A: RouteAttempt,
+    RH: RouterHost<Response = A::Outcome, Failure = Error>,
+{
+    let mut routed = routed;
+    let mut committed_budget = None;
+    loop {
+        let Some(last) = route.last() else {
+            return Ok(routed);
+        };
+        let Some((chunks, peek)) = A::held(&mut routed.output.response) else {
+            return Ok(routed);
+        };
+        let origin = StreamOrigin {
+            group: last.name.clone(),
+            order: last.target_order,
+            depth: last.fallback_depth,
+            level: last.fallback_level,
+            deployment_id: Some(last.deployment.id.clone()),
+            attempted_retries: last.retry,
+            committed_budget,
+            routed: last.routed.clone(),
+        };
+        let policy = router.stream_policy(request, &origin, None);
+        if !policy.can_retry && !policy.can_fall_back {
+            return Ok(routed);
+        }
+        let unsent = std::mem::replace(chunks, stream::empty().boxed());
+        let (failed, sent) = match stream_hold::hold(unsent, peek, stream_outcome::broke).await {
+            Held::Committed(sent) => {
+                *chunks = sent;
+                return Ok(routed);
+            }
+            Held::Failed { failed, sent } => (failed, sent),
+        };
+        let unanswered = match take_over(router, host, op, request, &origin, failed.failure).await {
+            TakenOver::By { answer, budget } => {
+                routed = answer;
+                committed_budget = budget;
+                continue;
+            }
+            TakenOver::ByNone { raised } => Some(raised),
+            TakenOver::Declined => None,
+        };
+        let Some(raised) = unanswered else {
+            *chunks = sent;
+            return Ok(routed);
+        };
+        // `_raise_stream_failure`: a take-over that served nothing ends the call on the error a
+        // later attempt raised, else on the stream's own, with what the router did for the
+        // stream.
+        let error = match (raised, failed.cause) {
+            (Some(raised), _) => raised,
+            (None, Cause::ErrorEvent { status, body }) => {
+                Error::Route(litellm_http::Error::upstream(status, body).into())
+            }
+            (None, Cause::Broke) => sent
+                .filter_map(|chunk| future::ready(chunk.err()))
+                .next()
+                .await
+                .map_or(Error::Internal, Error::from),
+        };
+        return Err(Ended {
+            error: Box::new(error),
+            routing: Some(Routing::served(&routed)),
+        });
+    }
+}
+
+/// How the take-over of a failed stream went.
+enum TakenOver<R> {
+    /// Another attempt answered. `budget` is what a retry committed the request's later stream
+    /// retries to.
+    By {
+        answer: RouterResponse<R>,
+        budget: Option<u32>,
+    },
+    /// Attempts ran and none answered. `raised` is the error of the newest one that failed,
+    /// `None` when the take-over ends on the stream's own failure.
+    ByNone { raised: Option<Error> },
+    /// No attempt may answer in the stream's place.
+    Declined,
+}
+
+/// The take-over of a stream from `origin` that failed with `failure` before any content
+/// (`_anthropic_recover_stream_error`): a retry in the stream's group while the failure's retry
+/// budget lasts, then the fallbacks. Where the stream is read, its failure was already counted
+/// against its deployment.
+async fn take_over<RH: RouterHost<Failure = Error>>(
+    router: &Router,
+    host: &RH,
+    op: &Op,
+    request: &RouterRequest,
+    origin: &StreamOrigin,
+    failure: AttemptError,
+) -> TakenOver<RH::Response> {
+    if !failure.status.is_none_or(should_retry_status) {
+        return TakenOver::Declined;
+    }
+    let policy = router.stream_policy(request, origin, Some(failure.kind));
+    let retries = policy
+        .retry_budget
+        .is_some_and(|(budget, _)| budget > origin.attempted_retries);
+    if !retries && !policy.can_fall_back {
+        return TakenOver::Declined;
+    }
+    let retried = router
+        .retry_stream(
+            host,
+            op.clone(),
+            request.clone(),
+            origin.clone(),
+            failure.clone(),
+        )
+        .await;
+    let (newest, raised) = match retried {
+        Ok(answer) => {
+            let budget = answer.max_retries;
+            return TakenOver::By { answer, budget };
+        }
+        Err(ended) => (
+            ended.error.attempt().cloned().unwrap_or(failure),
+            ended.raised.map(|raised| raised.failure),
+        ),
+    };
+    let fallen_back = router
+        .fallback_stream(host, op.clone(), request.clone(), origin.clone(), newest)
+        .await;
+    match fallen_back {
+        Ok(answer) => TakenOver::By {
+            answer,
+            budget: None,
+        },
+        Err(ended) => TakenOver::ByNone {
+            raised: ended.raised.map(|raised| raised.failure).or(raised),
+        },
+    }
 }
 
 /// `async_raise_no_deployment_exception`: when `model`'s deployments can be tried again, and
