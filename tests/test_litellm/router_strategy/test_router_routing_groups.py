@@ -5,6 +5,7 @@ the implicit `"default"` group driven by the router's top-level
 `routing_strategy` / `routing_strategy_args`.
 """
 
+import asyncio
 import os
 import sys
 from unittest.mock import patch
@@ -502,6 +503,30 @@ def test_unregister_router_selectors_removes_by_identity(monkeypatch):
     router._unregister_router_selectors([selector])
     assert all(c is not selector for c in litellm.callbacks)
     assert all(c is not selector for c in litellm.input_callback)
+
+
+@pytest.mark.asyncio
+async def test_update_settings_cancels_replaced_routing_group_sync_task(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(
+        routing_groups=[
+            {
+                "group_name": "usage",
+                "models": ["filtered-model"],
+                "routing_strategy": "usage-based-routing-v2",
+            }
+        ]
+    )
+    selector = router._group_selectors["usage"]["usage-based-routing-v2"]
+    sync_task = selector._sync_task
+    assert sync_task is not None
+    assert not sync_task.done()
+
+    router.update_settings(routing_groups=[])
+    await asyncio.sleep(0)
+
+    assert sync_task.cancelled()
 
 
 def test_init_routing_groups_with_none_clears_state():

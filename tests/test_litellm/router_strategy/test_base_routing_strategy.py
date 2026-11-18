@@ -56,6 +56,22 @@ async def base_strategy(mock_dual_cache):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_cancels_sync_task(mock_dual_cache):
+    strategy = BaseRoutingStrategy(
+        dual_cache=mock_dual_cache,
+        should_batch_redis_writes=True,
+        default_sync_interval=1,
+    )
+    sync_task = strategy._sync_task
+    assert sync_task is not None
+    assert not sync_task.done()
+
+    await strategy.cleanup()
+
+    assert sync_task.cancelled()
+
+
+@pytest.mark.asyncio
 async def test_increment_value_in_current_window(base_strategy, mock_dual_cache):
     # Test incrementing value in current window
     key = "test_key"
