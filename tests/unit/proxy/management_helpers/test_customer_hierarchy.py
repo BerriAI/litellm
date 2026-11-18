@@ -309,12 +309,22 @@ class Database:
             else source.litellm_customerorganizationtable
         )
         self.litellm_customerteamtable = (
-            Table("customer_team_id", self, create_error=team_create_error, hydration_limit=hydration_limit)
+            Table(
+                "customer_team_id",
+                self,
+                create_error=team_create_error,
+                hydration_limit=hydration_limit,
+            )
             if source is None
             else source.litellm_customerteamtable
         )
         self.litellm_customermembertable = (
-            Table("customer_member_id", self, hydration_limit=hydration_limit, read_limit=member_read_limit)
+            Table(
+                "customer_member_id",
+                self,
+                hydration_limit=hydration_limit,
+                read_limit=member_read_limit,
+            )
             if source is None
             else source.litellm_customermembertable
         )

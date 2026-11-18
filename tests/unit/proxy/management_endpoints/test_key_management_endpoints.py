@@ -2213,7 +2213,8 @@ async def test_update_key_clears_end_user_budget_id_with_empty_string():
 @pytest.mark.asyncio
 async def test_update_key_metadata_body_without_end_user_budget_id_is_a_clear_for_non_admin():
     """/key/update replaces metadata wholesale, so a non-admin sending metadata that drops the field
-    would detach the key default; that must be refused like an explicit clear, while an admin may do it."""
+    would detach the key default; that must be refused like an explicit clear, while an admin may do it.
+    """
     existing_key = LiteLLM_VerificationToken(token="hashed", metadata={"end_user_budget_id": "svc-a-budget"})
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
@@ -5924,9 +5925,12 @@ def _prisma_with_key_row(key_row: LiteLLM_VerificationToken) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Auth serves key objects cache-first, so a peer worker that is not told about the delete keeps
-    authenticating the deleted key from its own copy until user_api_key_cache_ttl expires"""
+    authenticating the deleted key from its own copy until user_api_key_cache_ttl expires
+    """
     raw_key: Final = "sk-" + uuid4().hex
     hashed_token: Final = hash_token(raw_key)
     deleting_worker_cache: Final = UserApiKeyCache()
@@ -5966,8 +5970,16 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeyp
 @pytest.mark.parametrize(
     "deleter",
     [
-        UserAPIKeyAuth(user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value),
-        UserAPIKeyAuth(user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value),
+        UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        UserAPIKeyAuth(
+            user_id="user-123",
+            api_key="sk-owner",
+            user_role=LitellmUserRoles.INTERNAL_USER.value,
+        ),
     ],
     ids=["proxy_admin", "key_owner"],
 )
@@ -5975,7 +5987,8 @@ async def test_delete_verification_tokens_evicts_a_requested_key_whose_row_is_al
     monkeypatch: pytest.MonkeyPatch, deleter: UserAPIKeyAuth
 ) -> None:
     """A key whose row was removed outside the API stays cached on every worker, so deleting it in a
-    batch beside a live key must still stop it everywhere instead of only evicting the rows found"""
+    batch beside a live key must still stop it everywhere instead of only evicting the rows found
+    """
     live_key: Final = "sk-" + uuid4().hex
     gone_key: Final = "sk-" + uuid4().hex
     live_token: Final = hash_token(live_key)
@@ -6006,10 +6019,13 @@ async def test_delete_verification_tokens_evicts_a_requested_key_whose_row_is_al
 
 
 @pytest.mark.asyncio
-async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_every_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_every_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """/key/delete accepts any string, and a name that is not a key row passes through unhashed. A key
     owner padding the request with another team's spend counter name must not wipe that counter from
-    every worker's memory: only the rows the caller was allowed to delete are evicted and broadcast"""
+    every worker's memory: only the rows the caller was allowed to delete are evicted and broadcast
+    """
     raw_key: Final = "sk-" + uuid4().hex
     hashed_token: Final = hash_token(raw_key)
     other_team_counter: Final = "spend:team:other-team"
@@ -7793,7 +7809,8 @@ async def test_bulk_update_keys_rejects_invalid_period_without_writing_the_key(
 @pytest.mark.asyncio
 async def test_bulk_update_keys_object_permission_is_granted_not_dropped(monkeypatch):
     """`object_permission` used to be accepted with 200 and dropped, leaving an item that carried
-    nothing but the key, so the call wiped the key's budget instead of granting the permission."""
+    nothing but the key, so the call wiped the key's budget instead of granting the permission.
+    """
     prisma = await _bulk_update_one_key(monkeypatch, {"object_permission": {"vector_stores": ["vs-1"]}})
 
     upserted = prisma.db.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]["create"]
@@ -9821,6 +9838,7 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
         f"budget_duration; got: {call_kwargs.get('key_budget_duration')}"
     )
 
+
 @pytest.mark.asyncio
 async def test_key_does_not_override_explicit_budget_duration():
     """
@@ -9884,11 +9902,8 @@ async def test_key_does_not_override_explicit_budget_duration():
     )
 
 
-
 @pytest.mark.asyncio
-@patch(
-    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
-)
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
 async def test_rotate_master_key_reencrypts_model_params_in_place(
     mock_rotate_mcp,
 ):
@@ -13730,7 +13745,12 @@ async def test_execute_virtual_key_regeneration_allows_when_custom_key_update_ho
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "data",
-    [None, RegenerateKeyRequest(), RegenerateKeyRequest(duration=""), RegenerateKeyRequest(budget_duration="")],
+    [
+        None,
+        RegenerateKeyRequest(),
+        RegenerateKeyRequest(duration=""),
+        RegenerateKeyRequest(budget_duration=""),
+    ],
 )
 async def test_execute_virtual_key_regeneration_skips_custom_key_update_hook_without_changes(data):
     mock_prisma_client = _make_regenerate_mock_prisma()
@@ -17978,7 +17998,11 @@ _ALICE_TEAM_MEMBER = [Member(user_id="alice", role="user"), Member(user_id="bob"
 
 @pytest.mark.parametrize(
     "user_role",
-    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.TEAM],
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+    ],
 )
 def test_list_keys_team_admin_key_alias_substring_returns_every_matching_team_key(user_role):
     keys = _list_team_a_keys_as(user_role, _ALICE_TEAM_ADMIN, "key_alias=first&substring_matching=true")
@@ -19213,18 +19237,10 @@ async def test_list_keys_without_expires_param_forwards_none():
 
 
 @pytest.mark.asyncio
-@patch(
-    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_sso_identity_assertions_master_key"
-)
-@patch(
-    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_env_vars_master_key"
-)
-@patch(
-    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_credentials_master_key"
-)
-@patch(
-    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
-)
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_sso_identity_assertions_master_key")
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_env_vars_master_key")
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_credentials_master_key")
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
 async def test_rotate_master_key_rotates_sso_identity_assertions(
     mock_rotate_mcp_server,
     mock_rotate_mcp_user,
@@ -19402,14 +19418,24 @@ _ESTIMATE_PER_MODEL = "default_estimated_output_tokens_per_model"
     [
         ("nothing declared", {}, None, True),
         ("declared top-level on a key with none stored", {_ESTIMATE: 1}, None, False),
-        ("declared inside metadata on a key with none stored", {"metadata": {_ESTIMATE: 1}}, None, False),
+        (
+            "declared inside metadata on a key with none stored",
+            {"metadata": {_ESTIMATE: 1}},
+            None,
+            False,
+        ),
         (
             "per-model map declared inside metadata",
             {"metadata": {_ESTIMATE_PER_MODEL: {"gpt-4": 1}}},
             None,
             False,
         ),
-        ("unrelated edit, metadata omitted", {"models": ["gpt-4"]}, {_ESTIMATE: 2000}, True),
+        (
+            "unrelated edit, metadata omitted",
+            {"models": ["gpt-4"]},
+            {_ESTIMATE: 2000},
+            True,
+        ),
         ("stored value resent unchanged", {_ESTIMATE: 2000}, {_ESTIMATE: 2000}, True),
         ("stored value lowered", {_ESTIMATE: 1}, {_ESTIMATE: 2000}, False),
         ("stored value raised", {_ESTIMATE: 9000}, {_ESTIMATE: 2000}, False),
@@ -19913,16 +19939,33 @@ async def test_bulk_key_update_batch_enqueued_token_limit_rejected_for_non_admin
     assert "Only proxy admins can set" in str(exc.value.detail)
 
 
-
 _INDEX_GRANT = [{"index_name": "docs", "index_permissions": ["read", "write"]}]
 
 
 @pytest.mark.parametrize(
     "label, top_level, sent, stored, allowed",
     [
-        ("granted top-level on a key with none stored", _INDEX_GRANT, _UNTOUCHED, None, False),
-        ("granted in metadata on a key with none stored", None, _INDEX_GRANT, None, False),
-        ("widened from read to read and write", None, _INDEX_GRANT, [{"index_name": "docs", "index_permissions": ["read"]}], False),
+        (
+            "granted top-level on a key with none stored",
+            _INDEX_GRANT,
+            _UNTOUCHED,
+            None,
+            False,
+        ),
+        (
+            "granted in metadata on a key with none stored",
+            None,
+            _INDEX_GRANT,
+            None,
+            False,
+        ),
+        (
+            "widened from read to read and write",
+            None,
+            _INDEX_GRANT,
+            [{"index_name": "docs", "index_permissions": ["read"]}],
+            False,
+        ),
         ("cleared by replacing the blob", None, None, _INDEX_GRANT, False),
         ("resent unchanged in metadata", None, _INDEX_GRANT, _INDEX_GRANT, True),
         ("resent unchanged top-level", _INDEX_GRANT, _UNTOUCHED, _INDEX_GRANT, True),
@@ -19972,7 +20015,10 @@ def test_vector_store_index_grants_admin_gate_matrix(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_fields",
-    [{"allowed_vector_store_indexes": _INDEX_GRANT}, {"metadata": {"allowed_vector_store_indexes": _INDEX_GRANT}}],
+    [
+        {"allowed_vector_store_indexes": _INDEX_GRANT},
+        {"metadata": {"allowed_vector_store_indexes": _INDEX_GRANT}},
+    ],
     ids=["top-level", "metadata"],
 )
 async def test_generate_key_vector_store_index_grants_rejected_for_non_admin(request_fields: dict[str, object]) -> None:
@@ -20248,7 +20294,10 @@ async def test_default_key_generate_params_allowed_routes_extends_key_type_prese
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("key_type", "preset_routes"),
-    [(LiteLLMKeyType.MANAGEMENT, ["management_routes"]), (LiteLLMKeyType.READ_ONLY, ["info_routes"])],
+    [
+        (LiteLLMKeyType.MANAGEMENT, ["management_routes"]),
+        (LiteLLMKeyType.READ_ONLY, ["info_routes"]),
+    ],
 )
 async def test_default_key_generate_params_allowed_routes_keeps_management_and_read_only_presets(
     monkeypatch: pytest.MonkeyPatch, key_type: LiteLLMKeyType, preset_routes: list[str]
@@ -20349,8 +20398,16 @@ def _owner_route_update_status(existing: list[str], incoming: list[str]) -> int 
         (["llm_api_routes"], [], None),
         (["llm_api_routes", "/key/spend/report"], [], 403),
         (["llm_api_routes", "/key/spend/report"], ["llm_api_routes"], 403),
-        (["llm_api_routes", "/key/spend/report"], ["llm_api_routes", "/key/spend/report"], None),
-        (["llm_api_routes", "/key/spend/report"], ["/key/spend/report", "llm_api_routes"], 403),
+        (
+            ["llm_api_routes", "/key/spend/report"],
+            ["llm_api_routes", "/key/spend/report"],
+            None,
+        ),
+        (
+            ["llm_api_routes", "/key/spend/report"],
+            ["/key/spend/report", "llm_api_routes"],
+            403,
+        ),
         (
             ["llm_api_routes", "/key/spend/report"],
             ["llm_api_routes", "/key/spend/report", "/key/spend/report"],
@@ -20385,7 +20442,10 @@ def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_para
     ("incoming", "written"),
     [
         (["llm_api_routes", "/key/spend/report"], None),
-        (["/key/spend/report", "llm_api_routes"], ["/key/spend/report", "llm_api_routes"]),
+        (
+            ["/key/spend/report", "llm_api_routes"],
+            ["/key/spend/report", "llm_api_routes"],
+        ),
         (["llm_api_routes"], ["llm_api_routes"]),
     ],
     ids=["unchanged_resend", "reordered", "changed"],
@@ -20407,7 +20467,10 @@ async def test_key_update_writes_allowed_routes_only_when_they_change(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("request_data", "expected_routes"),
-    [(GenerateKeyRequest(), []), (GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API), ["llm_api_routes"])],
+    [
+        (GenerateKeyRequest(), []),
+        (GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API), ["llm_api_routes"]),
+    ],
     ids=["no_key_type", "ai_apis"],
 )
 async def test_default_key_generate_params_allowed_routes_with_a_non_string_entry_is_ignored(
@@ -20485,9 +20548,12 @@ async def test_key_generate_omitted_budget_duration_still_takes_default_key_gene
 
 
 @pytest.mark.asyncio
-async def test_key_generate_explicit_null_budget_duration_cannot_bypass_upperbound(monkeypatch):
+async def test_key_generate_explicit_null_budget_duration_cannot_bypass_upperbound(
+    monkeypatch,
+):
     """upperbound_key_generate_params is an admin ceiling: an explicit null must not mint an uncapped key,
-    otherwise any key creator could bypass configured limits (duration, budgets, rate limits)."""
+    otherwise any key creator could bypass configured limits (duration, budgets, rate limits).
+    """
     from litellm.types.proxy.management_endpoints.ui_sso import (
         LiteLLM_UpperboundKeyGenerateParams,
     )
@@ -20525,6 +20591,8 @@ async def test_key_generate_omitted_budget_duration_still_filled_by_upperbound(m
 
     assert key_row["budget_duration"] == "30d"
     assert key_row["budget_reset_at"] is not None
+
+
 from litellm.proxy.management_helpers.access_group_key_sync import (
     _ATTACH_KEY_SQL,
     _DETACH_KEY_SQL,
@@ -21295,7 +21363,11 @@ async def test_check_project_key_limits_accepts_inherited_model_sentinels(reques
 @pytest.mark.parametrize("request_cls", [GenerateKeyRequest, UpdateKeyRequest])
 @pytest.mark.parametrize(
     "key_models",
-    [["gpt-5.4-mini"], ["all-team-models", "gpt-5.4-mini"], ["gpt-5.4-nano", "all-proxy-models", "gpt-5.4-mini"]],
+    [
+        ["gpt-5.4-mini"],
+        ["all-team-models", "gpt-5.4-mini"],
+        ["gpt-5.4-nano", "all-proxy-models", "gpt-5.4-mini"],
+    ],
 )
 @pytest.mark.asyncio
 async def test_check_project_key_limits_still_rejects_real_model_outside_project(request_cls, key_models):
@@ -23399,6 +23471,7 @@ async def test_generate_service_account_key_generates_uuid_when_no_alias(monkeyp
     assert data.metadata is not None
     assert data.metadata["service_account_id"]
 
+
 @pytest.mark.asyncio
 async def test_key_update_invalidates_cached_object_permission(monkeypatch):
     """Regression: /key/update must drop the cached permission row, not just the cached key.
@@ -24286,7 +24359,11 @@ def spend_permission_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 @pytest.mark.parametrize("route", ("/key/generate", "/user/new"))
-@pytest.mark.parametrize("permission", ("true", "false", False), ids=("string_true", "string_false", "bool_false"))
+@pytest.mark.parametrize(
+    "permission",
+    ("true", "false", False),
+    ids=("string_true", "string_false", "bool_false"),
+)
 def test_spend_permission_enterprise_error_regression(
     spend_permission_client: TestClient,
     route: str,
@@ -24301,7 +24378,12 @@ def test_spend_permission_enterprise_error_regression(
 
 @pytest.mark.parametrize(
     "permissions",
-    ({}, {"other": True}, {"other": "get_spend_routes"}, {"get_spend_routes_extra": True}),
+    (
+        {},
+        {"other": True},
+        {"other": "get_spend_routes"},
+        {"get_spend_routes_extra": True},
+    ),
     ids=("empty", "unrelated", "permission_in_value", "permission_in_other_key"),
 )
 def test_non_enterprise_permissions_guard(
@@ -24701,7 +24783,10 @@ def test_key_expiry_metadata_accepts_day_counts(value: int) -> None:
     assert raise_on_invalid_key_expiry_alert_days({}) is None
 
 
-@pytest.mark.parametrize("value", [None, "7", True, 7.0, {}, [], [7], [7, 1], 0, -1, KEY_EXPIRY_ALERT_MAX_DAYS + 1])
+@pytest.mark.parametrize(
+    "value",
+    [None, "7", True, 7.0, {}, [], [7], [7, 1], 0, -1, KEY_EXPIRY_ALERT_MAX_DAYS + 1],
+)
 def test_key_expiry_metadata_rejects_invalid_thresholds(value: object) -> None:
     with pytest.raises(HTTPException) as exc:
         raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value})
@@ -24813,3 +24898,11 @@ async def test_proxy_admin_can_replace_or_clear_customer_key_binding(
         user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
     assert actual["metadata"] == metadata
+
+
+@pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest, RegenerateKeyRequest))
+def test_public_key_requests_cannot_assign_the_server_owned_key_identity(
+    request_type: (type[GenerateKeyRequest] | type[UpdateKeyRequest] | type[RegenerateKeyRequest]),
+) -> None:
+    request: Final = request_type.model_validate({"key": "key-reference", "key_id": "caller-supplied-identity"})
+    assert "key_id" not in request.model_dump(exclude_unset=True)

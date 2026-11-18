@@ -14,6 +14,7 @@ import type { DailyData } from "@/components/UsagePage/types";
 import { customerHierarchyUsageCall, type CustomerUsageScope } from "./customerUsageApi";
 import { rankCustomerModels, rankCustomerUsage } from "./customerUsageData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
+import { customerAppParsers } from "./CustomerHierarchyNavigation";
 import {
   calendarDate,
   customerPresetRange,
@@ -23,6 +24,7 @@ import {
 } from "./customerUsageRange";
 
 const usageParsers = {
+  ...customerAppParsers,
   org: parseAsString,
   team: parseAsString,
   member: parseAsString,
@@ -55,7 +57,8 @@ export default function useCustomerHierarchyUsage() {
   const startDate = calendarDate(dateValue.from);
   const endDate = calendarDate(dateValue.to);
   const scope = params.org ? { org: params.org, team: params.team, member: params.member } : null;
-  const request = usageRequest(scope, accessToken, startDate, endDate);
+  const baseRequest = usageRequest(scope, accessToken, startDate, endDate);
+  const request = baseRequest ? { ...baseRequest, appId: params.app_id } : null;
   const month = customerPresetRange("month");
   const monthStartDate = calendarDate(month.from);
   const monthEndDate = calendarDate(month.to);
@@ -69,6 +72,7 @@ export default function useCustomerHierarchyUsage() {
       params.org,
       params.team,
       params.member,
+      params.app_id,
       startDate,
       endDate,
       monthStartDate,
@@ -113,6 +117,8 @@ export default function useCustomerHierarchyUsage() {
   const setBucket = (bucket: Granularity) => void setParams({ bucket });
   const setSearch = (search: string) => void setParams({ search, usagePage: null });
   const setPage = (usagePage: number) => void setParams({ usagePage });
+  const setApp = (app_id: string | null) =>
+    void setParams({ app_id, search: null, usagePage: null }, { history: "push" });
 
   return {
     params,
@@ -134,5 +140,6 @@ export default function useCustomerHierarchyUsage() {
     setBucket,
     setSearch,
     setPage,
+    setApp,
   };
 }
