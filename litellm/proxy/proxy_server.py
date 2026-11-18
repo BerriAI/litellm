@@ -22246,9 +22246,9 @@ def _is_callback_name(entry: object, callback_name: str) -> bool:
 def _callback_lists_to_rewrite(
     matching_keys: tuple[str, ...], owned_by_config: Callable[[str], bool]
 ) -> tuple[str, ...]:
-    """The matching lists the database owns, or all of them when the config file owns every one."""
+    """The matching lists the database owns. Callers refuse config-owned matches first."""
     database_owned: Final = tuple(key for key in matching_keys if not owned_by_config(key))
-    return database_owned or matching_keys
+    return database_owned
 
 
 @router.post(
@@ -22311,6 +22311,8 @@ async def delete_callback(
                 status_code=404,
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
+
+        proxy_config.reject_config_owned_deletes(section_name="litellm_settings", keys=matching_keys)
 
         rewritten_keys: Final = _callback_lists_to_rewrite(matching_keys, proxy_config.litellm_settings.owned_by_config)
         remaining_lists: Final = MappingProxyType(
