@@ -7,7 +7,6 @@ from litellm.types.utils import LlmProviders, ProviderSpecificHeader
 
 _HeaderValue: Final = TypeVar("_HeaderValue")
 _CASE_INSENSITIVE_OVERRIDES: Final = frozenset({ANTHROPIC_USER_PROFILE_ID_HEADER})
-_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
 
 
 def override_headers(
@@ -49,7 +48,8 @@ def _applies_to_call(
 
 
 def _contributed_headers(scoped_header: ProviderSpecificHeader, configured_names: frozenset[str]) -> Mapping[str, str]:
-    if scoped_header.get("configured_credential_only") and configured_names.isdisjoint(_CREDENTIAL_HEADERS):
+    credential_headers: Final = scoped_header.get("configured_credential_headers", ())
+    if credential_headers and configured_names.isdisjoint(name.lower() for name in credential_headers):
         return {}
     headers: Final[Mapping[str, str]] = scoped_header.get("extra_headers", {})
     if not scoped_header.get("yields_to_configured"):
@@ -77,7 +77,7 @@ class ProviderSpecificHeaderUtils:
         contribute only to a provider's native Messages route. Entries marked `claude_models_only` contribute
         only when `model` names a Claude model, entries marked `non_claude_models_only` only when it does not,
         entries marked `yields_to_configured` never replace a header already in `configured_headers`, and
-        entries marked `configured_credential_only` contribute only when `configured_headers` carries a credential.
+        entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider

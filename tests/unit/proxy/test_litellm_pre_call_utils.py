@@ -8465,6 +8465,13 @@ def test_a_completion_sends_the_client_profile_id_to_claude_models_unless_the_de
         ),
         ("chat", "sk-ant-caller", {"x-api-key": "sk-ant-deployment"}, ("x-api-key", "sk-ant-caller"), "uprof_client"),
         ("chat", "sk-ant-caller", {}, ("x-api-key", "sk-ant-caller"), "uprof_client"),
+        (
+            "chat",
+            "sk-ant-caller",
+            {"Authorization": "Bearer sk-ant-oat01-deployment"},
+            ("authorization", "Bearer sk-ant-oat01-deployment"),
+            "uprof_key",
+        ),
     ],
     ids=[
         "messages_sends_the_deployment_key_so_the_pin_applies",
@@ -8473,6 +8480,7 @@ def test_a_completion_sends_the_client_profile_id_to_claude_models_unless_the_de
         "messages_keeps_the_deployment_key_and_pin_for_a_prefixed_oauth_body_key",
         "chat_sends_the_caller_key_over_a_configured_one",
         "chat_sends_the_caller_key",
+        "chat_sends_a_configured_oauth_token_over_the_caller_key",
     ],
 )
 async def test_a_caller_api_key_skips_the_pin_only_when_anthropic_receives_it(
@@ -8516,6 +8524,57 @@ async def test_a_caller_api_key_skips_the_pin_only_when_anthropic_receives_it(
     assert len(received) == 1
     credentials: Final = {name: received[0].headers.get_list(name) for name in ("x-api-key", "authorization")}
     assert credentials == {"x-api-key": [], "authorization": [], sent_credential[0]: [sent_credential[1]]}
+    assert received[0].headers.get_list("anthropic-user-profile-id") == [sent_profile]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_headers,sent_profile",
+    [
+        ({"x-api-key": "foundry-deployment"}, "uprof_key"),
+        ({"Authorization": "Bearer foundry-deployment"}, "uprof_key"),
+        ({"api-key": "foundry-deployment"}, "uprof_client"),
+        ({}, "uprof_client"),
+    ],
+    ids=[
+        "configured_x_api_key_replaces_the_caller_key",
+        "configured_bearer_authenticates_beside_the_caller_key",
+        "configured_api_key_is_not_read_by_foundry_claude",
+        "caller_key_alone",
+    ],
+)
+async def test_foundry_chat_keeps_the_pin_when_a_configured_credential_can_authenticate(
+    deployment_headers: dict[str, str], sent_profile: str
+) -> None:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    updated: Final = await _request_data_added_by_the_proxy(
+        {"api_key": "foundry-caller"}, {USER_PROFILE_ID_HEADER: "uprof_client"}, {}, _PINNED_KEY
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what the proxy sent
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=dict(_ANTHROPIC_MESSAGE_REPLY), request=request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.acompletion(
+            model="azure_ai/claude-sonnet-5-5",
+            api_base=f"{_FOUNDRY_BASE}/anthropic",
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=8,
+            api_key="foundry-caller",
+            extra_headers=dict(deployment_headers),
+            client=upstream,
+            provider_specific_header=updated["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1
     assert received[0].headers.get_list("anthropic-user-profile-id") == [sent_profile]
 
 
