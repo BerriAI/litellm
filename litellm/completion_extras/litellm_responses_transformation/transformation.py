@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     responses_reasoning_items_from_thinking_blocks,
     thinking_blocks_from_reasoning_items,
 )
+from litellm.llms.azure_ai.common_utils import is_foundry_project_agent
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
@@ -238,6 +239,10 @@ def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
 
 
 _SYSTEM_INPUT_PROVIDERS: Final = frozenset({"openai", "azure", "azure_ai", "bedrock_mantle"})
+
+
+def _sends_system_as_input(provider: str | None, model: str) -> bool:
+    return provider in _SYSTEM_INPUT_PROVIDERS and not (provider == "azure_ai" and is_foundry_project_agent(model))
 
 
 def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
@@ -1350,7 +1355,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             keep_system_order=marked_a_system_string,
-            preserve_system_instructions=preserve_system_instructions or provider not in _SYSTEM_INPUT_PROVIDERS,
+            preserve_system_instructions=preserve_system_instructions or not _sends_system_as_input(provider, model),
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
             replay_openai_history=provider == "openai",
