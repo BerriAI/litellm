@@ -824,6 +824,11 @@ describe("Sidebar (leftnav)", () => {
     expect(link.querySelector("svg")).not.toBeNull();
   });
 
+  it("shows Projects without a Beta badge", () => {
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/ui/projects");
+  });
+
   it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
 
