@@ -12,7 +12,7 @@ from uuid import uuid4
 import anyio
 import httpx
 import httpx2
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import Headers
 from typing_extensions import Never, ReadOnly
@@ -1324,6 +1324,7 @@ if MCP_AVAILABLE:
     @catalog_operation(global_manager)
     async def call_tool_rest_api(
         request: Request,
+        response: Response,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -1342,205 +1343,244 @@ if MCP_AVAILABLE:
         )
 
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
+        raw_body: dict[str, object] = {}
+        processor: ProxyBaseLLMRequestProcessing | None = None
         try:
-            user_api_key_dict = await acting_user_auth(user_api_key_dict)
-            data = await request.json()
-
-            tool_name: Final[str | None] = data.get("name")
-            tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
-
-            from litellm.proxy.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
-
-            if tool_name in VIRTUAL_TOOL_NAMES:
-                return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
-
-            # Validate required parameters early
-            server_id: Final[str | None] = data.get("server_id")
-            if not server_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "missing_parameter",
-                        "message": "server_id is required in request body",
-                    },
-                )
-
-            if not tool_name:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "missing_parameter",
-                        "message": "name is required in request body",
-                    },
-                )
-
-            data["model"] = f"MCP: {tool_name}"
-            model_metadata: Final[_MCPModelMetadata] = {
-                **(data.get("metadata") or MappingProxyType({})),
-                "model_group": f"MCP: {tool_name}",
-            }
-            data["metadata"] = model_metadata
-            proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-            _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
             try:
-                (
+                user_api_key_dict = await acting_user_auth(user_api_key_dict)
+                data = await request.json()
+                raw_body = data
+
+                tool_name: Final[str | None] = data.get("name")
+                tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
+
+                from litellm.proxy.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
+
+                if tool_name in VIRTUAL_TOOL_NAMES:
+                    virtual_result: Final = await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
+                    response.headers.update(
+                        await proxy_logging_obj.post_call_response_headers_hook(
+                            data=data,
+                            user_api_key_dict=user_api_key_dict,
+                            response=virtual_result,
+                            request_headers=dict(request.headers),
+                        )
+                    )
+                    return virtual_result
+
+                # Validate required parameters early
+                server_id: Final[str | None] = data.get("server_id")
+                if not server_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "missing_parameter",
+                            "message": "server_id is required in request body",
+                        },
+                    )
+
+                if not tool_name:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "missing_parameter",
+                            "message": "name is required in request body",
+                        },
+                    )
+
+                data["model"] = f"MCP: {tool_name}"
+                model_metadata: Final[_MCPModelMetadata] = {
+                    **(data.get("metadata") or MappingProxyType({})),
+                    "model_group": f"MCP: {tool_name}",
+                }
+                data["metadata"] = model_metadata
+                proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+                processor = proxy_base_llm_response_processor
+                _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
+                try:
+                    (
+                        allowed_mcp_servers,
+                        canonical_server_id,
+                    ) = await _resolve_allowed_mcp_servers_with_ip_filter(request, user_api_key_dict, server_id)
+                except Exception as access_error:
+                    try:
+                        failure_pre_call_result: Final = (
+                            await proxy_base_llm_response_processor.common_processing_pre_call_logic(
+                                request=request,
+                                user_api_key_dict=user_api_key_dict,
+                                proxy_config=proxy_config,
+                                route_type=CallTypes.call_mcp_tool.value,
+                                proxy_logging_obj=proxy_logging_obj,
+                                general_settings=general_settings,
+                                skip_guardrails=True,
+                                logging_auth=user_api_key_dict,
+                            )
+                        )
+                        failure_data, failure_logging_candidate = TypeAdapter(
+                            tuple[dict[str, object], object]
+                        ).validate_python(failure_pre_call_result)
+                        if isinstance(failure_logging_candidate, LiteLLMLoggingObj):
+                            _stamp_mcp_tool_metadata(failure_logging_candidate, server_id, tool_name)
+                            await _safe_fire_mcp_tool_call_failure_logging(
+                                failure_logging_candidate,
+                                access_error,
+                                _request_start_time,
+                                user_api_key_dict,
+                                failure_data,
+                            )
+                        else:
+                            verbose_logger.warning("MCP request processing did not return a logging object")
+                    except Exception as logging_error:  # noqa: BLE001  # logging failures must not mask the access error
+                        verbose_logger.warning("MCP tool call access-failure logging failed: %s", logging_error)
+                    raise
+                target_server, guardrail_auth = await _rest_tool_call_server_and_auth(
+                    user_api_key_dict,
                     allowed_mcp_servers,
                     canonical_server_id,
-                ) = await _resolve_allowed_mcp_servers_with_ip_filter(request, user_api_key_dict, server_id)
-            except Exception as access_error:
+                    tool_name,
+                )
                 try:
-                    failure_pre_call_result: Final = (
-                        await proxy_base_llm_response_processor.common_processing_pre_call_logic(
-                            request=request,
-                            user_api_key_dict=user_api_key_dict,
-                            proxy_config=proxy_config,
-                            route_type=CallTypes.call_mcp_tool.value,
-                            proxy_logging_obj=proxy_logging_obj,
-                            general_settings=general_settings,
-                            skip_guardrails=True,
-                            logging_auth=user_api_key_dict,
-                        )
+                    pre_call_result: Final = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
+                        request=request,
+                        user_api_key_dict=user_api_key_dict,
+                        proxy_config=proxy_config,
+                        route_type=CallTypes.call_mcp_tool.value,
+                        proxy_logging_obj=proxy_logging_obj,
+                        general_settings=general_settings,
+                        skip_guardrails=True,
+                        logging_auth=guardrail_auth,
                     )
-                    failure_data, failure_logging_candidate = TypeAdapter(
-                        tuple[dict[str, object], object]
-                    ).validate_python(failure_pre_call_result)
-                    if isinstance(failure_logging_candidate, LiteLLMLoggingObj):
-                        _stamp_mcp_tool_metadata(failure_logging_candidate, server_id, tool_name)
-                        await _safe_fire_mcp_tool_call_failure_logging(
-                            failure_logging_candidate,
-                            access_error,
-                            _request_start_time,
-                            user_api_key_dict,
-                            failure_data,
-                        )
-                    else:
+                    data, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(
+                        pre_call_result
+                    )
+                    logging_obj: Final[LiteLLMLoggingObj | None] = (
+                        logging_candidate if isinstance(logging_candidate, LiteLLMLoggingObj) else None
+                    )
+                    if logging_obj is None:
                         verbose_logger.warning("MCP request processing did not return a logging object")
-                except Exception as logging_error:  # noqa: BLE001  # logging failures must not mask the access error
-                    verbose_logger.warning("MCP tool call access-failure logging failed: %s", logging_error)
-                raise
-            target_server, guardrail_auth = await _rest_tool_call_server_and_auth(
-                user_api_key_dict,
-                allowed_mcp_servers,
-                canonical_server_id,
-                tool_name,
-            )
-            try:
-                pre_call_result: Final = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
-                    request=request,
-                    user_api_key_dict=user_api_key_dict,
-                    proxy_config=proxy_config,
-                    route_type=CallTypes.call_mcp_tool.value,
-                    proxy_logging_obj=proxy_logging_obj,
-                    general_settings=general_settings,
-                    skip_guardrails=True,
-                    logging_auth=guardrail_auth,
-                )
-                data, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
-                logging_obj: Final[LiteLLMLoggingObj | None] = (
-                    logging_candidate if isinstance(logging_candidate, LiteLLMLoggingObj) else None
-                )
-                if logging_obj is None:
-                    verbose_logger.warning("MCP request processing did not return a logging object")
 
-                executed, _tool_start_time = await _execute_rest_mcp_tool(
-                    request=request,
-                    tool_name=tool_name,
-                    tool_arguments=tool_arguments,
-                    allowed_mcp_servers=allowed_mcp_servers,
-                    canonical_server_id=canonical_server_id,
-                    target_server=target_server,
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    logging_obj=logging_obj,
-                    guardrail_auth=guardrail_auth,
+                    executed, _tool_start_time = await _execute_rest_mcp_tool(
+                        request=request,
+                        tool_name=tool_name,
+                        tool_arguments=tool_arguments,
+                        allowed_mcp_servers=allowed_mcp_servers,
+                        canonical_server_id=canonical_server_id,
+                        target_server=target_server,
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        logging_obj=logging_obj,
+                        guardrail_auth=guardrail_auth,
+                    )
+                    result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
+                finally:
+                    failure: Final = sys.exc_info()[1]
+                    if isinstance(failure, Exception):
+                        request_data: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(
+                            proxy_base_llm_response_processor.data
+                        )
+                        request_logging_obj_candidate: Final = request_data.get("litellm_logging_obj")
+                        request_logging_obj: Final[LiteLLMLoggingObj | None] = (
+                            request_logging_obj_candidate
+                            if isinstance(request_logging_obj_candidate, LiteLLMLoggingObj)
+                            else None
+                        )
+                        await _safe_fire_mcp_tool_call_failure_logging(
+                            request_logging_obj,
+                            failure,
+                            _request_start_time,
+                            guardrail_auth,
+                            request_data,
+                        )
+                logged_result: Final = await _safe_fire_mcp_tool_call_logging(
+                    logging_obj,
+                    result,
+                    _tool_start_time,
+                    datetime.now(),
+                    user_api_key_auth=guardrail_auth,
+                    request_data=data,
                 )
-                result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
-            finally:
-                failure: Final = sys.exc_info()[1]
-                if isinstance(failure, Exception):
-                    request_data: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(
-                        proxy_base_llm_response_processor.data
+                response.headers.update(
+                    await proxy_logging_obj.post_call_response_headers_hook(
+                        data=proxy_base_llm_response_processor.data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=logged_result,
+                        request_headers=dict(request.headers),
                     )
-                    request_logging_obj_candidate: Final = request_data.get("litellm_logging_obj")
-                    request_logging_obj: Final[LiteLLMLoggingObj | None] = (
-                        request_logging_obj_candidate
-                        if isinstance(request_logging_obj_candidate, LiteLLMLoggingObj)
-                        else None
-                    )
-                    await _safe_fire_mcp_tool_call_failure_logging(
-                        request_logging_obj,
-                        failure,
-                        _request_start_time,
-                        guardrail_auth,
-                        request_data,
-                    )
-            return await _safe_fire_mcp_tool_call_logging(
-                logging_obj,
-                result,
-                _tool_start_time,
-                datetime.now(),
-                user_api_key_auth=guardrail_auth,
-                request_data=data,
-            )
-        except MCPMissingUserEnvVarsError as e:
-            verbose_logger.info(
-                "MCP tool call missing per-user env vars: server_id=%s missing=%s",
-                e.server_id,
-                e.missing,
-            )
-            raise HTTPException(
-                status_code=412,
-                detail={
-                    "error": "missing_user_env_vars",
-                    "message": str(e),
-                    "server_id": e.server_id,
-                    "server_name": e.server_name,
-                    "missing": e.missing,
-                    "setup_url": e.setup_url,
-                },
-            )
-        except BlockedPiiEntityError as e:
-            verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "blocked_pii_entity",
-                    "message": str(e),
-                    "entity_type": getattr(e, "entity_type", None),
-                    "guardrail_name": getattr(e, "guardrail_name", None),
-                },
-            )
-        except (GuardrailRaisedException, ModifyResponseException) as e:
-            verbose_logger.error("Guardrail violation in MCP tool call: %s", e)
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "guardrail_violation",
-                    "message": str(e),
-                    "guardrail_name": getattr(e, "guardrail_name", None),
-                },
-            )
-        except MCPUpstreamAuthError as e:
-            # A client-forwarded pass-through upstream 401 from either the direct or the virtual call
-            # branch. Relay it as a 401 + WWW-Authenticate so the MCP client can re-run upstream OAuth,
-            # and log at info: an expected caller-must-reauth signal, not an operator-actionable error.
-            verbose_logger.info("MCP tool call relaying upstream HTTP %s", e.status_code)
-            raise _relay_upstream_auth_http_exception(e, request)
+                )
+                return logged_result
+            except MCPMissingUserEnvVarsError as e:
+                verbose_logger.info(
+                    "MCP tool call missing per-user env vars: server_id=%s missing=%s",
+                    e.server_id,
+                    e.missing,
+                )
+                raise HTTPException(
+                    status_code=412,
+                    detail={
+                        "error": "missing_user_env_vars",
+                        "message": str(e),
+                        "server_id": e.server_id,
+                        "server_name": e.server_name,
+                        "missing": e.missing,
+                        "setup_url": e.setup_url,
+                    },
+                )
+            except BlockedPiiEntityError as e:
+                verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "blocked_pii_entity",
+                        "message": str(e),
+                        "entity_type": getattr(e, "entity_type", None),
+                        "guardrail_name": getattr(e, "guardrail_name", None),
+                    },
+                )
+            except (GuardrailRaisedException, ModifyResponseException) as e:
+                verbose_logger.error("Guardrail violation in MCP tool call: %s", e)
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "guardrail_violation",
+                        "message": str(e),
+                        "guardrail_name": getattr(e, "guardrail_name", None),
+                    },
+                )
+            except MCPUpstreamAuthError as e:
+                # A client-forwarded pass-through upstream 401 from either the direct or the virtual call
+                # branch. Relay it as a 401 + WWW-Authenticate so the MCP client can re-run upstream OAuth,
+                # and log at info: an expected caller-must-reauth signal, not an operator-actionable error.
+                verbose_logger.info("MCP tool call relaying upstream HTTP %s", e.status_code)
+                raise _relay_upstream_auth_http_exception(e, request)
+            except HTTPException as e:
+                # Locally generated denials (tool/server permission, IP filtering, BYOK) stay at error level
+                # so restriction probing keeps full monitoring visibility; the relayed upstream 401 above is
+                # the only status demoted to info.
+                verbose_logger.error("HTTPException in MCP tool call: %s", e)
+                raise e
+            except Exception as e:
+                verbose_logger.exception("Unexpected error in MCP tool call: %s", e)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "internal_server_error",
+                        "message": f"An unexpected error occurred: {e}",
+                    },
+                )
         except HTTPException as e:
-            # Locally generated denials (tool/server permission, IP filtering, BYOK) stay at error level
-            # so restriction probing keeps full monitoring visibility; the relayed upstream 401 above is
-            # the only status demoted to info.
-            verbose_logger.error("HTTPException in MCP tool call: %s", e)
-            raise e
-        except Exception as e:
-            verbose_logger.exception("Unexpected error in MCP tool call: %s", e)
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "internal_server_error",
-                    "message": f"An unexpected error occurred: {e}",
-                },
+            callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
+                data=processor.data if processor is not None else raw_body,
+                user_api_key_dict=user_api_key_dict,
+                response=None,
+                request_headers=dict(request.headers),
             )
+            if not callback_headers:
+                raise
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers={**callback_headers, **(e.headers or {})},
+            ) from e
 
     ########################################################
     # MCP Connection testing routes

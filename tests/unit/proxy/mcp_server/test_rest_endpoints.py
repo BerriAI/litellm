@@ -13,11 +13,14 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
+from typing_extensions import Never
 
+import litellm
 from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     NewMCPServerRequest,
     UpdateMCPServerRequest,
@@ -2549,6 +2552,7 @@ class TestCallToolRestAPI:
         with pytest.raises(HTTPException) as exc_info:
             await rest_endpoints.call_tool_rest_api(
                 request,
+                Response(),
                 user_api_key_dict=UserAPIKeyAuth(),
             )
 
@@ -2686,6 +2690,7 @@ class TestCallToolRestAPI:
 
         result = await rest_endpoints.call_tool_rest_api(
             request,
+            Response(),
             user_api_key_dict=original_auth,
         )
 
@@ -2897,7 +2902,7 @@ class TestCallToolRestAPI:
             json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
         )
 
-        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+        result = await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=UserAPIKeyAuth())
 
         assert isinstance(result, CallToolResult)
         dumped = result.model_dump(by_alias=True, mode="json", exclude_none=True)
@@ -2975,7 +2980,7 @@ class TestCallToolRestAPI:
             json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
         )
 
-        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+        result = await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=UserAPIKeyAuth())
 
         assert result == _OK_TOOL_RESULT
         assert captured["oauth2_headers"] == expected
@@ -3044,7 +3049,7 @@ class TestCallToolRestAPI:
             json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
         )
 
-        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+        result = await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=UserAPIKeyAuth())
 
         assert result == masked_result
 
@@ -3116,7 +3121,7 @@ class TestCallToolRestAPI:
             json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
         )
 
-        await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+        await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=UserAPIKeyAuth())
 
         logged_start_time = fire_logging.await_args.args[2]
         assert captured["start_time"] >= pre_call_finished_at["value"]
@@ -3216,6 +3221,7 @@ class TestCallToolRestAPI:
         with pytest.raises(HTTPException) as exc_info:
             await rest_endpoints.call_tool_rest_api(
                 request,
+                Response(),
                 user_api_key_dict=UserAPIKeyAuth(),
             )
 
@@ -3286,7 +3292,7 @@ class TestCallToolRestAPI:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+            await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=UserAPIKeyAuth())
 
         assert exc_info.value.status_code == 403
         error_messages = [_rendered_log_message(c) for c in mock_logger.error.call_args_list if c.args]
@@ -3387,7 +3393,7 @@ class TestCallToolRestAPI:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+            await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=user_api_key_dict)
 
         assert exc_info.value.status_code == 400
         if custom_code:
@@ -3448,7 +3454,9 @@ class TestCallToolRestAPI:
 
         with pytest.raises(HTTPException) as exc_info:
             await rest_endpoints.call_tool_rest_api(
-                request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+                request,
+                Response(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call"),
             )
 
         assert exc_info.value is guardrail_error
@@ -3472,7 +3480,20 @@ class TestCallToolRestAPI:
         fire_logging.assert_awaited_once()
 
     @pytest.mark.parametrize("upstream_status", [401, 403])
-    async def test_virtual_mcp_tool_call_relays_upstream_auth_failure(self, monkeypatch, upstream_status):
+    @pytest.mark.parametrize(
+        ("callback_headers", "relayed_callback_headers"),
+        [
+            pytest.param({}, {}, id="no_callback_headers"),
+            pytest.param(
+                {"www-authenticate": "Bearer from-callback", "x-callback-trace": "trace-1"},
+                {"x-callback-trace": "trace-1"},
+                id="callback_cannot_replace_the_upstream_challenge",
+            ),
+        ],
+    )
+    async def test_virtual_mcp_tool_call_relays_upstream_auth_failure(
+        self, monkeypatch, upstream_status, callback_headers, relayed_callback_headers
+    ):
         """The virtual mcp_tool_call REST branch reaches execute_mcp_tool via handle_mcp_tool_call
         without the direct branch's relay wrapper, so an MCPUpstreamAuthError from it must be relayed
         by the endpoint-level handler (a real 401/403 + WWW-Authenticate) rather than falling through
@@ -3488,6 +3509,14 @@ class TestCallToolRestAPI:
 
         async def fake_handle_mcp_tool_call(**kwargs):
             raise MCPUpstreamAuthError(status_code=upstream_status, www_authenticate=challenge, server_name="stub")
+
+        class CallbackHeaders(CustomLogger):
+            async def async_post_call_response_headers_hook(
+                self, data, user_api_key_dict, response, request_headers=None
+            ):
+                return callback_headers
+
+        monkeypatch.setattr(litellm, "callbacks", [CallbackHeaders()])
 
         class _FakePreCall:
             def __init__(self, data):
@@ -3519,11 +3548,10 @@ class TestCallToolRestAPI:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+            await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=user_api_key_dict)
 
         assert exc_info.value.status_code == upstream_status
-        assert exc_info.value.headers is not None
-        assert exc_info.value.headers.get("www-authenticate") == challenge
+        assert exc_info.value.headers == {**relayed_callback_headers, "www-authenticate": challenge}
 
     async def test_virtual_mcp_tool_call_guardrail_block_runs_failure_logging(self, monkeypatch):
         """A pre_mcp_call guardrail block on the virtual mcp_tool_call branch must write a failure
@@ -3567,7 +3595,7 @@ class TestCallToolRestAPI:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+            await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=user_api_key_dict)
 
         assert exc_info.value is guardrail_error
         failure_logging.assert_awaited_once()
@@ -3660,12 +3688,12 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
     )
     if selected and action == "block":
         with pytest.raises(HTTPException) as error:
-            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=caller)
+            await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=caller)
         assert error.value.status_code == 400
         assert error.value.detail["message"] == "resolved tool blocked"
         upstream.assert_not_awaited()
     else:
-        result: Final = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=caller)
+        result: Final = await rest_endpoints.call_tool_rest_api(request, Response(), user_api_key_dict=caller)
         assert result.is_error is False
         upstream.assert_awaited_once()
         assert upstream.await_args.kwargs == {"q": "redacted" if selected else "confidential"}
@@ -4926,7 +4954,7 @@ class TestClientAllowlistOnRestRoutes:
 
         with pytest.raises(HTTPException) as denied:
             await rest_endpoints.call_tool_rest_api(
-                request, user_api_key_dict=UserAPIKeyAuth(jwt_claims={"azp": "claude-code"})
+                request, Response(), user_api_key_dict=UserAPIKeyAuth(jwt_claims={"azp": "claude-code"})
             )
 
         assert denied.value.status_code == 403
@@ -5097,6 +5125,7 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
     try:
         result: Final = await rest_endpoints.call_tool_rest_api(
             _build_request(headers, path="/mcp-rest/tools/call", json_body=payload),
+            Response(),
             user_api_key_dict=auth,
         )
         assert result.is_error is False
@@ -5104,3 +5133,126 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
         assert observed.get_nowait() == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")
+
+
+@pytest.mark.parametrize("virtual", [False, True], ids=["direct", "virtual"])
+async def test_rest_tool_call_sets_callback_response_headers_without_changing_the_result(
+    monkeypatch: pytest.MonkeyPatch, virtual: bool
+) -> None:
+    from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
+
+    class TraceHeaders(CustomLogger):
+        async def async_post_call_response_headers_hook(
+            self,
+            data: dict[str, object],
+            user_api_key_dict: UserAPIKeyAuth,
+            response: object,
+            request_headers: dict[str, str] | None = None,
+        ) -> dict[str, str]:
+            return {
+                "x-callback-model": str(data.get("model")),
+                "x-callback-result-error": str(getattr(response, "is_error", None)),
+                "x-callback-request-trace": (request_headers or {}).get("x-trace", ""),
+            }
+
+    async def echo() -> str:
+        return "traced-result"
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-traced",
+        object_permission={
+            "object_permission_id": "traced",
+            "mcp_servers": ["traced"],
+            "mcp_tool_search_enabled": virtual,
+        },
+    )
+    managed: Final = MCPServer(
+        server_id="traced",
+        name="traced",
+        transport=MCPTransport.http,
+        spec_path="/catalog.yaml",
+        allow_all_keys=True,
+    )
+    monkeypatch.setitem(rest_endpoints.global_mcp_server_manager.registry, managed.server_id, managed)
+    global_mcp_tool_registry.register_tool(
+        name="traced-echo", description="Echo", input_schema={"type": "object"}, handler=echo
+    )
+    payload: Final = {
+        "server_id": "traced",
+        "name": "mcp_tool_call" if virtual else "traced-echo",
+        "arguments": {"tool_name": "traced-echo", "arguments": {}} if virtual else {},
+    }
+
+    async def call(response: Response) -> object:
+        return await rest_endpoints.call_tool_rest_api(
+            _build_request({"x-trace": "trace-7"}, path="/mcp-rest/tools/call", json_body=payload),
+            response,
+            user_api_key_dict=auth,
+        )
+
+    try:
+        without_callback: Final = Response()
+        expected: Final = await call(without_callback)
+        monkeypatch.setattr(litellm, "callbacks", [TraceHeaders()])
+        with_callback: Final = Response()
+        result: Final = await call(with_callback)
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("traced-")
+    assert result == expected
+    assert "x-callback-model" not in without_callback.headers
+    assert with_callback.headers["x-callback-result-error"] == "False"
+    assert with_callback.headers["x-callback-request-trace"] == "trace-7"
+    assert virtual or with_callback.headers["x-callback-model"] == "MCP: traced-echo"
+
+
+async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data_pre_call_hooks_produced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+
+    class StampThenReport(CustomLogger):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict[str, object],
+            call_type: str,
+        ) -> dict[str, object]:
+            return {**data, "stamped_by_pre_call": call_type}
+
+        async def async_post_call_response_headers_hook(
+            self,
+            data: dict[str, object],
+            user_api_key_dict: UserAPIKeyAuth,
+            response: object,
+            request_headers: dict[str, str] | None = None,
+        ) -> dict[str, str]:
+            return {"x-callback-stamp": str(data.get("stamped_by_pre_call")), "x-callback-response": str(response)}
+
+    async def explode(**kwargs: object) -> Never:
+        raise HTTPException(status_code=418, detail={"error": "teapot"})
+
+    managed: Final = MCPServer(
+        server_id="failing",
+        name="failing",
+        transport=MCPTransport.http,
+        spec_path="/catalog.yaml",
+        allow_all_keys=True,
+    )
+    monkeypatch.setitem(rest_endpoints.global_mcp_server_manager.registry, managed.server_id, managed)
+    monkeypatch.setattr(litellm, "callbacks", [StampThenReport()])
+    monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", explode)
+    with pytest.raises(HTTPException) as error:
+        await rest_endpoints.call_tool_rest_api(
+            _build_request(
+                path="/mcp-rest/tools/call",
+                json_body={"server_id": "failing", "name": "failing-explode", "arguments": {}},
+            ),
+            Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-failing",
+                object_permission={"object_permission_id": "failing", "mcp_servers": ["failing"]},
+            ),
+        )
+    assert (error.value.status_code, error.value.detail) == (418, {"error": "teapot"})
+    assert error.value.headers == {"x-callback-stamp": "call_mcp_tool", "x-callback-response": "None"}

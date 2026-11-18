@@ -16,11 +16,13 @@ import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from functools import partial
 from types import SimpleNamespace
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Response
 from mcp.types import ListToolsResult, Tool
 from pydantic import JsonValue
 
@@ -679,11 +681,12 @@ class TestCallToolRestApiVirtualTools:
     def _get_call_fn(self) -> Any:
         from litellm.proxy.mcp_server.rest_endpoints import router
 
-        return next(
+        endpoint = next(
             r.endpoint
             for r in router.routes
             if hasattr(r, "path") and r.path.endswith("/tools/call") and hasattr(r, "methods") and "POST" in r.methods
         )
+        return partial(endpoint, response=Response())
 
     @pytest.mark.asyncio
     async def test_mcp_tool_search_call_returns_tool_defs(self) -> None:
@@ -955,6 +958,7 @@ class TestCallToolRestApiVirtualTools:
         router.aembedding = AsyncMock(side_effect=fake_aembedding)
         key_limits = MagicMock()
         key_limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        key_limits.post_call_response_headers_hook = AsyncMock(return_value={})
         with (
             patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
                 "litellm.proxy.proxy_server.llm_router", router

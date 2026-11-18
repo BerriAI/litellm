@@ -26,6 +26,7 @@ from integration._support.mcp import (
     McpPeer,
     Outcome,
     ScriptedTool,
+    call_tool,
     mcp_peer,
     register_mcp,
     scripted_peer,
@@ -269,6 +270,12 @@ class HookRecorder(CustomLogger):
                 "content": [item.model_dump() for item in response_obj.mcp_tool_call_response],
             }}
         )
+
+    async def async_post_call_response_headers_hook(self, data, user_api_key_dict, response, request_headers=None):
+        return {{
+            "x-recorder-response": "absent" if response is None else "present",
+            "x-recorder-model": str(data.get("model")),
+        }}
 
 
 class SinkGuardrail(CustomGuardrail):
@@ -691,3 +698,56 @@ def test_an_adapter_returning_the_wrong_number_of_texts_fails_closed_before_the_
             ("call_mcp_tool", "failure"),
         ], rows
         assert _tool_metadata(rows[1])["arguments"] == {"record": COUNT_MISMATCH}, rows[1]
+
+
+def _rest_add(gateway: Gateway, scenario: Scenario, peer: McpPeer) -> tuple[httpx.Response, str]:
+    alias: Final = "hdr" + uuid.uuid4().hex[:8]
+    identity: Final = register_mcp(scenario, peer, alias)
+    key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+    return call_tool(gateway, key, identity, f"{alias}-add", {"a": 2, "b": 3}), alias
+
+
+def test_rest_tool_call_carries_callback_response_headers_and_the_body_a_gateway_without_the_callback_returns(
+    hooks_rig: HooksRig, gateway: Gateway
+) -> None:
+    with mcp_peer() as peer, hooks_rig.gateway.scenario() as hooked, gateway.scenario() as plain:
+        with_callback, alias = _rest_add(hooks_rig.gateway, hooked, peer)
+        without_callback, _ = _rest_add(gateway, plain, peer)
+        assert (with_callback.status_code, without_callback.status_code) == (200, 200), with_callback.text
+        assert "x-recorder-response" not in without_callback.headers, without_callback.headers
+        assert with_callback.json() == without_callback.json(), with_callback.text
+        assert [item["text"] for item in with_callback.json()["content"]] == ["5"], with_callback.text
+        assert with_callback.headers.get("x-recorder-response") == "present", with_callback.headers
+        assert with_callback.headers.get("x-recorder-model") == f"MCP: {alias}-add", with_callback.headers
+
+
+def _rejected_tool_calls(gateway: Gateway, scenario: Scenario, peer: McpPeer) -> tuple[httpx.Response, httpx.Response]:
+    alias: Final = "hdrdeny" + uuid.uuid4().hex[:8]
+    register_mcp(scenario, peer, alias)
+    key: Final = scenario.key()
+    headers: Final = {"x-litellm-api-key": key}
+    no_server: Final = gateway.client.post(
+        "/mcp-rest/tools/call", headers=headers, json={"name": f"{alias}-add", "arguments": {"a": 2, "b": 3}}
+    )
+    unknown_server: Final = gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers=headers,
+        json={"server_id": "no-such-server", "name": "no-such-server-add", "arguments": {"a": 2, "b": 3}},
+    )
+    return no_server, unknown_server
+
+
+def test_rejected_rest_tool_call_carries_callback_response_headers_with_status_and_detail_unchanged(
+    hooks_rig: HooksRig, gateway: Gateway
+) -> None:
+    with mcp_peer() as peer, hooks_rig.gateway.scenario() as hooked, gateway.scenario() as plain:
+        with_callback: Final = _rejected_tool_calls(hooks_rig.gateway, hooked, peer)
+        without_callback: Final = _rejected_tool_calls(gateway, plain, peer)
+        assert tool_calls(peer.drain()) == ()
+    for hooked_response, plain_response in zip(with_callback, without_callback, strict=True):
+        assert hooked_response.status_code == plain_response.status_code >= 400, hooked_response.text
+        assert hooked_response.json() == plain_response.json(), hooked_response.text
+        assert "x-recorder-response" not in plain_response.headers, plain_response.headers
+        assert hooked_response.headers.get("x-recorder-response") == "absent", hooked_response.headers
+    assert with_callback[0].json()["detail"]["error"] == "missing_parameter", with_callback[0].text
+    assert with_callback[1].headers.get("x-recorder-model") == "MCP: no-such-server-add", with_callback[1].headers
