@@ -344,6 +344,7 @@ model LiteLLM_ProjectTable {
 
 // Audit table for deleted teams - preserves spend and team information for historical tracking
 model LiteLLM_DeletedTeamTable {
+    cost_margin_percent     Float?
     id                      String   @id @default(uuid())
     team_id                 String   // Original team_id
     team_alias              String?
