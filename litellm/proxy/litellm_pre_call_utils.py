@@ -4235,22 +4235,35 @@ def _valid_provider_specific_header(entry: object) -> ProviderSpecificHeader | N
         return None
 
 
-def _reaches_any_provider(header: ProviderSpecificHeader, providers: frozenset[str]) -> bool:
-    return not providers.isdisjoint(provider.strip() for provider in header["custom_llm_provider"].split(","))
-
-
-def _without_pin_overrides(header: ProviderSpecificHeader, pinned_providers: frozenset[str]) -> ProviderSpecificHeader:
-    strips_credentials: Final = _reaches_any_provider(header, pinned_providers)
-    return _PROVIDER_SPECIFIC_HEADER.validate_python(
-        {
-            **header,
-            "extra_headers": {
-                name: value
-                for name, value in header["extra_headers"].items()
-                if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
-                and not (strips_credentials and _is_credential_header(name))
-            },
-        }
+def _caller_entries_beside_a_pin(
+    header: ProviderSpecificHeader, pinned_providers: frozenset[str]
+) -> tuple[ProviderSpecificHeader, ...]:
+    headers: Final = {
+        name: value
+        for name, value in header["extra_headers"].items()
+        if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+    }
+    credentials: Final = {name: value for name, value in headers.items() if _is_credential_header(name)}
+    providers: Final = tuple(provider.strip() for provider in header["custom_llm_provider"].split(","))
+    variants: Final = (
+        (
+            header["custom_llm_provider"],
+            {name: value for name, value in headers.items() if name not in credentials},
+            {},
+        ),
+        (",".join(provider for provider in providers if provider not in pinned_providers), credentials, {}),
+        (
+            ",".join(provider for provider in providers if provider in pinned_providers),
+            credentials,
+            {"non_claude_models_only": True},
+        ),
+    )
+    return tuple(
+        _PROVIDER_SPECIFIC_HEADER.validate_python(
+            {**header, "custom_llm_provider": scope, "extra_headers": extra_headers, **model_filter}
+        )
+        for scope, extra_headers, model_filter in variants
+        if scope and extra_headers
     )
 
 
@@ -4318,13 +4331,15 @@ def add_provider_specific_headers_to_request(
     ]
 
     caller_entries: Final = tuple(
-        _without_pin_overrides(entry, ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers)
-        if user_profile_id
-        else entry
-        for entry in map(
-            _valid_provider_specific_header, _request_entries(request_fields.get("provider_specific_header"))
+        itertools.chain.from_iterable(
+            _caller_entries_beside_a_pin(entry, ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers)
+            if user_profile_id
+            else (entry,)
+            for entry in map(
+                _valid_provider_specific_header, _request_entries(request_fields.get("provider_specific_header"))
+            )
+            if entry is not None
         )
-        if entry is not None
     )
     entries: Final = [*caller_entries, *scoped_headers]
     if scoped_headers:

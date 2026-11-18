@@ -38,6 +38,8 @@ def _applies_to_call(
 ) -> bool:
     if scoped_header.get("claude_models_only") and not names_a_claude_model(model):
         return False
+    if scoped_header.get("non_claude_models_only") and names_a_claude_model(model):
+        return False
     scoped_providers: Final = scoped_header.get("custom_llm_provider", "").split(",")
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
 
@@ -65,8 +67,8 @@ class ProviderSpecificHeaderUtils:
         providers and headers that are safe for exactly one can travel on the same request
         without sharing a scope. Entries whose provider list does not contain
         `custom_llm_provider` contribute nothing. Entries marked `claude_models_only` contribute only
-        when `model` names a Claude model, and entries marked `yields_to_configured` never replace a
-        header already in `configured_headers`.
+        when `model` names a Claude model, entries marked `non_claude_models_only` only when it does not,
+        and entries marked `yields_to_configured` never replace a header already in `configured_headers`.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider

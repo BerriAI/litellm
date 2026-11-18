@@ -8182,8 +8182,22 @@ async def test_a_caller_credential_keeps_the_profile_id_it_sent_in_a_body_field(
 @pytest.mark.parametrize(
     ("user_api_key_dict", "caller_providers", "custom_llm_provider", "model", "expected"),
     [
-        (_PINNED_KEY, "anthropic,openai", "openai", "gpt-5.5", {"x-trace": "t1"}),
+        (_PINNED_KEY, "anthropic,openai", "openai", "gpt-5.5", {"x-trace": "t1", "Authorization": "Bearer caller-token"}),
         (_PINNED_KEY, "openai", "openai", "gpt-5.5", {"x-trace": "t1", "Authorization": "Bearer caller-token"}),
+        (
+            _PINNED_KEY,
+            "vertex_ai,openai",
+            "vertex_ai",
+            "gemini-3-pro",
+            {"x-trace": "t1", "Authorization": "Bearer caller-token", "anthropic-beta": "beta-1"},
+        ),
+        (
+            _PINNED_KEY,
+            "vertex_ai,openai",
+            "vertex_ai",
+            "claude-sonnet-5-5",
+            {"x-trace": "t1", "anthropic-beta": "beta-1", USER_PROFILE_ID_HEADER: "uprof_key"},
+        ),
         (
             _PINNED_KEY,
             "anthropic,openai",
@@ -8204,7 +8218,14 @@ async def test_a_caller_credential_keeps_the_profile_id_it_sent_in_a_body_field(
             },
         ),
     ],
-    ids=["pinned-key-other-model", "pinned-key-other-provider-only", "pinned-key-claude", "unpinned-key"],
+    ids=[
+        "pinned-key-other-provider",
+        "pinned-key-other-provider-only",
+        "pinned-key-vertex-other-model",
+        "pinned-key-vertex-claude",
+        "pinned-key-claude",
+        "unpinned-key",
+    ],
 )
 async def test_a_callers_own_provider_specific_headers_reach_the_provider_beside_the_proxys(
     user_api_key_dict: UserAPIKeyAuth,

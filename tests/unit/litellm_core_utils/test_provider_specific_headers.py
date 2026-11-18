@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -182,6 +184,25 @@ def test_a_claude_only_entry_reaches_claude_models_alone(model: str | None, expe
         ProviderSpecificHeaderUtils.get_provider_specific_headers(_PROFILE_ON_AZURE_AI, "azure_ai", model=model)
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("claude-sonnet-5-5", {}),
+        ("Claude-Opus-5-5", {}),
+        ("mistral-large-3", {"authorization": "Bearer caller"}),
+        (None, {"authorization": "Bearer caller"}),
+    ],
+    ids=["claude", "claude_mixed_case", "non_claude", "unknown_model"],
+)
+def test_a_non_claude_entry_skips_claude_models(model: str | None, expected: dict[str, str]) -> None:
+    entry: Final[ProviderSpecificHeader] = {
+        "custom_llm_provider": "azure_ai",
+        "extra_headers": {"authorization": "Bearer caller"},
+        "non_claude_models_only": True,
+    }
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(entry, "azure_ai", model=model) == expected
 
 
 @pytest.mark.parametrize(

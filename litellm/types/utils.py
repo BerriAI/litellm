@@ -4589,6 +4589,7 @@ class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: ReadOnly[dict[str, str]]
     claude_models_only: NotRequired[ReadOnly[bool]]
+    non_claude_models_only: NotRequired[ReadOnly[bool]]
     yields_to_configured: NotRequired[ReadOnly[bool]]
 
 
