@@ -23,6 +23,8 @@ class TestCustomSecretManager(CustomSecretManager):
     This simulates a simple in-memory secret store for testing purposes.
     """
 
+    __test__ = False
+
     def __init__(self, secrets: Optional[dict] = None):
         super().__init__(secret_manager_name="test_custom_secret_manager")
         self.secrets = secrets or {
@@ -168,33 +170,22 @@ async def test_custom_secret_manager_async_delete():
     assert secret_manager.sync_read_secret("TEST_API_KEY") is None
 
 
-def test_custom_secret_manager_integration_with_litellm():
+def test_custom_secret_manager_integration_with_litellm(monkeypatch):
     """
     Test that the custom secret manager integrates with LiteLLM's secret management system.
     """
-    # Create and set the custom secret manager
     secret_manager = TestCustomSecretManager()
-    litellm.secret_manager_client = secret_manager
-    litellm._key_management_system = KeyManagementSystem.CUSTOM
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_manager)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
 
-    # Set access mode to enable secret reading
-    litellm._key_management_settings = KeyManagementSettings(access_mode="read_only")
+    from litellm.secret_managers.main import get_secret
 
-    try:
-        # Test getting a secret through LiteLLM's get_secret function
-        from litellm.secret_managers.main import get_secret
+    api_key = get_secret("TEST_API_KEY")
+    assert api_key == "test-api-key-12345"
 
-        api_key = get_secret("TEST_API_KEY")
-        assert api_key == "test-api-key-12345"
-
-        openai_key = get_secret("OPENAI_API_KEY")
-        assert openai_key == "sk-test-openai-key"
-
-    finally:
-        # Clean up
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    openai_key = get_secret("OPENAI_API_KEY")
+    assert openai_key == "sk-test-openai-key"
 
 
 class MinimalCustomSecretManager(CustomSecretManager):
@@ -260,35 +251,29 @@ def test_minimal_custom_secret_manager():
 # ---------------------------------------------------------------------------
 
 
-def test_load_custom_secret_manager_config_validation():
+def test_load_custom_secret_manager_config_validation(monkeypatch):
     """
     Test that missing config_file_path or key_management_settings raises ValueError.
     """
-    # Missing config_file_path
     with pytest.raises(ValueError, match="config_file_path is required to load custom secret manager"):
         load_custom_secret_manager(None)
 
-    # Missing key_management_settings
-    orig_settings = litellm._key_management_settings
-    try:
-        litellm._key_management_settings = None
-        with pytest.raises(ValueError, match="key_management_settings is required with custom_secret_manager field"):
-            load_custom_secret_manager("config.yaml")
+    monkeypatch.setattr(litellm, "_key_management_settings", None)
+    with pytest.raises(ValueError, match="key_management_settings is required with custom_secret_manager field"):
+        load_custom_secret_manager("config.yaml")
 
-        # Missing custom_secret_manager attribute / empty string
-        litellm._key_management_settings = KeyManagementSettings(custom_secret_manager=None)
-        with pytest.raises(ValueError, match="custom_secret_manager field is required in key_management_settings"):
-            load_custom_secret_manager("config.yaml")
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(custom_secret_manager=None))
+    with pytest.raises(ValueError, match="custom_secret_manager field is required in key_management_settings"):
+        load_custom_secret_manager("config.yaml")
 
-        # Missing dot in custom_secret_manager path
-        litellm._key_management_settings = KeyManagementSettings(custom_secret_manager="InvalidModuleNoDot")
-        with pytest.raises(ValueError, match="CustomSecretManagerException - Invalid module path"):
-            load_custom_secret_manager("config.yaml")
-    finally:
-        litellm._key_management_settings = orig_settings
+    monkeypatch.setattr(
+        litellm, "_key_management_settings", KeyManagementSettings(custom_secret_manager="InvalidModuleNoDot")
+    )
+    with pytest.raises(ValueError, match="CustomSecretManagerException - Invalid module path"):
+        load_custom_secret_manager("config.yaml")
 
 
-def test_load_custom_secret_manager_multi_segment_module(tmp_path):
+def test_load_custom_secret_manager_multi_segment_module(tmp_path, monkeypatch):
     """
     Test that module paths with multiple segments (e.g. foo.bar.MySecretManager)
     are handled properly without unpack error.
@@ -310,20 +295,93 @@ class MultiSegmentSecretManager(CustomSecretManager):
     module_file.write_text(module_code)
 
     config_path = str(tmp_path / "config.yaml")
-    litellm._key_management_settings = KeyManagementSettings(
-        custom_secret_manager="foo.bar.MultiSegmentSecretManager"
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="foo.bar.MultiSegmentSecretManager"),
     )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
 
-    try:
-        load_custom_secret_manager(config_file_path=config_path)
-        assert litellm.secret_manager_client is not None
-        assert litellm.secret_manager_client.secret_manager_name == "multi_segment_manager"
-        assert litellm._key_management_system == KeyManagementSystem.CUSTOM
-        assert isinstance(litellm.secret_manager_client, CustomSecretManager)
-    finally:
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    load_custom_secret_manager(config_file_path=config_path)
+    assert litellm.secret_manager_client is not None
+    assert litellm.secret_manager_client.secret_manager_name == "multi_segment_manager"
+    assert litellm._key_management_system == KeyManagementSystem.CUSTOM
+    assert isinstance(litellm.secret_manager_client, CustomSecretManager)
+
+
+def test_load_custom_secret_manager_package_directory_layout(tmp_path, monkeypatch):
+    """
+    Test that real package layout (pkg/submodule.py) resolves and loads properly.
+    """
+    pkg_dir = tmp_path / "pkg"
+    pkg_dir.mkdir()
+    module_code = """
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+
+class PackageSecretManager(CustomSecretManager):
+    def __init__(self):
+        super().__init__(secret_manager_name="pkg_manager")
+
+    async def async_read_secret(self, secret_name: str, **kwargs):
+        return "pkg_secret"
+
+    def sync_read_secret(self, secret_name: str, **kwargs):
+        return "pkg_secret"
+"""
+    (pkg_dir / "submodule.py").write_text(module_code)
+
+    config_path = str(tmp_path / "config.yaml")
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="pkg.submodule.PackageSecretManager"),
+    )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+
+    load_custom_secret_manager(config_file_path=config_path)
+    assert litellm.secret_manager_client is not None
+    assert litellm.secret_manager_client.secret_manager_name == "pkg_manager"
+    assert litellm._key_management_system == KeyManagementSystem.CUSTOM
+    assert isinstance(litellm.secret_manager_client, CustomSecretManager)
+
+
+def test_load_custom_secret_manager_package_init_layout(tmp_path, monkeypatch):
+    """
+    Test that package __init__.py layout (pkg/submodule/__init__.py) resolves and loads properly.
+    """
+    sub_dir = tmp_path / "pkg" / "submodule"
+    sub_dir.mkdir(parents=True)
+    module_code = """
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+
+class InitSecretManager(CustomSecretManager):
+    def __init__(self):
+        super().__init__(secret_manager_name="init_manager")
+
+    async def async_read_secret(self, secret_name: str, **kwargs):
+        return "init_secret"
+
+    def sync_read_secret(self, secret_name: str, **kwargs):
+        return "init_secret"
+"""
+    (sub_dir / "__init__.py").write_text(module_code)
+
+    config_path = str(tmp_path / "config.yaml")
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="pkg.submodule.InitSecretManager"),
+    )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+
+    load_custom_secret_manager(config_file_path=config_path)
+    assert litellm.secret_manager_client is not None
+    assert litellm.secret_manager_client.secret_manager_name == "init_manager"
+    assert litellm._key_management_system == KeyManagementSystem.CUSTOM
+    assert isinstance(litellm.secret_manager_client, CustomSecretManager)
 
 
 @pytest.mark.parametrize(
@@ -338,27 +396,29 @@ class MultiSegmentSecretManager(CustomSecretManager):
         r"\windows\system32\calc.MyClass",
         ".MyClass",
         "my_module.",
+        "pkg..submodule.MyClass",
+        "foo...bar.MyClass",
+        "..pkg.MyClass",
     ],
 )
-def test_load_custom_secret_manager_rejects_path_traversal(tmp_path, bad_path):
+def test_load_custom_secret_manager_rejects_path_traversal(tmp_path, monkeypatch, bad_path):
     """
     Test that path traversal attempts and invalid module paths are blocked with ValueError.
     """
     config_path = str(tmp_path / "config.yaml")
-    litellm._key_management_settings = KeyManagementSettings(
-        custom_secret_manager=bad_path
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager=bad_path),
     )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
 
-    try:
-        with pytest.raises(ValueError, match="CustomSecretManagerException - Invalid module path"):
-            load_custom_secret_manager(config_file_path=config_path)
-    finally:
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    with pytest.raises(ValueError, match="CustomSecretManagerException - Invalid module path"):
+        load_custom_secret_manager(config_file_path=config_path)
 
 
-def test_load_custom_secret_manager_missing_class(tmp_path):
+def test_load_custom_secret_manager_missing_class(tmp_path, monkeypatch):
     """
     Test that requesting a class that does not exist in the loaded module raises AttributeError.
     """
@@ -373,17 +433,16 @@ class RealSecretManager(CustomSecretManager):
     module_file.write_text(module_code)
 
     config_path = str(tmp_path / "config.yaml")
-    litellm._key_management_settings = KeyManagementSettings(
-        custom_secret_manager="secret_mod.NonExistentClass"
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="secret_mod.NonExistentClass"),
     )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
 
-    try:
-        with pytest.raises(AttributeError, match="CustomSecretManagerException - Class NonExistentClass not found"):
-            load_custom_secret_manager(config_file_path=config_path)
-    finally:
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    with pytest.raises(AttributeError, match="CustomSecretManagerException - Class NonExistentClass not found"):
+        load_custom_secret_manager(config_file_path=config_path)
 
 
 def test_load_custom_secret_manager_missing_loader(tmp_path, monkeypatch):
@@ -394,9 +453,13 @@ def test_load_custom_secret_manager_missing_loader(tmp_path, monkeypatch):
     module_file.write_text("# dummy")
 
     config_path = str(tmp_path / "config.yaml")
-    litellm._key_management_settings = KeyManagementSettings(
-        custom_secret_manager="dummy_loader.SomeClass"
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="dummy_loader.SomeClass"),
     )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
 
     import importlib.util
 
@@ -404,13 +467,8 @@ def test_load_custom_secret_manager_missing_loader(tmp_path, monkeypatch):
     mock_spec.loader = None
     monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *args, **kwargs: mock_spec)
 
-    try:
-        with pytest.raises(ImportError, match="Could not find a module specification"):
-            load_custom_secret_manager(config_file_path=config_path)
-    finally:
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    with pytest.raises(ImportError, match="Could not find a module specification"):
+        load_custom_secret_manager(config_file_path=config_path)
 
 
 def test_load_custom_secret_manager_missing_spec(tmp_path, monkeypatch):
@@ -421,24 +479,23 @@ def test_load_custom_secret_manager_missing_spec(tmp_path, monkeypatch):
     module_file.write_text("# dummy")
 
     config_path = str(tmp_path / "config.yaml")
-    litellm._key_management_settings = KeyManagementSettings(
-        custom_secret_manager="dummy_spec.SomeClass"
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="dummy_spec.SomeClass"),
     )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
 
     import importlib.util
 
     monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *args, **kwargs: None)
 
-    try:
-        with pytest.raises(ImportError, match="Could not find a module specification"):
-            load_custom_secret_manager(config_file_path=config_path)
-    finally:
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    with pytest.raises(ImportError, match="Could not find a module specification"):
+        load_custom_secret_manager(config_file_path=config_path)
 
 
-def test_load_custom_secret_manager_not_a_type(tmp_path):
+def test_load_custom_secret_manager_not_a_type(tmp_path, monkeypatch):
     """
     Test that when the target attribute in the module is not a type (e.g. string, object),
     TypeError is raised before calling issubclass.
@@ -450,20 +507,19 @@ NotAClass = "I am a string, not a class"
     module_file.write_text(module_code)
 
     config_path = str(tmp_path / "config.yaml")
-    litellm._key_management_settings = KeyManagementSettings(
-        custom_secret_manager="not_type_mod.NotAClass"
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="not_type_mod.NotAClass"),
     )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
 
-    try:
-        with pytest.raises(TypeError, match="must be a subclass of CustomSecretManager"):
-            load_custom_secret_manager(config_file_path=config_path)
-    finally:
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    with pytest.raises(TypeError, match="must be a subclass of CustomSecretManager"):
+        load_custom_secret_manager(config_file_path=config_path)
 
 
-def test_load_custom_secret_manager_invalid_subclass(tmp_path):
+def test_load_custom_secret_manager_invalid_subclass(tmp_path, monkeypatch):
     """
     Test that when the class does not inherit from CustomSecretManager, TypeError is raised.
     """
@@ -475,14 +531,13 @@ class UnrelatedClass:
     module_file.write_text(module_code)
 
     config_path = str(tmp_path / "config.yaml")
-    litellm._key_management_settings = KeyManagementSettings(
-        custom_secret_manager="unrelated_mod.UnrelatedClass"
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(custom_secret_manager="unrelated_mod.UnrelatedClass"),
     )
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
 
-    try:
-        with pytest.raises(TypeError, match="must be a subclass of CustomSecretManager"):
-            load_custom_secret_manager(config_file_path=config_path)
-    finally:
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
+    with pytest.raises(TypeError, match="must be a subclass of CustomSecretManager"):
+        load_custom_secret_manager(config_file_path=config_path)

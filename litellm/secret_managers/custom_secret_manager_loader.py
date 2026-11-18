@@ -18,6 +18,29 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 _LOADED_ATTRIBUTE: Final = TypeAdapter(object)
 
 
+def _is_invalid_module_path(file_name: str) -> bool:
+    is_external_path: Final = os.path.isabs(file_name) or file_name.startswith(("/", "\\"))
+    has_traversal: Final = any(segment == ".." for segment in file_name.replace("\\", "/").split("/"))
+    has_empty_segment: Final = any(not segment for segment in file_name.split("."))
+    return is_external_path or has_traversal or has_empty_segment
+
+
+def _resolve_custom_secret_manager_file_path(directory: str, file_name: str) -> str:
+    package_file_path: Final = os.path.join(directory, *file_name.split(".")) + ".py"
+    if os.path.isfile(package_file_path):
+        return package_file_path
+
+    package_init_path: Final = os.path.join(directory, *file_name.split("."), "__init__.py")
+    if os.path.isfile(package_init_path):
+        return package_init_path
+
+    dot_file_path: Final = os.path.join(directory, file_name) + ".py"
+    if os.path.isfile(dot_file_path):
+        return dot_file_path
+
+    return package_file_path
+
+
 def load_custom_secret_manager(config_file_path: str | None = None) -> None:
     """
     Load and initialize a custom secret manager from a python file.
@@ -68,17 +91,15 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
         _class_name,
     )
 
-    # Load the module from the same directory as config.yaml
-    directory: Final = os.path.dirname(config_file_path)
-    module_file_path: Final = os.path.join(directory, _file_name) + ".py"
+    if _is_invalid_module_path(_file_name):
+        raise ValueError("CustomSecretManagerException - Invalid module path")
 
-    # Validate against directory traversal
-    if (
-        os.path.isabs(_file_name)
-        or _file_name.startswith(("/", "\\"))
-        or any(segment == ".." for segment in _file_name.replace("\\", "/").split("/"))
-        or os.path.relpath(os.path.realpath(module_file_path), os.path.realpath(directory)).startswith("..")
-    ):
+    directory: Final = os.path.dirname(config_file_path)
+    module_file_path: Final = _resolve_custom_secret_manager_file_path(directory, _file_name)
+
+    real_directory: Final = os.path.realpath(directory)
+    real_module_path: Final = os.path.realpath(module_file_path)
+    if os.path.relpath(real_module_path, real_directory).startswith(".."):
         raise ValueError("CustomSecretManagerException - Invalid module path")
 
     spec: Final = importlib.util.spec_from_file_location(_class_name, module_file_path)
