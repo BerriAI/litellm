@@ -93,6 +93,8 @@ class _AsyncRedisCommands(Protocol):
         self, name: str, value: str | bytes, *, ex: int | None = None, xx: bool = False, get: bool = False
     ) -> Awaitable[object]: ...
 
+    def getset(self, name: str, value: str | bytes) -> Awaitable[object]: ...
+
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
@@ -448,6 +450,24 @@ def _redis_reply_error_types() -> tuple[type[Exception], type[Exception]]:
     from redis.exceptions import ReadOnlyError, ResponseError
 
     return ResponseError, ReadOnlyError
+
+
+async def _set_existing_reply(commands: _AsyncRedisCommands, name: str, value: str, ttl: int | None) -> object:
+    try:
+        return await commands.set(name, value, ex=ttl, xx=True, get=True)
+    except _redis_reply_error_types()[0]:
+        return await _getset_existing_before_redis_6_2(commands, name, value, ttl)
+
+
+async def _getset_existing_before_redis_6_2(
+    commands: _AsyncRedisCommands, name: str, value: str, ttl: int | None
+) -> object:
+    previous: Final = await commands.getset(name, value)
+    if previous is None:
+        await commands.delete(name)
+    elif ttl is not None:
+        await commands.expire(name, ttl)
+    return previous
 
 
 def _is_redis_reply(exc: BaseException) -> bool:
@@ -1677,7 +1697,7 @@ class RedisCache(BaseCache):
     @_redis_circuit_breaker_guard
     async def async_set_existing_returning_previous(self, key: str, value: str, ttl: int | None) -> str | None:
         previous: Final = _SET_GET_REPLY.validate_python(
-            await self._async_commands().set(self.check_and_fix_namespace(key=key), value, ex=ttl, xx=True, get=True)
+            await _set_existing_reply(self._async_commands(), self.check_and_fix_namespace(key=key), value, ttl)
         )
         return previous.decode("utf-8", errors="replace") if isinstance(previous, bytes) else previous
 

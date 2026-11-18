@@ -89,11 +89,6 @@ class _ScriptRefusingRedisStandIn(_RedisStandIn):
         return refused
 
 
-class _SetGetRefusingRedisStandIn(_ScriptRefusingRedisStandIn):
-    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: Optional[int]) -> NoReturn:
-        raise ResponseError("syntax error")
-
-
 class _CancelledRightAfterTheStatusCheckRedisStandIn(_ScriptRefusingRedisStandIn):
     async def async_getrange(self, key: str, start: int, end: int) -> str:
         prefix: Final = await super().async_getrange(key, start, end)
@@ -667,7 +662,7 @@ class TestResponsePollingHandler:
         assert await handler.is_cancelled_or_gone("litellm_poll_never_created") is True
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("redis_type", (_RedisStandIn, _ScriptRefusingRedisStandIn, _SetGetRefusingRedisStandIn))
+    @pytest.mark.parametrize("redis_type", (_RedisStandIn, _ScriptRefusingRedisStandIn))
     async def test_a_cancel_sticks_whether_or_not_redis_runs_scripts(self, redis_type: type[_RedisStandIn]) -> None:
         redis_cache: Final = redis_type.holding(
             {"id": "litellm_poll_test", "object": "response", "status": "in_progress", "output": []}

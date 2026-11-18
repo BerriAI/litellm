@@ -9,6 +9,9 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
+from redis.exceptions import ResponseError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -99,17 +102,22 @@ async def test_async_getrange_reads_a_prefix_of_what_was_set_under_the_namespace
     await client.aclose()
 
 
+class _FakeRedisBefore62(FakeRedis):
+    async def set(self, name: str, value: str | bytes, *args: object, get: bool = False, **kwargs: object) -> object:
+        if get:
+            raise ResponseError("syntax error")
+        return await super().set(name, value, *args, **kwargs)
+
+
+@pytest.mark.parametrize("redis_type", [FakeRedis, _FakeRedisBefore62])
 @pytest.mark.parametrize("decode_responses", [False, True])
 @pytest.mark.asyncio
 async def test_async_set_existing_returning_previous_replaces_only_a_key_that_exists(
-    decode_responses, monkeypatch, redis_no_ping
-):
-    from fakeredis import FakeServer
-    from fakeredis.aioredis import FakeRedis
-
+    redis_type: type[FakeRedis], decode_responses: bool, monkeypatch: pytest.MonkeyPatch, redis_no_ping: None
+) -> None:
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache: Final = RedisCache(namespace="litellm")
-    client: Final = FakeRedis(server=FakeServer(), decode_responses=decode_responses)
+    client: Final = redis_type(server=FakeServer(), decode_responses=decode_responses)
 
     with patch.object(redis_cache, "init_async_client", return_value=client):
         await redis_cache.async_set_cache("polling:1", "first", ttl=600)

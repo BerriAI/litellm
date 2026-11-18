@@ -309,14 +309,7 @@ class ResponsePollingHandler:
         self, redis_cache: RedisCache, cache_key: str, state: Mapping[str, object]
     ) -> int:
         ttl: Final = redis_cache.get_ttl(ttl=self.ttl)
-        try:
-            previous: Final = await redis_cache.async_set_existing_returning_previous(
-                cache_key, _encoded_state(state), ttl
-            )
-        except ResponseError as set_get_error:
-            verbose_proxy_logger.debug("Redis did not take SET with GET, writing with a plain SET: %s", set_get_error)
-            await redis_cache.async_set_cache(cache_key, json.dumps({"status": state["status"], **state}), ttl=ttl)
-            return _WRITTEN
+        previous: Final = await redis_cache.async_set_existing_returning_previous(cache_key, _encoded_state(state), ttl)
         if previous is None:
             return 0
         if not previous.startswith(_CANCELLED_PREFIX):
