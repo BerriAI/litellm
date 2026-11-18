@@ -377,6 +377,24 @@ def _response_carries_marker(response: object, marker: str | None) -> bool:
     )
 
 
+def _has_post_call_check(data: Mapping[str, object], response: object, guardrail_name: str | None) -> bool:
+    if not guardrail_name:
+        return False
+    prefix: Final = f"{_POST_CALL_CHECKED_TOKEN}:"
+    metadata: Final = (_str_keyed_dict(data.get("metadata")), _str_keyed_dict(data.get("litellm_metadata")))
+    request_checks: Final = (
+        _str_collection(meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)) for meta in metadata if meta is not None
+    )
+    hidden: Final = _response_hidden_params(response)
+    response_checks: Final = (
+        _str_collection(hidden.get(_RESPONSE_GUARDRAIL_CHECKS_KEY)) if hidden is not None else frozenset[str]()
+    )
+    return any(
+        marker.startswith(prefix) and marker[len(prefix) :].partition(":")[2] == guardrail_name
+        for marker in frozenset[str]().union(*request_checks, response_checks)
+    )
+
+
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -1229,6 +1247,8 @@ class CustomGuardrail(CustomLogger):
 
     def post_call_already_checked(self, data: Mapping[str, object], response: object) -> bool:
         """Whether a deployment-level hook of this request already ran this guardrail on this exact response."""
+        if not _has_post_call_check(data, response, self.guardrail_name):
+            return False
         marker: Final = self._post_call_check_marker(response)
         return _request_carries_marker(data, marker) or _response_carries_marker(response, marker)
 

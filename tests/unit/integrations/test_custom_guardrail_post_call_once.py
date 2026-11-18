@@ -12,7 +12,7 @@ import respx
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from mcp.types import Tool as MCPTool
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, PrivateAttr, TypeAdapter, model_serializer
 
 import litellm
 from litellm.caching.caching import Cache
@@ -147,6 +147,100 @@ class OwnHookG(_CountedGuardrail):
         self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> None:
         self.checked = (*self.checked, _reply_text(response))
+
+
+class SerializationObservedResponse(ModelResponse):
+    _serialization_count: int = PrivateAttr(default=0)
+
+    @property
+    def serialization_count(self) -> int:
+        return self._serialization_count
+
+    @model_serializer(mode="wrap")
+    def observe_serialization(self, serialize: Callable[[object], object]) -> object:
+        self._serialization_count += 1
+        return serialize(self)
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["sequential", "parallel"])
+@pytest.mark.parametrize(
+    ("event_hook", "default_on", "requested", "checks"),
+    [
+        pytest.param(None, False, False, (), id="no-guardrails"),
+        pytest.param(GuardrailEventHooks.post_call, False, False, (), id="not-applicable"),
+        pytest.param(GuardrailEventHooks.post_call, True, False, (REPLY,), id="global-post-call"),
+        pytest.param(GuardrailEventHooks.post_call, False, True, (REPLY,), id="requested-post-call"),
+        pytest.param(GuardrailEventHooks.during_call, True, False, (), id="during-call-only"),
+        pytest.param(
+            [GuardrailEventHooks.during_call, GuardrailEventHooks.post_call],
+            True,
+            False,
+            (REPLY,),
+            id="during-and-post-call",
+        ),
+    ],
+)
+async def test_proxy_dedupe_does_not_serialize_without_a_deployment_check(
+    monkeypatch: pytest.MonkeyPatch,
+    parallel: bool,
+    event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None,
+    default_on: bool,
+    requested: bool,
+    checks: tuple[str, ...],
+) -> None:
+    guardrail: Final = OwnHookG(
+        guardrail_name="G",
+        event_hook=event_hook or GuardrailEventHooks.post_call,
+        default_on=default_on,
+        run_in_parallel=parallel,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [] if event_hook is None else [guardrail])
+    data: Final = {"model": "gpt", "metadata": {"guardrails": ["G"]} if requested else {}}
+    guardrail.mark_pre_call_hook_ran(data)
+    response: Final = SerializationObservedResponse(choices=[{"message": {"role": "assistant", "content": REPLY}}])
+
+    returned: Final = await ProxyLogging(user_api_key_cache=UserApiKeyCache()).post_call_success_hook(
+        data=data, response=response, user_api_key_dict=UserAPIKeyAuth()
+    )
+
+    assert returned is response
+    assert response.serialization_count == 0
+    assert guardrail.checked == checks
+
+
+@pytest.mark.parametrize("marker_source", ["metadata", "litellm_metadata", "response"])
+async def test_recorded_post_call_checks_still_compare_response_content(
+    monkeypatch: pytest.MonkeyPatch, marker_source: str
+) -> None:
+    guardrail: Final = _guardrail_g(default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    data: Final = {"guardrails": ["G"], marker_source: {}} if marker_source != "response" else {"guardrails": ["G"]}
+    checked: Final = SerializationObservedResponse(choices=[{"message": {"role": "assistant", "content": REPLY}}])
+    await guardrail.async_post_call_success_deployment_hook(
+        request_data=data, response=checked, call_type=CallTypes.acompletion
+    )
+    response: Final = (
+        checked
+        if marker_source == "response"
+        else SerializationObservedResponse(choices=[{"message": {"role": "assistant", "content": REPLY}}])
+    )
+    request: Final = {} if marker_source == "response" else data
+    other_guardrail: Final = OwnHookG(guardrail_name="other", event_hook=GuardrailEventHooks.post_call)
+    before: Final = response.serialization_count
+    assert other_guardrail.post_call_already_checked(request, response) is False
+    assert response.serialization_count == before
+    assert guardrail.post_call_already_checked(request, response) is True
+    assert response.serialization_count > 0
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    await logger.post_call_success_hook(data=request, response=response, user_api_key_dict=UserAPIKeyAuth())
+    assert guardrail.checked == (REPLY,)
+
+    choice: Final = response.choices[0]
+    assert isinstance(choice, Choices)
+    choice.message.content = REWRITTEN
+    assert guardrail.post_call_already_checked(request, response) is False
+    await logger.post_call_success_hook(data=request, response=response, user_api_key_dict=UserAPIKeyAuth())
+    assert guardrail.checked == (REPLY, REWRITTEN)
 
 
 class InheritedApplyGuardrailG(ApplyGuardrailG):
