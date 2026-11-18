@@ -5467,9 +5467,7 @@ def _bridged_transform_request(
 
 @pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
-def test_chained_turn_keeps_leading_system_strings_in_instructions(
-    continuation: dict[str, str], location: str
-) -> None:
+def test_chained_turn_keeps_leading_system_strings_in_instructions(continuation: dict[str, str], location: str) -> None:
     copied_continuation: Final = copy.deepcopy(continuation)
     optional: Final = (
         copied_continuation
@@ -5496,10 +5494,18 @@ def test_chained_turn_keeps_leading_system_strings_in_instructions(
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
 def test_auto_truncation_keeps_system_prompt_in_instructions(location: str) -> None:
     truncation: Final = {"truncation": "auto"}
-    optional: Final = truncation if location == "optional" else {"extra_body": truncation} if location == "extra_body" else {}
+    optional: Final = (
+        truncation if location == "optional" else {"extra_body": truncation} if location == "extra_body" else {}
+    )
     params: Final = {
         "custom_llm_provider": "openai",
-        **(truncation if location == "litellm" else {"extra_body": truncation} if location == "litellm_extra_body" else {}),
+        **(
+            truncation
+            if location == "litellm"
+            else {"extra_body": truncation}
+            if location == "litellm_extra_body"
+            else {}
+        ),
     }
     request: Final = _bridged_transform_request(
         "gpt-6.2-sol",

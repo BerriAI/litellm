@@ -2129,9 +2129,7 @@ class TestPromptCacheBreakpointToResponses:
     EXPLICIT = {"mode": "explicit"}
 
     @pytest.mark.parametrize("preserve_system_instructions", [False, True])
-    def test_system_with_breakpoint_becomes_leading_developer_message(
-        self, preserve_system_instructions: bool
-    ) -> None:
+    def test_system_with_breakpoint_becomes_leading_developer_message(self, preserve_system_instructions: bool) -> None:
         request: Final = _make_request(
             model="openai/gpt-5.6",
             system=[
