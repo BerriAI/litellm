@@ -424,77 +424,31 @@ fn is_non_string_text_block(block: &ContentBlock) -> bool {
             .is_some_and(|text| !is_python_str_text(text))
 }
 
-/// Python's `malformed_text_error`: the first user text that is not a string, as the field path
-/// its 400 names, counted over the blocks the caller sent.
+/// Python's `non_string_user_text_error`: the first user text block that is not a string, as the
+/// field path its 400 names, counted over the blocks the caller sent.
 pub fn non_string_user_text_path(messages: &[Recognized<Message>]) -> Option<String> {
     messages
         .iter()
         .enumerate()
-        .find_map(|(message_index, message)| match message {
-            Recognized::Known(message) if message.role == USER => match &message.content {
-                MessageContent::Blocks(blocks) => {
-                    blocks.iter().enumerate().find_map(|(block_index, block)| {
-                        non_string_text_path(message_index, block_index, block)
-                    })
-                }
-                MessageContent::Text(_) => None,
-            },
-            Recognized::Unrecognized(message) if is_raw_user_message(message) => message
-                .get(CONTENT)
-                .and_then(Value::as_array)?
-                .iter()
-                .enumerate()
-                .find_map(|(block_index, block)| {
-                    non_string_raw_text_path(message_index, block_index, block)
-                }),
-            Recognized::Known(_) | Recognized::Unrecognized(_) => None,
+        .find_map(|(message_index, message)| {
+            let block_index = match message {
+                Recognized::Known(message) if message.role == USER => match &message.content {
+                    MessageContent::Blocks(blocks) => {
+                        blocks.iter().position(is_non_string_text_block)
+                    }
+                    MessageContent::Text(_) => None,
+                },
+                Recognized::Unrecognized(message) if is_raw_user_message(message) => message
+                    .get(CONTENT)
+                    .and_then(Value::as_array)?
+                    .iter()
+                    .position(is_non_string_raw_text),
+                Recognized::Known(_) | Recognized::Unrecognized(_) => None,
+            }?;
+            Some(format!(
+                "messages.{message_index}.content.{block_index}.text"
+            ))
         })
-}
-
-fn non_string_text_path(
-    message_index: usize,
-    block_index: usize,
-    block: &ContentBlock,
-) -> Option<String> {
-    if is_non_string_text_block(block) {
-        return Some(user_text_path(message_index, block_index));
-    }
-    if !block.is_type(ContentBlockType::ToolResult) {
-        return None;
-    }
-    tool_result_text_path(block.tool_use_id.as_deref(), block.content.as_ref()?)
-}
-
-fn non_string_raw_text_path(
-    message_index: usize,
-    block_index: usize,
-    block: &Value,
-) -> Option<String> {
-    if is_non_string_raw_text(block) {
-        return Some(user_text_path(message_index, block_index));
-    }
-    if raw_block_type(block) != Some("tool_result") {
-        return None;
-    }
-    tool_result_text_path(
-        block.get("tool_use_id").and_then(Value::as_str),
-        block.get(CONTENT)?,
-    )
-}
-
-fn user_text_path(message_index: usize, block_index: usize) -> String {
-    format!("messages.{message_index}.content.{block_index}.text")
-}
-
-fn tool_result_text_path(tool_use_id: Option<&str>, content: &Value) -> Option<String> {
-    let part_index = content
-        .as_array()?
-        .iter()
-        .position(is_non_string_raw_text)?;
-    Some(match tool_use_id {
-        Some(id) => format!("tool_result {id} content.{part_index}.text"),
-        None => format!("tool_result content.{part_index}.text"),
-    })
 }
 
 fn without_non_string_tool_result_texts(block: ContentBlock) -> ContentBlock {

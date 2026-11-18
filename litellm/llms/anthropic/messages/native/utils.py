@@ -16,7 +16,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     drop_non_string_texts,
     malformed_text_error,
     reject_emptied_messages,
-    reject_non_string_text,
+    reject_non_string_user_text,
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
@@ -276,7 +276,7 @@ def native_messages_to_send(
 def cleaned_native_messages(
     messages: Sequence[object], drop_params: object, *, model: str, custom_llm_provider: str | None
 ) -> list[dict[str, object]]:  # mutable-ok: maybe_inject_cache_control takes these messages as list[dict]
-    reject_non_string_text(messages, drop_params, model, custom_llm_provider)
+    reject_non_string_user_text(messages, drop_params, model, custom_llm_provider)
     cleaned: Final = native_messages_to_send(messages, drop_params)
     reject_emptied_messages(messages, cleaned, model, custom_llm_provider)
     return cleaned

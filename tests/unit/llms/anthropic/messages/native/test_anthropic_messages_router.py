@@ -1255,23 +1255,6 @@ _REJECTED_REQUESTS: Final = (
     pytest.param(
         _BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text"), id="blank-before-null"
     ),
-    pytest.param(
-        [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_1",
-                        "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": 5}],
-                    }
-                ],
-            }
-        ],
-        {},
-        _non_string_text_error("tool_result toolu_1 content.1.text"),
-        id="number-in-tool-result",
-    ),
 )
 _EVERY_MESSAGES_PATH: Final = (
     pytest.param("anthropic/claude-opus-5-5", id="native-anthropic"),
@@ -1334,4 +1317,5 @@ def test_sync_messages_create_answers_the_same_400_for_a_non_string_user_text_or
         )
 
     assert rejected.value.message.partition("\n\n")[0] == error
+    assert rejected.value.llm_provider == "anthropic"
     assert upstream.call_count == 0

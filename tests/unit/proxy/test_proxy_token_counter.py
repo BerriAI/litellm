@@ -1815,19 +1815,8 @@ def _non_string_text_error(field: str) -> str:
             _non_string_text_error("messages.0.content.1.text"),
         ),
         (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
-        (
-            _prompt_beside(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": "toolu_1",
-                    "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": 5}],
-                }
-            ),
-            {},
-            _non_string_text_error("tool_result toolu_1 content.1.text"),
-        ),
     ),
-    ids=("only-null-dropped", "only-empty-string", "null-beside-text", "blank-before-null", "number-in-tool-result"),
+    ids=("only-null-dropped", "only-empty-string", "null-beside-text", "blank-before-null"),
 )
 @pytest.mark.parametrize(
     "model",

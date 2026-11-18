@@ -195,21 +195,36 @@ def _tool_result_text_errors(block: object) -> Iterator[str]:
             return iter(())
 
 
+_BlockTextErrors: TypeAlias = Callable[[int, int, object], Iterator[str]]
+
+
+def _user_text_errors(message_index: int, block_index: int, block: object) -> Iterator[str]:
+    if _non_str_text(block) is None:
+        return iter(())
+    return iter((f"messages.{message_index}.content.{block_index}.text: Input should be a valid string",))
+
+
 def _user_block_text_errors(message_index: int, block_index: int, block: object) -> Iterator[str]:
-    if _non_str_text(block) is not None:
-        return iter((f"messages.{message_index}.content.{block_index}.text: Input should be a valid string",))
-    return _tool_result_text_errors(block)
+    return chain(_user_text_errors(message_index, block_index, block), _tool_result_text_errors(block))
 
 
-def _message_text_errors(message_index: int, message: object) -> Iterator[str]:
+def _message_text_errors(block_errors: _BlockTextErrors, message_index: int, message: object) -> Iterator[str]:
     return chain.from_iterable(
-        _user_block_text_errors(message_index, block_index, block)
+        block_errors(message_index, block_index, block)
         for block_index, block in enumerate(_user_content_blocks(message))
     )
 
 
+def _first_text_error(block_errors: _BlockTextErrors, messages: Iterable[object]) -> str | None:
+    return next(chain.from_iterable(starmap(partial(_message_text_errors, block_errors), enumerate(messages))), None)
+
+
 def malformed_text_error(messages: Iterable[object]) -> str | None:
-    return next(chain.from_iterable(starmap(_message_text_errors, enumerate(messages))), None)
+    return _first_text_error(_user_block_text_errors, messages)
+
+
+def non_string_user_text_error(messages: Iterable[object]) -> str | None:
+    return _first_text_error(_user_text_errors, messages)
 
 
 def malformed_text_count_error(
@@ -444,15 +459,29 @@ def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
 def reject_malformed_text(
     messages: Iterable[Mapping[str, object]], model: str, forwarded_kwargs: Mapping[str, object]
 ) -> None:
-    reject_non_string_text(
-        messages, forwarded_kwargs.get("drop_params"), model, forwarded_kwargs.get("custom_llm_provider")
+    _reject_text_error(
+        malformed_text_error,
+        messages,
+        forwarded_kwargs.get("drop_params"),
+        model,
+        forwarded_kwargs.get("custom_llm_provider"),
     )
 
 
-def reject_non_string_text(messages: Iterable[object], drop_params: object, model: str, provider: object) -> None:
+def reject_non_string_user_text(messages: Iterable[object], drop_params: object, model: str, provider: object) -> None:
+    _reject_text_error(non_string_user_text_error, messages, drop_params, model, provider)
+
+
+def _reject_text_error(
+    first_error: Callable[[Iterable[object]], str | None],
+    messages: Iterable[object],
+    drop_params: object,
+    model: str,
+    provider: object,
+) -> None:
     if drops_unsupported_params(drop_params):
         return
-    error: Final = malformed_text_error(messages)
+    error: Final = first_error(messages)
     if error is None:
         return
     _raise_bad_request(error, model, provider)

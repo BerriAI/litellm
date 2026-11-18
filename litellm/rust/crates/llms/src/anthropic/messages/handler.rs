@@ -420,23 +420,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::text_block(
-        json!({"type": "text", "text": null}),
-        "messages.1.content.1.text: Input should be a valid string"
-    )]
-    #[case::tool_result_part(
-        json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": [
-            {"type": "text", "text": "ok"}, {"type": "text", "text": 5}
-        ]}),
-        "tool_result toolu_1 content.1.text: Input should be a valid string"
-    )]
     fn a_user_s_non_string_text_is_a_request_error_naming_the_sent_index_without_drop_params(
-        #[case] malformed: Value,
-        #[case] message: &str,
         #[values(false, true)] presanitized: bool,
     ) {
-        let content =
-            json!([{"type": "text", "text": ""}, malformed, {"type": "text", "text": "hi"}]);
+        let content = json!([
+            {"type": "text", "text": ""},
+            {"type": "text", "text": null},
+            {"type": "text", "text": "hi"}
+        ]);
         let shape = |drops_unsupported_params| {
             shape_anthropic_messages_request(
                 request(json!({"model": "m", "messages": [
@@ -453,8 +444,35 @@ mod tests {
         let Err(Error::InvalidRequest(detail)) = shape(false) else {
             panic!("a non-string user text must be a request error without drop_params");
         };
-        assert_eq!(detail.to_string(), message);
+        assert_eq!(
+            detail.to_string(),
+            "messages.1.content.1.text: Input should be a valid string"
+        );
         assert!(shape(true).is_ok());
+    }
+
+    #[rstest]
+    fn a_non_string_tool_result_text_is_forwarded_as_sent_without_drop_params(
+        #[values(false, true)] presanitized: bool,
+    ) {
+        let tool_result = json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            {"type": "text", "text": "ok"}, {"type": "text", "text": 5}
+        ]});
+        let shaped = shape_anthropic_messages_request(
+            request(json!({"model": "m", "messages": [
+                {"role": "user", "content": [tool_result.clone()]}
+            ]})),
+            MessagesShapeOptions {
+                reasoning_auto_summary: false,
+                presanitized,
+                drops_unsupported_params: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(shaped).unwrap()["messages"],
+            json!([{"role": "user", "content": [tool_result]}])
+        );
     }
 
     #[test]
