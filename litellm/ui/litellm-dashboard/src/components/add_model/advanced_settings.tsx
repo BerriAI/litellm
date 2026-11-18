@@ -37,6 +37,7 @@ import {
 } from "../../utils/ptuValidation";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
+import { MountedUpstreamProxyField } from "@/components/upstream_proxies/UpstreamProxySelect";
 
 interface AdvancedSettingsProps {
   showAdvancedSettings: boolean;
@@ -488,6 +489,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 <Switch id={control.id} checked={control.value === true} onCheckedChange={control.onChange} />
               )}
             </MountedFormField>
+
+            <MountedUpstreamProxyField />
 
             <MountedFormField
               name="cache_control"
