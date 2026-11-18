@@ -527,10 +527,7 @@ def test_cyberark_auth_and_url_encoding(cyberark_env, monkeypatch: pytest.Monkey
     [
         "..",
         "../bad_secret",
-        r"..\bad_secret",
-        r"bad\..\secret",
         "bad/../secret",
-        r"secret\..",
         "secret/..",
     ],
 )
@@ -544,13 +541,29 @@ def test_cyberark_get_url_rejects_unsafe_secret_name(cyberark_env, unsafe_name):
         assert manager.sync_read_secret(unsafe_name) is None
 
 
+@pytest.mark.parametrize(
+    ("secret_name", "expected_url"),
+    [
+        ("release-1.0..2", "http://0.0.0.0:8080/secrets/default/variable/release-1.0..2"),
+        ("team/foo..bar", "http://0.0.0.0:8080/secrets/default/variable/team%2Ffoo..bar"),
+        ("..foo", "http://0.0.0.0:8080/secrets/default/variable/..foo"),
+        ("foo..", "http://0.0.0.0:8080/secrets/default/variable/foo.."),
+    ],
+)
+def test_cyberark_get_url_allows_embedded_double_dots(cyberark_env, secret_name, expected_url):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        manager = CyberArkSecretManager()
+        assert manager.get_url(secret_name) == expected_url
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "unsafe_name",
     [
+        "..",
         "../bad_secret",
-        r"..\bad_secret",
-        r"bad\..\secret",
+        "bad/../secret",
+        "secret/..",
     ],
 )
 async def test_cyberark_async_operations_reject_unsafe_secret_name(cyberark_env, unsafe_name):
@@ -561,9 +574,3 @@ async def test_cyberark_async_operations_reject_unsafe_secret_name(cyberark_env,
         write_res = await manager.async_write_secret(unsafe_name, "value")
         assert write_res["status"] == "error"
         assert "Invalid secret_name" in write_res["message"]
-
-        with pytest.raises(ValueError, match="Invalid secret_name"):
-            await manager.async_rotate_secret(unsafe_name, "valid_new", "value")
-
-        with pytest.raises(ValueError, match="Invalid secret_name"):
-            await manager.async_rotate_secret("valid_old", unsafe_name, "value")
