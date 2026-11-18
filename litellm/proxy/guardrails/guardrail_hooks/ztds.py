@@ -20,19 +20,36 @@ import re
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterable, Collection, Mapping, Sequence
 from types import MappingProxyType
-from typing import ClassVar, Final, TypeAlias
+from typing import ClassVar, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponseStream
 
 _TOKEN_LITERAL_RE: Final = re.compile(r"\[([A-Z_]+)_TOKEN_([a-zA-Z0-9_-]+)\]")
 _NON_CALLER_ROLES: Final = frozenset({"system", "developer"})
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
 _JSON_ENCODED_STRING_KEYS: Final = frozenset({"arguments"})
+_UNSUPPORTED_BLOCK_TYPES: Final = frozenset({"file", "input_file", "input_audio", "audio"})
+_UNSUPPORTED_BINARY_KEYS: Final = frozenset({"file_data", "input_audio"})
+_PARALLEL_HOOK_NAMES: Final = frozenset(
+    {GuardrailEventHooks.during_call.value, GuardrailEventHooks.during_mcp_call.value}
+)
+_INTERNAL_METADATA_KEYS: Final = frozenset(
+    {
+        "guardrails",
+        "applied_guardrails",
+        "pre_call_executed_guardrails",
+        "model_info",
+        "requester_metadata",
+        "ztds_sanitized",
+        "ztds_standard",
+        "ztds_invariants_verified",
+    }
+)
 _SYSTEM_PROVENANCE_KEYS: Final = frozenset(
     {
         "system",
@@ -46,6 +63,7 @@ _SYSTEM_PROVENANCE_KEYS: Final = frozenset(
         "function_call",
         "response_format",
         "config",
+        "user",
     }
 )
 _HIDDEN_REASONING_KEYS: Final = frozenset({"thinking", "reasoning", "reasoning_content", "summary"})
@@ -104,7 +122,6 @@ _CONTROL_KEYS: Final = frozenset(
         "temperature",
         "top_p",
         "n",
-        "stop",
         "logprobs",
         "top_logprobs",
         "presence_penalty",
@@ -121,7 +138,6 @@ _CONTROL_KEYS: Final = frozenset(
         "modalities",
         "drop_params",
         "additional_drop_params",
-        "user",
     }
 )
 
@@ -150,6 +166,14 @@ def _as_mapping(value: object) -> Mapping[object, object] | None:
     return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # isinstance widens Mapping to Mapping[Unknown, Unknown]
 
 
+def _as_set(value: object) -> set[object] | None:  # mutable-ok: narrows dynamic set container
+    return value if isinstance(value, set) else None  # pyright: ignore[reportUnknownVariableType]  # isinstance widens set to set[Unknown]
+
+
+def _as_frozenset(value: object) -> frozenset[object] | None:
+    return value if isinstance(value, frozenset) else None  # pyright: ignore[reportUnknownVariableType]  # isinstance widens frozenset to frozenset[Unknown]
+
+
 _NormalizedEventHook: TypeAlias = GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None
 
 
@@ -163,6 +187,28 @@ def _normalize_event_hook(
     return [item if isinstance(item, GuardrailEventHooks) else GuardrailEventHooks(item) for item in event_hook]
 
 
+def _reject_parallel_during_call(normalized_hook: _NormalizedEventHook) -> None:
+    if normalized_hook is None:
+        return
+    if isinstance(normalized_hook, GuardrailEventHooks):
+        if normalized_hook.value in _PARALLEL_HOOK_NAMES:
+            raise ValueError("ZTDS zero-egress guardrail cannot use parallel during_call hooks; use pre_call")
+        return
+    if isinstance(normalized_hook, list):
+        if any(item.value in _PARALLEL_HOOK_NAMES for item in normalized_hook):
+            raise ValueError("ZTDS zero-egress guardrail cannot use parallel during_call hooks; use pre_call")
+        return
+    mode_values: Final[list[str]] = []  # mutable-ok: local flattened hook names from Mode
+    for val in normalized_hook.tags.values():
+        mode_values.extend((val,) if isinstance(val, str) else val)
+    if normalized_hook.default is not None:
+        mode_values.extend(
+            (normalized_hook.default,) if isinstance(normalized_hook.default, str) else normalized_hook.default
+        )
+    if any(hook in _PARALLEL_HOOK_NAMES for hook in mode_values):
+        raise ValueError("ZTDS zero-egress guardrail cannot use parallel during_call hooks; use pre_call")
+
+
 class ZTDSGuardrail(CustomGuardrail):
     """LiteLLM Guardrail enforcing Zero-Trust Data Sanitization (ZTDS) RFC v1.0.
 
@@ -171,6 +217,7 @@ class ZTDSGuardrail(CustomGuardrail):
     completion return without external network egress.
     """
 
+    use_native_lifecycle_hooks: ClassVar[bool] = True
     TOKEN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\[[A-Z_]+_TOKEN_[a-zA-Z0-9_-]+\]")
     _MAX_ACTIVE_SESSIONS: ClassVar[int] = 4096
 
@@ -199,28 +246,27 @@ class ZTDSGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        enabled_entities: Sequence[str] | None = None,
+        enabled_entities: Sequence[str] | str | None = None,
         reverse_on_output: bool = True,
         enforce_zero_egress: bool = True,
         guardrail_name: str | None = "ztds",
         event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks | str] | Mode | str | None = None,
         default_on: bool = False,
     ) -> None:
+        normalized_hook: Final = _normalize_event_hook(event_hook)
+        if enforce_zero_egress:
+            _reject_parallel_during_call(normalized_hook)
+        validated_entities: Final = self._validate_enabled_entities(enabled_entities)
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # CustomGuardrail.__init__ accepts unannotated **kwargs
             guardrail_name=guardrail_name,
-            event_hook=_normalize_event_hook(event_hook),
+            event_hook=normalized_hook,
             default_on=default_on,
         )
-        self.enabled_entities: tuple[str, ...] = (
-            tuple(enabled_entities) if enabled_entities else tuple(self.PATTERNS.keys())
-        )
+        self.enabled_entities: tuple[str, ...] = validated_entities
         self.reverse_on_output: bool = reverse_on_output
         self.enforce_zero_egress: bool = enforce_zero_egress
-        active_entities: Final = tuple(et for et in self.enabled_entities if et in self.PATTERN_STRINGS)
-        self._master_pattern: re.Pattern[str] | None = (
-            re.compile("|".join(f"(?P<{et}>{self.PATTERN_STRINGS[et]})" for et in active_entities))
-            if active_entities
-            else None
+        self._master_pattern: re.Pattern[str] = re.compile(
+            "|".join(f"(?P<{et}>{self.PATTERN_STRINGS[et]})" for et in validated_entities)
         )
         # In-memory ephemeral lookup map: {session_id: {token: original_cleartext}}
         self._session_maps: dict[str, dict[str, str]] = {}  # mutable-ok: volatile per-session token map in RAM
@@ -231,12 +277,32 @@ class ZTDSGuardrail(CustomGuardrail):
         # Per-session, per-entity counter table for O(1) surrogate generation
         self._entity_counters: dict[str, dict[str, int]] = {}  # mutable-ok: volatile O(1) entity counter map in RAM
 
+    @classmethod
+    def _validate_enabled_entities(cls, enabled_entities: object) -> tuple[str, ...]:
+        if enabled_entities is None:
+            return tuple(cls.PATTERN_STRINGS.keys())
+        seq: Final = _as_sequence(enabled_entities)
+        if not isinstance(enabled_entities, str) and (seq is None or len(seq) == 0):
+            raise ValueError("ZTDS enabled_entities must be a non-empty sequence of supported entity names")
+        candidates: Final[Sequence[object]] = (enabled_entities,) if isinstance(enabled_entities, str) else seq or ()
+
+        normalized: Final[list[str]] = []  # mutable-ok: validated uppercase entity names built once
+        for raw in candidates:
+            if not isinstance(raw, str):
+                raise TypeError(f"Unsupported ZTDS entity value: {raw!r}")
+            upper = raw.strip().upper()
+            if upper not in cls.PATTERN_STRINGS:
+                supported = ", ".join(cls.PATTERN_STRINGS.keys())
+                raise ValueError(f"Unsupported ZTDS entity '{raw}'. Supported entities: {supported}")
+            if upper not in normalized:
+                normalized.append(upper)
+        return tuple(normalized)
+
     @staticmethod
     def coerce_entities(raw_entities: object) -> tuple[str, ...] | None:
-        seq: Final = _as_sequence(raw_entities)
-        if seq is None:
+        if raw_entities is None:
             return None
-        return tuple(item for item in seq if isinstance(item, str))
+        return ZTDSGuardrail._validate_enabled_entities(raw_entities)
 
     def _ensure_session(self, session_id: str) -> None:
         if session_id not in self._session_maps:
@@ -270,9 +336,6 @@ class ZTDSGuardrail(CustomGuardrail):
         entity_map: Final = self._entity_maps[session_id]
         caller_set: Final = self._caller_tokens[session_id]
         counters: Final = self._entity_counters[session_id]
-
-        if self._master_pattern is None:
-            return text, token_map
 
         existing_tokens: Final[set[str]] = set()  # mutable-ok: local pre-indexed token literals from input
         if "_TOKEN_" in text:
@@ -376,6 +439,24 @@ class ZTDSGuardrail(CustomGuardrail):
             )
         )
 
+    def _reject_uninspectable_dict(self, node_dict: Mapping[object, object]) -> None:
+        if not self.enforce_zero_egress:
+            return
+        block_type: Final = node_dict.get("type")
+        if isinstance(block_type, str) and block_type in _UNSUPPORTED_BLOCK_TYPES:
+            raise ValueError(f"ZTDS guardrail rejects uninspectable '{block_type}' attachment block")
+        if block_type == "base64" and "data" in node_dict:
+            raise ValueError("ZTDS guardrail rejects uninspectable base64 document block")
+        for bkey in _UNSUPPORTED_BINARY_KEYS:
+            if bkey in node_dict and node_dict[bkey] is not None:
+                raise ValueError(f"ZTDS guardrail rejects uninspectable '{bkey}' payload")
+
+    def _sanitize_dict_key(self, key: object, session_id: str) -> object:
+        if not isinstance(key, str) or key.startswith("_"):
+            return key
+        clean_key, _ = self.sanitize_text(key, session_id, is_caller_visible=False)
+        return clean_key
+
     def _sanitize_string_value(
         self,
         value: str,
@@ -384,7 +465,10 @@ class ZTDSGuardrail(CustomGuardrail):
         is_caller_visible: bool,
         parent_key: str | None,
     ) -> str:
-        if parent_key in _JSON_ENCODED_STRING_KEYS:
+        is_json_candidate: Final = parent_key in _JSON_ENCODED_STRING_KEYS or (
+            len(value) >= 2 and value[0] in ("{", "[", '"') and "\\" in value
+        )
+        if is_json_candidate:
             try:
                 parsed: Final = _JSON_VALUE_ADAPTER.validate_json(value)
                 if _as_dict(parsed) is not None or _as_list(parsed) is not None:
@@ -392,10 +476,39 @@ class ZTDSGuardrail(CustomGuardrail):
                         parsed, session_id, is_caller_visible=is_caller_visible, parent_key=None
                     )
                     return json.dumps(sanitized_obj, ensure_ascii=False)
+                if isinstance(parsed, str) and parsed != value:
+                    sanitized_str, _ = self.sanitize_text(parsed, session_id, is_caller_visible=is_caller_visible)
+                    return json.dumps(sanitized_str, ensure_ascii=False)
+            except (ValueError, ValidationError):
+                pass
+        if "\\u" in value or "\\U" in value:
+            try:
+                wrapped: Final = _JSON_VALUE_ADAPTER.validate_json(f'"{value}"')
+                if isinstance(wrapped, str) and wrapped != value:
+                    sanitized_wrapped, _ = self.sanitize_text(wrapped, session_id, is_caller_visible=is_caller_visible)
+                    if sanitized_wrapped != wrapped:
+                        return sanitized_wrapped
             except (ValueError, ValidationError):
                 pass
         sanitized, _ = self.sanitize_text(value, session_id, is_caller_visible=is_caller_visible)
         return sanitized
+
+    def _sanitize_bytes_value(
+        self,
+        raw: bytes | bytearray,
+        session_id: str,
+        *,
+        is_caller_visible: bool,
+    ) -> bytes | bytearray:
+        try:
+            decoded: Final = bytes(raw).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if self.enforce_zero_egress:
+                raise ValueError("ZTDS guardrail rejects non-UTF-8 binary payload") from exc
+            return raw
+        sanitized, _ = self.sanitize_text(decoded, session_id, is_caller_visible=is_caller_visible)
+        encoded: Final = sanitized.encode("utf-8")
+        return bytearray(encoded) if isinstance(raw, bytearray) else encoded
 
     def _sanitize_dict_node(
         self,
@@ -404,13 +517,14 @@ class ZTDSGuardrail(CustomGuardrail):
         *,
         is_caller_visible: bool,
     ) -> dict[object, object]:  # mutable-ok: returns sanitized nested dict
+        self._reject_uninspectable_dict(node_dict)
         role_val: Final = node_dict.get("role")
         branch_visible: Final = is_caller_visible and not (
             isinstance(role_val, str) and role_val.lower() in _NON_CALLER_ROLES
         )
         if not branch_visible:
             return {
-                key: (
+                self._sanitize_dict_key(key, session_id): (
                     val
                     if isinstance(key, str) and (key.startswith("_") or key == "litellm_logging_obj")
                     else self._sanitize_payload_node(
@@ -422,6 +536,7 @@ class ZTDSGuardrail(CustomGuardrail):
                 )
                 for key, val in node_dict.items()
             }
+        key_renames: Final[list[tuple[object, object]]] = []  # mutable-ok: defers key replacement until iteration ends
         for key in tuple(node_dict.keys()):
             if isinstance(key, str) and (key.startswith("_") or key == "litellm_logging_obj"):
                 continue
@@ -433,7 +548,58 @@ class ZTDSGuardrail(CustomGuardrail):
                 is_caller_visible=child_visible,
                 parent_key=parent_key,
             )
+            clean_key = self._sanitize_dict_key(key, session_id)
+            if clean_key != key:
+                key_renames.append((key, clean_key))
+        for old_key, new_key in key_renames:
+            node_dict[new_key] = node_dict.pop(old_key)  # rebind-ok: swap sanitized dict key in place
         return node_dict
+
+    def _sanitize_collection_node(
+        self,
+        node: object,
+        session_id: str,
+        *,
+        is_caller_visible: bool,
+        parent_key: str | None,
+    ) -> tuple[bool, object]:
+        list_val: Final = _as_list(node)
+        if list_val is not None:
+            if not is_caller_visible:
+                return True, [
+                    self._sanitize_payload_node(item, session_id, is_caller_visible=False, parent_key=parent_key)
+                    for item in list_val
+                ]
+            for idx in range(len(list_val)):
+                list_val[idx] = self._sanitize_payload_node(
+                    list_val[idx], session_id, is_caller_visible=True, parent_key=parent_key
+                )
+            return True, list_val
+        seq_val: Final = _as_sequence(node)
+        if seq_val is not None:
+            return True, tuple(
+                self._sanitize_payload_node(
+                    item, session_id, is_caller_visible=is_caller_visible, parent_key=parent_key
+                )
+                for item in seq_val
+            )
+        set_val: Final = _as_set(node)
+        if set_val is not None:
+            return True, {
+                self._sanitize_payload_node(
+                    item, session_id, is_caller_visible=is_caller_visible, parent_key=parent_key
+                )
+                for item in set_val
+            }
+        fset_val: Final = _as_frozenset(node)
+        if fset_val is not None:
+            return True, frozenset(
+                self._sanitize_payload_node(
+                    item, session_id, is_caller_visible=is_caller_visible, parent_key=parent_key
+                )
+                for item in fset_val
+            )
+        return False, node
 
     def _sanitize_payload_node(
         self,
@@ -449,6 +615,8 @@ class ZTDSGuardrail(CustomGuardrail):
             return self._sanitize_string_value(
                 node, session_id, is_caller_visible=is_caller_visible, parent_key=parent_key
             )
+        if isinstance(node, (bytes, bytearray)):
+            return self._sanitize_bytes_value(node, session_id, is_caller_visible=is_caller_visible)
         if isinstance(node, BaseModel):
             return self._sanitize_payload_node(
                 _dump_pydantic_model(node),
@@ -456,26 +624,11 @@ class ZTDSGuardrail(CustomGuardrail):
                 is_caller_visible=is_caller_visible,
                 parent_key=parent_key,
             )
-        list_val: Final = _as_list(node)
-        if list_val is not None:
-            if not is_caller_visible:
-                return [
-                    self._sanitize_payload_node(item, session_id, is_caller_visible=False, parent_key=parent_key)
-                    for item in list_val
-                ]
-            for idx in range(len(list_val)):
-                list_val[idx] = self._sanitize_payload_node(
-                    list_val[idx], session_id, is_caller_visible=True, parent_key=parent_key
-                )
-            return list_val
-        seq_val: Final = _as_sequence(node)
-        if seq_val is not None:
-            return tuple(
-                self._sanitize_payload_node(
-                    item, session_id, is_caller_visible=is_caller_visible, parent_key=parent_key
-                )
-                for item in seq_val
-            )
+        handled, sanitized_collection = self._sanitize_collection_node(
+            node, session_id, is_caller_visible=is_caller_visible, parent_key=parent_key
+        )
+        if handled:
+            return sanitized_collection
         dict_val: Final = _as_dict(node)
         if dict_val is not None:
             return self._sanitize_dict_node(dict_val, session_id, is_caller_visible=is_caller_visible)
@@ -483,6 +636,8 @@ class ZTDSGuardrail(CustomGuardrail):
         if mapping_val is not None:
             copied: Final[dict[object, object]] = dict(mapping_val)  # mutable-ok: mutable working copy of Mapping
             return self._sanitize_dict_node(copied, session_id, is_caller_visible=is_caller_visible)
+        if self.enforce_zero_egress:
+            raise ValueError(f"ZTDS guardrail rejects unsupported payload object of type {type(node).__name__}")
         return node
 
     def _sanitize_request_mapping(
@@ -495,6 +650,14 @@ class ZTDSGuardrail(CustomGuardrail):
                 opt_dict = _as_str_dict(target.get("optional_params"))
                 if opt_dict is not None:
                     self._sanitize_request_mapping(opt_dict, session_id)
+                else:
+                    opt_map = _as_mapping(target.get("optional_params"))
+                    if opt_map is not None:
+                        copied_opt: dict[str, object] = {  # mutable-ok: copied Mapping container for sanitization
+                            str(ok): ov for ok, ov in opt_map.items()
+                        }
+                        self._sanitize_request_mapping(copied_opt, session_id)
+                        target["optional_params"] = copied_opt  # rebind-ok: store sanitized optional_params copy
                 continue
             if key in _CONTROL_KEYS or key.startswith(("_", "litellm_")):
                 continue
@@ -502,6 +665,44 @@ class ZTDSGuardrail(CustomGuardrail):
             target[key] = self._sanitize_payload_node(  # rebind-ok: sanitize provider-visible request field
                 target[key], session_id, is_caller_visible=is_visible, parent_key=key
             )
+
+    def _sanitize_metadata_slot(
+        self,
+        slot_dict: dict[str, object],  # mutable-ok: sanitizes metadata slot in place
+        session_id: str,
+    ) -> None:
+        key_renames: Final[list[tuple[str, str]]] = []  # mutable-ok: defers key replacement until iteration ends
+        for k in tuple(slot_dict.keys()):
+            if k == "requester_metadata":
+                req_meta = _as_dict(slot_dict.get("requester_metadata"))
+                if req_meta is not None:
+                    for rk in tuple(req_meta.keys()):
+                        if rk == "headers" or (isinstance(rk, str) and rk.startswith("_")):
+                            continue
+                        req_meta[rk] = self._sanitize_payload_node(
+                            req_meta[rk], session_id, is_caller_visible=False, parent_key=str(rk)
+                        )
+                continue
+            if k in _INTERNAL_METADATA_KEYS or k.startswith(("user_api_key", "_", "litellm_")):
+                continue
+            slot_dict[k] = self._sanitize_payload_node(  # rebind-ok: sanitize caller metadata value in place
+                slot_dict[k], session_id, is_caller_visible=False, parent_key=k
+            )
+            clean_k, _ = self.sanitize_text(k, session_id, is_caller_visible=False)
+            if clean_k != k:
+                key_renames.append((k, clean_k))
+        for old_k, new_k in key_renames:
+            slot_dict[new_k] = slot_dict.pop(old_k)  # rebind-ok: swap sanitized metadata key in place
+
+    def _sanitize_caller_metadata(
+        self,
+        data: dict[str, object],  # mutable-ok: inspects caller-controlled metadata buckets in place
+        session_id: str,
+    ) -> None:
+        for meta_slot in ("metadata", "litellm_metadata"):
+            slot_dict = _as_str_dict(data.get(meta_slot))
+            if slot_dict is not None:
+                self._sanitize_metadata_slot(slot_dict, session_id)
 
     async def async_pre_call_hook(
         self,
@@ -515,7 +716,16 @@ class ZTDSGuardrail(CustomGuardrail):
         session_id: Final = f"{raw_call_id}_{uuid.uuid4().hex}"
         data["_ztds_session_id"] = session_id  # rebind-ok: attach ephemeral session handle for lifecycle cleanup
 
-        self._sanitize_request_mapping(data, session_id)
+        try:
+            self._sanitize_request_mapping(data, session_id)
+            self._sanitize_caller_metadata(data, session_id)
+        except Exception:
+            self.zeroize_session(session_id)
+            data.pop("_ztds_session_id", None)
+            raise
+
+        if call_type in ("mcp_call", "call_mcp_tool") and "arguments" in data:
+            data["modified_arguments"] = data["arguments"]  # rebind-ok: MCP pre_call hook returns modified_arguments
 
         existing_meta: Final = _as_str_dict(data.get("metadata"))
         metadata: Final[dict[str, object]] = (  # mutable-ok: proxy request metadata dict
@@ -528,6 +738,61 @@ class ZTDSGuardrail(CustomGuardrail):
         metadata["ztds_invariants_verified"] = (1, 2, 3, 4)
 
         return data
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],  # mutable-ok: inherited CustomGuardrail apply_guardrail signature
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        """Unified guardrail entrypoint supporting /guardrails/apply_guardrail and SDK callers."""
+        if input_type == "response":
+            sid: Final = self._extract_session_id(request_data)
+            if sid is None:
+                return inputs
+            try:
+                raw_resp_texts: Final = inputs.get("texts")
+                if self.reverse_on_output and raw_resp_texts:
+                    return {**inputs, "texts": [self.restore_text(text, sid) for text in raw_resp_texts]}
+                return inputs
+            finally:
+                self.zeroize_session(sid)
+
+        raw_call_id: Final = request_data.get("litellm_call_id") or "call"
+        existing_sid: Final = self._extract_session_id(request_data)
+        session_id: Final = existing_sid if existing_sid is not None else f"{raw_call_id}_{uuid.uuid4().hex}"
+        request_data["_ztds_session_id"] = session_id  # rebind-ok: track unified guardrail session for cleanup
+        updated_inputs: Final[GenericGuardrailAPIInputs] = dict(inputs)  # pyright: ignore[reportAssignmentType]  # shallow copy of TypedDict preserves schema keys
+        try:
+            raw_texts: Final = inputs.get("texts")
+            if raw_texts:
+                updated_inputs["texts"] = [
+                    self.sanitize_text(text, session_id, is_caller_visible=True)[0] for text in raw_texts
+                ]
+            raw_msgs: Final = inputs.get("structured_messages")
+            if raw_msgs is not None:
+                sanitized_msgs: Final = self._sanitize_payload_node(
+                    raw_msgs, session_id, is_caller_visible=True, parent_key="structured_messages"
+                )
+                updated_inputs["structured_messages"] = sanitized_msgs  # pyright: ignore[reportGeneralTypeIssues]  # preserves message dicts cleanly while sanitizing leaf text
+            raw_tools: Final = inputs.get("tools")
+            if raw_tools is not None:
+                sanitized_tools: Final = self._sanitize_payload_node(
+                    raw_tools, session_id, is_caller_visible=False, parent_key="tools"
+                )
+                updated_inputs["tools"] = sanitized_tools  # pyright: ignore[reportGeneralTypeIssues]  # preserves ChatCompletionToolParam dict structure cleanly
+            raw_calls: Final = inputs.get("tool_calls")
+            if raw_calls is not None:
+                sanitized_calls: Final = self._sanitize_payload_node(
+                    raw_calls, session_id, is_caller_visible=True, parent_key="tool_calls"
+                )
+                updated_inputs["tool_calls"] = sanitized_calls  # pyright: ignore[reportGeneralTypeIssues]  # preserves tool call dicts cleanly while sanitizing arguments
+        except Exception:
+            self.zeroize_session(session_id)
+            request_data.pop("_ztds_session_id", None)
+            raise
+        return updated_inputs
 
     def _restore_response_choices(self, choices: object, session_id: str) -> None:
         choice_seq: Final = _as_sequence(choices)

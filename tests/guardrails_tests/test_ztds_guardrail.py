@@ -713,6 +713,118 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(rerank_instr_email, restored_text)
         self.assertIn(instr_tok, restored_text)
 
+    async def test_entity_configuration_normalizes_case_and_rejects_invalid_names(self) -> None:
+        """Entity configuration must normalize case/whitespace and fail closed on invalid or parallel configs."""
+        normalized: Final = ZTDSGuardrail(enabled_entities=["email", " api_secret "])
+        self.assertEqual(normalized.enabled_entities, ("EMAIL", "API_SECRET"))
+        sanitized, _ = normalized.sanitize_text("Email alice@corp.com ip 10.0.0.1", "ent-case-1")
+        self.assertIn("[EMAIL_TOKEN_1]", sanitized)
+        self.assertIn("10.0.0.1", sanitized)
+
+        init_params: Final = LitellmParams(
+            guardrail="ztds",
+            mode="pre_call",
+            default_on=False,
+            enabled_entities=["email"],
+        )
+        init_cfg: Final[Guardrail] = {"guardrail_name": "ztds-lower", "litellm_params": init_params}
+        init_obj: Final = initialize_ztds(litellm_params=init_params, guardrail=init_cfg)
+        try:
+            assert isinstance(init_obj, ZTDSGuardrail)
+            self.assertEqual(init_obj.enabled_entities, ("EMAIL",))
+            masked_init, _ = init_obj.sanitize_text("Contact init@corp.com", "ent-case-2")
+            self.assertNotIn("init@corp.com", masked_init)
+        finally:
+            _remove_callback(init_obj)
+
+        with self.assertRaisesRegex(ValueError, r"Unsupported ZTDS entity"):
+            ZTDSGuardrail(enabled_entities=["invalid_entity"])
+        with self.assertRaisesRegex(ValueError, r"non-empty sequence"):
+            ZTDSGuardrail(enabled_entities=[])
+        with self.assertRaisesRegex(ValueError, r"cannot use parallel during_call"):
+            ZTDSGuardrail(event_hook="during_call")
+
+    async def test_fail_closed_unsupported_shapes_user_stop_metadata_dict_keys_and_mcp(self) -> None:
+        """User/stop/metadata/dict-keys/MCP/apply_guardrail sanitize cleanly while opaque payloads fail closed."""
+        user_email: Final = "owner@corp.com"
+        stop_email: Final = "halt@corp.com"
+        meta_email: Final = "meta@corp.com"
+        key_email: Final = "key_user@corp.com"
+        mcp_email: Final = "mcp@corp.com"
+
+        req_data: Final[dict[str, object]] = {  # mutable-ok: multi-field request fixture
+            "litellm_call_id": "call-meta-user-stop",
+            "user": user_email,
+            "stop": [stop_email],
+            "metadata": {"customer_email": meta_email},
+            "messages": [{"role": "user", "content": "ok"}],
+            "extra_body": {key_email: "v"},
+        }
+        modified: Final = await self.guardrail.async_pre_call_hook({}, {}, req_data, "chat_completion")
+        serialized: Final = json.dumps(modified)
+        for sensitive in (user_email, stop_email, meta_email, key_email):
+            self.assertNotIn(sensitive, serialized)
+
+        user_match: Final = re.search(r"\[EMAIL_TOKEN_\d+\]", str(modified["user"]))
+        meta_dict: Final = _expect_dict(modified["metadata"])
+        meta_match: Final = re.search(r"\[EMAIL_TOKEN_\d+\]", str(meta_dict["customer_email"]))
+        stop_list: Final = _expect_list(modified["stop"])
+        stop_match: Final = re.search(r"\[EMAIL_TOKEN_\d+\]", str(stop_list[0]))
+        assert user_match is not None and meta_match is not None and stop_match is not None
+
+        resp: Final = await self.guardrail.async_post_call_success_hook(
+            data=modified,
+            user_api_key_dict={},
+            response=MockModelResponse(
+                f"stop={stop_match.group(0)} user={user_match.group(0)} meta={meta_match.group(0)}"
+            ),
+        )
+        assert isinstance(resp, MockModelResponse)
+        reply: Final = resp.choices[0].message.content
+        self.assertIn(stop_email, reply)
+        self.assertNotIn(user_email, reply)
+        self.assertNotIn(meta_email, reply)
+
+        mcp_req: Final[dict[str, object]] = {  # mutable-ok: MCP tool call fixture
+            "litellm_call_id": "call-mcp-1",
+            "name": "send_email",
+            "arguments": {"email": mcp_email},
+        }
+        mcp_out: Final = await self.guardrail.async_pre_call_hook({}, {}, mcp_req, "mcp_call")
+        mcp_args: Final = _expect_dict(mcp_out["modified_arguments"])
+        self.assertNotIn(mcp_email, str(mcp_args["email"]))
+        self.guardrail.zeroize_session(str(mcp_out["_ztds_session_id"]))
+
+        req_meta: Final[dict[str, object]] = {"litellm_call_id": "call-unified-1"}  # mutable-ok: unified fixture
+        unified_req: Final = await self.guardrail.apply_guardrail(
+            inputs={"texts": ["Reach unified@corp.com"]},
+            request_data=req_meta,
+            input_type="request",
+        )
+        self.assertNotIn("unified@corp.com", str(unified_req.get("texts")))
+        unified_resp: Final = await self.guardrail.apply_guardrail(
+            inputs={"texts": unified_req["texts"]},
+            request_data=req_meta,
+            input_type="response",
+        )
+        self.assertEqual(unified_resp.get("texts"), ["Reach unified@corp.com"])
+
+        bad_file_req: Final[dict[str, object]] = {  # mutable-ok: fail-closed binary fixture
+            "litellm_call_id": "call-bad-file",
+            "messages": [{"role": "user", "content": [{"type": "input_file", "file_data": "ZGF0YQ=="}]}],
+        }
+        with self.assertRaisesRegex(ValueError, r"rejects uninspectable"):
+            await self.guardrail.async_pre_call_hook({}, {}, bad_file_req, "chat_completion")
+        self.assertNotIn("_ztds_session_id", bad_file_req)
+
+        bad_obj_req: Final[dict[str, object]] = {  # mutable-ok: fail-closed opaque object fixture
+            "litellm_call_id": "call-bad-obj",
+            "messages": [{"role": "user", "content": object()}],
+        }
+        with self.assertRaisesRegex(ValueError, r"rejects unsupported payload object"):
+            await self.guardrail.async_pre_call_hook({}, {}, bad_obj_req, "chat_completion")
+        self.assertNotIn("_ztds_session_id", bad_obj_req)
+
 
 if __name__ == "__main__":
     unittest.main()
