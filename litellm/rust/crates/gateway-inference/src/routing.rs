@@ -15,7 +15,10 @@ use litellm_router_core::{
 use litellm_router_types::Spelled;
 use serde_json::{Map, Value};
 
-use crate::{Error, Gateway, error::NoDeployments};
+use crate::{
+    Error, Gateway,
+    error::{Ended, NoDeployments},
+};
 
 /// The host the routes are served through. It answers router-core's hostcalls for one call, and
 /// the gateway crate attaches the native one.
@@ -163,7 +166,8 @@ fn caller_request(identity: &AuthenticatedRequest, model: &str) -> RouterRequest
 }
 
 /// Authorize `model`, then serve it through the router: pick, run `route` on each attempt,
-/// retry and fall back.
+/// retry and fall back. A call that ends on an attempt's error names the deployment the router
+/// says raised it.
 pub(crate) async fn call<H: Host, A: RouteAttempt>(
     gateway: &Gateway<H>,
     identity: &AuthenticatedRequest,
@@ -171,7 +175,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
     path: &'static str,
     model: &str,
     route: &A,
-) -> Result<RouterResponse<A::Outcome>, Error> {
+) -> Result<RouterResponse<A::Outcome>, Ended> {
     let request = caller_request(identity, model);
     let first = first_model(gateway, &request).ok_or_else(|| Error::UnknownModel {
         route: path,
@@ -183,20 +187,23 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
         Ok(routed) => return Ok(routed),
         Err(ended) => ended,
     };
-    Err(match ended {
+    Err(match *ended {
         CallError {
-            raised: Some(error),
+            raised: Some(raised),
             ..
-        } => error,
+        } => Ended {
+            error: Box::new(raised.failure),
+            deployment_id: raised.deployment_id,
+        },
         CallError {
             error: litellm_router_core::Error::UnknownModel { model },
             ..
-        } => Error::UnknownModel { route: path, model },
+        } => Error::UnknownModel { route: path, model }.into(),
         CallError {
             error: litellm_router_core::Error::NoHealthyDeployments { model, .. },
             ..
         } => no_deployments(gateway, model).await.into(),
-        CallError { error, .. } => Error::Routing(error),
+        CallError { error, .. } => Error::Routing(error).into(),
     })
 }
 

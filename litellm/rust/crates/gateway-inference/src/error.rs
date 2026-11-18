@@ -1,12 +1,14 @@
 use axum::http::StatusCode;
 use axum::{
-    Json,
+    Extension, Json,
     response::{IntoResponse, Response},
 };
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_python_compat::{Value as PyValue, repr::repr};
 use serde_json::{Map, Value, json};
+
+use crate::headers::Routing;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -99,6 +101,37 @@ pub enum BodyError {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         self.openai_response()
+    }
+}
+
+/// The error a request ended on, with the deployment the router says raised it, which the proxy
+/// names in `x-litellm-model-id`.
+#[derive(Debug)]
+pub struct Ended {
+    pub error: Box<Error>,
+    pub deployment_id: Option<String>,
+}
+
+impl Ended {
+    /// What the router did for the call, which the routing headers layer reads off the response.
+    pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
+        let deployment_id = self.deployment_id.as_deref()?;
+        Some(Extension(Routing::failed_on(deployment_id)))
+    }
+}
+
+impl<E: Into<Error>> From<E> for Ended {
+    fn from(error: E) -> Self {
+        Self {
+            error: Box::new(error.into()),
+            deployment_id: None,
+        }
+    }
+}
+
+impl IntoResponse for Ended {
+    fn into_response(self) -> Response {
+        (self.routing(), *self.error).into_response()
     }
 }
 

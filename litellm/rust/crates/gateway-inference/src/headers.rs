@@ -30,12 +30,20 @@ impl From<ExposedHeader> for HeaderName {
     }
 }
 
-/// What the router did to serve a request. A route attaches it to its response as an extension,
-/// and [`layer`] is the one place that turns it into the proxy's `x-litellm-*` headers, the same
-/// for a complete answer and for a stream, whose head is written after its attempt was served.
+/// What the router did for a request. A route attaches it to its response as an extension, and
+/// [`layer`] is the one place that turns it into the proxy's `x-litellm-*` headers, the same for
+/// a complete answer and for a stream, whose head is written after its attempt was served.
 #[derive(Clone, Debug)]
 pub(crate) struct Routing {
+    /// The deployment the last attempt ran on.
     deployment_id: String,
+    /// `None` for a call that ended on a failed attempt, which the proxy names only the
+    /// deployment of.
+    served: Option<Served>,
+}
+
+#[derive(Clone, Debug)]
+struct Served {
     model_group: String,
     attempted_retries: u32,
     attempted_fallbacks: u32,
@@ -46,10 +54,20 @@ impl Routing {
     pub(crate) fn served<R>(routed: &RouterResponse<R>) -> Self {
         Self {
             deployment_id: routed.deployment_id.clone(),
-            model_group: routed.model_group.clone(),
-            attempted_retries: routed.attempted_retries,
-            attempted_fallbacks: routed.attempted_fallbacks,
-            max_retries: routed.max_retries,
+            served: Some(Served {
+                model_group: routed.name.clone(),
+                attempted_retries: routed.attempted_retries,
+                attempted_fallbacks: routed.attempted_fallbacks,
+                max_retries: routed.max_retries,
+            }),
+        }
+    }
+
+    /// For a call that ended on a failed attempt on `deployment_id`.
+    pub(crate) fn failed_on(deployment_id: &str) -> Self {
+        Self {
+            deployment_id: deployment_id.to_owned(),
+            served: None,
         }
     }
 }
@@ -74,21 +92,27 @@ pub(crate) fn layer() -> (SetHeader, SetHeader, SetHeader, SetHeader, SetHeader)
     (
         set("x-litellm-max-retries", |response| {
             told(response, |routing| {
-                routing.max_retries.map(|max| max.to_string())
+                routing
+                    .served
+                    .as_ref()?
+                    .max_retries
+                    .map(|max| max.to_string())
             })
         }),
         set("x-litellm-attempted-fallbacks", |response| {
             told(response, |routing| {
-                Some(routing.attempted_fallbacks.to_string())
+                Some(routing.served.as_ref()?.attempted_fallbacks.to_string())
             })
         }),
         set("x-litellm-attempted-retries", |response| {
             told(response, |routing| {
-                Some(routing.attempted_retries.to_string())
+                Some(routing.served.as_ref()?.attempted_retries.to_string())
             })
         }),
         set("x-litellm-model-group", |response| {
-            told(response, |routing| Some(routing.model_group.clone()))
+            told(response, |routing| {
+                Some(routing.served.as_ref()?.model_group.clone())
+            })
         }),
         set("x-litellm-model-id", |response| {
             told(response, |routing| Some(routing.deployment_id.clone()))

@@ -8,7 +8,7 @@ use litellm_router_core::{Attempt, Op, Served};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    Error, Gateway,
+    Ended, Error, Gateway,
     headers::Routing,
     request::{self, InferenceBody},
     routing::{self, Host, RouteAttempt},
@@ -18,7 +18,7 @@ pub(crate) async fn create<H: Host>(
     State(gateway): State<Arc<Gateway<H>>>,
     identity: AuthenticatedRequest,
     body: InferenceBody,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<impl IntoResponse, Ended> {
     handle(&gateway, &identity, body)
         .await
         .map(|(routing, body)| (routing, Json(body)))
@@ -31,7 +31,7 @@ async fn handle<H: Host>(
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<(Extension<Routing>, Value), Error> {
+) -> Result<(Extension<Routing>, Value), Ended> {
     let model = request::model(&body)?.to_owned();
     let audio = match upload {
         Some(upload) => {

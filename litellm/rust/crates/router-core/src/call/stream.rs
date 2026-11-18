@@ -176,7 +176,7 @@ impl Router {
         request: RouterRequest,
         origin: StreamOrigin,
         failure: AttemptError,
-    ) -> Result<super::RouterResponse<H::Response>, CallError<H::Failure>> {
+    ) -> Result<super::RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
         self.live()?;
         let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();
@@ -216,7 +216,7 @@ impl Router {
         request: RouterRequest,
         origin: StreamOrigin,
         failure: AttemptError,
-    ) -> Result<super::RouterResponse<H::Response>, CallError<H::Failure>> {
+    ) -> Result<super::RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
         self.live()?;
         let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();

@@ -30,7 +30,7 @@ use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
-pub use error::{BodyError, Error};
+pub use error::{BodyError, Ended, Error};
 pub use headers::ExposedHeader;
 pub use request::{JsonObject, RequestId};
 pub use routing::Host;

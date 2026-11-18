@@ -420,7 +420,10 @@ async fn a_failed_call_hands_back_the_host_error_of_the_attempt_it_ends_on(confi
         ),
         (
             Some(FailureKind::BadRequest),
-            Some(Raised(selected[0].clone())),
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
             2,
         )
     );
@@ -451,7 +454,14 @@ async fn a_refused_attempt_ends_the_call_without_retries_or_fallbacks(config: Ro
     );
     assert_eq!(
         (ended.raised, selected.len(), host.retries()),
-        (Some(Raised(selected[0].clone())), 1, 0)
+        (
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
+            1,
+            0
+        )
     );
 }
 

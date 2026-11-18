@@ -138,7 +138,7 @@ pub use crate::{
     health::{Clock, Health, Outcome, SystemClock},
     host::{
         Attempt, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallError, CallbackFiltered,
-        Capability, HostFacts, Provided, RegistryHost, RetryCause, RouterEvent, RouterHost,
+        Capability, HostFacts, Provided, Raised, RegistryHost, RetryCause, RouterEvent, RouterHost,
         RouterRequest, RoutingContext, SecretAt, SecretRef, SelectStage, Served,
     },
     outcome::{OutcomeCallbacks, OutcomeWrite},
@@ -279,7 +279,7 @@ impl Core {
 pub(crate) struct Call<'a, H: RouterHost> {
     core: &'a Core,
     pub(crate) host: &'a H,
-    raised: Mutex<Vec<Option<H::Failure>>>,
+    raised: Mutex<Vec<Option<Raised<H::Failure>>>>,
 }
 
 impl<'a, H: RouterHost> Call<'a, H> {
@@ -295,27 +295,34 @@ impl<'a, H: RouterHost> Call<'a, H> {
         Health::new(self.host.cache(), self.core.clock.clone())
     }
 
-    /// The error a failed attempt stands for, naming the slot its host error is kept in.
-    pub(crate) fn failed(&self, failure: AttemptFailure<H::Failure>) -> Error {
+    /// The error a failed attempt stands for, naming the slot its host error is kept in with the
+    /// deployment the attempt ran on.
+    pub(crate) fn failed(
+        &self,
+        failure: AttemptFailure<H::Failure>,
+        deployment_id: Option<&str>,
+    ) -> Error {
         let mut raised = self.raised.lock();
         let slot = RaisedAt(raised.len());
-        match failure {
-            AttemptFailure::Failed { facts, raised: own } => {
-                raised.push(Some(own));
+        let (failure, error) = match failure {
+            AttemptFailure::Failed { facts, raised: own } => (
+                own,
                 Error::Attempt(AttemptError {
                     raised_at: Some(slot),
                     ..facts
-                })
-            }
-            AttemptFailure::Refused(own) => {
-                raised.push(Some(own));
-                Error::Refused(slot)
-            }
-        }
+                }),
+            ),
+            AttemptFailure::Refused(own) => (own, Error::Refused(slot)),
+        };
+        raised.push(Some(Raised {
+            failure,
+            deployment_id: deployment_id.map(str::to_owned),
+        }));
+        error
     }
 
     /// The error the call ends on, with the host error behind it when an attempt raised it.
-    pub(crate) fn ended(&self, error: Error) -> CallError<H::Failure> {
+    pub(crate) fn ended(&self, error: Error) -> Box<CallError<H::Failure>> {
         let slot = match &error {
             Error::Attempt(failure) => failure.raised_at,
             Error::Refused(slot) => Some(*slot),
@@ -323,7 +330,7 @@ impl<'a, H: RouterHost> Call<'a, H> {
         };
         let raised =
             slot.and_then(|RaisedAt(slot)| self.raised.lock().get_mut(slot).and_then(Option::take));
-        CallError { error, raised }
+        Box::new(CallError { error, raised })
     }
 }
 
@@ -465,7 +472,7 @@ impl Router {
         host: &H,
         op: Op,
         request: RouterRequest,
-    ) -> Result<RouterResponse<H::Response>, CallError<H::Failure>> {
+    ) -> Result<RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
         self.live()?;
         let call = Call::new(&self.core, host);
         call.call(op, Arc::new(request))

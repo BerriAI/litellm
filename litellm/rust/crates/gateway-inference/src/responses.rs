@@ -15,7 +15,7 @@ use litellm_router_core::{Attempt, Op, Served};
 use serde_json::{Map, Value};
 
 use crate::{
-    Error, Gateway, JsonObject,
+    Ended, Error, Gateway, JsonObject,
     caching::CacheHeaders,
     headers::Routing,
     model_restamp::ReportedModel,
@@ -28,7 +28,7 @@ pub(crate) async fn create<H: Host>(
     State(gateway): State<Arc<Gateway<H>>>,
     identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
-) -> Result<Response, Error> {
+) -> Result<Response, Ended> {
     let model = request::model(&body)?.to_owned();
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
     let route = gateway.responses.clone();
