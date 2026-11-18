@@ -238,6 +238,52 @@ class PromptShieldDocument(TypedDict):
     per_thousand: ReadOnly[float | None]
 
 
+class DurationClip(TypedDict):
+    type: ReadOnly[Literal["duration"]]
+    seconds: ReadOnly[float]
+
+
+class TokenClip(TypedDict):
+    type: ReadOnly[Literal["tokens"]]
+    audio: ReadOnly[float]
+    text: ReadOnly[float]
+    output: ReadOnly[float]
+
+
+class OtherClip(TypedDict):
+    type: ReadOnly[Literal["other"]]
+
+
+ClipUsage: TypeAlias = DurationClip | TokenClip | OtherClip
+
+
+class ClipUse(TypedDict):
+    rows: ReadOnly[Sequence[int]]
+    usage: ReadOnly[ClipUsage]
+
+
+class TranslationUse(TypedDict):
+    input_seconds: ReadOnly[float]
+    output_seconds: ReadOnly[float]
+    rows: ReadOnly[Sequence[int]]
+
+
+class MeteredUse(TypedDict):
+    quantity: ReadOnly[float]
+    rows: ReadOnly[Sequence[int]]
+
+
+class SessionDocument(TypedDict):
+    """What a realtime or Live session bills beside its tokens. Each part names its rows by index among the rows
+    passed beside the document, in the order main tries the session's models."""
+
+    transcription: ReadOnly[Sequence[ClipUse]]
+    translation: ReadOnly[TranslationUse | None]
+    live_voice: ReadOnly[MeteredUse | None]
+    audio_duration: ReadOnly[MeteredUse | None]
+    text_messages: ReadOnly[MeteredUse | None]
+
+
 FeeDocument: TypeAlias = A2aDocument | McpDocument | GuardrailDocument | PromptShieldDocument
 
 
@@ -378,6 +424,19 @@ def price_many(
 def price_fee(document: FeeDocument) -> NativeReceipt | NativeUnpriced:
     """An agent call, MCP tool call or guardrail run priced from ``document``'s facts, or why nothing prices it."""
     return model_cost_inputs.price_fee(document)
+
+
+def price_session(document: SessionDocument, rows: Sequence[Mapping[str, object]]) -> NativeReceipt | NativeUnpriced:
+    """A session's parts beside its tokens, one receipt part each: ``transcription_cost``, ``translation_cost``,
+    ``live_voice_cost``, ``audio_duration_cost`` and ``text_message_cost``."""
+    return model_cost_inputs.price_session(document, rows)
+
+
+def part_costs(outcome: NativeReceipt | NativeUnpriced) -> Mapping[str, float]:
+    """Each priced part's cost by label, a part no price covers left out, the 0.0 main billed it."""
+    if not isinstance(outcome, NativeReceipt):
+        return MappingProxyType({})
+    return MappingProxyType({label: cost for label, cost in outcome.parts if cost is not None})
 
 
 def total_or_zero(outcome: NativeReceipt | NativeUnpriced) -> float:

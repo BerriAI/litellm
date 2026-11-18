@@ -343,6 +343,17 @@ impl NativeModelCostMap {
         cost::price_many(py, &*self.cost_snapshot(py)?, documents, &rows)
     }
 
+    /// Prices what a realtime or Live session bills beside its tokens, one receipt part each. Each part names its rows
+    /// by index in `rows`, the rows `get_model_info` found for the session's candidate models
+    fn price_session(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+        rows: Vec<Bound<'_, PyMapping>>,
+    ) -> PyResult<Py<PyAny>> {
+        cost::price_session(py, &*self.cost_snapshot(py)?, document, &rows)
+    }
+
     /// Prices an agent call, an MCP tool call or a guardrail run from the facts in `document`, a receipt or why it
     /// is unpriced
     fn price_fee(&self, py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
