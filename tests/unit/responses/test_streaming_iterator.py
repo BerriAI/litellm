@@ -2930,6 +2930,8 @@ async def test_synthetic_stream_preserves_terminal_status_and_success_callbacks(
     empty_output: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
     original: Final = _answer_with_text_and_tool_call()
     transformed: Final = ResponsesAPIResponse.model_validate(
         {
@@ -2974,6 +2976,9 @@ async def test_synthetic_stream_preserves_terminal_status_and_success_callbacks(
         f"response.{status}",
     )
     assert events[-1].response.model_dump() == transformed.model_dump()
+    downstream_response: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(iterator)
+    assert isinstance(downstream_response, ResponsesAPIResponse)
+    assert downstream_response.model_dump() == transformed.model_dump()
     assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == (
         "" if empty_output else "Checking the weather."
     )
