@@ -3,6 +3,8 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+import os
+import platform
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
@@ -10,11 +12,16 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm._version import version as _LITELLM_VERSION
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
+_USER_AGENT_ADAPTER: Final = TypeAdapter(str)
+
+_VERSION_PLACEHOLDER: Final = "{version}"
+_PYTHON_PLACEHOLDER: Final = "{python}"
 
 
 class SimpleProviderConfig:
@@ -26,6 +33,9 @@ class SimpleProviderConfig:
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
+        self.user_agent: str | None = (
+            _USER_AGENT_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
+        )
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
@@ -38,6 +48,18 @@ class SimpleProviderConfig:
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+
+    def get_attribution_headers(self) -> Mapping[str, str]:
+        if not self.user_agent:
+            return {}
+        user_agent_override: Final = os.environ.get("LITELLM_USER_AGENT")
+        if user_agent_override is not None:
+            return {"User-Agent": user_agent_override}
+        return {
+            "User-Agent": self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
+                _PYTHON_PLACEHOLDER, platform.python_version()
+            )
+        }
 
 
 class JSONProviderRegistry:

@@ -17,9 +17,20 @@ class CachePointBlock(TypedDict, total=False):
     ttl: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
+class GuardrailConverseContentBlock(TypedDict, total=False):
+    """Content block for selective guardrail evaluation in Bedrock Converse API"""
+
+    text: GuardrailConverseTextBlock
+
+
 class SystemContentBlock(TypedDict, total=False):
     text: str
     cachePoint: CachePointBlock
+    guardContent: ReadOnly[GuardrailConverseContentBlock]
 
 
 class S3Location(TypedDict):
@@ -118,16 +129,6 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 
 class BedrockConverseGptReasoningEffortBlock(TypedDict):
     effort: ReadOnly[str]
-
-
-class GuardrailConverseTextBlock(TypedDict, total=False):
-    text: str
-
-
-class GuardrailConverseContentBlock(TypedDict, total=False):
-    """Content block for selective guardrail evaluation in Bedrock Converse API"""
-
-    text: GuardrailConverseTextBlock
 
 
 class CitationWebLocationBlock(TypedDict, total=False):

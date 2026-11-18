@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
-use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::fallback::{CapabilityRules, FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
@@ -63,6 +63,7 @@ pub struct Catalog {
     store: Store<CatalogRows>,
     sections: Vec<Section>,
     fallback_generalizations: Option<FallbackGeneralizations>,
+    capability_rules: CapabilityRules,
 }
 
 /// Models and aliases, an alias served as its owner's row
@@ -246,6 +247,10 @@ impl Catalog {
                     })
                     .ok()
             });
+        let capability_rules = fallback_generalizations
+            .as_ref()
+            .map(|generalizations| CapabilityRules::new(&generalizations.rules))
+            .unwrap_or_default();
         Ok(Loaded {
             value: Self {
                 store: Store::new(CatalogRows {
@@ -255,6 +260,7 @@ impl Catalog {
                 }),
                 sections,
                 fallback_generalizations,
+                capability_rules,
             },
             errors: problems,
         })
@@ -480,6 +486,10 @@ impl Catalog {
 
     pub fn fallback_rules(&self) -> Option<&[FallbackRule]> {
         Some(self.fallback_generalizations.as_ref()?.rules.as_slice())
+    }
+
+    pub fn capability_rules(&self) -> &CapabilityRules {
+        &self.capability_rules
     }
 }
 

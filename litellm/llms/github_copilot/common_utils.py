@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import (
     Final,
     Protocol,
+    TypeAlias,
     cast,  # noqa: TID251  # casts pin the untyped litellm clients and cache to the local Protocols
 )
 from urllib.parse import urlsplit
@@ -24,7 +25,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST, GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-from .github_host import GithubHostEndpoints, github_host_endpoints
+from .github_host import DEFAULT_GITHUB_CLIENT_ID, GithubHostEndpoints, github_host_endpoints
 
 COPILOT_VERSION: Final = "0.26.7"
 EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
@@ -34,28 +35,36 @@ DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
 _GITHUB_API_HOST: Final = "api.github.com"
 _PLAN_API_BASE_RETRY_SECONDS: Final = 60
 _PLAN_API_BASE_TIMEOUT_SECONDS: Final = 10.0
-DEFAULT_COPILOT_INTEGRATION_ID: Final = "vscode-chat"
+VSCODE_CHAT_INTEGRATION_ID: Final = "vscode-chat"
+COPILOT_CLI_INTEGRATION_ID: Final = "copilot-developer-cli"
 DEFAULT_COPILOT_EDITOR_VERSION: Final = "vscode/1.115.0"
 DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION: Final = EDITOR_PLUGIN_VERSION
 DEFAULT_COPILOT_USER_AGENT: Final = USER_AGENT
 
-_COPILOT_AUTH_HEADER_CONFIG: Final = (
-    ("accept", "GITHUB_COPILOT_ACCEPT", "application/json"),
-    ("content-type", "GITHUB_COPILOT_CONTENT_TYPE", "application/json"),
-    ("copilot-integration-id", "GITHUB_COPILOT_INTEGRATION_ID", DEFAULT_COPILOT_INTEGRATION_ID),
-    ("editor-version", "GITHUB_COPILOT_EDITOR_VERSION", DEFAULT_COPILOT_EDITOR_VERSION),
-    ("editor-plugin-version", "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION", DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION),
-    ("user-agent", "GITHUB_COPILOT_USER_AGENT", DEFAULT_COPILOT_USER_AGENT),
-)
-_COPILOT_REQUEST_HEADER_CONFIG: Final = _COPILOT_AUTH_HEADER_CONFIG + (
-    ("openai-intent", "GITHUB_COPILOT_OPENAI_INTENT", "conversation-panel"),
-    ("x-github-api-version", "GITHUB_COPILOT_API_VERSION", API_VERSION),
-    (
-        "x-vscode-user-agent-library-version",
-        "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
-        "electron-fetch",
-    ),
-)
+_CopilotHeaderConfig: TypeAlias = tuple[tuple[str, str, str | None], ...]
+
+
+def _copilot_auth_header_config() -> _CopilotHeaderConfig:
+    return (
+        ("accept", "GITHUB_COPILOT_ACCEPT", "application/json"),
+        ("content-type", "GITHUB_COPILOT_CONTENT_TYPE", "application/json"),
+        ("copilot-integration-id", "GITHUB_COPILOT_INTEGRATION_ID", copilot_integration_id()),
+        ("editor-version", "GITHUB_COPILOT_EDITOR_VERSION", DEFAULT_COPILOT_EDITOR_VERSION),
+        ("editor-plugin-version", "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION", DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION),
+        ("user-agent", "GITHUB_COPILOT_USER_AGENT", DEFAULT_COPILOT_USER_AGENT),
+    )
+
+
+def _copilot_request_header_config() -> _CopilotHeaderConfig:
+    return _copilot_auth_header_config() + (
+        ("openai-intent", "GITHUB_COPILOT_OPENAI_INTENT", "conversation-panel"),
+        ("x-github-api-version", "GITHUB_COPILOT_API_VERSION", API_VERSION),
+        (
+            "x-vscode-user-agent-library-version",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
+            "electron-fetch",
+        ),
+    )
 
 
 class _PlanApiBaseCache(Protocol):
@@ -98,6 +107,18 @@ _PLAN_API_BASE_LOOKUPS: Final[  # mutable-ok: single-flight registry of in-progr
 ] = {}
 
 
+def custom_github_app_hint() -> str | None:
+    """Explain the GitHub App permission a custom Copilot sign-in app needs, or None for the default app."""
+    if os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID) in ("", DEFAULT_GITHUB_CLIENT_ID):
+        return None
+    return (
+        "LiteLLM signs in to GitHub Copilot with a custom GitHub App (GITHUB_COPILOT_CLIENT_ID). Check that the "
+        "app's 'Copilot Requests' permission is set to 'Read-only' and that the app's installation accepted it: "
+        "open https://github.com/settings/apps (or your organization's Settings > Developer settings > GitHub Apps), "
+        "select the app, then Permissions & events > Organization permissions > Copilot Requests."
+    )
+
+
 class GithubCopilotError(BaseLLMException):
     def __init__(
         self,
@@ -130,6 +151,14 @@ class InvalidAPIBaseError(GithubCopilotError):
     pass
 
 
+def copilot_integration_id() -> str:
+    """Copilot serves a custom GitHub App's user tokens only as the Copilot CLI integration."""
+    client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+    if client_id in ("", DEFAULT_GITHUB_CLIENT_ID):
+        return VSCODE_CHAT_INTEGRATION_ID
+    return COPILOT_CLI_INTEGRATION_ID
+
+
 def _get_copilot_header_value(environment_variable: str, default: str | None) -> str | None:
     value: Final = os.getenv(environment_variable)
     if value is None:
@@ -138,7 +167,7 @@ def _get_copilot_header_value(environment_variable: str, default: str | None) ->
 
 
 def _get_configured_copilot_headers(
-    config: tuple[tuple[str, str, str | None], ...],
+    config: _CopilotHeaderConfig,
 ) -> Mapping[str, str]:
     return {
         header: value
@@ -150,7 +179,7 @@ def _get_configured_copilot_headers(
 def get_copilot_auth_headers(
     access_token: str | None = None,
 ) -> dict[str, str]:  # mutable-ok: returned straight into httpx handlers whose headers params require dict
-    headers: Final = _get_configured_copilot_headers(_COPILOT_AUTH_HEADER_CONFIG)
+    headers: Final = _get_configured_copilot_headers(_copilot_auth_header_config())
     return {**headers, "authorization": f"token {access_token}"} if access_token else {**headers}
 
 
@@ -158,7 +187,7 @@ def get_copilot_default_headers(
     api_key: str,
 ) -> dict[str, str]:  # mutable-ok: callers merge caller headers into the returned dict
     return {
-        **_get_configured_copilot_headers(_COPILOT_REQUEST_HEADER_CONFIG),
+        **_get_configured_copilot_headers(_copilot_request_header_config()),
         "Authorization": f"Bearer {api_key}",
         "x-request-id": str(uuid4()),
     }

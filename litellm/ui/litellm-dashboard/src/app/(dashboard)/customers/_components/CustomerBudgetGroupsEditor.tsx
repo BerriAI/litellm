@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { v4 as uuidv4 } from "uuid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
@@ -49,11 +50,13 @@ export default function CustomerBudgetGroupsEditor({
   defaultGroupId,
   onChange,
   disabled = false,
+  showHeading = true,
 }: {
   groups: CustomerBudgetGroupFields[];
   defaultGroupId: string;
   onChange: (groups: CustomerBudgetGroupFields[], defaultGroupId: string) => void;
   disabled?: boolean;
+  showHeading?: boolean;
 }) {
   const { t } = useTranslation();
   const updateGroup = (id: string, patch: Partial<Omit<CustomerBudgetGroupFields, "id">>) =>
@@ -67,7 +70,7 @@ export default function CustomerBudgetGroupsEditor({
   };
   const addGroup = () => {
     const group: CustomerBudgetGroupFields = {
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: "",
       monthlyBudget: "",
       yearlyBudget: "",
@@ -76,11 +79,12 @@ export default function CustomerBudgetGroupsEditor({
     onChange([...groups, group], groups.length ? defaultGroupId : group.id);
   };
   return (
-    <section className="space-y-3 border-t pt-5" aria-labelledby="cc-groups-title">
+    <section
+      className={showHeading ? "space-y-3 border-t pt-5" : "space-y-3"}
+      aria-label={t("customerPortal.createDialog.groups")}
+    >
       <div>
-        <h3 id="cc-groups-title" className="font-medium">
-          {t("customerPortal.createDialog.groups")}
-        </h3>
+        {showHeading && <h3 className="font-medium">{t("customerPortal.createDialog.groups")}</h3>}
         <p className="mt-1 text-xs text-muted-foreground">{t("customerPortal.createDialog.groupsHelp")}</p>
       </div>
       <div
@@ -187,8 +191,6 @@ export default function CustomerBudgetGroupsEditor({
         <Plus className="size-4" />
         {t("customerPortal.createDialog.addGroup")}
       </Button>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.defaultHelp")}</p>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.resetHelp")}</p>
     </section>
   );
 }

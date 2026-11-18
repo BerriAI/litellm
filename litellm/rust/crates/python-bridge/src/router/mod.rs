@@ -1698,6 +1698,27 @@ fn step_dict(py: Python<'_>, step: Step) -> PyResult<Bound<'_, PyDict>> {
     Ok(dict)
 }
 
+/// router-core's decisions for the fallback-hop parts of an attempt's kwargs, as Python reads them.
+#[pyclass(frozen, name = "AttemptShape")]
+pub(crate) struct AttemptShape {
+    #[pyo3(get)]
+    fallback_model_group: Option<String>,
+    #[pyo3(get)]
+    is_fallback: bool,
+    #[pyo3(get)]
+    drops_mock_timeout: bool,
+}
+
+impl From<litellm_router_core::shape::AttemptShape> for AttemptShape {
+    fn from(shape: litellm_router_core::shape::AttemptShape) -> Self {
+        Self {
+            fallback_model_group: shape.fallback_model_group,
+            is_fallback: shape.is_fallback,
+            drops_mock_timeout: shape.drops_mock_timeout,
+        }
+    }
+}
+
 fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> PyResult<()> {
     match call {
         HostCall::Attempt {
@@ -1716,7 +1737,9 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             scope,
             max_retries,
             model_group_size,
+            shape,
         } => {
+            dict.set_item("shape", AttemptShape::from(shape))?;
             dict.set_item("routed", routed)?;
             dict.set_item("scope", scope)?;
             dict.set_item("max_retries", max_retries)?;

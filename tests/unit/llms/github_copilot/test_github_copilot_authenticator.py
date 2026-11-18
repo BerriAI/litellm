@@ -14,9 +14,9 @@ from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
     DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION,
     DEFAULT_COPILOT_EDITOR_VERSION,
-    DEFAULT_COPILOT_INTEGRATION_ID,
     DEFAULT_COPILOT_USER_AGENT,
     DEFAULT_GITHUB_COPILOT_API_BASE,
+    VSCODE_CHAT_INTEGRATION_ID,
     GetAccessTokenError,
     GetDeviceCodeError,
     InvalidAPIBaseError,
@@ -187,7 +187,7 @@ class TestGitHubCopilotAuthenticator:
         assert headers == {
             "accept": "application/json",
             "content-type": "application/json",
-            "copilot-integration-id": DEFAULT_COPILOT_INTEGRATION_ID,
+            "copilot-integration-id": VSCODE_CHAT_INTEGRATION_ID,
             "editor-version": DEFAULT_COPILOT_EDITOR_VERSION,
             "editor-plugin-version": DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION,
             "user-agent": DEFAULT_COPILOT_USER_AGENT,

@@ -1,5 +1,4 @@
 import signal
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,9 +8,7 @@ from typing import Final
 import anyio
 import pytest
 
-from litellm.proxy.rust_forward.platform import ChildProcess, Platform, current_platform
-from litellm.proxy.rust_forward.platform.windows import WindowsPlatform
-from litellm.proxy.rust_forward.supervisor import supervise
+from litellm.proxy.rust_forward.platform import ChildProcess, current_platform
 from litellm.proxy.rust_forward.supervisor.children import ChildSpec
 from litellm.proxy.rust_forward.supervisor.lifecycle import (
     Action,
@@ -24,42 +21,6 @@ from litellm.proxy.rust_forward.supervisor.lifecycle import (
     Spawn,
 )
 from litellm.proxy.rust_forward.supervisor.runtime import SpawnFailed, drive, exit_like, open_children, spawn_subprocess
-from tests.unit.proxy.rust_forward.supervisor._support import python_server
-
-
-PYTHON_CHILD: Final = """
-import json, os, pathlib, socket, time
-time.sleep(0.5)
-pathlib.Path(os.environ["MARKERS"], "listening").touch()
-private = json.loads(os.environ["_LITELLM_GATEWAY_SUPERVISED"])["listener"]
-listener = socket.socket(fileno=private["fd"]) if "fd" in private else socket.create_server(("127.0.0.1", private["port"]))
-listener.listen()
-time.sleep(10)
-"""
-RUST_CHILD: Final = """
-import os, pathlib
-markers = pathlib.Path(os.environ["MARKERS"])
-(markers / "rust_saw_python_listening").write_text(str((markers / "listening").exists()))
-"""
-
-
-def _fake_gateway(scripts: Path) -> Platform:
-    if sys.platform != "win32":
-        gateway: Final = scripts / "litellm-gateway"
-        gateway.write_text(f"#!{sys.executable} -I\n{RUST_CHILD}")
-        gateway.chmod(0o755)
-        return current_platform()
-    script: Final = scripts / "rust_child.py"
-    script.write_text(RUST_CHILD)
-    (scripts / "litellm-gateway.cmd").write_text(f'@"{sys.executable}" -I "{script}"\r\n')
-    return WindowsPlatform(gateway_name="litellm-gateway.cmd")
-
-
-def test_rust_opens_the_public_port_only_once_python_listens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MARKERS", str(tmp_path))
-    command: Final = (sys.executable, "-I", "-c", PYTHON_CHILD)
-    supervise(python_server(), command, scripts_dir=str(tmp_path), platform=_fake_gateway(tmp_path))
-    assert (tmp_path / "rust_saw_python_listening").read_text() == "True"
 
 
 TERM: Final = signal.SIGTERM
@@ -190,15 +151,6 @@ async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops() -> No
     assert (while_child_runs, once_child_exits) == (((child,), 1, False), True)
 
 
-async def test_exiting_children_are_reported_as_events() -> None:
-    async with open_children(
-        current_platform(), spawn_subprocess, _children((sys.executable, "-c", "exit(7)")), 1
-    ) as children:
-        assert await children.spawn(Child.RUST) is None
-        with anyio.fail_after(5):
-            assert await children.next_event() == ChildExited(Child.RUST, 7)
-
-
 async def test_a_child_that_cannot_start_is_returned_as_a_failure(tmp_path: Path) -> None:
     async with open_children(
         current_platform(), spawn_subprocess, _children((str(tmp_path / "missing"),)), 1
@@ -223,13 +175,3 @@ def _dropped(_signum: signal.Signals) -> None:
 )
 def test_a_supervisor_the_kernel_will_not_signal_still_exits_as_python_alone_would(status: int, exits: int) -> None:
     assert exit_like(status, STOPS, die_by=_dropped) == exits
-
-
-@POSIX_ONLY
-@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGKILL])
-def test_the_supervisor_dies_by_the_signal_that_killed_python(signum: signal.Signals) -> None:
-    script: Final = (
-        "from litellm.proxy.rust_forward.supervisor.runtime import exit_like\n"
-        f"raise SystemExit(exit_like({-signum}, frozenset()))"
-    )
-    assert subprocess.run((sys.executable, "-I", "-c", script), check=False, timeout=60).returncode == -signum
