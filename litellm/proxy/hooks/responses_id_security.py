@@ -7,7 +7,7 @@ instead of writing immediately on each request.
 
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -23,6 +23,12 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.interactions import (
+    CancelInteractionResult,
+    DeleteInteractionResult,
+    InteractionsAPIResponse,
+    InteractionsAPIStreamingResponse,
+)
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
@@ -42,7 +48,7 @@ if TYPE_CHECKING:
 
 
 _RESPONSES_API_PROVIDER_PREFIX: Final = "/openai"
-_RESPONSES_API_ROUTES: Final = frozenset({"/v1/responses", "/responses"})
+_RESPONSES_API_ROUTES: Final = frozenset({"/v1/responses", "/responses", "/v1beta/interactions", "/interactions"})
 _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE: Final[Mapping[str, str]] = MappingProxyType(
     {
         "aresponses": "previous_response_id",
@@ -51,6 +57,10 @@ _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE: Final[Mapping[str, str]] = MappingPro
         "adelete_responses": "response_id",
         "acancel_responses": "response_id",
         "alist_input_items": "response_id",
+        "acreate_interaction": "previous_interaction_id",
+        "aget_interaction": "interaction_id",
+        "adelete_interaction": "interaction_id",
+        "acancel_interaction": "interaction_id",
     }
 )
 
@@ -80,7 +90,14 @@ def _proxy_signing_key() -> str | None:
 _RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _ResponseObjectT = TypeVar("_ResponseObjectT", bound=BaseLiteLLMOpenAIResponseObject)
-_AddressedResultT = TypeVar("_AddressedResultT", bound=ResponsesAPIResponse | DeleteResponseResult)
+_AddressedResult: TypeAlias = (
+    ResponsesAPIResponse
+    | InteractionsAPIResponse
+    | DeleteResponseResult
+    | DeleteInteractionResult
+    | CancelInteractionResult
+)
+_AddressedResultT: Final = TypeVar("_AddressedResultT", bound=_AddressedResult)
 
 
 def _response_payload(response_obj: object) -> Mapping[str, object] | None:
@@ -94,8 +111,28 @@ def _rewrite_advertised_id(
     event: _ResponseObjectT,
     rewrite: Callable[[str], str],
 ) -> _ResponseObjectT:
+    if isinstance(event, InteractionsAPIStreamingResponse):
+        interaction_id: Final = event.interaction_id
+        rewritten_interaction_id: Final = rewrite(interaction_id) if isinstance(interaction_id, str) else None
+        interaction: Final = _response_payload(event.interaction)
+        nested_id: Final = None if interaction is None else interaction.get("id")
+        rewritten_interaction: Final = (
+            {**interaction, "id": rewrite(nested_id)}
+            if interaction is not None and isinstance(nested_id, str)
+            else None
+        )
+        if rewritten_interaction_id is not None or rewritten_interaction is not None:
+            return event.model_copy(
+                update={
+                    **({"interaction_id": rewritten_interaction_id} if rewritten_interaction_id is not None else {}),
+                    **({"interaction": rewritten_interaction} if rewritten_interaction is not None else {}),
+                }
+            )
+
     event_id: Final = getattr(event, "id", None)
-    if isinstance(event_id, str) and event_id.startswith("resp_"):
+    if isinstance(event_id, str) and (
+        event_id.startswith("resp_") or isinstance(event, InteractionsAPIResponse | InteractionsAPIStreamingResponse)
+    ):
         setattr(event, "id", rewrite(event_id))
         return event
 
@@ -152,7 +189,7 @@ def _held_id_naming(response_id: str | None, held_ids: Mapping[str, str]) -> str
     )
 
 
-def _id_sent_back(response: ResponsesAPIResponse | DeleteResponseResult, held_ids: Mapping[str, str]) -> str | None:
+def _id_sent_back(response: _AddressedResult, held_ids: Mapping[str, str]) -> str | None:
     held_id: Final = _held_id_naming(response.id, held_ids)
     if held_id is not None:
         return held_id
@@ -461,7 +498,14 @@ class ResponsesIDSecurity(CustomLogger):
 
         if general_settings.get("disable_responses_id_security", False):
             return response
-        if isinstance(response, ResponsesAPIResponse | DeleteResponseResult):
+        if isinstance(
+            response,
+            ResponsesAPIResponse
+            | InteractionsAPIResponse
+            | DeleteResponseResult
+            | DeleteInteractionResult
+            | CancelInteractionResult,
+        ):
             return self._advertised_response(response, user_api_key_dict, data)
         return response
 
