@@ -335,9 +335,9 @@ from litellm.proxy.v2_proxy_fields import (
 )
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
 from litellm.repositories.table_repositories import (
-    EndUserRepository,
     HealthCheckRepository,
     SpendLogsRepository,
     UserNotificationsRepository,
@@ -2020,6 +2020,13 @@ def _overrides_hook(callback: object, hook_name: str) -> bool:
 def routes_through_apply_guardrail(callback: CustomGuardrail) -> bool:
     return subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail) and not getattr(
         callback, "use_native_lifecycle_hooks", False
+    )
+
+
+def scans_mcp_tool_results(callback: CustomGuardrail) -> bool:
+    return routes_through_apply_guardrail(callback) or (
+        subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail)
+        and GuardrailEventHooks.post_mcp_call in (type(callback).get_supported_event_hooks() or ())
     )
 
 
@@ -4942,7 +4949,7 @@ class ProxyLogging:
     ) -> None:
         if not isinstance(callback, CustomGuardrail):
             return
-        if not routes_through_apply_guardrail(callback):
+        if not scans_mcp_tool_results(callback):
             return
         if callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call) is not True:
             return
@@ -7762,6 +7769,7 @@ class PrismaClient:
                             )
                             if isinstance(self.db, RoutingPrismaWrapper):
                                 self.db.mark_writer_recovered()
+                                await self.db.degrade_reader_unless_healthy()
                             await self._start_engine_watcher()
                             return
                     except Exception as probe_err:
@@ -8137,6 +8145,20 @@ class PrismaClient:
         )
         return rows[0]["present"]
 
+    async def _recover_unavailable_reader(self) -> None:
+        if not isinstance(self.db, RoutingPrismaWrapper) or not self.db.reader_unavailable:
+            return
+        try:
+            await asyncio.wait_for(
+                self.db.recover_reader(),
+                timeout=self._db_watchdog_reconnect_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning(
+                "Reader Prisma client did not recover within %ss; reads stay on the writer.",
+                self._db_watchdog_reconnect_timeout_seconds,
+            )
+
     async def _db_health_watchdog_loop(self) -> None:
         while True:
             try:
@@ -8152,6 +8174,7 @@ class PrismaClient:
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                     continue
+                await self._recover_unavailable_reader()
                 if await asyncio.wait_for(
                     self._writer_is_read_only(self.writer_db),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,

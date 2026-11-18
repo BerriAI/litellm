@@ -10,9 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
-
-from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
 from fastapi import FastAPI, HTTPException
 
 import litellm
@@ -29,16 +26,16 @@ from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
-    _IncrementSpendCounters,
     _charge_request_cost,
     _get_budget_reservation_from_metadata,
+    _IncrementSpendCounters,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
     is_pre_routing_rejection,
     run_spend_event,
 )
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -52,12 +49,14 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
-from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
-from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
 )
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 
@@ -4536,3 +4535,196 @@ async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails
 
     assert await _charge_request_cost(charge_spend, dict(poll), 0.43, reservation) == charged
     assert charge_spend.calls == ((0.43, 0.43, reservation), *(() if second_call is None else (second_call,)))
+
+
+def _billed_failure_row(metadata: Mapping[str, object], snapshot: object) -> Mapping[str, object]:
+    return {"litellm_params": {"metadata": metadata}, "standard_logging_object": snapshot}
+
+
+def test_a_billed_failure_for_a_customer_carries_the_surcharge_and_records_it() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    snapshot: Final = {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}}
+    row: Final = _billed_failure_row({"user_api_key_customer_org_id": "org-1"}, snapshot)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.02)
+    recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
+    assert recorded["cost_breakdown"]["customer_margin_percent"] == 0.02
+    assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.02)
+    assert snapshot == {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}}
+
+
+@pytest.mark.parametrize(
+    ("metadata", "row_cost", "snapshot"),
+    [
+        ({"user_api_key_team_id": "team-1"}, 1.0, {"response_cost": 1.0}),
+        ({"user_api_key_customer_org_id": "org-1"}, 0.0, {"response_cost": 0.0}),
+        (
+            {"user_api_key_customer_org_id": "org-1"},
+            1.02,
+            {"response_cost": 1.02, "cost_finalized": True, "cost_breakdown": {"customer_margin_amount": 0.02}},
+        ),
+    ],
+    ids=["no customer", "nothing billed", "already surcharged"],
+)
+def test_a_failure_row_is_not_surcharged_without_a_customer_a_cost_or_twice(
+    metadata: Mapping[str, object], row_cost: float, snapshot: Mapping[str, object]
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = _billed_failure_row(metadata, dict(snapshot))
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(row_cost, row)
+    assert cost == row_cost
+    assert kwargs["standard_logging_object"] == snapshot
+
+
+def test_a_billed_failure_with_no_snapshot_records_the_surcharge_on_its_spend_row() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+    from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    row: Final = _billed_failure_row({"user_api_key_customer_org_id": "org-1"}, None)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(2.0, row)
+    assert cost == pytest.approx(2.04)
+    now: Final = datetime.now(timezone.utc)
+    spend_row: Final = get_logging_payload(
+        kwargs={**kwargs, "response_cost": cost}, response_obj=None, start_time=now, end_time=now
+    )
+    assert spend_row["spend"] == pytest.approx(2.04)
+    assert customer_margin_share_of_spend(json.loads(spend_row["metadata"]), spend_row["spend"]) == pytest.approx(0.04)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("app_margin", "billed"), [(None, 1.02), (0.05, 1.05), (0, 1.0)])
+async def test_a_billed_responses_failure_on_a_customer_bound_key_writes_a_spend_row_at_its_app_surcharge(
+    app_margin: float | None, billed: float
+) -> None:
+    from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
+    from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
+
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock(return_value=False)
+    binding: Final = CustomerUsageAttribution(customer_org_id="org-1").model_dump_json()
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+            request_data={
+                "model": "gpt-5.6",
+                "input": "Hello",
+                "metadata": {"trace": "t-1"},
+                "litellm_metadata": {
+                    CUSTOMER_USAGE_METADATA_KEY: binding,
+                    "user_api_key_customer_hierarchy": {
+                        "customer_org_id": "org-1",
+                        "app_id": "app-1",
+                        "app_customer_margin": app_margin,
+                    },
+                },
+                "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+                "response_cost": 1.0,
+                "standard_logging_object": {
+                    "response_cost": 1.0,
+                    "cost_breakdown": {"total_cost": 1.0},
+                    "metadata": {},
+                    "model_map_information": None,
+                },
+                "proxy_server_request": {"url": "http://localhost/v1/responses", "body": {"model": "gpt-5.6"}},
+            },
+            original_exception=Exception("stream broke mid-flight"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/v1/responses"),
+        )
+
+    written: Final = writer.update_database.call_args.kwargs
+    assert written["response_cost"] == pytest.approx(billed)
+    now: Final = datetime.now(timezone.utc)
+    spend_row: Final = get_logging_payload(
+        kwargs={**written["kwargs"], "response_cost": written["response_cost"]},
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+    )
+    assert spend_row["spend"] == pytest.approx(billed)
+    assert customer_margin_share_of_spend(json.loads(spend_row["metadata"]), spend_row["spend"]) == pytest.approx(
+        billed - 1.0
+    )
+
+
+def test_a_billed_failure_is_surcharged_from_the_binding_the_proxy_stamped_beside_litellm_params() -> None:
+    from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = {
+        "litellm_metadata": {
+            CUSTOMER_USAGE_METADATA_KEY: CustomerUsageAttribution(customer_org_id="org-1").model_dump_json()
+        },
+        "litellm_params": {"metadata": {"trace": "t-1"}},
+        "standard_logging_object": {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}},
+    }
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.02)
+    recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
+    assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.02)
+
+
+def test_a_billed_failure_is_charged_the_app_surcharge_the_proxy_stamped_beside_litellm_params() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = {
+        "litellm_metadata": {
+            "user_api_key_customer_org_id": "org-1",
+            "user_api_key_customer_hierarchy": {
+                "customer_org_id": "org-1",
+                "app_id": "app-1",
+                "app_customer_margin": 0.05,
+            },
+        },
+        "litellm_params": {"metadata": {"trace": "t-1"}},
+        "standard_logging_object": {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}},
+    }
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, _ = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.05)
+
+
+@pytest.mark.parametrize("stamped_bucket", ["litellm_metadata", "metadata"])
+def test_a_billed_failure_is_charged_the_app_surcharge_from_either_metadata_bucket(stamped_bucket: str) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    stamped: Final = {
+        "user_api_key_customer_org_id": "org-1",
+        "user_api_key_customer_hierarchy": {"customer_org_id": "org-1", "app_id": "app-1", "app_customer_margin": 0.05},
+    }
+    caller_bucket: Final = "metadata" if stamped_bucket == "litellm_metadata" else "litellm_metadata"
+    row: Final = {
+        "litellm_params": {stamped_bucket: stamped, caller_bucket: {"trace": "t-1"}},
+        "standard_logging_object": {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}},
+    }
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.05)
+    recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
+    assert recorded["cost_breakdown"]["customer_margin_percent"] == 0.05
+    assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize("trusted_bucket", ["litellm_metadata", "metadata"])
+def test_a_billed_failure_on_a_customer_bound_key_is_surcharged_from_either_metadata_bucket(
+    trusted_bucket: str,
+) -> None:
+    from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    binding: Final = CustomerUsageAttribution(customer_org_id="org-1").model_dump_json()
+    caller_bucket: Final = "metadata" if trusted_bucket == "litellm_metadata" else "litellm_metadata"
+    row: Final = {
+        "litellm_params": {trusted_bucket: {CUSTOMER_USAGE_METADATA_KEY: binding}, caller_bucket: {"trace": "t-1"}},
+        "standard_logging_object": {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}},
+    }
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.02)
+    recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
+    assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.02)

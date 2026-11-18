@@ -493,7 +493,12 @@ class TestVertexAIGeminiImageGenerationConfig:
         )
 
         assert result.usage.output_tokens == 1340
-        assert result.usage.input_tokens_details.model_dump() == {"text_tokens": 12, "image_tokens": 0}
+        assert result.usage.input_tokens_details.model_dump() == {
+            "text_tokens": 12,
+            "image_tokens": 0,
+            "cached_tokens": 0,
+            "cached_tokens_details": None,
+        }
         assert result.usage.completion_tokens_details == {
             "text_tokens": 10,
             "image_tokens": 1290,

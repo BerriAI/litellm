@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { defaultCustomerCapPolicy, type CustomerBudgetGroupFields } from "./customerOrganizationForm";
+import { CustomerRateLimitFields } from "./CustomerRateLimits";
 
 export function BudgetInput({
   id,
@@ -77,6 +78,8 @@ export default function CustomerBudgetGroupsEditor({
       name: "",
       monthlyBudget: "",
       yearlyBudget: "",
+      tpm: "",
+      rpm: "",
       capPolicy: defaultCustomerCapPolicy,
     };
     onChange([...groups, group], memberGroups && !groups.length ? group.id : defaultGroupId);
@@ -137,7 +140,17 @@ export default function CustomerBudgetGroupsEditor({
                 />
               </div>
             ))}
-            <div hidden={!memberGroups} className="col-span-2 min-w-0 space-y-1.5 sm:col-span-3 sm:row-start-2">
+            <div className="col-span-2 min-w-0 sm:col-span-3 sm:row-start-2">
+              <CustomerRateLimitFields
+                id={`cc-rates-${group.id}`}
+                label={t("customerPortal.rateLimits.group", { index: index + 1 })}
+                tpm={group.tpm}
+                rpm={group.rpm}
+                onChange={(field, value) => updateGroup(group.id, { [field]: value })}
+                showHint={false}
+              />
+            </div>
+            <div hidden={!memberGroups} className="col-span-2 min-w-0 space-y-1.5 sm:col-span-3 sm:row-start-3">
               <Label htmlFor={`cc-cap-${group.id}`}>{t("customerPortal.budgetGroups.atCap")}</Label>
               <Select
                 value={group.capPolicy}

@@ -85,7 +85,6 @@ from litellm.router_api import (
     SETTING_FIELDS,
     ApplyResult,
     ChangeSet,
-    RouterHealth,
     RouterRegistry,
     RouterSettings,
     RoutingContext,
@@ -1167,13 +1166,13 @@ class _SettingsSource:
         raise NotImplementedError
 
 
-class RustHealth(RouterHealth):
+class RustHealth:
     """``health()``: cooldowns, fail counts and usage, read through the host's routing cache and
     written through the Rust core."""
 
     __slots__ = ("_core",)
 
-    def __init__(self, core: "RustCore") -> None:  # pyright: ignore[reportMissingSuperCall]  # reads the Rust core, not a Router
+    def __init__(self, core: "RustCore") -> None:
         self._core = core
 
     def __getattribute__(self, name: str) -> object:
@@ -1256,9 +1255,11 @@ class RustHealth(RouterHealth):
     ) -> tuple[int | None, int | None]: ...
 
     @overload
-    async def usage(self, model_group: str, *, kind: Literal["remaining"]) -> Mapping[str, int]: ...
+    async def usage(
+        self, model_group: str, *, kind: Literal["remaining"]
+    ) -> dict[str, int]: ...  # mutable-ok: the host's fresh usage dict
 
-    async def usage(  # pyright: ignore[reportIncompatibleMethodOverride]  # the same two kinds
+    async def usage(
         self, model_group: str, *, kind: Literal["current", "remaining"] = "current"
     ) -> tuple[int | None, int | None] | Mapping[str, int]:
         """The group's usage this minute, read from the routing cache over the host registry's

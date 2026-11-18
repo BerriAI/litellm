@@ -71,7 +71,6 @@ async def test_get_key_object_loads_object_permission(rust_auth_stores: RustAuth
         assert result.object_permission.mcp_servers == ["server1", "server2"]
 
 
-
 @pytest.mark.asyncio
 async def test_get_key_object_no_permission_id(rust_auth_stores: RustAuthStores):
     """
@@ -119,13 +118,9 @@ async def test_get_team_object_loads_object_permission():
     mock_cache.async_get_cache = AsyncMock(return_value=None)  # Not in cache
 
     # Mock team data with object_permission_id
-    mock_team = MagicMock()
-    mock_team.dict.return_value = {
-        "team_id": "test_team",
-        "team_alias": "Test Team",
-        "object_permission_id": "test_perm_id",
-        "object_permission": None,
-    }
+    mock_team = LiteLLM_TeamTableCachedObj(
+        team_id="test_team", team_alias="Test Team", object_permission_id="test_perm_id", object_permission=None
+    )
 
     # Mock the object_permission that should be loaded
     mock_object_permission = LiteLLM_ObjectPermissionTable(

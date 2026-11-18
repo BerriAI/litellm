@@ -5,6 +5,7 @@ import asyncio
 import copy
 import datetime
 import functools
+import itertools
 import json
 import math
 import os
@@ -20,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
-from types import MappingProxyType, TracebackType
+from types import FunctionType, MappingProxyType, MethodType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
 
 from httpx import Response, Timeout
@@ -104,6 +105,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.manifest import LegacyBinding
 from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.integrations.custom_logger_v2.rust import RustLogger
 from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
@@ -469,6 +471,44 @@ last_fetched_at_keys: Final = None
 
 ####
 in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
+
+_ORIGINAL_RESPONSE_NOT_RETAINED: Final = '{"litellm_note":"raw response not retained"}'
+_ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset({"athina", "sentry", "wandb"})
+_FIRST_PARTY_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
+
+
+def _attribute_defined_on(owner: object, name: str) -> object:
+    return getattr(owner, "__dict__", {}).get(name)
+
+
+def _is_first_party_module_name(module_name: str) -> bool:
+    return module_name.partition(".")[0] in _FIRST_PARTY_PACKAGES
+
+
+def _is_defined_by_litellm(definition: object) -> bool:
+    module_name: Final = getattr(definition, "__module__", None)
+    qualname: Final = getattr(definition, "__qualname__", None)
+    if not isinstance(module_name, str) or not isinstance(qualname, str):
+        return False
+    if not _is_first_party_module_name(module_name):
+        return False
+    return functools.reduce(_attribute_defined_on, qualname.split("."), sys.modules.get(module_name)) is definition
+
+
+def _callback_definition(owner: object) -> object:
+    if isinstance(owner, RustLogger) and _is_first_party_module_name(type(owner).__module__):
+        return RustLogger
+    return owner if isinstance(owner, FunctionType | type) else type(owner)
+
+
+def _callback_may_read_original_response(callback: object) -> bool:
+    if isinstance(callback, str):
+        return callback in _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES
+    owner: Final = callback.__self__ if isinstance(callback, MethodType) else callback
+    if type(owner) is CustomLogger or not _is_defined_by_litellm(_callback_definition(owner)):
+        return True
+    return getattr(owner, "reads_original_response", False) is True
+
 
 # Cached lazy import for PrometheusLogger
 # Module-level cache to avoid repeated imports while preserving memory benefits
@@ -2227,7 +2267,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         if isinstance(original_response, dict):
-            original_response = json.dumps(original_response, default=str)
+            original_response = (
+                json.dumps(original_response, default=str)
+                if self._original_response_may_be_read()
+                else _ORIGINAL_RESPONSE_NOT_RETAINED
+            )
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -2243,9 +2287,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
             callattr: Final = verbose_logger.warning if attr == "warning" else verbose_logger.debug
             callattr(
-                "RAW RESPONSE:\n{}\n\n".format(
-                    self._model_call_details_view.get("original_response", self._model_call_details_view)
-                )
+                "RAW RESPONSE:\n%s\n\n",
+                self._model_call_details_view.get("original_response", self._model_call_details_view),
             )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
@@ -2270,6 +2313,33 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         except Exception as e:
             verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
+
+    def _original_response_may_be_read(self) -> bool:
+        return (
+            callable(getattr(self, "logger_fn", None))
+            or self.litellm_request_debug
+            or is_debugging_on()
+            or litellm.set_verbose is True
+            or self._callbacks_may_read_original_response()
+        )
+
+    def _callbacks_may_read_original_response(self) -> bool:
+        try:
+            return any(
+                _callback_may_read_original_response(callback)
+                for callback in itertools.chain(
+                    litellm.logging_callback_manager.get_all_callbacks(),
+                    litellm.input_callback,
+                    litellm._async_input_callback,  # pyright: ignore[reportPrivateUsage]  # no public accessor
+                    self.dynamic_input_callbacks or (),
+                    self.dynamic_success_callbacks or (),
+                    self.dynamic_async_success_callbacks or (),
+                    self.dynamic_failure_callbacks or (),
+                    self.dynamic_async_failure_callbacks or (),
+                )
+            )
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return True
 
     def _log_provider_response_received(self, callback: object, _kwargs: object) -> None:
         try:

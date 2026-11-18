@@ -106,6 +106,10 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.proxy.rust_auth_stores import (
+    FakeOrganizationStore,
+    FakeTeamStore,
+)
 
 # Setup TestClient
 client = TestClient(app)
@@ -2567,8 +2571,8 @@ async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkey
 
     team_id: Final = "team-read-cache-miss"
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=LiteLLM_TeamTable(team_id=team_id, models=["model-a"])
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team_id: {"team_id": team_id, "models": ["model-a"]}}))
     )
     cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
     publish: Final = AsyncMock()
@@ -2653,6 +2657,7 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
 
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(**columns))
+    install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team_id: columns})))
     prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=update)
     cache: Final = UserApiKeyCache()
     redis: Final = _BroadcastRecordingRedis()
@@ -4598,7 +4603,9 @@ def _org_membership(user_id: str, organization_id: str, user_role: str) -> LiteL
 
 
 @pytest.mark.asyncio
-async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(monkeypatch):
+async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """
     /v2/team/list: an org admin of org_A who is a member of a team in org_B
     gets that team back on a self query (with and without user_id, with and
@@ -4661,16 +4668,17 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     prisma_client.db.litellm_teamtable.count = AsyncMock(side_effect=count)
     prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
     prisma_client.db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
-    prisma_client.writer_db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(
+    rust_auth_stores.user.writer = {
+        "org_admin_user": LiteLLM_UserTable(
             user_id="org_admin_user",
             teams=["team_in_org_A", "team_in_org_B"],
             organization_memberships=[
                 _org_membership("org_admin_user", "org_A", "org_admin"),
                 _org_membership("org_admin_user", "org_B", "internal_user"),
             ],
-        )
-    )
+        ).model_dump()
+    }
+
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     proxy_logging_obj = MagicMock()
@@ -4700,11 +4708,10 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     assert await list_teams(None) == own_view
     assert await list_teams("org_admin_user", search="team_in_org_B") == ["team_in_org_B"]
     assert await list_teams("other_user") == ["other_team_in_org_A"]
-    prisma_client.writer_db.litellm_usertable.find_unique.assert_awaited_with(
-        where={"user_id": "org_admin_user"}, include={"organization_memberships": True}
-    )
+    sign_in, writer = rust_auth_stores.user.sign_ins[-1]
+    assert (sign_in["user_id"], writer) == ("org_admin_user", True)
 
-    prisma_client.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("db down")
+    rust_auth_stores.user.error = RuntimeError("db down")
     with pytest.raises(ValueError, match="db down"):
         await list_teams("org_admin_user")
 
@@ -9151,6 +9158,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
 @pytest.mark.asyncio
 async def test_update_team_guardrails_with_org_id(
     disable_audit_logging_for_mocked_team,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """
     Test that updating team guardrails works when team has an organization_id.
@@ -9268,6 +9276,14 @@ async def test_update_team_guardrails_with_org_id(
         # The fix ensures 'teams: True' is in the include clause
         mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
             return_value=mock_org
+        )
+        install_rust_auth_stores(
+            monkeypatch,
+            RustAuthStores(
+                organization=FakeOrganizationStore(
+                    rows={"test-org-guardrails": mock_org.model_dump.return_value}
+                )
+            ),
         )
 
         # Destination-org guard in update_team queries for the caller's
@@ -17545,16 +17561,14 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_client):
+async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_client, rust_auth_stores: RustAuthStores):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
     transaction = statement_timeout_reads(mock_db_client, _team_spend_reads(["sk-alpha"], []))
-    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
-        return_value=_team_spend_by_user_caller("alice", ["team-alpha"])
-    )
+    rust_auth_stores.user.writer = {"alice": _team_spend_by_user_caller("alice", ["team-alpha"]).model_dump()}
 
     await get_team_spend_by_user(
         user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
@@ -17567,7 +17581,7 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_client):
+async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_client, rust_auth_stores: RustAuthStores):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -17577,9 +17591,7 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
     transaction = statement_timeout_reads(
         mock_db_client, _team_spend_reads(["sk-bob"], [_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
     )
-    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
-        return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
-    )
+    rust_auth_stores.user.writer = {"bob": _team_spend_by_user_caller("bob", ["team-alpha"]).model_dump()}
 
     response = await get_team_spend_by_user(
         user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
@@ -17594,14 +17606,12 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_client):
+async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_client, rust_auth_stores: RustAuthStores):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
     transaction = statement_timeout_reads(mock_db_client, AsyncMock(return_value=[]))
-    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
-        return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
-    )
+    rust_auth_stores.user.writer = {"bob": _team_spend_by_user_caller("bob", ["team-alpha"]).model_dump()}
 
     with pytest.raises(HTTPException) as exc_info:
         await get_team_spend_by_user(
@@ -19432,9 +19442,9 @@ _DB_OUTAGE_503_BODY: Final = {
 }
 
 
-def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
+def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    stores.user.error = error
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
@@ -19454,8 +19464,8 @@ def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:
 
 
 @pytest.mark.asyncio
-async def test_get_org_admin_org_ids_propagates_a_db_outage_instead_of_answering_not_an_org_admin():
-    prisma_client, cache = _user_read_raising(httpx.ConnectError("All connection attempts failed"))
+async def test_get_org_admin_org_ids_propagates_a_db_outage_instead_of_answering_not_an_org_admin(rust_auth_stores: RustAuthStores):
+    prisma_client, cache = _user_read_raising(rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
         with pytest.raises(httpx.ConnectError):
@@ -19468,8 +19478,8 @@ async def test_get_org_admin_org_ids_propagates_a_db_outage_instead_of_answering
 
 
 @pytest.mark.asyncio
-async def test_build_team_list_where_conditions_propagates_a_db_outage_instead_of_answering_user_not_found():
-    prisma_client, cache = _user_read_raising(httpx.ConnectError("All connection attempts failed"))
+async def test_build_team_list_where_conditions_propagates_a_db_outage_instead_of_answering_user_not_found(rust_auth_stores: RustAuthStores):
+    prisma_client, cache = _user_read_raising(rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
         with pytest.raises(httpx.ConnectError):
@@ -19485,8 +19495,8 @@ async def test_build_team_list_where_conditions_propagates_a_db_outage_instead_o
             )
 
 
-def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(monkeypatch):
-    prisma_client, cache = _user_read_raising(httpx.ConnectError("All connection attempts failed"))
+def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(monkeypatch, rust_auth_stores: RustAuthStores):
+    prisma_client, cache = _user_read_raising(rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     app.dependency_overrides[user_api_key_auth] = lambda: _db_unavailable_fallback_identity("/v2/team/list")
@@ -19529,6 +19539,7 @@ def _db_with_one_ptu_hour_of_team_spend(team_id: str) -> MagicMock:
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         guardrail_spend=0.0,
+        customer_margin_spend=0.0,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=3,
