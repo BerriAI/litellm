@@ -2388,7 +2388,7 @@ class RedisCache(BaseCache):
         if major_version >= 7:
             for lpop_op in lpop_list:
                 key = self.check_and_fix_namespace(key=lpop_op["key"])
-                pipe.lpop(key, lpop_op["count"])
+                pipe.lpop(key, 1 if lpop_op["count"] is None else lpop_op["count"])
             raw_results = await pipe.execute()
         else:
             # For Redis < 7, LPOP doesn't support count param.
