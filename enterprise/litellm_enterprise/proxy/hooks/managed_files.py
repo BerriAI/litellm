@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    as_openai_image_part,
     extract_file_metadata,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import gemini_files_api_tool_uri
@@ -201,7 +202,16 @@ def _public_file_object(file_object: OpenAIFileObject, unified_file_id: str) -> 
 
 def _chat_message_file_id(part: object, role: str) -> str | None:
     fields: Final = as_str_mapping(part)
-    if fields is None or fields.get("type") not in ("file", "input_file"):
+    if fields is None:
+        return None
+    if fields.get("type") in ("image_url", "input_image"):
+        image: Final = as_openai_image_part({**fields, "type": "image_url"})
+        if image is None:
+            return None
+        image_fields: Final = as_str_mapping(image["image_url"]) or {}
+        url: Final = image_fields.get("url")
+        return url if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+    if fields.get("type") not in ("file", "input_file"):
         return None
     file: Final = as_str_mapping(fields.get("file")) or {}
     file_id: Final = file.get("file_id")
@@ -1573,7 +1583,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
             if file_ids:
                 # Check user has access to all managed files
-                await self.check_file_ids_access(file_ids, user_api_key_dict)
+                await self.check_file_ids_access(file_ids, user_api_key_dict, include_gemini_files_api_uris=True)
 
                 model_file_id_mapping = await self.get_model_file_id_mapping(
                     file_ids, user_api_key_dict.parent_otel_span
