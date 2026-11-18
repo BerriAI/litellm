@@ -400,8 +400,9 @@ async fn invalid_messages_stays_an_anthropic_error() {
 
 const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";
 
-#[tokio::test]
-async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
+/// A stream of `public/model`, whose deployment retries `num_retries` times and whose provider
+/// sends one event and then drops the connection, never to answer again.
+async fn broken_stream(num_retries: u32) -> axum::response::Response {
     let base = support::truncating_upstream(FIRST_EVENT).await;
     let request = Request::post("/v1/messages")
         .header("content-type", "application/json")
@@ -411,11 +412,19 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
             .to_string(),
         ))
         .unwrap();
+    support::app_with_litellm_params(
+        "anthropic/test-model",
+        &base,
+        json!({"num_retries": num_retries}),
+    )
+    .oneshot(request)
+    .await
+    .unwrap()
+}
 
-    let response = support::app("anthropic/test-model", &base)
-        .oneshot(request)
-        .await
-        .unwrap();
+#[tokio::test]
+async fn a_stream_that_breaks_with_no_attempt_left_to_answer_ends_with_an_sse_error_frame() {
+    let response = broken_stream(0).await;
 
     assert_eq!(response.status(), 200);
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
@@ -427,6 +436,74 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
     let error: serde_json::Value = serde_json::from_str(frame.trim_end()).unwrap();
     assert_eq!(error["type"], "error");
     assert_eq!(error["error"]["type"], "api_error");
+}
+
+#[tokio::test]
+async fn a_stream_that_breaks_before_content_and_is_not_answered_for_ends_on_an_error_answer() {
+    let response = broken_stream(1).await;
+
+    let routed: Vec<(&str, &str)> = [
+        "x-litellm-model-group",
+        "x-litellm-attempted-retries",
+        "x-litellm-attempted-fallbacks",
+    ]
+    .into_iter()
+    .filter_map(|name| Some((name, response.headers().get(name)?.to_str().ok()?)))
+    .collect();
+    assert_eq!(
+        (response.status().as_u16(), routed),
+        (
+            500,
+            vec![
+                ("x-litellm-model-group", "public/model"),
+                ("x-litellm-attempted-retries", "0"),
+                ("x-litellm-attempted-fallbacks", "0"),
+            ]
+        )
+    );
+    let error = support::json(response).await;
+    assert_eq!(
+        (&error["type"], &error["error"]["type"]),
+        (&json!("error"), &json!("api_error"))
+    );
+}
+
+/// The Python proxy answers a provider's 413 as a 400 `invalid_request_error`, and a 408 with
+/// the type `api_error`. The gateway answers what the provider said.
+#[rstest]
+#[case::too_large(413, "request_too_large")]
+#[case::timed_out(408, "timeout_error")]
+#[tokio::test]
+async fn a_providers_refusal_is_answered_with_its_own_status_and_error_type(
+    #[case] status: u16,
+    #[case] error_type: &str,
+) {
+    let upstream = MockServer::start().await;
+    let error = json!({"type": "error", "error": {"type": error_type, "message": "refused"}});
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(error.clone()))
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({
+            "model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16,
+        }).to_string()))
+        .unwrap();
+
+    let response = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({"num_retries": 0}),
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (response.status().as_u16(), support::json(response).await),
+        (status, error)
+    );
 }
 
 #[rstest]
