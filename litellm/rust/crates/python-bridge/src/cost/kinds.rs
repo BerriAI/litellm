@@ -7,8 +7,9 @@
 
 use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::query::{
-    AdjustmentPolicy, Basis, Candidate, Header, OcrQuery, PriceQuery, PriceSource, Provider,
-    RerankQuery, SearchQuery, SpeechQuery, TranscriptionQuery, VectorStoreSearchQuery, VideoQuery,
+    AdjustmentPolicy, Basis, Candidate, Header, ImageCalculator, ImageQuery, OcrQuery, PriceQuery,
+    PriceSource, Provider, RerankQuery, SearchQuery, SpeechQuery, TranscriptionQuery,
+    VectorStoreSearchQuery, VideoQuery,
 };
 use litellm_cost::receipt::{PriceOutcome, Unpriced};
 use litellm_cost::row::RowRef;
@@ -62,6 +63,16 @@ enum UnitsDocument {
         seconds: f64,
         #[serde(default)]
         tokens: bool,
+    },
+    Image {
+        #[serde(flatten)]
+        named: Named,
+        calculator: ImageCalculator,
+        images: u64,
+        #[serde(default)]
+        pixels: u64,
+        #[serde(default)]
+        input_images: u64,
     },
     Video {
         #[serde(flatten)]
@@ -141,7 +152,8 @@ pub(crate) fn price_units(
         | UnitsDocument::Speech { named, .. }
         | UnitsDocument::Transcription { named, .. }
         | UnitsDocument::Search { named, .. }
-        | UnitsDocument::Video { named, .. } => named,
+        | UnitsDocument::Video { named, .. }
+        | UnitsDocument::Image { named, .. } => named,
     };
     let provider = named.provider.as_deref().unwrap_or_default();
     let candidate = Candidate {
@@ -250,6 +262,19 @@ pub(crate) fn price_units(
             header,
             seconds,
             tokens,
+        })),
+        UnitsDocument::Image {
+            calculator,
+            images,
+            pixels,
+            input_images,
+            ..
+        } => PriceQuery::Image(Box::new(ImageQuery {
+            header,
+            calculator,
+            images,
+            pixels,
+            input_images,
         })),
         UnitsDocument::Video {
             seconds,
