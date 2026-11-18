@@ -887,7 +887,7 @@ def attempt_call(
     *,
     group: str,
     requested: str,
-    fallback_level: int = 0,
+    fallback_model_group: str | None = None,
 ) -> AttemptCall:
     """The host call for one attempt of ``plan`` against ``deployment``: the request (as the attempt
     helper receives it), shaped for the deployment and merged with its litellm params."""
@@ -898,10 +898,9 @@ def attempt_call(
     model_name: Final = str(data.get("model"))
     _validate_decisions_connection(plan, data, request)
     caching: Final = shaping.cache_responses
-    # A fallback hop routes the target group in a copy of the metadata (`run_async_fallback`).
-    if fallback_level > 0:
+    if fallback_model_group is not None:
         field: Final = plan.prepare_field or "metadata"
-        kwargs[field] = {**as_dict(kwargs.get(field)), "model_group": requested}
+        kwargs[field] = {**as_dict(kwargs.get(field)), "model_group": fallback_model_group}
     match plan.kind:
         case "chat":
             host = core.host  # rebind-ok: rebound as the Python router rebinds it
@@ -1334,8 +1333,6 @@ async def _run_silent(core: EndpointCore, silent_model: str, messages: object, k
 
 async def _silent_async(core: EndpointCore, silent_model: str, messages: object, kwargs: Mapping[str, object]) -> None:
     try:
-        if as_dict(kwargs.get("metadata")).get("is_silent_experiment", False):
-            return
         silent: Final = _silent_kwargs(kwargs)
         as_dict_metadata: Final = silent["metadata"]
         if isinstance(as_dict_metadata, dict):
@@ -1347,8 +1344,6 @@ async def _silent_async(core: EndpointCore, silent_model: str, messages: object,
 
 def _silent_thread(core: EndpointCore, silent_model: str, messages: object, kwargs: Mapping[str, object]) -> None:
     try:
-        if as_dict(kwargs.get("metadata")).get("is_silent_experiment", False):
-            return
         silent: Final = _silent_kwargs(kwargs)
         metadata: Final = silent["metadata"]
         if isinstance(metadata, dict):

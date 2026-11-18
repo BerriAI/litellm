@@ -9,16 +9,18 @@ See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     billed_cache_read_rate,
+    calculate_cache_writing_cost,
     call_context,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
 )
 from litellm.rust_bridge._native import NativePrices
-from litellm.types.utils import Usage
+from litellm.types.utils import CacheCreationTokenDetails, Usage
 from litellm.utils import get_model_info
 
 
@@ -27,6 +29,7 @@ class TokenBreakdown:
     text_tokens: int
     cached_tokens: int
     cache_creation_tokens: int
+    cache_creation_token_details: CacheCreationTokenDetails | None
     completion_tokens: int
     reasoning_tokens: int
 
@@ -48,6 +51,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
         text_tokens=text_tokens,
         cached_tokens=cached_tokens,
         cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=prompt_details["cache_creation_token_details"],
         completion_tokens=completion_tokens,
         reasoning_tokens=reasoning_tokens,
     )
@@ -82,7 +86,12 @@ def cost_per_token(
     prompt_cost: Final = (
         (breakdown.text_tokens * quote.input)
         + (breakdown.cached_tokens * billed_cache_read_rate(quote, usage))
-        + (breakdown.cache_creation_tokens * quote.cache_write)
+        + calculate_cache_writing_cost(
+            cache_creation_tokens=breakdown.cache_creation_tokens,
+            cache_creation_token_details=breakdown.cache_creation_token_details,
+            cache_creation_cost=quote.cache_write,
+            cache_creation_cost_by_ttl=MappingProxyType({"1hr": quote.cache_write_1h}),
+        )
     )
     completion_cost: Final = (breakdown.completion_tokens * quote.output) + (
         breakdown.reasoning_tokens * quote.reasoning

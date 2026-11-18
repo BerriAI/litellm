@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
+import respx
 from prisma.errors import DataError as PrismaDataError
 from prisma.errors import RawQueryError
 from redis.exceptions import DataError
@@ -23,7 +24,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import (
     _SPEND_TABLE_COMMIT_ORDER,
     _TEAM_ADVISORY_LOCK_SQL,
@@ -40,6 +43,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+from litellm.proxy.utils import ProxyLogging
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
@@ -1119,6 +1123,61 @@ async def test_commit_spend_updates_to_db_increments_every_customer_hierarchy_ta
         "customer_team_list_transactions",
         "customer_member_list_transactions",
     ]
+
+
+@pytest.mark.parametrize("scope", ("org", "team", "member"))
+@pytest.mark.asyncio
+async def test_committed_customer_budget_webhooks_include_scope_and_dedupe(
+    scope: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [CustomerBudgetWebhook(endpoint="https://alerts.example/budget")])
+    receiver: Final = respx_mock.post("https://alerts.example/budget").respond(200)
+    logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    organization: Final = {"customer_org_id": "org-1", "alias": "tenant"}
+    team: Final = {"customer_team_id": "team-1", "parent_org": organization}
+    row: Final = {
+        **organization,
+        **team,
+        "customer_member_id": "member-1",
+        "parent_team": team,
+        "spend": 0.25,
+        "budget": {"max_budget": 0.2, "soft_budget": 0.1},
+    }
+    batch: Final = MagicMock()
+    transaction: Final = AsyncMock()
+    transaction.__aenter__.return_value = transaction
+    transaction.batch_ = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=batch)))
+    prisma: Final = MagicMock()
+    prisma.db.tx.return_value = transaction
+    prisma.writer_db = prisma.db
+    table: Final = {
+        "org": "litellm_customerorganizationtable",
+        "team": "litellm_customerteamtable",
+        "member": "litellm_customermembertable",
+    }[scope]
+    getattr(prisma.db, table).find_unique = AsyncMock(return_value=SimpleNamespace(model_dump=lambda: row))
+    writer: Final = DBSpendUpdateWriter()
+    for _ in range(3):
+        await writer._commit_spend_updates_to_db(
+            prisma_client=prisma,
+            n_retry_times=0,
+            proxy_logging_obj=logging,
+            db_spend_update_transactions={
+                **{name: {} for name in _SPEND_TABLE_COMMIT_ORDER},
+                f"customer_{scope}_list_transactions": {f"{scope}-1": 0.25},
+            },
+        )
+    payloads: Final = tuple(json.loads(call.request.content) for call in receiver.calls)
+    assert len(payloads) == 2, payloads
+    assert {payload["event"] for payload in payloads} == {"soft_budget_crossed", "budget_crossed"}
+    for payload in payloads:
+        assert payload["scope"] == f"customer_{scope}"
+        assert payload["entity_id"] == f"{scope}-1"
+        assert payload["customer_org_id"] == "org-1"
+        assert payload["customer_org_alias"] == "tenant"
+        assert payload["spend"] == 0.25
+        assert payload["budget"] == (0.2 if payload["event"] == "budget_crossed" else 0.1)
 
 
 @pytest.mark.asyncio

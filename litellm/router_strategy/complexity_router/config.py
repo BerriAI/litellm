@@ -1265,6 +1265,16 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "may not name the highest one, since that would make the LLM classifier unreachable."
         ),
     )
+    heuristic_first_max_context_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        strict=True,
+        description=(
+            "Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier "
+            "even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. "
+            "Unset preserves the local shortcut. Existing session and user-turn pins still take precedence."
+        ),
+    )
     hybrid_boundary_margin: float | None = Field(
         default=None,
         ge=0,
@@ -1657,6 +1667,29 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "idle time for the session's routing decisions rather than total session length"
         ),
     )
+    conversation_header: str | None = Field(
+        default=None,
+        description=(
+            "Request header whose value names the application conversation for session_affinity, "
+            "deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name "
+            "matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. "
+            "A request without a usable value (header missing, empty, or a redacted credential header, and "
+            "any SDK call without proxy request headers) gets no conversation-based reuse from this router and "
+            "never falls back to its session_id. A separately enabled Router-level session_affinity pre-call "
+            "check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. "
+            "Unset keeps the session_id behavior"
+        ),
+    )
+
+    @field_validator("conversation_header")
+    @classmethod
+    def _normalize_conversation_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name: Final = value.strip().lower()
+        if not name:
+            raise ValueError("conversation_header must be a non-empty header name")
+        return name
 
     plugins: list[RoutingPlugin] | None = Field(
         default=None,
@@ -1948,6 +1981,12 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
                 f"custom_dimensions regex work estimate is {work}; the limit across the router is "
                 f"{MAX_CUSTOM_DIMENSIONS_WORK}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_heuristic_first_context_limit(self) -> "ComplexityRouterConfig":
+        if self.heuristic_first_max_context_tokens is not None and self.classifier_type != "heuristic_first":
+            raise ValueError("heuristic_first_max_context_tokens requires classifier_type 'heuristic_first'")
         return self
 
     @field_validator("heuristic_first_max_tier", mode="before")

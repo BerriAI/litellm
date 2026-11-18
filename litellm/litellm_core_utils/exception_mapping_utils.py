@@ -321,6 +321,14 @@ def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
     return response if response is not None and (response.headers or response.content) else None
 
 
+def _github_copilot_custom_app_hint(custom_llm_provider: str, request_kwargs: Mapping[str, object]) -> str | None:
+    if custom_llm_provider != "github_copilot":
+        return None
+    from litellm.llms.github_copilot.per_user_auth import github_copilot_sign_in_app_hint
+
+    return github_copilot_sign_in_app_hint(request_kwargs).strip() or None
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -330,6 +338,7 @@ def _map_openai_exception(
     exception_type: str,
     exception_provider: str,
     extra_information: str,
+    request_kwargs: Mapping[str, object],
 ) -> None:
     response: Final = _without_credentials(_litellm_proxy_response(original_exception, custom_llm_provider))
     if (cyber_policy_body := _openai_cyber_policy_body(original_exception)) is not None:
@@ -361,6 +370,13 @@ def _map_openai_exception(
         exception_provider = "OpenAI" + "Exception"
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
+    copilot_app_hint: Final = _github_copilot_custom_app_hint(custom_llm_provider, request_kwargs)
+    if (
+        copilot_app_hint is not None
+        and getattr(original_exception, "status_code", None) in (400, 401, 403)
+        and "model_not_supported" not in error_str
+    ):
+        message = f"{message} {copilot_app_hint}"  # rebind-ok: add the custom App hint
 
     if ExceptionCheckers.is_error_str_rate_limit(
         error_str, status_code=getattr(original_exception, "status_code", None)
@@ -379,6 +395,27 @@ def _map_openai_exception(
             model=model,
             response=response,
             litellm_debug_info=extra_information,
+        )
+    elif custom_llm_provider == "github_copilot" and "model_not_supported" in error_str:
+        from litellm.llms.github_copilot.per_user_auth import (
+            github_copilot_account_in_use,
+            github_copilot_sign_in_app_hint,
+        )
+
+        raise BadRequestError(
+            message=(
+                f"{exception_provider} - GitHub Copilot rejected model '{model}' because it is not available for "
+                f"{github_copilot_account_in_use(request_kwargs)}. That can be a different account from the one "
+                f"signed in to your editor.{github_copilot_sign_in_app_hint(request_kwargs)} "
+                "Ask your GitHub admin to enable the model in that account's Copilot "
+                "model policy, or use a model its Copilot plan includes. This is not a LiteLLM error. "
+                f"GitHub Copilot response: {message}"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=response,
+            litellm_debug_info=extra_information,
+            body=getattr(original_exception, "body", None),
         )
     elif "invalid_request_error" in error_str and "model_not_found" in error_str:
         raise NotFoundError(
@@ -515,6 +552,14 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 model=model,
                 response=response,
+                litellm_debug_info=extra_information,
+            )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"{exception_provider} - {message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response if response is not None else _response_or_stub(original_exception, status_code=403),
                 litellm_debug_info=extra_information,
             )
         elif original_exception.status_code == 404:
@@ -2279,7 +2324,7 @@ def _map_azure_exception(
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         raise APIConnectionError(
-            message=f"{exception_provider} APIConnectionError - {message}\n{redact_string(traceback.format_exc())}",
+            message=f"{exception_provider} APIConnectionError - {message or type(original_exception).__name__}",
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
@@ -2746,6 +2791,7 @@ def exception_type(
                     exception_type=exception_type,
                     exception_provider=exception_provider,
                     extra_information=extra_information,
+                    request_kwargs=as_str_mapping(extra_kwargs) or _NO_LITELLM_PARAMS,
                 )
             elif custom_llm_provider == "anthropic" or custom_llm_provider == "anthropic_text":  # one of the anthropics
                 _map_anthropic_exception(
