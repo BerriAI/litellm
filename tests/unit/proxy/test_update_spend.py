@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import httpx
 import math
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.proxy.utils import update_spend
+from litellm.proxy.db import baseline_accounting
+from litellm.proxy.utils import update_spend, update_spend_logs_job
 
 # The flush chunks the queue by BATCH_SIZE and then splits each chunk by the row
 # budget, so statement counts below are derived from both rather than hardcoded.
@@ -40,6 +41,7 @@ class MockPrismaClient:
         self.autorouter_turn_transactions = []
         self.baseline_accounting_transactions = []
         self.baseline_accounting_lock = asyncio.Lock()
+        self.baseline_accounting_recovery_due_at = 0.0
         self.spend_log_flush_requested = None
         self.db.tx = MagicMock()
         self.db.tx.return_value.__aenter__ = AsyncMock(return_value=self.db)
@@ -71,6 +73,21 @@ def create_mock_proxy_logging():
     )
     print("returning proxy logging obj")
     return proxy_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_empty_flush_coalesces_baseline_recovery_claims(monkeypatch: pytest.MonkeyPatch) -> None:
+    times = iter((10.0, 11.0, 16.0))
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: next(times))
+    client = MockPrismaClient()
+    logging = create_mock_proxy_logging()
+
+    await update_spend_logs_job(client, None, logging)
+    await update_spend_logs_job(client, None, logging)
+    assert client.db.query_raw.await_count == 1
+
+    await update_spend_logs_job(client, None, logging)
+    assert client.db.query_raw.await_count == 2
 
 
 @pytest.mark.asyncio
