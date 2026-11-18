@@ -1,12 +1,13 @@
 "use client";
 
 import { useMemo, useState, type FormEvent } from "react";
-import { parseAsString, useQueryState } from "nuqs";
+import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { DataTablePagination } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "../../hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -28,6 +29,8 @@ import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
 import AppProfileSelect from "./AppProfileSelect";
 
+const APPLICATIONS_PAGE_SIZE = 25;
+
 export default function AppsManager() {
   const { t } = useTranslation();
   const { accessToken, userRole, isLoading } = useAuthorized();
@@ -45,14 +48,10 @@ export default function AppsManager() {
     enabled: canManage && resourceType !== null,
   });
   const [selected, setSelected] = useQueryState("app", parseAsString);
-  const [search, setSearch] = useState("");
-  const rows = useMemo(
-    () => applicationRows(resources.data ?? [], apps.data ?? [], search),
-    [resources.data, apps.data, search],
-  );
   const resource = resources.data?.find((row) => row.resource_id === selected);
   if (isLoading) return <p role="status">{t("apps.loading")}</p>;
   if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
+  if (selected && resources.isPending) return <p role="status">{t("apps.loading")}</p>;
   if (selected && resource)
     return (
       <main className="mx-auto w-full max-w-[1200px] space-y-6 px-4 py-6 sm:px-6">
@@ -81,38 +80,75 @@ export default function AppsManager() {
         <p className="mt-1 text-sm text-muted-foreground">{t("apps.settingsHint")}</p>
       </header>
       {resourceType && (
-        <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-            <Input
-              className="max-w-xs"
-              aria-label={t("apps.list.searchPlaceholder")}
-              placeholder={t("apps.list.searchPlaceholder")}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <span className="text-xs text-muted-foreground">{t("apps.list.count", { count: rows.length })}</span>
-          </div>
-          {resources.isError || apps.isError ? (
-            <div className="p-3">
-              <ErrorState
-                message={extractProxyErrorMessage(resources.error ?? apps.error)}
-                onRetry={() => void (resources.isError ? resources.refetch() : apps.refetch())}
-              />
-            </div>
-          ) : (
-            <ApplicationsTable
-              rows={rows}
-              loading={resources.isPending || apps.isPending}
-              searching={search.trim() !== ""}
-              onOpen={(resourceId) => void setSelected(resourceId)}
-            />
-          )}
-        </section>
+        <ApplicationsList resources={resources} apps={apps} onOpen={(resourceId) => void setSelected(resourceId)} />
       )}
       <section className={resourceType ? "border-t pt-6" : undefined}>
         <AppDefinitionSetting />
       </section>
     </main>
+  );
+}
+
+function ApplicationsList({
+  resources,
+  apps,
+  onOpen,
+}: {
+  resources: UseQueryResult<AppResource[]>;
+  apps: UseQueryResult<App[]>;
+  onOpen: (resourceId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(0));
+  const [pageSize, setPageSize] = useQueryState("page_size", parseAsInteger.withDefault(APPLICATIONS_PAGE_SIZE));
+  const rows = useMemo(
+    () => applicationRows(resources.data ?? [], apps.data ?? [], search),
+    [resources.data, apps.data, search],
+  );
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
+  return (
+    <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
+        <Input
+          className="max-w-xs"
+          aria-label={t("apps.list.searchPlaceholder")}
+          placeholder={t("apps.list.searchPlaceholder")}
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            void setPage(0);
+          }}
+        />
+        <span className="text-xs text-muted-foreground">{t("apps.list.count", { count: rows.length })}</span>
+      </div>
+      {resources.isError || apps.isError ? (
+        <div className="p-3">
+          <ErrorState
+            message={extractProxyErrorMessage(resources.error ?? apps.error)}
+            onRetry={() => void (resources.isError ? resources.refetch() : apps.refetch())}
+          />
+        </div>
+      ) : (
+        <ApplicationsTable
+          rows={rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize)}
+          loading={resources.isPending || apps.isPending}
+          searching={search.trim() !== ""}
+          onOpen={onOpen}
+        />
+      )}
+      <DataTablePagination
+        page={currentPage}
+        pageSize={pageSize}
+        rowCount={rows.length}
+        onPageChange={(pageIndex) => void setPage(pageIndex)}
+        onPageSizeChange={(size) => {
+          void setPageSize(size);
+          void setPage(0);
+        }}
+        isLoading={resources.isFetching || apps.isFetching}
+      />
+    </section>
   );
 }
 

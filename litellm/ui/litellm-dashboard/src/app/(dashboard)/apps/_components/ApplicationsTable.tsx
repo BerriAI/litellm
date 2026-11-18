@@ -1,15 +1,13 @@
 import { useTranslation } from "react-i18next";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
-import CustomerBudgetSpend from "../../customers/_components/CustomerBudgetSpend";
-import { CustomerBudgetLimitCell } from "../../customers/_components/CustomerBudgetColumn";
+import AppBudgetLimits from "./AppBudgetLimits";
 import { APP_RESOURCE_LABELS } from "./appForms";
 import { applicationInitials, type ApplicationRow } from "./applications";
 
 const COLUMNS = [
   { id: "application", label: "apps.list.columns.application" },
   { id: "spend", label: "apps.list.columns.spend" },
-  { id: "budget", label: "customerPortal.hierarchy.maxBudget" },
   { id: "surcharge", label: "apps.list.columns.surcharge" },
   { id: "customers", label: "apps.list.columns.newCustomers" },
   { id: "status", label: "customerPortal.list.columns.status" },
@@ -91,15 +89,8 @@ export default function ApplicationsTable({
                 </div>
               </TableCell>
               <TableCell className="px-4">
-                <div className="max-w-lg">
-                  <CustomerBudgetSpend
-                    spend={app?.spend ?? 0}
-                    limit={app?.budget?.max_budget ?? null}
-                    label={t("apps.list.columns.spend")}
-                  />
-                </div>
+                <AppBudgetLimits budget={app?.budget} usage={app?.budget_usage} cumulativeSpend={app?.spend ?? 0} />
               </TableCell>
-              <CustomerBudgetLimitCell limit={app?.budget?.max_budget ?? null} />
               <TableCell className="px-4 tabular-nums">
                 {app?.customer_margin === null || app?.customer_margin === undefined
                   ? t("apps.list.gatewaySurcharge")

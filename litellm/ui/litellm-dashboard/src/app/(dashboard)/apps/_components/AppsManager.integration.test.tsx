@@ -197,6 +197,49 @@ describe("Gateway app definition", () => {
     expect(search).toHaveTextContent("Not configured");
   });
 
+  it("should show the current budget window's spend and cap instead of lifetime spend", async () => {
+    definition = { resource_type: "team" };
+    resources = [{ ...resource, app_id: "app-chat" }];
+    configuredApps = [
+      {
+        ...app,
+        spend: 900,
+        budget: { budget_limits: [{ budget_duration: "1mo", max_budget: 100 }] },
+        budget_usage: [{ budget_duration: "1mo", max_budget: 100, spend: 40, reset_at: null }],
+      },
+    ];
+    render(<AppsManager />);
+    await screen.findByRole("button", { name: "chat" });
+    const usage = within(screen.getByRole("table", { name: "Applications" })).getByRole("progressbar");
+    expect(usage).toHaveAttribute("aria-valuenow", "40");
+    expect(usage).toHaveAttribute("aria-valuetext", expect.stringContaining("$100"));
+  });
+
+  it("should show one page of applications at a time and move to the next page", async () => {
+    const user = userEvent.setup();
+    definition = { resource_type: "team" };
+    resources = Array.from({ length: 30 }, (_, index) => ({
+      resource_type: "team",
+      resource_id: `team-${index}`,
+      alias: `app-${String(index).padStart(2, "0")}`,
+      app_id: null,
+    }));
+    render(<AppsManager />);
+    await screen.findByRole("button", { name: "app-00" });
+    expect(screen.queryByRole("button", { name: "app-25" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(await screen.findByRole("button", { name: "app-25" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "app-00" })).not.toBeInTheDocument();
+  });
+
+  it("should open a linked application without showing the list first", async () => {
+    definition = { resource_type: "team" };
+    render(<AppsManager />, { searchParams: "?app=team-chat" });
+    expect(await screen.findByRole("form", { name: "Defaults for chat" })).toBeInTheDocument();
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/apps/resources"))).toBe(true);
+    expect(screen.queryByRole("table", { name: "Applications" })).not.toBeInTheDocument();
+  });
+
   it("should narrow the list with the search box and say when nothing matches", async () => {
     definition = { resource_type: "team" };
     render(<AppsManager />);
