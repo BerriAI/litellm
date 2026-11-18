@@ -111,6 +111,11 @@ def test_build_responses_kwargs_sends_the_system_prompt_as_a_developer_message(
             {"custom_llm_provider": "openai", "extra_body": {"previous_response_id": "resp_prior"}},
             id="stored-conversation-in-extra-body",
         ),
+        pytest.param(
+            "openai/gpt-6.2",
+            {"custom_llm_provider": "openai", "extra_body": {"conversation": "conv_prior"}},
+            id="stored-conversation-object-in-extra-body",
+        ),
         pytest.param("openai/gpt-6.2", {"custom_llm_provider": "openai", "truncation": "auto"}, id="auto-truncation"),
         pytest.param(
             "openai/gpt-6.2",

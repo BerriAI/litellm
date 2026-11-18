@@ -2250,7 +2250,7 @@ class TestPromptCacheBreakpointToResponses:
         }
 
     @pytest.mark.parametrize("system", ["", [], [{"type": "text", "text": ""}]])
-    def test_system_as_developer_adds_no_item_for_an_empty_system(self, system):
+    def test_system_as_developer_adds_no_item_for_an_empty_system(self, system: str | list[Mapping[str, str]]) -> None:
         kwargs = _ADAPTER.translate_request(_make_request(system=system), system_as_developer=True)
         assert [item["role"] for item in kwargs["input"]] == ["user"]
         assert not kwargs.get("instructions")

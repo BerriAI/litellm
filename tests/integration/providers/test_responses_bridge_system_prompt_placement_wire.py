@@ -557,3 +557,18 @@ def test_malformed_messages_field_is_rejected_before_the_wire(rig: _Rig, endpoin
     )
     assert response.status_code >= 400, response.text
     assert pcb.with_marker(pcb.drained_posts(rig.wire), marker) == (), response.text
+
+
+def test_messages_with_a_stored_conversation_keeps_the_system_prompt_in_instructions(rig: _Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    response: Final = _send(
+        rig.gateway,
+        "messages",
+        rig.model(_SOL, "messages"),
+        marker,
+        fields={"extra_body": {"conversation": "conv_prior"}},
+    )
+    body: Final = _wire_body(rig.wire, marker)
+    assert body["conversation"] == "conv_prior", body
+    _assert_kept_in_instructions(body, marker)
+    _assert_answered(response, "messages", marker)

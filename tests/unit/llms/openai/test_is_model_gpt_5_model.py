@@ -279,7 +279,9 @@ class TestOpenAIGPT5ConfigSeriesBoundaries:
         pytest.param("gpt-6.2", "openai", (), {}, True, id="boundary"),
         pytest.param("gpt-7", "openai", (), {}, True, id="future-major"),
         pytest.param("gpt-6.2", "openai", (), {"truncation": "disabled"}, True, id="truncation-disabled"),
-        pytest.param("gpt-6.2", "openai", (), {"previous_response_id": None}, True, id="no-stored-conversation"),
+        pytest.param(
+            "gpt-6.2", "openai", (), {"previous_response_id": None, "conversation": None}, True, id="nothing-stored"
+        ),
         pytest.param("house-model", "openai", ("gpt-6.2-sol",), {}, True, id="alias-with-newer-base"),
         pytest.param("gpt-6.1", "openai", ("gpt-6.3",), {}, True, id="newer-base-decides"),
         pytest.param("gpt-6.2", "openai", ("gpt-6.1",), {}, False, id="older-base-decides"),
@@ -288,6 +290,7 @@ class TestOpenAIGPT5ConfigSeriesBoundaries:
         pytest.param("gpt-6.1", "openai", (), {}, False, id="older-model"),
         pytest.param("house-model", "openai", (), {}, False, id="alias-without-base"),
         pytest.param("gpt-6.2", "openai", (), {"previous_response_id": "resp_1"}, False, id="stored-conversation"),
+        pytest.param("gpt-6.2", "openai", (), {"conversation": "conv_1"}, False, id="stored-conversation-object"),
         pytest.param("gpt-6.2", "openai", (), {"truncation": "auto"}, False, id="auto-truncation"),
         pytest.param("gpt-6.2", "chatgpt", (), {}, False, id="chatgpt"),
         pytest.param("gpt-6.2", "azure", (), {}, False, id="azure"),

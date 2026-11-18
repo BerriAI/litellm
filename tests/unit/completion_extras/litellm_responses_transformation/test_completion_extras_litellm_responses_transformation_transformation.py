@@ -1920,14 +1920,20 @@ def _developer_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": text}]}
 
 
+@dataclass(frozen=True, slots=True)
+class _TransformedRequest:
+    input: Sequence[Mapping[str, object]]
+    instructions: str | None
+
+
 def _transformed_system_prompt_request(
     messages: Sequence[Mapping[str, object]],
     *,
     model: str = "gpt-6.2",
     litellm_params: Mapping[str, object] = MappingProxyType({"custom_llm_provider": "openai"}),
     optional_params: Mapping[str, object] = MappingProxyType({}),
-) -> dict:
-    return LiteLLMResponsesTransformationHandler().transform_request(
+) -> _TransformedRequest:
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
         model=model,
         messages=list(messages),
         optional_params=dict(optional_params),
@@ -1935,6 +1941,7 @@ def _transformed_system_prompt_request(
         headers={},
         litellm_logging_obj=Mock(),
     )
+    return _TransformedRequest(input=request["input"], instructions=request.get("instructions"))
 
 
 @pytest.mark.parametrize(
@@ -1957,8 +1964,8 @@ def test_transform_request_sends_the_system_prompt_as_the_first_developer_item(
         [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], model=model, litellm_params=litellm_params
     )
 
-    assert result["input"] == [_developer_item(_JOINED_SYSTEM_TEXT), _HELLO_ITEM]
-    assert "instructions" not in result
+    assert result.input == [_developer_item(_JOINED_SYSTEM_TEXT), _HELLO_ITEM]
+    assert result.instructions is None
 
 
 @pytest.mark.parametrize(
@@ -1972,6 +1979,9 @@ def test_transform_request_sends_the_system_prompt_as_the_first_developer_item(
         ),
         pytest.param(
             "gpt-6.2", {"custom_llm_provider": "openai"}, {"previous_response_id": "resp_123"}, id="stored-conversation"
+        ),
+        pytest.param(
+            "gpt-6.2", {"custom_llm_provider": "openai"}, {"conversation": "conv_1"}, id="stored-conversation-object"
         ),
         pytest.param("gpt-6.2", {"custom_llm_provider": "openai"}, {"truncation": "auto"}, id="auto-truncation"),
         pytest.param(
@@ -1989,8 +1999,8 @@ def test_transform_request_keeps_instructions_unless_the_prompt_moves(
         [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], model=model, litellm_params=litellm_params, optional_params=optional_params
     )
 
-    assert result["input"] == [_HELLO_ITEM]
-    assert result["instructions"] == _JOINED_SYSTEM_TEXT
+    assert result.input == [_HELLO_ITEM]
+    assert result.instructions == _JOINED_SYSTEM_TEXT
 
 
 @pytest.mark.parametrize(
@@ -2009,8 +2019,8 @@ def test_transform_request_system_text_the_api_needs_in_input_uses_the_developer
 ) -> None:
     result: Final = _transformed_system_prompt_request(messages, optional_params=optional_params)
 
-    assert result["input"][0] == _developer_item(_JOINED_SYSTEM_TEXT)
-    assert "instructions" not in result
+    assert result.input[0] == _developer_item(_JOINED_SYSTEM_TEXT)
+    assert result.instructions is None
 
 
 def test_transform_request_json_object_on_a_stored_conversation_keeps_the_system_role() -> None:
@@ -2019,18 +2029,18 @@ def test_transform_request_json_object_on_a_stored_conversation_keeps_the_system
         optional_params={"response_format": {"type": "json_object"}, "previous_response_id": "resp_123"},
     )
 
-    assert result["input"] == [
+    assert result.input == [
         {"type": "message", "role": "system", "content": [{"type": "input_text", "text": _JOINED_SYSTEM_TEXT}]},
         _HELLO_ITEM,
     ]
-    assert "instructions" not in result
+    assert result.instructions is None
 
 
 def test_transform_request_empty_system_prompt_adds_no_developer_item() -> None:
     result: Final = _transformed_system_prompt_request([{"role": "system", "content": ""}, _HELLO_MESSAGE])
 
-    assert result["input"] == [_HELLO_ITEM]
-    assert not result.get("instructions")
+    assert result.input == [_HELLO_ITEM]
+    assert not result.instructions
 
 
 def test_transform_request_system_items_left_in_input_keep_their_role_after_the_developer_item() -> None:
@@ -2042,7 +2052,7 @@ def test_transform_request_system_items_left_in_input_keep_their_role_after_the_
         ]
     )
 
-    assert result["input"] == [
+    assert result.input == [
         _developer_item("Be concise."),
         {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Marked."}]},
         _HELLO_ITEM,

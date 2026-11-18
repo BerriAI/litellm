@@ -25,6 +25,7 @@ def system_prompt_moves_to_developer_item(
     if (
         custom_llm_provider != LlmProviders.OPENAI.value
         or request_params.get("previous_response_id")
+        or request_params.get("conversation")
         or request_params.get("truncation") == "auto"
     ):
         return False
