@@ -10,7 +10,6 @@ from typing import Final, TypedDict
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
@@ -180,13 +179,6 @@ class TavilySearchConfig(BaseSearchConfig):
             SearchResponse with standardized format
         """
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
-
-        auto_parameters: Final = as_str_mapping(response_json.get("auto_parameters"))
-        reported_depth: Final = auto_parameters.get("search_depth") if auto_parameters is not None else None
-        if isinstance(reported_depth, str):
-            pricing_params: Final = as_str_mapping(attribute_or_none(logging_obj, "optional_params"))
-            if pricing_params is not None and pricing_params.get("search_depth") is None:
-                logging_obj.optional_params = {**pricing_params, "search_depth": reported_depth}
 
         # Transform results to SearchResult objects
         results: Final = []
