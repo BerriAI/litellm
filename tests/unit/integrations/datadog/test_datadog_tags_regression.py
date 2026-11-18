@@ -117,6 +117,28 @@ class TestDatadogTagsRegression:
 
         assert tags[-3:] == ["team:platform", "cost_center:engineering", "region:eu"]
 
+    def test_dd_tags_cannot_add_a_second_value_for_a_base_tag(self, mock_env_vars: None) -> None:
+        dd_tags: Final = "env:other,service:other,version:other,HOSTNAME:other,POD_NAME:other,cost_center:engineering"
+        with patch.dict(os.environ, {"DD_TAGS": dd_tags}):
+            tags: Final = get_datadog_tags()
+
+        assert tags == [
+            "env:test-env",
+            "service:test-service",
+            "version:1.0.0",
+            "HOSTNAME:test-host",
+            "POD_NAME:test-pod",
+            "cost_center:engineering",
+        ]
+
+    def test_request_team_replaces_the_dd_tags_team(self, mock_env_vars: None) -> None:
+        payload: Final = StandardLoggingPayload(metadata=StandardLoggingMetadata(user_api_key_team_alias="payments"))
+        with patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}):
+            tags: Final = get_datadog_tags(payload)
+
+        assert [tag for tag in tags if tag.startswith("team:")] == ["team:payments"]
+        assert "cost_center:engineering" in tags
+
     def test_unset_dd_tags_adds_no_tags(self, mock_env_vars: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DD_TAGS", raising=False)
 

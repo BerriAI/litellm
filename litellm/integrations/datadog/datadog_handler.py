@@ -44,11 +44,28 @@ def normalize_datadog_tag_value(value: object) -> str:
     return re.sub(r"_+", "_", normalized_value).strip("_")
 
 
-def get_datadog_global_tags() -> tuple[str, ...]:
-    """Split `DD_TAGS` into tags, on commas when it has any and on whitespace otherwise, like ddtrace."""
+def get_datadog_global_tags(skip_keys: frozenset[str] = frozenset()) -> tuple[str, ...]:
+    """Split `DD_TAGS` into tags, on commas when it has any and on whitespace otherwise, like ddtrace.
+
+    Tags whose key is in `skip_keys` are left out.
+    """
     dd_tags: Final = os.getenv("DD_TAGS", "")
     raw_tags: Final = dd_tags.split(",") if "," in dd_tags else dd_tags.split()
-    return tuple(stripped for tag in raw_tags if (stripped := tag.strip()))
+    stripped_tags: Final = (tag.strip() for tag in raw_tags)
+    return tuple(tag for tag in stripped_tags if tag and tag.partition(":")[0] not in skip_keys)
+
+
+def _get_request_team(standard_logging_object: StandardLoggingPayload | None) -> object:
+    """The team alias or id of the request, or None when it has neither."""
+    if not standard_logging_object:
+        return None
+    metadata: Final = standard_logging_object.get("metadata", {}) or {}
+    return (
+        metadata.get("user_api_key_team_alias")
+        or metadata.get("team_alias")
+        or metadata.get("user_api_key_team_id")
+        or metadata.get("team_id")
+    )
 
 
 def get_datadog_tags(
@@ -69,24 +86,18 @@ def get_datadog_tags(
         "POD_NAME": get_datadog_pod_name(),
     }
 
+    team_tag: Final = _get_request_team(standard_logging_object)
+    litellm_tag_keys: Final = frozenset((*base_tags, "team") if team_tag else base_tags)
     tags: Final[list[str]] = [
         *(f"{k}:{v}" for k, v in base_tags.items()),
-        *get_datadog_global_tags(),
+        *get_datadog_global_tags(skip_keys=litellm_tag_keys),
     ]
 
     if standard_logging_object:
         request_tags: Final = standard_logging_object.get("request_tags", []) or []
         tags.extend(f"request_tag:{normalize_datadog_tag_value(tag)}" for tag in request_tags)
 
-        # Add Team Tag
-        metadata: Final = standard_logging_object.get("metadata", {}) or {}
-        team_tag: Final = (
-            metadata.get("user_api_key_team_alias")
-            or metadata.get("team_alias")
-            or metadata.get("user_api_key_team_id")
-            or metadata.get("team_id")
-        )
-        if team_tag:
-            tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
+    if team_tag:
+        tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
 
     return tags
