@@ -10,7 +10,6 @@ from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
-    calculate_cache_writing_cost,
     calculate_image_response_cost_from_usage,
     generic_cost_per_token,
     get_billed_token_rates,
@@ -2146,101 +2145,69 @@ def test_string_cost_values_with_threshold():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
-def test_calculate_cache_writing_cost():
-    """Test the calculate_cache_writing_cost function with detailed cache creation token breakdown."""
-
-    # Test case 1: With cache creation token details (matching the provided input)
-    cache_creation_tokens = 14055
-    cache_creation_token_details = CacheCreationTokenDetails(
-        ephemeral_5m_input_tokens=56, ephemeral_1h_input_tokens=13999
+def _writes_cost(
+    written: int, details: CacheCreationTokenDetails | None, write_rate: float, long_write_rate: float
+) -> float:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "cache_creation_input_token_cost": write_rate,
+            "cache_creation_input_token_cost_above_1hr": long_write_rate,
+            "cache_creation_input_token_cost_above_12hr": long_write_rate,
+        },
     )
-    cache_creation_cost_above_1hr = 6e-06
-    cache_creation_cost = 3.75e-06
-
-    result = calculate_cache_writing_cost(
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_token_details=cache_creation_token_details,
-        cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr, "12hr": cache_creation_cost_above_1hr},
-    )
-
-    # Expected calculation:
-    # 5m tokens: 56 * 3.75e-06 = 0.00021
-    # 1h tokens: 13999 * 6e-06 = 0.083994
-    # Total: 0.00021 + 0.083994 = 0.084204
-    expected_cost = (56 * 3.75e-06) + (13999 * 6e-06)
-
-    assert round(result, 6) == round(expected_cost, 6)
-    assert round(result, 6) == 0.084204
-
-    # Test case 2: Without cache creation token details (fallback behavior)
-    cache_creation_tokens_no_details = 1000
-    cache_creation_token_details_none = None
-    cache_creation_cost_fallback = 5e-06
-
-    result_no_details = calculate_cache_writing_cost(
-        cache_creation_tokens=cache_creation_tokens_no_details,
-        cache_creation_token_details=cache_creation_token_details_none,
-        cache_creation_cost=cache_creation_cost_fallback,
-        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr, "12hr": cache_creation_cost_above_1hr},
-    )
-
-    # Expected calculation when no details: 1000 * 5e-06 = 0.005
-    expected_cost_no_details = 1000 * 5e-06
-
-    assert round(result_no_details, 6) == round(expected_cost_no_details, 6)
-    assert result_no_details == 0.005
-
-    # Test case 3: With cache creation token details but None values
-    cache_creation_token_details_partial = CacheCreationTokenDetails(
-        ephemeral_5m_input_tokens=None, ephemeral_1h_input_tokens=100
-    )
-
-    result_partial = calculate_cache_writing_cost(
-        cache_creation_tokens=500,
-        cache_creation_token_details=cache_creation_token_details_partial,
-        cache_creation_cost=3e-06,
-        cache_creation_cost_by_ttl={"1hr": 6e-06, "12hr": 6e-06},
-    )
-
-    expected_cost_partial = (400 * 3e-06) + (100 * 6e-06)
-
-    assert round(result_partial, 6) == round(expected_cost_partial, 6)
-
-    # Test case 4: Zero costs
-    result_zero = calculate_cache_writing_cost(
-        cache_creation_tokens=1000,
-        cache_creation_token_details=CacheCreationTokenDetails(
-            ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950
+    usage: Final = Usage(
+        prompt_tokens=written,
+        completion_tokens=0,
+        total_tokens=written,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=written, cache_creation_token_details=details
         ),
-        cache_creation_cost=0.0,
-        cache_creation_cost_by_ttl={"1hr": 0.0, "12hr": 0.0},
     )
+    return get_token_type_cost_breakdown(
+        model="rate-fixture", custom_llm_provider="openai", usage=usage, model_info=model_info
+    ).cache_creation_cost
 
-    assert result_zero == 0.0
+
+@pytest.mark.parametrize(
+    ("written", "details", "expected"),
+    [
+        pytest.param(
+            14055,
+            CacheCreationTokenDetails(ephemeral_5m_input_tokens=56, ephemeral_1h_input_tokens=13999),
+            56 * 3.75e-06 + 13999 * 6e-06,
+            id="each-lifetime-at-its-rate",
+        ),
+        pytest.param(1000, None, 1000 * 3.75e-06, id="no-details-at-the-base-rate"),
+        pytest.param(
+            500,
+            CacheCreationTokenDetails(ephemeral_5m_input_tokens=None, ephemeral_1h_input_tokens=100),
+            400 * 3.75e-06 + 100 * 6e-06,
+            id="unreported-lifetimes-at-the-base-rate",
+        ),
+    ],
+)
+def test_cache_writes_bill_each_reported_lifetime_at_its_rate(
+    written: int, details: CacheCreationTokenDetails | None, expected: float
+) -> None:
+    assert _writes_cost(written, details, 3.75e-06, 6e-06) == pytest.approx(expected)
+
+
+def test_cache_writes_at_zero_rates_cost_nothing() -> None:
+    details: Final = CacheCreationTokenDetails(ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950)
+    assert _writes_cost(1000, details, 0.0, 0.0) == 0.0
 
 
 @pytest.mark.parametrize("field", CacheCreationTokenDetails.model_fields)
-def test_calculate_cache_writing_cost_bills_every_reported_lifetime(field: str) -> None:
-    cost = calculate_cache_writing_cost(
-        cache_creation_tokens=10,
-        cache_creation_token_details=CacheCreationTokenDetails(**{field: 10}),
-        cache_creation_cost=2.0,
-        cache_creation_cost_by_ttl={"1hr": 2.0, "12hr": 2.0},
-    )
-    assert cost == 20.0
+def test_cache_writes_bill_every_reported_lifetime(field: str) -> None:
+    assert _writes_cost(10, CacheCreationTokenDetails(**{field: 10}), 2.0, 2.0) == 20.0
 
 
-def test_calculate_cache_writing_cost_bills_writes_of_an_unknown_lifetime_at_the_base_rate() -> None:
-    cost = calculate_cache_writing_cost(
-        cache_creation_tokens=10,
-        cache_creation_token_details=CacheCreationTokenDetails(
-            ephemeral_30m_input_tokens=2, ephemeral_12h_input_tokens=3
-        ),
-        cache_creation_cost=1.0,
-        cache_creation_cost_by_ttl={"1hr": 4.0, "12hr": 4.0},
-    )
-    assert cost == 2 * 1.0 + 3 * 4.0 + 5 * 1.0
+def test_cache_writes_of_an_unknown_lifetime_bill_at_the_base_rate() -> None:
+    details: Final = CacheCreationTokenDetails(ephemeral_30m_input_tokens=2, ephemeral_12h_input_tokens=3)
+    assert _writes_cost(10, details, 1.0, 4.0) == 2 * 1.0 + 3 * 4.0 + 5 * 1.0
 
 
 @pytest.mark.parametrize(
@@ -4146,16 +4113,26 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
     usage = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
 
     rates = _billed_rates(model_info, usage, current_time=current_time)
+    long_writes: Final = Usage(
+        prompt_tokens=10,
+        completion_tokens=1,
+        total_tokens=11,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=3,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_1h_input_tokens=1, ephemeral_12h_input_tokens=2
+            ),
+        ),
+    )
 
     assert rates.cache_creation_input_token_cost == pytest.approx(expected_creation)
-    assert calculate_cache_writing_cost(
-        cache_creation_tokens=3,
-        cache_creation_token_details=CacheCreationTokenDetails(
-            ephemeral_1h_input_tokens=1, ephemeral_12h_input_tokens=2
-        ),
-        cache_creation_cost=rates.cache_creation_input_token_cost,
-        cache_creation_cost_by_ttl=rates.cache_creation_input_token_cost_by_ttl,
-    ) == pytest.approx(3 * expected_creation_1h)
+    assert get_token_type_cost_breakdown(
+        model="rate-fixture",
+        custom_llm_provider="openai",
+        usage=long_writes,
+        current_time=current_time,
+        model_info=cast(ModelInfo, model_info),
+    ).cache_creation_cost == pytest.approx(3 * expected_creation_1h)
 
 
 def _image_response(num_images: int = 1, usage: ImageUsage | None = None) -> ImageResponse:
