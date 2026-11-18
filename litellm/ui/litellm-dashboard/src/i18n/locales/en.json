@@ -7083,6 +7083,21 @@
     }
   },
   "routerSettings": {
+    "mtlsClientAuth": {
+      "enable": "Enable certificate approval",
+      "disable": "Disable certificate approval",
+      "ingressHint": "Only trust certificate headers from your verifying ingress. Restrict direct access to the proxy. The virtual key still controls permissions and budgets.",
+      "issuerHeader": "Certificate issuer header",
+      "subjectHeader": "Certificate subject header",
+      "client": "Approved client {{number}}",
+      "issuer": "Issuer DN",
+      "subject": "Subject DN",
+      "alias": "End-user alias (optional, defaults to subject DN)",
+      "add": "Add approved client",
+      "remove": "Remove client {{number}}",
+      "emptyWarning": "An empty approval list rejects every authenticated request, including admin requests.",
+      "invalid": "Use valid header names and provide an exact issuer and subject for every client."
+    },
     "generalSettings": {
       "tabs": {
         "loadbalancing": "Loadbalancing",

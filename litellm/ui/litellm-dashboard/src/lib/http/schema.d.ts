@@ -32620,6 +32620,8 @@ export interface components {
              * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
              */
             model_list_healthy_only?: boolean | null;
+            /** @description Approve ingress-verified client certificate issuer/subject pairs before API key authentication. */
+            mtls_client_auth?: components["schemas"]["MTLSClientAuth"] | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -40914,6 +40916,30 @@ export interface components {
             server_name?: string | null;
             /** Setup Url */
             setup_url?: string | null;
+        };
+        /** MTLSClient */
+        MTLSClient: {
+            /** End User Id */
+            end_user_id?: string | null;
+            /** Issuer */
+            issuer: string;
+            /** Subject */
+            subject: string;
+        };
+        /** MTLSClientAuth */
+        MTLSClientAuth: {
+            /** Allowed Clients */
+            allowed_clients: components["schemas"]["MTLSClient"][];
+            /**
+             * Issuer Header
+             * @default x-amzn-mtls-clientcert-issuer
+             */
+            issuer_header: string;
+            /**
+             * Subject Header
+             * @default x-amzn-mtls-clientcert-subject
+             */
+            subject_header: string;
         };
         /** MakeAgentsPublicRequest */
         MakeAgentsPublicRequest: {

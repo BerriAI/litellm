@@ -319,3 +319,69 @@ it("keeps a new baggage mapping unsaved until every field the backend requires i
     ["token", "request_tag_mappings", [{ header: "baggage", key: "service", value: "a", tag: "app:support" }]],
   ]);
 });
+
+it("edits certificate approval without replacing exact DN values and can disable it", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "mtls_client_auth",
+      field_type: "MTLSClientAuth",
+      field_value: null,
+      field_description: "Certificate approval",
+      stored_in_db: null,
+      editable: true,
+    },
+  ]);
+  vi.mocked(updateConfigFieldSetting).mockClear();
+  vi.mocked(deleteConfigFieldSetting).mockClear();
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  await user.click(await screen.findByRole("button", { name: "Enable certificate approval" }));
+  expect(screen.getByText(/An empty approval list rejects every authenticated request/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Add approved client" }));
+  const update = within(screen.getByRole("row", { name: /mtls_client_auth/ })).getByRole("button", { name: "Update" });
+  expect(update).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Issuer DN"), { target: { value: "CN=WorkloadCA,O=Example" } });
+  fireEvent.change(screen.getByLabelText("Subject DN"), { target: { value: "CN=billing-worker,O=Example" } });
+  fireEvent.change(screen.getByLabelText("End-user alias (optional, defaults to subject DN)"), {
+    target: { value: "billing-worker" },
+  });
+  fireEvent.change(screen.getByLabelText("Certificate issuer header"), { target: { value: "X-Issuer" } });
+  await user.click(update);
+  expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
+    [
+      "token",
+      "mtls_client_auth",
+      {
+        issuer_header: "X-Issuer",
+        subject_header: "x-amzn-mtls-clientcert-subject",
+        allowed_clients: [
+          { issuer: "CN=WorkloadCA,O=Example", subject: "CN=billing-worker,O=Example", end_user_id: "billing-worker" },
+        ],
+      },
+    ],
+  ]);
+  await user.click(screen.getByRole("button", { name: "Disable certificate approval" }));
+  await user.click(update);
+  expect(vi.mocked(deleteConfigFieldSetting).mock.calls).toEqual([["token", "mtls_client_auth"]]);
+});
+
+it("shows config-owned certificate approval as read-only", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "mtls_client_auth",
+      field_type: "MTLSClientAuth",
+      field_value: { allowed_clients: [{ issuer: "CN=CA", subject: "CN=worker" }] },
+      field_description: "Certificate approval",
+      stored_in_db: false,
+      editable: false,
+    },
+  ]);
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  expect(await screen.findByLabelText("Issuer DN")).toHaveValue("CN=CA");
+  expect(screen.getByLabelText("Issuer DN")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add approved client" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Update" })).toBeDisabled();
+});

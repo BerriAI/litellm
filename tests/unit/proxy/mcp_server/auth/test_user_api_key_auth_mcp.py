@@ -12,6 +12,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
+from starlette.requests import Request
+from starlette.types import Message
 
 from litellm.caching.caching import DualCache
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
@@ -12926,3 +12928,119 @@ async def test_admin_dashboard_session_keeps_the_whole_mcp_registry(
     assert set(await global_mcp_server_manager.get_allowed_mcp_servers(dashboard_session)) == set(
         global_mcp_server_manager.get_registry()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admission", ("session", "bridge"))
+@pytest.mark.parametrize(
+    "case",
+    (
+        "approved",
+        "subject-fallback",
+        "unset",
+        "missing",
+        "unapproved-pair",
+        "duplicate-subject",
+        "duplicate-issuer",
+        "spoofed-customer",
+        "spoofed-end-user",
+        "spoofed-mapped-customer",
+        "empty-allowlist",
+    ),
+)
+async def test_mtls_alternate_admission_requires_certificate_and_binds_workload(
+    admission: str, case: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    issuer: Final = "CN=WorkloadCA,O=Example"
+    subject: Final = "CN=billing-worker,O=Example"
+    certificate: Final = (
+        (b"x-amzn-mtls-clientcert-issuer", issuer.encode()),
+        (b"x-amzn-mtls-clientcert-subject", subject.encode()),
+    )
+    headers: Final = {
+        "missing": (),
+        "unset": (),
+        "unapproved-pair": (certificate[0], (certificate[1][0], b"CN=unapproved,O=Example")),
+        "duplicate-subject": (*certificate, certificate[1]),
+        "duplicate-issuer": (*certificate, certificate[0]),
+        "spoofed-customer": (*certificate, (b"x-litellm-customer-id", b"forged")),
+        "spoofed-end-user": (*certificate, (b"x-litellm-end-user-id", b"forged")),
+        "spoofed-mapped-customer": (*certificate, (b"x-workload-customer", b"forged")),
+    }.get(case, certificate)
+    settings: Final = {
+        "mtls_client_auth": {
+            "allowed_clients": (
+                []
+                if case == "empty-allowlist"
+                else [
+                    {
+                        "issuer": issuer,
+                        "subject": subject,
+                        **({} if case == "subject-fallback" else {"end_user_id": "billing-worker"}),
+                    }
+                ]
+            ),
+        },
+        "user_header_mappings": [{"header_name": "x-workload-customer", "litellm_user_role": "customer"}],
+    }
+    monkeypatch.setattr(proxy_server, "general_settings", {} if case == "unset" else settings)
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b'{"user":"forged-body-user"}', "more_body": False}
+
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/mcp/bridge_delegate_server", "headers": headers}, receive
+    )
+    bridge: Final = TestMCPDcrBridgeDelegateAdmission()
+    session: Final = TestGatewaySessionAdmission()
+    original: Final = bridge._reloaded_key(end_user_id="legacy-customer")
+    master_key: Final = bridge._MASTER_KEY if admission == "bridge" else session._MASTER_KEY
+    monkeypatch.setattr(proxy_server, "master_key", master_key)
+    token: Final = bridge._mint_bridge_envelope(minted_at=now) if admission == "bridge" else session._access_token()
+    reload: Final = (
+        bridge._patch_key_reload(return_value=original)
+        if admission == "bridge"
+        else session._patch_user_reload(user_id="sso-user-42")
+    )
+
+    async def authenticate() -> UserAPIKeyAuth:
+        if admission == "bridge":
+            admitted, _ = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=bridge._bridge_delegate_server(),
+                requested_name="bridge_delegate_server",
+                authorization_value=f"Bearer {token}",
+                mcp_server_auth_headers=None,
+                request=request,
+                route=request.url.path,
+            )
+            return admitted
+        return await MCPRequestHandler._admit_gateway_session(
+            authorization_value=f"Bearer {token}", request=request, route=request.url.path, mcp_servers=None
+        )
+
+    with (
+        reload,
+        patch(
+            "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.datetime",
+            SimpleNamespace(now=lambda tz: now),
+        ),
+    ):
+        if case not in ("approved", "subject-fallback", "unset"):
+            with pytest.raises(ProxyException) as denied:
+                await authenticate()
+            assert str(denied.value.code) == "403"
+        else:
+            authenticated: Final = await authenticate()
+            expected: Final = (
+                ("legacy-customer" if admission == "bridge" else None)
+                if case == "unset"
+                else subject
+                if case == "subject-fallback"
+                else "billing-worker"
+            )
+            assert authenticated.end_user_id == expected
+            assert authenticated.user_id == (original.user_id if admission == "bridge" else "sso-user-42")
+    assert original.end_user_id == "legacy-customer"

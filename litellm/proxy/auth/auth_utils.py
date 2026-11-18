@@ -2355,8 +2355,13 @@ def _coerce_user_id_to_str(value: object) -> str | None:
 
 
 def get_end_user_id_from_request_body(
-    request_body: Mapping[str, object], request_headers: Mapping[str, object] | None = None
+    request_body: Mapping[str, object],
+    request_headers: Mapping[str, object] | None = None,
+    *,
+    trusted_end_user_id: str | None = None,
 ) -> str | None:
+    if trusted_end_user_id is not None:
+        return trusted_end_user_id
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings

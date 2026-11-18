@@ -27,6 +27,8 @@ import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_AccessGroupTable,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_JWTAuth,
     LiteLLM_UserTable,
@@ -51,7 +53,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_builder,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key
 from litellm.proxy.proxy_server import hash_token
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
@@ -67,6 +69,217 @@ from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_
 @pytest.fixture
 def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
     return install_rust_auth_stores(monkeypatch)
+
+
+@pytest.fixture
+def mtls_auth_settings(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    settings: Final[dict[str, object]] = {
+        "mtls_client_auth": {
+            "allowed_clients": [
+                {"issuer": "CN=WorkloadCA", "subject": "CN=billing-worker", "end_user_id": "billing-worker"}
+            ]
+        }
+    }
+    server: Final = litellm.proxy.proxy_server
+    monkeypatch.setattr(server, "general_settings", settings)
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=None)))
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+    return settings
+
+
+def _mtls_request(headers: tuple[tuple[bytes, bytes], ...], path: str = "/chat/completions") -> StarletteRequest:
+    return StarletteRequest(
+        {"type": "http", "method": "POST", "path": path, "headers": list(headers)},
+        receive=AsyncMock(
+            return_value={"type": "http.request", "body": b'{"user":"forged-body-user"}', "more_body": False}
+        ),
+    )
+
+
+_MTLS_HEADERS: Final = (
+    (b"x-amzn-mtls-clientcert-issuer", b"CN=WorkloadCA"),
+    (b"x-amzn-mtls-clientcert-subject", b"CN=billing-worker"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    (
+        (),
+        (_MTLS_HEADERS[0], (b"x-amzn-mtls-clientcert-subject", b"CN=other")),
+        (*_MTLS_HEADERS, _MTLS_HEADERS[1]),
+        (*_MTLS_HEADERS, (b"x-litellm-customer-id", b"forged")),
+        (*_MTLS_HEADERS, (b"x-litellm-end-user-id", b"forged")),
+    ),
+)
+@pytest.mark.parametrize("path", ("/chat/completions", "/key/generate"))
+async def test_mtls_refuses_certificate_failures_before_key_auth(
+    mtls_auth_settings: dict[str, object], headers: tuple[tuple[bytes, bytes], ...], path: str
+) -> None:
+    with pytest.raises(ProxyException) as denied:
+        await user_api_key_auth(request=_mtls_request(headers, path), api_key="Bearer sk-not-valid")
+    assert denied.value.code == "403"
+    assert denied.value.type == "auth_error"
+
+
+@pytest.mark.asyncio
+async def test_mtls_approved_pair_does_not_authorize_an_invalid_key(mtls_auth_settings: dict[str, object]) -> None:
+    with pytest.raises(ProxyException) as denied:
+        await user_api_key_auth(request=_mtls_request(_MTLS_HEADERS), api_key="Bearer sk-not-valid")
+    assert denied.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True))
+async def test_mtls_preserves_key_permissions_and_records_trusted_workload(
+    mtls_auth_settings: dict[str, object], monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    if not enabled:
+        monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    key: Final = "sk-mtls-virtual-key"
+    cached: Final = UserAPIKeyAuth(token=hash_token(key), models=["only-permitted-model"], user_id="virtual-key-owner")
+    await litellm.proxy.proxy_server.user_api_key_cache.async_set_cache(key=hash_token(key), value=cached)
+    request: Final = _mtls_request(_MTLS_HEADERS if enabled else ())
+    auth: Final = await user_api_key_auth_builder(
+        request=request,
+        api_key=f"Bearer {key}",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data={"user": "forged-body-user", "metadata": {"user": "forged-metadata-user"}},
+    )
+    assert auth.models == ["only-permitted-model"]
+    assert auth.user_id == "virtual-key-owner"
+    assert auth.end_user_id == ("billing-worker" if enabled else None)
+    assert request.headers.items() == list(_MTLS_HEADERS_TO_TEXT if enabled else ())
+
+
+_MTLS_HEADERS_TO_TEXT: Final = tuple((name.decode(), value.decode()) for name, value in _MTLS_HEADERS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True))
+@pytest.mark.parametrize("custom_end_user_id", (None, "custom-customer"))
+@pytest.mark.parametrize("spend", (0.0, 11.0))
+async def test_mtls_custom_auth_checks_the_approved_workloads_budget(
+    mtls_auth_settings: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    custom_end_user_id: str | None,
+    spend: float,
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    if not enabled:
+        monkeypatch.setattr(server, "general_settings", {})
+    custom_token: Final = UserAPIKeyAuth(end_user_id=custom_end_user_id)
+
+    async def custom_auth(request: FastAPIRequest, api_key: str) -> UserAPIKeyAuth:
+        return custom_token
+
+    monkeypatch.setattr(server, "user_custom_auth", custom_auth)
+    monkeypatch.setattr(auth_module, "enterprise_custom_auth", None)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    counters: Final = FakeSpendCounters().store()
+    await counters.increment("spend:end_user:billing-worker", spend)
+    monkeypatch.setattr(server, "spend_counter_store", counters)
+    await server.user_api_key_cache.async_set_cache(
+        key=end_user_cache_key("billing-worker"),
+        value=LiteLLM_EndUserTable(
+            user_id="billing-worker",
+            blocked=False,
+            spend=spend,
+            budget_id="workload-budget",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0),
+        ),
+    )
+    await server.user_api_key_cache.async_set_cache(
+        key=end_user_cache_key("custom-customer"),
+        value=LiteLLM_EndUserTable(user_id="custom-customer", blocked=False),
+    )
+
+    async def authenticate() -> UserAPIKeyAuth:
+        return await user_api_key_auth_builder(
+            request=_mtls_request(_MTLS_HEADERS if enabled else ()),
+            api_key="Bearer sk-custom-auth",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"user": "forged-body-user"},
+        )
+
+    if enabled and spend > 10.0:
+        with pytest.raises(ProxyException, match=r"[Bb]udget") as denied:
+            await authenticate()
+        assert denied.value.type == "budget_exceeded"
+    else:
+        authenticated: Final = await authenticate()
+        assert authenticated.end_user_id == ("billing-worker" if enabled else custom_end_user_id)
+    assert custom_token.end_user_id == custom_end_user_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/health/liveness", "/open-endpoint"))
+async def test_mtls_keeps_public_and_open_passthrough_routes_unchanged(
+    mtls_auth_settings: dict[str, object], monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {**mtls_auth_settings, "pass_through_endpoints": [{"path": "/open-endpoint", "auth": False}]},
+    )
+    identity: Final = await user_api_key_auth_builder(
+        request=_mtls_request((), path),
+        api_key="",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data={},
+    )
+    assert identity.end_user_id is None
+    assert identity.token is None
+
+
+def test_mtls_identity_reaches_the_core_auth_request(mtls_auth_settings: dict[str, object]) -> None:
+    request: Final = _mtls_request(_MTLS_HEADERS)
+    approved: Final = auth_module.approved_mtls_end_user_id(request, "/chat/completions")
+    auth_request: Final = auth_module._auth_request(
+        "sk-not-yet-validated",
+        "/chat/completions",
+        request,
+        {"user": "forged-body-user"},
+        pass_through_open=False,
+        from_custom_auth=False,
+        trusted_end_user_id=approved,
+    )
+    assert auth_request.end_user_id == "billing-worker"
+
+
+@pytest.mark.parametrize("custom_auth_enabled", (False, True))
+@pytest.mark.parametrize("headers", ((), _MTLS_HEADERS))
+def test_mtls_dev_mode_is_only_unauthenticated_without_custom_auth(
+    mtls_auth_settings: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    custom_auth_enabled: bool,
+    headers: tuple[tuple[bytes, bytes], ...],
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_custom_auth", AsyncMock() if custom_auth_enabled else None)
+    request: Final = _mtls_request(headers)
+    if custom_auth_enabled and not headers:
+        with pytest.raises(ProxyException) as denied:
+            auth_module.approved_mtls_end_user_id(request, "/chat/completions")
+        assert denied.value.code == "403"
+    else:
+        approved: Final = auth_module.approved_mtls_end_user_id(request, "/chat/completions")
+        assert approved == ("billing-worker" if custom_auth_enabled else None)
 
 
 @pytest.mark.asyncio

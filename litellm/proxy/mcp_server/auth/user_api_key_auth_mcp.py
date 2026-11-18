@@ -50,8 +50,10 @@ from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    approved_mtls_end_user_id,
     run_centralized_common_checks,
     user_api_key_auth,
+    with_mtls_end_user,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1183,6 +1185,7 @@ class MCPRequestHandler:
         higher-priority alias slot, pairing the admitted identity with an attacker's upstream
         credential; the alias-keyed injection overwrites any such caller value.
         """
+        mtls_end_user_id: Final = approved_mtls_end_user_id(request, route)
         result: Final = await MCPRequestHandler._open_dcr_bridge_envelope(
             server=server,
             requested_name=requested_name,
@@ -1193,7 +1196,9 @@ class MCPRequestHandler:
         header_key: Final = server.alias or server.server_name
         if header_key is None:
             raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-        admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
+        admitted: Final = with_mtls_end_user(
+            await MCPRequestHandler._reload_admitted_principal(result.identity), mtls_end_user_id
+        )
         await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
         injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
         new_headers: Final = {
@@ -1363,6 +1368,7 @@ class MCPRequestHandler:
         if not master_key:
             raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
 
+        mtls_end_user_id: Final = approved_mtls_end_user_id(request, route)
         await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
 
         keys: Final = active_session_signing_keys(master_key)
@@ -1373,7 +1379,9 @@ class MCPRequestHandler:
         match result:
             case SessionBearerAdmitted():
                 try:
-                    admitted: Final = await MCPRequestHandler.reload_admitted_user(result.principal.user_id)
+                    admitted: Final = with_mtls_end_user(
+                        await MCPRequestHandler.reload_admitted_user(result.principal.user_id), mtls_end_user_id
+                    )
                     admitted.mcp_session_resource_server_ids = result.principal.resource_server_ids
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route

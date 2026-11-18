@@ -7544,6 +7544,7 @@ class ProxyConfig:
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                         "access_group_rules",
+                        "mtls_client_auth",
                     )
                     if name in typed_general_settings
                 }
@@ -21398,6 +21399,7 @@ _PLUGIN_KEY_REDACTED: Final = "***"
 
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
+        "mtls_client_auth": "MTLSClientAuth",
         "request_tag_mappings": "RequestTagMappings",
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
