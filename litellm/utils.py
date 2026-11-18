@@ -9754,6 +9754,14 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
     return thinking_blocks is None or (hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0)
 
 
+def thinking_param_needs_replayed_thinking_blocks(thinking: object) -> bool:
+    match thinking:
+        case None | {"type": "adaptive"}:
+            return False
+        case _:
+            return True
+
+
 def add_dummy_tool(custom_llm_provider: str) -> list[ChatCompletionToolParam]:
     """
     Prevent Anthropic from raising error when tool_use block exists but no tools are provided.
