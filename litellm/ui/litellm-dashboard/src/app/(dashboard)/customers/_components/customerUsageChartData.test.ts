@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bucketSeries,
   bucketTotals,
   OTHER_COLOR,
   type Series,
@@ -10,7 +11,7 @@ import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActiv
 import type { DailyData, MetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
 import i18n from "@/i18n/i18n";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
-import { customerUsageSeries } from "./customerUsageChartData";
+import { customerCacheTokenSeries, customerUsageSeries } from "./customerUsageChartData";
 import type { CustomerUsageDimension } from "./CustomerUsageRankings";
 
 const metrics = (spend: number, tokens: number, requests: number): SpendMetrics => ({
@@ -102,6 +103,30 @@ const valueAt = (series: Series, label: string, date = "2026-11-01"): number => 
 };
 const colorOf = (series: Series, label: string): string => series.colors[series.labels.indexOf(label)];
 const other = () => i18n.t("usage.overview.otherSeries");
+
+describe("customerCacheTokenSeries", () => {
+  it("stacks customer-wide cache tokens without double-counting total volume", () => {
+    const days = [
+      day("2026-11-01", {
+        ...metrics(1, 100, 1),
+        cache_read_input_tokens: 40,
+        cache_creation_input_tokens: 20,
+      }),
+      day("2026-11-02", { ...metrics(2, 200, 1), cache_read_input_tokens: 150 }),
+      day("2026-11-03", { ...metrics(3, 150, 1), prompt_tokens: 100, cache_creation_input_tokens: 120 }),
+    ];
+
+    const series = customerCacheTokenSeries(days);
+    const week = bucketSeries(series, "week");
+    const read = i18n.t("customerPortal.tokenUsage.cacheReadTokens");
+    const write = i18n.t("customerPortal.tokenUsage.cacheWriteTokens");
+    const other = i18n.t("customerPortal.tokenUsage.otherTokens");
+    const unclassified = i18n.t("customerPortal.tokenUsage.unclassifiedTokens");
+    expect([read, write, other, unclassified].map((label) => valueAt(series, label))).toEqual([40, 20, 40, 0]);
+    expect([read, write, other, unclassified].map((label) => valueAt(week, label))).toEqual([190, 20, 90, 150]);
+    expect(bucketTotals(week).get("2026-11-01")).toBe(450);
+  });
+});
 
 describe("customerUsageSeries", () => {
   it.each<[CustomerUsageDimension, string, number]>([

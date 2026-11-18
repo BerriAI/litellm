@@ -134,6 +134,9 @@ describe("customer organization overview", () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
     await screen.findByRole("link", { name: "Customer 29" });
+    const spendTable = within(screen.getByRole("table", { name: "Customer organizations" }));
+    expect(spendTable.getByRole("columnheader", { name: "Cache tokens" })).toBeInTheDocument();
+    expect(spendTable.getByRole("columnheader", { name: "Cache cost" })).toBeInTheDocument();
     expect(customerLinks()[0]).toHaveTextContent("Customer 29");
     expect(customerLinks()[0]).toHaveAttribute(
       "href",
@@ -156,12 +159,15 @@ describe("customer organization overview", () => {
       "descending",
     );
     const row = screen.getByRole("row", { name: /Customer 00/ });
-    expect(within(row).getByRole("cell", { name: "100" })).toBeInTheDocument();
-    expect(within(row).getByRole("cell", { name: "60" })).toBeInTheDocument();
-    expect(within(row).getByRole("cell", { name: "40" })).toBeInTheDocument();
-    expect(within(row).getByRole("cell", { name: "10" })).toBeInTheDocument();
-    expect(within(row).getByRole("cell", { name: "4" })).toBeInTheDocument();
+    const totalTokens = within(row).getByRole("button", { name: "100 total tokens. View breakdown" });
+    expect(totalTokens).toHaveTextContent("100");
+    expect(within(row).getByRole("cell", { name: /Cache reads\s*10\s*Cache writes\s*4/ })).toBeInTheDocument();
     expect(within(row).getByRole("cell", { name: "$0.75" })).toBeInTheDocument();
+    await user.click(totalTokens);
+    expect(await screen.findByRole("dialog", { name: "Token breakdown" })).toHaveTextContent(
+      /Input tokens\s*60\s*Output tokens\s*40/,
+    );
+    await user.keyboard("{Escape}");
     expect(within(row).getByText("$8.00 / $10.00")).toBeInTheDocument();
     expect(within(row).getByText("Reached limit")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
@@ -191,8 +197,7 @@ describe("customer organization overview", () => {
       ).toBeInTheDocument();
       expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
       const row = within(screen.getByRole("row", { name: /Customer 00/ }));
-      expect(row.getByRole("cell", { name: "12" })).toBeInTheDocument();
-      expect(row.getByRole("cell", { name: "6" })).toBeInTheDocument();
+      expect(row.getByRole("cell", { name: /Cache reads\s*12\s*Cache writes\s*6/ })).toBeInTheDocument();
       expect(row.getByRole("cell", { name: /\$0\.05\s*Partial cost/ })).toBeInTheDocument();
       expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
         "href",

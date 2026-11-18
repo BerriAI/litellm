@@ -386,23 +386,22 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("end_date")).toBe("2026-11-03");
   });
 
-  it("shows cache reads, writes, total tokens and recorded cost for each model in the selected range", async () => {
+  it("shows the customer-wide cache breakdown in the Usage over time chart", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
-    const chart = await screen.findByRole("table", { name: "Token usage by model" });
-    const first = within(chart).getByRole("row", { name: /model-a/ });
-    expect(
-      within(first)
-        .getAllByRole("cell")
-        .slice(1)
-        .map((cell) => cell.textContent),
-    ).toEqual(["40", "20", "40", "100", "$0.0123"]);
-    const second = within(chart).getByRole("row", { name: /model-b/ });
-    expect(
-      within(second)
-        .getAllByRole("cell")
-        .slice(1)
-        .map((cell) => cell.textContent),
-    ).toEqual(["500", "0", "100", "600", "Unavailable"]);
+    await screen.findByRole("table", { name: "Models" });
+    const trend = within(screen.getByRole("region", { name: "Usage over time" }));
+    await user.click(trend.getByRole("radio", { name: "Cache tokens" }));
+    expect(trend.getByRole("radio", { name: "Cache tokens" })).toBeChecked();
+    expect(trend.getByText("Cache read tokens")).toBeInTheDocument();
+    expect(trend.getByText("Cache write tokens")).toBeInTheDocument();
+    expect(trend.getByText("Other tokens")).toBeInTheDocument();
+    expect(trend.getByText("700")).toBeInTheDocument();
+    expect(trend.getByText("$0.0123")).toBeInTheDocument();
+    expect(trend.getByText("Partial cost")).toBeInTheDocument();
+    expect(trend.queryByText("model-a")).not.toBeInTheDocument();
+    await user.click(trend.getByRole("radio", { name: "Tokens" }));
+    expect(trend.getByText("model-a")).toBeInTheDocument();
   });
 
   it("should apply the global metric to sorting and shares across models, keys and teams", async () => {

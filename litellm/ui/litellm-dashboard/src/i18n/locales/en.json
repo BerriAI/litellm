@@ -20919,16 +20919,17 @@
   },
   "customerPortal": {
     "tokenUsage": {
+      "tokenBreakdown": "Token breakdown",
+      "viewTokenBreakdown": "{{total}} total tokens. View breakdown",
+      "cacheTokens": "Cache tokens",
       "cacheReadTokens": "Cache read tokens",
       "cacheWriteTokens": "Cache write tokens",
       "cacheCost": "Cache cost",
       "costUnavailable": "Unavailable",
       "partialCost": "Partial cost",
       "otherTokens": "Other tokens",
-      "volume": "Token volume",
-      "modelTitle": "Token usage by model",
-      "topModels": "Top {{limit}} models by total tokens",
-      "inconsistent": "Bars show only the total where reported cache tokens exceed input tokens."
+      "unclassifiedTokens": "Unclassified tokens",
+      "inconsistent": "Days with inconsistent cache counts are shown as unclassified tokens."
     },
     "organizationGroups": {
       "title": "Organization budget groups",

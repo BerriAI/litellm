@@ -3473,6 +3473,7 @@ class DBSpendUpdateWriter:
             caller_request: Final = not is_internal_call and not _is_billed_retry_attempt(_metadata)
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
+            cost_breakdown: Final = _metadata.get("cost_breakdown")
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
@@ -3482,7 +3483,7 @@ class DBSpendUpdateWriter:
                 model_id=payload.get("model_id"),
                 llm_router=get_llm_router,
                 usage_object=usage_obj,
-                cost_breakdown=_metadata.get("cost_breakdown"),
+                cost_breakdown=cost_breakdown,
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
                 recorded_autorouter_savings_estimate=_metadata.get("autorouter_savings_estimate"),
                 billed_at=payload.get("endTime"),
@@ -3529,7 +3530,7 @@ class DBSpendUpdateWriter:
             if type != "customer_member":
                 return daily_transaction
             cache_cost, priced_cache_tokens = recorded_customer_cache_cost(
-                _metadata["cost_breakdown"] if "cost_breakdown" in _metadata else None,
+                cost_breakdown,
                 daily_transaction["cache_read_input_tokens"],
                 daily_transaction["cache_creation_input_tokens"],
             )

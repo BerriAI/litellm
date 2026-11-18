@@ -16,7 +16,6 @@ import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage"
 import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
 import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
 import CustomerUsageAppFilter from "../_components/CustomerUsageAppFilter";
-import CustomerModelTokenChart from "../_components/CustomerModelTokenChart";
 
 const METRIC_LABELS = {
   spend: "customerPortal.analytics.spend",
@@ -42,6 +41,7 @@ export default function CustomerHierarchyUsagePage() {
     results,
     totals,
     modelColors,
+    rankingMetric,
     rows,
     drillDown,
     setDateRange,
@@ -54,7 +54,7 @@ export default function CustomerHierarchyUsagePage() {
     setPage,
     setApp,
   } = useCustomerHierarchyUsage();
-  const metricLabel = t(METRIC_LABELS[params.metric]);
+  const metricLabel = t(METRIC_LABELS[rankingMetric]);
   const budgetEntity = data?.member ?? data?.team ?? data?.organization;
 
   if (!scope)
@@ -133,7 +133,6 @@ export default function CustomerHierarchyUsagePage() {
             onBucketChange={setBucket}
             appFilter={<CustomerUsageAppFilter value={params.app_id} onChange={setApp} />}
           />
-          {isOrganizationScope && <CustomerModelTokenChart days={results} />}
           {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {!usage.isPending && (
             <>
@@ -146,7 +145,7 @@ export default function CustomerHierarchyUsagePage() {
               <CustomerUsageRankings
                 rows={rows}
                 dimension={params.breakdown}
-                metric={params.metric}
+                metric={rankingMetric}
                 search={params.search}
                 page={params.usagePage}
                 colorByModel={modelColors}

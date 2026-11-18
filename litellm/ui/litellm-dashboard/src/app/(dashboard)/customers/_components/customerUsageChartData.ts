@@ -1,4 +1,5 @@
 import {
+  formatDayLabel,
   rankValue,
   rollUpBreakdown,
   seriesBy,
@@ -13,6 +14,39 @@ import type { CustomerUsageDimension } from "./CustomerUsageRankings";
 import { customerModelBreakdown } from "./customerUsageTotals";
 
 const TOP_SERIES = 8;
+
+const CACHE_TOKEN_SERIES = [
+  { key: "cacheRead", label: "customerPortal.tokenUsage.cacheReadTokens", color: "#3b82f6" },
+  { key: "cacheWrite", label: "customerPortal.tokenUsage.cacheWriteTokens", color: "#a855f7" },
+  { key: "other", label: "customerPortal.tokenUsage.otherTokens", color: "#cbd5e1" },
+] as const;
+const UNCLASSIFIED_TOKEN_SERIES = {
+  key: "unclassified",
+  label: "customerPortal.tokenUsage.unclassifiedTokens",
+  color: "#64748b",
+} as const;
+
+export const customerCacheTokenSeries = (days: readonly DailyData[]): Series => {
+  const data = days.map(({ date, metrics }) => {
+    const cacheRead = metrics.cache_read_input_tokens ?? 0;
+    const cacheWrite = metrics.cache_creation_input_tokens ?? 0;
+    const total = metrics.total_tokens;
+    const point = { date, label: formatDayLabel(date) };
+    if (cacheRead + cacheWrite > Math.min(metrics.prompt_tokens, total)) {
+      return { ...point, cacheRead: 0, cacheWrite: 0, other: 0, unclassified: total };
+    }
+    return { ...point, cacheRead, cacheWrite, other: total - cacheRead - cacheWrite, unclassified: 0 };
+  });
+  const segments = data.some(({ unclassified }) => unclassified > 0)
+    ? [...CACHE_TOKEN_SERIES, UNCLASSIFIED_TOKEN_SERIES]
+    : CACHE_TOKEN_SERIES;
+  return {
+    data,
+    keys: segments.map(({ key }) => key),
+    labels: segments.map(({ label }) => i18n.t(label)),
+    colors: segments.map(({ color }) => color),
+  };
+};
 
 const entityDays = (
   primary: readonly DailyData[],

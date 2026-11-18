@@ -1,23 +1,20 @@
 import type { DailyData } from "@/components/UsagePage/types";
 
-export const CUSTOMER_TOKEN_COLUMNS = [
-  { id: "tokens", label: "usage.statStrip.tokenPopover.totalTokens" },
-  { id: "inputTokens", label: "usage.statStrip.tokenPopover.inputTokens" },
-  { id: "outputTokens", label: "usage.statStrip.tokenPopover.outputTokens" },
-  { id: "cacheReadTokens", label: "customerPortal.tokenUsage.cacheReadTokens" },
-  { id: "cacheWriteTokens", label: "customerPortal.tokenUsage.cacheWriteTokens" },
-] as const;
+export type CustomerUsageTotal = Readonly<{
+  spend: number;
+  requests: number;
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cacheCost: number;
+  pricedCacheTokens: number;
+}>;
 
-type Totals = Readonly<
-  { spend: number; requests: number; cacheCost: number; pricedCacheTokens: number } & Record<
-    (typeof CUSTOMER_TOKEN_COLUMNS)[number]["id"],
-    number
-  >
->;
+export type CustomerUsageTotals = ReadonlyMap<string, CustomerUsageTotal>;
 
-export type CustomerUsageTotals = ReadonlyMap<string, Totals>;
-
-const ZERO_TOTALS: Totals = {
+export const EMPTY_CUSTOMER_USAGE: CustomerUsageTotal = {
   spend: 0,
   requests: 0,
   tokens: 0,
@@ -32,13 +29,10 @@ const ZERO_TOTALS: Totals = {
 export const customerModelBreakdown = ({ breakdown }: DailyData) =>
   Object.keys(breakdown.model_groups).length > 0 ? breakdown.model_groups : breakdown.models;
 
-export function customerUsageTotals(
-  days: readonly DailyData[],
-  selectBreakdown = (day: DailyData) => day.breakdown.entities,
-): CustomerUsageTotals {
+export function customerUsageTotals(days: readonly DailyData[]): CustomerUsageTotals {
   return days.reduce((totals, day) => {
-    for (const [id, entity] of Object.entries(selectBreakdown(day))) {
-      const previous = totals.get(id) ?? ZERO_TOTALS;
+    for (const [id, entity] of Object.entries(day.breakdown.entities)) {
+      const previous = totals.get(id) ?? EMPTY_CUSTOMER_USAGE;
       const metrics = entity.metrics;
       const next = {
         spend: previous.spend + metrics.spend,
@@ -54,19 +48,5 @@ export function customerUsageTotals(
       totals.set(id, next);
     }
     return totals;
-  }, new Map<string, Totals>());
-}
-
-export function customerModelTokenUsage(days: readonly DailyData[]) {
-  return [...customerUsageTotals(days, customerModelBreakdown)]
-    .filter(([, totals]) => totals.tokens > 0)
-    .map(([model, totals]) => ({
-      model,
-      ...totals,
-      other:
-        totals.cacheReadTokens + totals.cacheWriteTokens > Math.min(totals.tokens, totals.inputTokens)
-          ? null
-          : totals.tokens - totals.cacheReadTokens - totals.cacheWriteTokens,
-    }))
-    .sort((a, b) => b.tokens - a.tokens || a.model.localeCompare(b.model));
+  }, new Map<string, CustomerUsageTotal>());
 }
