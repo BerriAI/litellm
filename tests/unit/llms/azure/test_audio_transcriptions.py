@@ -4,11 +4,14 @@ from typing import Final
 
 import httpx
 import pytest
+from unittest.mock import Mock
 import respx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm.cost_calculator import completion_cost
+from litellm.llms.azure.audio_transcriptions import AzureAudioTranscription
+from litellm.types.utils import TranscriptionResponse
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 
 AUDIO_FILE: Final = Path(__file__).parents[3] / "gettysburg.wav"
@@ -228,3 +231,27 @@ def test_azure_sync_transcription_uses_the_deployments_route(
     assert sent_url.path == "/openai/deployments/gpt-transcribe/audio/transcriptions"
     assert sent_url.params.get("api-version") == expected_api_version
     assert response.text == "hello"
+
+@pytest.mark.asyncio
+async def test_async_error_logs_the_audio_file(monkeypatch: pytest.MonkeyPatch):
+    handler = AzureAudioTranscription()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    def boom(**kwargs):
+        raise RuntimeError("client failed")
+
+    monkeypatch.setattr(handler, "get_azure_openai_client", boom)
+
+    with pytest.raises(RuntimeError):
+        await handler.async_audio_transcriptions(
+            audio_file=("gettysburg.wav", b"audio", "audio/wav"),
+            model="whisper-1",
+            data={},
+            model_response=TranscriptionResponse(text=""),
+            timeout=1,
+            logging_obj=logging_obj,
+            api_key="test-key",
+        )
+
+    assert logging_obj.post_call.call_args.kwargs["input"] == "gettysburg.wav"

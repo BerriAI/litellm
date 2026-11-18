@@ -289,3 +289,26 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "https://gateway.example.com/jina/v1/embeddings"
     )
+
+def test_transform_embedding_response_logs_the_request_input():
+    logging_obj = MagicMock()
+    JinaAIEmbeddingConfig().transform_embedding_response(
+        model="jina-embeddings-v3",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "model": "jina-embeddings-v3",
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 2]}],
+                "usage": {"prompt_tokens": 3, "total_tokens": 5},
+            },
+        ),
+        model_response=EmbeddingResponse(),
+        logging_obj=logging_obj,
+        api_key="test-key",
+        request_data={"input": ["hello"]},
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert logging_obj.post_call.call_args.kwargs["input"] == ["hello"]
