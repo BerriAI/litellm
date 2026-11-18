@@ -10,6 +10,8 @@ from email.message import Message
 from queue import SimpleQueue
 from typing import Final
 
+from tests.integration._support.ports import allocate_port
+
 
 @dataclass(frozen=True, slots=True)
 class Delivery:
@@ -112,7 +114,7 @@ def smtp_sink() -> Generator[Mailbox, None, None]:
         allow_reuse_address = True
         daemon_threads = False
 
-    with OwnedServer(("127.0.0.1", 0), Handler) as server:
+    with OwnedServer(("127.0.0.1", allocate_port()), Handler) as server:
         mailbox: Final = Mailbox("127.0.0.1", server.server_address[1])
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()

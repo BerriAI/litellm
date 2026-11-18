@@ -333,6 +333,40 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
 
 
 @pytest.mark.asyncio
+async def test_bridged_follow_up_after_a_client_tool_search_reports_auto_for_an_allowed_tools_choice_it_dropped():
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(db=_StoredTurns((_stored_mcp_turn(previous_response_id),))),
+    ):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            tools=[
+                {"type": "tool_search", "execution": "client"},
+                {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+            ],
+            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+            drop_params=True,
+            previous_response_id=previous_response_id,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert "tool_choice" not in provider.request_body
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.tool_choice == "auto"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("client_field", ["caller_input", "names_non_string_fields"])
 async def test_bridged_follow_up_after_a_client_tool_search_with_a_client_field_named_like_a_bridge_keyword_reaches_the_provider(
     client_field: str,
@@ -359,3 +393,120 @@ async def test_bridged_follow_up_after_a_client_tool_search_with_a_client_field_
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert isinstance(response, ResponsesAPIResponse)
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_with_a_lone_user_item_without_content_ends_on_a_user_turn():
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    stored_turns: Final = _StoredTurns((_stored_mcp_turn(previous_response_id),))
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+        await litellm.aresponses(
+            model="azure_ai/claude-opus-5-5",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[{"role": "user", "content": None}],
+            previous_response_id=previous_response_id,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [message["role"] for message in provider.request_body["messages"]] == ["user", "assistant", "user"]
+
+
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "Eight."}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 12, "outputTokens": 1, "totalTokens": 13},
+}
+
+
+def _stored_converse_turn(request_id: str, input_items: object, reply: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "converse-session",
+        "model": "us.anthropic.claude-opus-5-5",
+        "custom_llm_provider": "bedrock",
+        "proxy_server_request": {"input": input_items, "model": "bedrock/us.anthropic.claude-opus-5-5"},
+        "response": {
+            "id": request_id,
+            "object": "response",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": reply, "annotations": []}],
+                }
+            ],
+        },
+    }
+
+
+async def _sent_converse_messages(
+    stored: tuple[Mapping[str, object], ...],
+    input_items: object,
+    previous_response_id: str,
+    continue_settings: Mapping[str, object],
+) -> object:
+    provider: Final = _RecordingAnthropicHandler(_CONVERSE_REPLY)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns(stored))):
+        await litellm.aresponses(
+            model="bedrock/us.anthropic.claude-opus-5-5",
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            aws_region_name="us-east-1",
+            input=input_items,
+            previous_response_id=previous_response_id,
+            client=client,
+            **continue_settings,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    return provider.request_body["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("modify_params", "continue_settings"),
+    [(False, {}), (True, {}), (False, {"user_continue_message": {"role": "user", "content": "Go on."}})],
+    ids=["no_continue_setting", "modify_params", "user_continue_message"],
+)
+@pytest.mark.parametrize(
+    "blank_input", [[{"role": "user", "content": None}], "   "], ids=["null_user_item", "whitespace_string"]
+)
+async def test_converse_turn_after_a_blank_user_turn_resends_the_messages_that_follow_up_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    modify_params: bool,
+    continue_settings: Mapping[str, object],
+    blank_input: object,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    first_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="bedrock", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    follow_up_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="bedrock", model_id="deployment-a", response_id="chatcmpl-turn-two"
+    )
+    first_turn: Final = _stored_converse_turn(first_id, "What is 2+2?", "Four.")
+
+    follow_up_messages: Final = await _sent_converse_messages((first_turn,), blank_input, first_id, continue_settings)
+    next_turn_messages: Final = await _sent_converse_messages(
+        (first_turn, _stored_converse_turn(follow_up_id, blank_input, "Eight.")),
+        [{"role": "user", "content": "Double it."}],
+        follow_up_id,
+        continue_settings,
+    )
+
+    assert isinstance(follow_up_messages, list) and isinstance(next_turn_messages, list)
+    assert [message["role"] for message in next_turn_messages] == ["user", "assistant", "user", "assistant", "user"]
+    assert next_turn_messages[: len(follow_up_messages)] == follow_up_messages

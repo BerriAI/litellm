@@ -3,14 +3,17 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 if TYPE_CHECKING:
@@ -21,6 +24,23 @@ AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
 LICENSE_ALL_FEATURES: Final = "*"
 AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
 _LICENSE_VERDICT: Final = TypeAdapter(object)
+
+
+class _LicenseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _license_fields(license_data: object) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(license_data)
+    if fields is None:
+        raise TypeError(f"'{type(license_data).__name__}' object is not subscriptable")
+    return fields
+
+
+def _expiration_text(expiration_date: object) -> str:
+    if isinstance(expiration_date, str):
+        return expiration_date
+    raise TypeError(f"strptime() argument 1 must be str, not {type(expiration_date).__name__}")
 
 
 class LicenseCheck:
@@ -201,15 +221,15 @@ class LicenseCheck:
             )
 
             # Decode and parse the data
-            license_data: Final = json.loads(message.decode())
+            license_data: Final = _license_fields(_LICENSE_VERDICT.validate_python(json.loads(message.decode())))
 
             # Check expiration date
-            expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d")
+            expiration_date: Final = datetime.strptime(_expiration_text(license_data["expiration_date"]), "%Y-%m-%d")
             if expiration_date < datetime.now():
                 self.airgapped_license_data = None
                 return False, "License has expired"
 
-            self.airgapped_license_data = EnterpriseLicenseData(**license_data)
+            self.airgapped_license_data = EnterpriseLicenseData(**_LicenseFields(**license_data))
 
             return True
 
