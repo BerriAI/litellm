@@ -417,6 +417,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     drop_non_string_tool_result_texts,
     malformed_tool_result_count_error,
 )
+from litellm.llms.anthropic.messages.responses_adapters.handler import RESPONSES_SYSTEM_PLACEMENT_PARAMS
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
@@ -15297,15 +15298,18 @@ async def _with_resolved_credentials(deployment: Mapping[str, object] | None) ->
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
-def _deployment_with_request_drop_params(
+def _deployment_with_request_count_params(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    drop_params: object,
+    params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    if drop_params is None:
+    counted_params: Final = {
+        key: params[key] for key in ("drop_params", *RESPONSES_SYSTEM_PLACEMENT_PARAMS) if key in params
+    }
+    if not counted_params:
         return deployment
     resolved_deployment: Final = deployment or {}
     litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
-    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+    return {**resolved_deployment, "litellm_params": {**litellm_params, **counted_params}}
 
 
 def _counted_request_messages(
@@ -16096,7 +16100,7 @@ async def _count_request_tokens(
             model_to_use = _model
 
     sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
-    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
+    count_deployment: Final = _deployment_with_request_count_params(deployment, sent_params)
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(

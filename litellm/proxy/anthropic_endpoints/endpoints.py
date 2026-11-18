@@ -22,6 +22,7 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicM
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
+from litellm.llms.anthropic.messages.responses_adapters.handler import RESPONSES_SYSTEM_PLACEMENT_PARAMS
 from litellm.proxy._types import *
 from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -288,7 +289,7 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_LITELLM_PARAMS: Final = ("drop_params", *RESPONSES_SYSTEM_PLACEMENT_PARAMS)
 
 
 class _CountTokensBodyOptions(TypedDict):

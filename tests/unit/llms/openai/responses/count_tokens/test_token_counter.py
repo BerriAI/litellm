@@ -219,12 +219,8 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
 
     assert sent == {
         "model": "gpt-4o",
+        "instructions": "Be brief.",
         "input": [
-            {
-                "type": "message",
-                "role": "developer",
-                "content": [{"type": "input_text", "text": "Be brief."}],
-            },
             {
                 "type": "message",
                 "role": "user",
