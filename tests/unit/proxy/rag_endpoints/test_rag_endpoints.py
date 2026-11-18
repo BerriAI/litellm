@@ -910,6 +910,34 @@ def test_rag_ingest_registers_the_upload_under_the_model_a_restricted_key_reache
     assert aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
 
 
+def test_rag_ingest_keeps_the_environment_key_when_the_team_allows_no_model_the_key_reaches_its_deployment_by(
+    client_team_a,
+):
+    caller: Final = UserAPIKeyAuth(
+        user_id="test_team_user", team_id=_TEAM_ID, team_models=["claude-opus-4-6"], models=["openai/gpt-4o*"]
+    )
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_wildcard_router()),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: caller}),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook.registrations == ()
+    assert "api_key" not in aingest.await_args.kwargs["ingest_options"]["vector_store"]
+
+
 @pytest.mark.parametrize(
     ("router_factory", "hook"),
     [
@@ -1339,6 +1367,33 @@ def test_rag_query_managed_store_with_an_empty_key_uses_team_provider_credential
     assert response.status_code == 200, response.json()
     assert search.call_count == 1
     assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_keeps_the_environment_openai_key_when_the_team_does_not_allow_the_team_deployment(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
+    for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(unset, raising=False)
+    search: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+    caller: Final = UserAPIKeyAuth(
+        user_id="test_team_user", team_id=_TEAM_ID, team_models=["claude-opus-4-6"], models=["openai/team-provider"]
+    )
+
+    with patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: caller}):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+        )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_ENVIRONMENT_OPENAI_KEY}"
 
 
 @pytest.mark.usefixtures("httpx_transport")

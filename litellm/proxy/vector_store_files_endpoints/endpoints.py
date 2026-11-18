@@ -30,7 +30,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     carries_explicit_credentials,
     explicit_request_credentials,
     get_credentials_for_model,
-    get_team_provider_deployment,
     handle_model_based_routing,
     managed_file_copy_on_deployment,
     managed_file_ids_for_provider_file_ids,
@@ -176,12 +175,7 @@ async def _caller_team_copy_of_managed_file(
 ) -> _ManagedFileCopy | None:
     if provider is None:
         return None
-    team_deployment: Final = await team_deployment_the_caller_may_use(
-        get_team_provider_deployment(llm_router, user_api_key_dict, provider.value),
-        provider.value,
-        llm_router,
-        user_api_key_dict,
-    )
+    team_deployment: Final = await team_deployment_the_caller_may_use(llm_router, user_api_key_dict, provider.value)
     provider_file_id: Final = await managed_file_copy_on_deployment(
         file_id, team_deployment, managed_files_obj, user_api_key_dict.parent_otel_span
     )
