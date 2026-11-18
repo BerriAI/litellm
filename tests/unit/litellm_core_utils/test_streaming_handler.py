@@ -7,6 +7,7 @@ import queue
 import sys
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
@@ -4767,12 +4768,43 @@ class _DelegatingChunk:
         return self._fields.get
 
 
-def test_custom_provider_stream_reads_dict_like_chunk_objects(monkeypatch: pytest.MonkeyPatch):
+class _ValueErrorForMissingKeyChunk(_DelegatingChunk):
+    def __getitem__(self, key: str) -> object:
+        if key not in self._fields:
+            raise ValueError(f"no field {key}")
+        return self._fields[key]
+
+
+class _EmptyStringForMissingKeyChunk(_DelegatingChunk):
+    def __init__(self, fields: dict[str, object]) -> None:
+        super().__init__(defaultdict(str, fields))
+
+
+class _NoneAsDefaultDict(dict[str, object]):
+    def get(self, key: str, default: object = None, /) -> object:
+        value: Final = super().get(key)
+        return default if value is None else value
+
+
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
+        pytest.param(_ValueErrorForMissingKeyChunk, id="object-raising-value-error-for-missing-key"),
+        pytest.param(_EmptyStringForMissingKeyChunk, id="object-returning-empty-string-for-missing-key"),
+    ],
+)
+def test_custom_provider_stream_reads_dict_like_chunk_objects(
+    monkeypatch: pytest.MonkeyPatch,
+    as_chunk: Callable[[dict[str, object]], object],
+):
     monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    chunks: Final = (
+        {"text": "hello", "is_finished": False, "finish_reason": "", "usage": None},
+        {"text": "", "is_finished": True, "finish_reason": "length", "usage": None},
+    )
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=iter(
-            [_DictLikeChunk(text="hello"), _DictLikeChunk(is_finished=True, finish_reason="length")]
-        ),
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
         model="custom-model",
         logging_obj=MagicMock(),
         custom_llm_provider="my-custom-llm",
@@ -4789,6 +4821,7 @@ def test_custom_provider_stream_reads_dict_like_chunk_objects(monkeypatch: pytes
     [
         pytest.param(dict, id="dict"),
         pytest.param(MappingProxyType, id="mapping"),
+        pytest.param(_NoneAsDefaultDict, id="dict-whose-get-skips-none"),
         pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
         pytest.param(_NoneAsDefaultChunk.model_validate, id="object-whose-get-skips-none"),
         pytest.param(_DelegatingChunk, id="object-with-get-from-getattr"),

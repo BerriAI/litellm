@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence, Sized
+from collections.abc import AsyncIterator, Callable, Container, Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast, runtime_checkable
@@ -3312,7 +3312,7 @@ def _chunk_object_shape_error(chunk: object) -> str | None:
 
 def _generic_chunk_fields(chunk: object) -> Mapping[str, object]:
     fields: Final = as_str_mapping(chunk)
-    if fields is not None:
+    if fields is not None and type(chunk) is dict:
         return fields
     if not isinstance(chunk, _SubscriptableChunk):
         return MappingProxyType({})
@@ -3323,9 +3323,13 @@ def _generic_chunk_fields(chunk: object) -> Mapping[str, object]:
 
 def _subscripted_field(chunk: _SubscriptableChunk, key: str) -> object:
     try:
-        return chunk[key]
+        return chunk[key] if key in _GCHUNK_REQUIRED_FIELDS or _chunk_has_key(chunk, key) else _ABSENT_FIELD
     except (LookupError, AttributeError, TypeError):
         return _ABSENT_FIELD
+
+
+def _chunk_has_key(chunk: object, key: str) -> bool:
+    return isinstance(chunk, (Container, Iterable)) and key in chunk
 
 
 def convert_generic_chunk_to_model_response_stream(
