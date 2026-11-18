@@ -89,6 +89,10 @@ class A2AConfig(BaseConfig):
 
         return api_base, api_key, headers
 
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        return False
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         """Return list of supported OpenAI parameters"""
         return [
