@@ -5385,3 +5385,61 @@ async def test_rest_tool_call_targets_the_server_as_the_granted_caller_sees_it(
     assert [(server.server_id, server.auth_profile_id, server.needs_user_oauth_token) for server in allowed] == [
         ("analytics", "ana-bots", False)
     ]
+
+
+@pytest.mark.asyncio
+async def test_rest_tool_call_sends_the_profile_granted_on_the_key_permission_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx2
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy.mcp_server.outbound_credentials.client_credentials import ClientCredentialsTokenSource
+    from litellm.proxy.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
+    from litellm.proxy.utils import hash_token
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profiled_analytics_server,
+    )
+
+    upstream: Final = AnalyticsUpstream()
+    server: Final = profiled_analytics_server(allow_all_keys=True)
+    manager: Final = MCPServerManager(
+        cred_provider=UpstreamCredentialProvider(
+            client_credentials_source=ClientCredentialsTokenSource(BotTokenEndpoint())
+        ),
+        upstream_transport=httpx2.MockTransport(upstream.respond),
+    )
+    manager.registry[server.server_id] = server
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    granted_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-nightly-bot"),
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-bot", mcp_servers=["analytics"], mcp_auth_profiles=["ana-bots"]
+        ),
+    )
+    request: Final = _build_request(path="/mcp-rest/tools/call", headers={"x-litellm-api-key": "sk-nightly-bot"})
+    allowed, canonical_server_id = await rest_endpoints._resolve_allowed_mcp_servers_with_ip_filter(
+        request, granted_key, "analytics"
+    )
+
+    async with manager.catalog.operation():
+        await rest_endpoints._execute_rest_mcp_tool(
+            request=request,
+            tool_name="get_issue",
+            tool_arguments={},
+            allowed_mcp_servers=allowed,
+            canonical_server_id=canonical_server_id,
+            target_server=allowed[0],
+            user_api_key_dict=granted_key,
+            data={"metadata": {"user_api_key_auth": granted_key}},
+            logging_obj=None,
+            guardrail_auth=granted_key,
+        )
+
+    assert upstream.calls("tools/call") == ("Bearer bot-app-token-1",), upstream.requests

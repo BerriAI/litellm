@@ -27,6 +27,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, objec
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
+from litellm.types.object_permission import without_empty_auth_profile_grants
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -74,7 +75,7 @@ async def attach_object_permission_to_dict(
                 object_permission = object_permission.model_dump()
             except Exception:
                 object_permission = object_permission.dict()  # pyright: ignore[reportDeprecated]  # pydantic v1 fallback
-            data_dict["object_permission"] = object_permission
+            data_dict["object_permission"] = without_empty_auth_profile_grants(object_permission)
     return data_dict
 
 

@@ -27,10 +27,6 @@ class AuthProfileOwnerSource(Protocol):
     async def __call__(self, profile_ids: AbstractSet[str]) -> Mapping[str, str | None] | None: ...
 
 
-async def no_auth_profile_grants(user_api_key_auth: "UserAPIKeyAuth | None") -> tuple[tuple[str, ...], ...]:
-    return ()
-
-
 @dataclass(frozen=True, slots=True)
 class AmbiguousProfile:
     server: str

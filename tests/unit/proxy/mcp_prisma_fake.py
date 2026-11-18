@@ -9,6 +9,8 @@ from typing import Final
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 class FakeRow(BaseModel, extra="allow", frozen=True):
     pass
@@ -319,3 +321,50 @@ class _LaggingReplica:
         transaction: Final = self._writer.tx()
         transaction.litellm_mcpauthprofiletable = self._writer.litellm_mcpauthprofiletable
         return transaction
+
+
+class _NoToolsetTable:
+    async def find_many(self, where: Mapping[str, object]) -> Sequence[FakeRow]:
+        return []
+
+
+class _GrantDb:
+    def __init__(self) -> None:
+        self.litellm_mcptoolsettable = _NoToolsetTable()
+
+
+class FakeGrantPrisma:
+    """Teams and permission rows served through the Rust repository fakes the auth reads use."""
+
+    def __init__(
+        self,
+        stores: RustAuthStores,
+        teams: Mapping[str, str],
+        permissions: Mapping[str, Sequence[str]],
+        servers: Mapping[str, Sequence[str]] | None = None,
+    ) -> None:
+        self._stores = stores
+        for team_id, permission_id in teams.items():
+            stores.team.rows[team_id] = {"team_id": team_id, "object_permission_id": permission_id}
+        for permission_id, grants in permissions.items():
+            stores.object_permission.seed(
+                permission_id,
+                LiteLLM_ObjectPermissionTable(
+                    object_permission_id=permission_id,
+                    mcp_auth_profiles=tuple(grants),
+                    mcp_servers=list((servers or {}).get(permission_id, ())),
+                ),
+            )
+        self.db = _GrantDb()
+        self.writer_db = self.db
+
+    def fail_permission_reads(self) -> None:
+        for permission_id in tuple(self._stores.object_permission.reader):
+            self._stores.object_permission.seed(permission_id, ConnectionError("permission table unreachable"))
+
+    def forget_reads(self) -> None:
+        self._stores.team.lookups.clear()
+        self._stores.object_permission.lookups.clear()
+
+    def reads(self) -> tuple[int, int]:
+        return len(self._stores.team.lookups), len(self._stores.object_permission.lookups)

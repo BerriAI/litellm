@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictInt, field
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
+from litellm.types.object_permission import without_empty_auth_profile_grants
 from litellm.types.proxy.agent_identity import (
     AgentExecutionMode,
     AgentIdentityBinding,
@@ -182,6 +183,7 @@ class AgentObjectPermission(TypedDict, total=False):
     mcp_tool_permissions: dict[str, list[str]] | None
     models: list[str] | None
     agents: list[str] | None
+    mcp_auth_profiles: ReadOnly[Sequence[str] | None]
 
 
 class AgentKillSwitchBearerAuth(LiteLLMBaseModel):
@@ -323,6 +325,12 @@ class AgentResponse(LiteLLMBaseModel):
     agent_card_params: dict[str, Any]
     object_permission: dict[str, object] | None = None
     spend: float | None = None
+
+    @field_validator("object_permission")
+    @classmethod
+    def _omit_empty_auth_profile_grants(cls, value: Mapping[str, object] | None) -> Mapping[str, object] | None:
+        return None if value is None else without_empty_auth_profile_grants(value)
+
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     session_tpm_limit: int | None = None

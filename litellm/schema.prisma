@@ -514,6 +514,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_tool_search_enabled Boolean?
   skills                String[]       @default([]) // Claude Code plugin names granted to this key/team beyond the public (enabled) set
   apps                  String[]       @default([])
+  mcp_auth_profiles     String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]

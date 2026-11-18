@@ -5,9 +5,15 @@ Canonical definition for ``litellm_objectpermissiontable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Final
+
+from pydantic import SerializerFunctionWrapHandler, TypeAdapter, model_serializer
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.object_permission import without_empty_auth_profile_grants
+
+_DUMPED: Final = TypeAdapter(Mapping[str, object])
 
 
 class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
@@ -27,3 +33,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     mcp_tool_search_enabled: bool | None = None
     skills: list[str] | None = None
     apps: Sequence[str] | None = None
+    mcp_auth_profiles: tuple[str, ...] | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_auth_profile_grants(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202  # a return annotation collapses the OpenAPI response schema
+        return without_empty_auth_profile_grants(_DUMPED.validate_python(handler(self)))
