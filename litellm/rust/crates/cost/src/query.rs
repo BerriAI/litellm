@@ -15,6 +15,8 @@ use crate::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage, Web
 
 pub use crate::ocr::OcrQuery;
 pub use crate::rerank::RerankQuery;
+pub use crate::speech::SpeechQuery;
+pub use crate::transcription::TranscriptionQuery;
 pub use crate::vector_store::VectorStoreSearchQuery;
 
 /// One call to price, tagged by `kind`
@@ -27,8 +29,8 @@ pub use crate::vector_store::VectorStoreSearchQuery;
 pub enum PriceQuery {
     Tokens(Box<TokensQuery>),
     Image(Header),
-    Speech(Header),
-    Transcription(Header),
+    Speech(Box<SpeechQuery>),
+    Transcription(Box<TranscriptionQuery>),
     Ocr(Box<OcrQuery>),
     Rerank(Box<RerankQuery>),
     Search(Header),

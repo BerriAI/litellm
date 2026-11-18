@@ -8,7 +8,7 @@
 use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::query::{
     AdjustmentPolicy, Basis, Candidate, Header, OcrQuery, PriceQuery, PriceSource, Provider,
-    RerankQuery, VectorStoreSearchQuery,
+    RerankQuery, SpeechQuery, TranscriptionQuery, VectorStoreSearchQuery,
 };
 use litellm_cost::receipt::{PriceOutcome, Unpriced};
 use litellm_cost::row::RowRef;
@@ -48,6 +48,21 @@ enum UnitsDocument {
         #[serde(default)]
         catalog_deferred: bool,
     },
+    Speech {
+        #[serde(flatten)]
+        named: Named,
+        #[serde(default)]
+        characters: Option<u64>,
+        #[serde(default)]
+        generations: Option<u64>,
+    },
+    Transcription {
+        #[serde(flatten)]
+        named: Named,
+        seconds: f64,
+        #[serde(default)]
+        tokens: bool,
+    },
 }
 
 /// The model and provider main's calculator priced under
@@ -85,7 +100,9 @@ pub(crate) fn price_units(
     let named = match &document {
         UnitsDocument::Rerank { named, .. }
         | UnitsDocument::VectorStoreSearch { named }
-        | UnitsDocument::Ocr { named, .. } => named,
+        | UnitsDocument::Ocr { named, .. }
+        | UnitsDocument::Speech { named, .. }
+        | UnitsDocument::Transcription { named, .. } => named,
     };
     let provider = named.provider.as_deref().unwrap_or_default();
     let candidate = Candidate {
@@ -153,6 +170,22 @@ pub(crate) fn price_units(
             credits,
             batch,
             catalog_deferred,
+        })),
+        UnitsDocument::Speech {
+            characters,
+            generations,
+            ..
+        } => PriceQuery::Speech(Box::new(SpeechQuery {
+            header,
+            characters,
+            generations,
+        })),
+        UnitsDocument::Transcription {
+            seconds, tokens, ..
+        } => PriceQuery::Transcription(Box::new(TranscriptionQuery {
+            header,
+            seconds,
+            tokens,
         })),
     };
     outcome(py, litellm_cost::price(&rows, &query))

@@ -396,6 +396,15 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
             "annotation_cost_per_page" => (annotation.clone(), Channel::Online),
             "annotation_cost_per_page_batches" => (annotation.clone(), Channel::Batch),
             "ocr_cost_per_credit" => (Meter::Feature(Feature::OcrCredit), Channel::Online),
+            "input_cost_per_character" => (Meter::Input(InputUnit::Character), Channel::Online),
+            "output_cost_per_image" => (Meter::Output(OutputUnit::Image(None)), Channel::Online),
+            "input_cost_per_second" => (Meter::Input(InputUnit::Second), Channel::Online),
+            "output_cost_per_second" => (Meter::Output(OutputUnit::Second(None)), Channel::Online),
+            "input_cost_per_audio_token" => (AUDIO_INPUT, Channel::Online),
+            "output_cost_per_audio_token" => (
+                Meter::Output(OutputUnit::Token(TokenKind::Audio)),
+                Channel::Online,
+            ),
             _ => return None,
         })
     };
@@ -419,6 +428,18 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
         prices: Prices::new(rates, None, Billing::default()),
         ..TestRow::default()
     }
+}
+
+/// The case `name` of a parity fixture
+pub(crate) fn fixture_case(fixture: &str, name: &str) -> serde_json::Value {
+    let fixture: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap_or_else(|| panic!("no fixture case {name}"))
+        .clone()
 }
 
 /// What a per-unit parity case expects: main's `(prompt, completion)`, or that main raised

@@ -1,0 +1,90 @@
+{
+ "source": "Captured once from main's Python (8388e4f60f, LITELLM_LOCAL_MODEL_COST_MAP=True). `row` holds the cost fields the calculator read, `expected` what main returned or the exception it raised",
+ "cases": [
+  {
+   "name": "tts_1",
+   "model": "tts-1",
+   "provider": "openai",
+   "characters": 137,
+   "row": {
+    "input_cost_per_character": 1.5e-05
+   },
+   "lyria": null,
+   "expected": {
+    "prompt": 0.002055,
+    "completion": 0
+   }
+  },
+  {
+   "name": "azure_tts",
+   "model": "speech/azure-tts",
+   "provider": "azure",
+   "characters": 4000,
+   "row": {
+    "input_cost_per_character": 1.5e-05
+   },
+   "lyria": null,
+   "expected": {
+    "prompt": 0.060000000000000005,
+    "completion": 0
+   }
+  },
+  {
+   "name": "elevenlabs",
+   "model": "eleven_multilingual_v2",
+   "provider": "elevenlabs",
+   "characters": 333,
+   "row": {
+    "input_cost_per_character": 8e-05
+   },
+   "lyria": null,
+   "expected": {
+    "prompt": 0.02664,
+    "completion": 0
+   }
+  },
+  {
+   "name": "dashscope_characters",
+   "model": "qwen3-tts-flash",
+   "provider": "dashscope",
+   "characters": 81,
+   "row": {
+    "input_cost_per_character": 1e-05
+   },
+   "lyria": null,
+   "expected": {
+    "prompt": 0.0008100000000000001,
+    "completion": 0
+   }
+  },
+  {
+   "name": "uncounted_characters",
+   "model": "tts-1",
+   "provider": "openai",
+   "characters": null,
+   "row": {
+    "input_cost_per_character": 1.5e-05
+   },
+   "lyria": null,
+   "expected": {
+    "raises": "ValueError"
+   }
+  },
+  {
+   "name": "lyria_generation",
+   "model": "lyria-002",
+   "provider": "vertex_ai",
+   "characters": 10,
+   "row": {
+    "output_cost_per_image": 0.06
+   },
+   "lyria": {
+    "output_cost_per_image": 0.06
+   },
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.06
+   }
+  }
+ ]
+}

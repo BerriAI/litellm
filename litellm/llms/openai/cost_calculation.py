@@ -10,6 +10,11 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+    TranscriptionDocument,
+    price_units,
+    prompt_and_completion,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -63,33 +68,13 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
 
-    ## GET MODEL INFO
-    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
-    prompt_cost = 0.0
-    completion_cost = 0.0
-    ## Speech / Audio cost calculation
-    output_cost_per_second: Final = model_info.get("output_cost_per_second")
-    if output_cost_per_second is not None and output_cost_per_second > 0:
-        verbose_logger.debug(
-            "For model=%s - output_cost_per_second: %s; duration: %s",
-            model,
-            output_cost_per_second,
-            duration,
+    provider: Final = custom_llm_provider or "openai"
+    return prompt_and_completion(
+        price_units(
+            TranscriptionDocument(kind="transcription", model=model, provider=provider, seconds=duration, tokens=False),
+            catalog=get_model_info(model=model, custom_llm_provider=provider),
         )
-        ## COST PER SECOND ##
-        completion_cost = output_cost_per_second * duration
-    elif "input_cost_per_second" in model_info and model_info["input_cost_per_second"] is not None:
-        verbose_logger.debug(
-            "For model=%s - input_cost_per_second: %s; duration: %s",
-            model,
-            model_info.get("input_cost_per_second"),
-            duration,
-        )
-        ## COST PER SECOND ##
-        prompt_cost = model_info["input_cost_per_second"] * duration
-        completion_cost = 0.0
-
-    return prompt_cost, completion_cost
+    )
 
 
 def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
