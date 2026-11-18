@@ -48,7 +48,6 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.rust_bridge._native import NativeReceipt
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
     TranscriptionUsageObjectTransformation,
@@ -136,7 +135,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.rust_bridge._native import billable_service_tier
+from litellm.rust_bridge._native import NativeReceipt, billable_service_tier
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import (
     DecisionsResponse,
