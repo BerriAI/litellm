@@ -3882,15 +3882,25 @@ def get_optional_params_transcription(
     for k, v in special_params.items():
         passed_params[k] = v
 
+    gnani_rejected_params: Final = (
+        ("stream", "chunking_strategy", "include", "known_speaker_names", "known_speaker_references")
+        if custom_llm_provider == "gnani"
+        else ()
+    )
     default_params: Final = {
         "language": None,
         "prompt": None,
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
         "timestamp_granularities": None,
+        **{param: None for param in gnani_rejected_params},
     }
 
-    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if k in default_params and v != default_params[k] and not (k == "stream" and v == "")
+    }
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -3934,7 +3944,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=drop_params is True or litellm.drop_params is True,
         )
 
     optional_params = add_provider_specific_params_to_optional_params(
@@ -7359,6 +7369,8 @@ def validate_environment(
             else:
                 missing_keys.append("GOOGLE_API_KEY")
                 missing_keys.append("GEMINI_API_KEY")
+        elif custom_llm_provider == "gnani" and not os.environ.get("GNANI_API_KEY"):
+            missing_keys.append("GNANI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -9603,6 +9615,10 @@ class ProviderConfigManager:
             return AzureSpeechAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
+
+            return GnaniAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,
