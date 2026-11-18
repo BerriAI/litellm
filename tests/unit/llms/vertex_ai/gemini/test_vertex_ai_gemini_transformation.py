@@ -3039,3 +3039,56 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     assert signatures == [get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
     assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == get_dummy_thought_signature()
+
+
+def test_image_only_assistant_history_keeps_thought_signature_on_the_image_part() -> None:
+    png: Final = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+        "/x8AAwMCAO+jhGQAAAAASUVORK5CYII="
+    )
+    messages: Final = [
+        {"role": "user", "content": "Draw a red square."},
+        {
+            "role": "assistant",
+            "content": None,
+            "images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + png}}],
+            "provider_specific_fields": {"thought_signatures": ["synthetic-image-signature"]},
+        },
+        {"role": "user", "content": "Make the square blue."},
+    ]
+
+    parts: Final = _parts_of(
+        gemini_convert_messages_with_history(
+            messages=messages, model="gemini-3.1-flash-image-preview", custom_llm_provider="vertex_ai"
+        )
+    )
+
+    image_parts: Final = [part for part in parts if "inline_data" in part]
+    assert len(image_parts) == 1, f"expected one replayed image part, got {parts}"
+    assert image_parts[0].get("thoughtSignature") == "synthetic-image-signature"
+
+
+def test_text_and_image_assistant_history_attaches_the_signature_to_one_part_only() -> None:
+    png: Final = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+        "/x8AAwMCAO+jhGQAAAAASUVORK5CYII="
+    )
+    messages: Final = [
+        {"role": "user", "content": "Draw a red square."},
+        {
+            "role": "assistant",
+            "content": "Here is the square.",
+            "images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + png}}],
+            "provider_specific_fields": {"thought_signatures": ["synthetic-image-signature"]},
+        },
+        {"role": "user", "content": "Make the square blue."},
+    ]
+
+    parts: Final = _parts_of(
+        gemini_convert_messages_with_history(
+            messages=messages, model="gemini-3.1-flash-image-preview", custom_llm_provider="vertex_ai"
+        )
+    )
+
+    signatures: Final = [part["thoughtSignature"] for part in parts if "thoughtSignature" in part]
+    assert signatures == ["synthetic-image-signature"], f"signature must be replayed exactly once, got {parts}"
