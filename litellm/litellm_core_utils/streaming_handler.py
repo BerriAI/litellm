@@ -2046,6 +2046,10 @@ class CustomStreamWrapper:
             chunk_usage: Final = getattr(chunk, "usage", None)
             if isinstance(chunk_usage, Usage):
                 model_response.usage = chunk_usage
+                if self.custom_llm_provider == LlmProviders.BEDROCK.value:
+                    served_tier: Final = stored_attribute(chunk, "service_tier")
+                    if isinstance(served_tier, str) and served_tier:
+                        set_extra_attribute(model_response, "service_tier", served_tier)
             elif isinstance(chunk_usage, BaseModel):
                 model_response.usage = Usage(**_keyword_fields(chunk_usage.model_dump()))
 
