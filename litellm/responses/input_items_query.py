@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
@@ -31,7 +32,7 @@ def _parsed_cursor(
     param: Literal["after", "before"], value: object, default: str | None, drop_malformed: bool
 ) -> str | None | InvalidInputItemsQuery:
     match value:
-        case None:
+        case None | "":
             return default
         case str():
             return value
@@ -85,10 +86,15 @@ def _include_values(value: object) -> tuple[object, ...]:
             return (value,)
 
 
+def _comma_separated(value: object) -> tuple[object, ...]:
+    return tuple(value.split(",")) if isinstance(value, str) else (value,)
+
+
 def _parsed_include(
     include: object, bracketed_include: object, default: tuple[str, ...], drop_malformed: bool
 ) -> tuple[str, ...] | InvalidInputItemsQuery:
-    values: Final = (*_include_values(include), *_include_values(bracketed_include))
+    split_include: Final = tuple(chain.from_iterable(map(_comma_separated, _include_values(include))))
+    values: Final = tuple(value for value in (*split_include, *_include_values(bracketed_include)) if value != "")
     if not values:
         return default
     names: Final = tuple(value for value in values if isinstance(value, str))

@@ -50,7 +50,6 @@ def test_sdk_extra_query_under_drop_params_falls_back_to_the_callers_own_argumen
     assert forwarded == ((("limit", "3"), ("order", "asc")), 1)
 
 
-
 @pytest.mark.parametrize("extra_query", ("limit=2", [("limit", 2)]))
 def test_sdk_a_non_object_extra_query_under_drop_params_asks_for_the_default_page(extra_query: object) -> None:
     assert _list_items(extra_query, True) == ((("limit", "20"), ("order", "desc")), 1)

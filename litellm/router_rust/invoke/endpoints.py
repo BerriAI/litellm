@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import without
 from litellm.litellm_core_utils.routing_common_utils import without_router_only_kwargs
+from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.shaping import (
@@ -1008,7 +1009,7 @@ def _deployment_call_params(
     params: Final = without_retrieve_stream_defaults(data, kwargs)
     if endpoint != "alist_input_items":
         return params
-    return without(params, "order")
+    return without(params, *INPUT_ITEMS_QUERY_KEYS)
 
 
 def _generic_attempt(

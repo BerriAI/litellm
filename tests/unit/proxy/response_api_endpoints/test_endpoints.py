@@ -1786,7 +1786,7 @@ async def _list_items_through_proxy(
     monkeypatch: pytest.MonkeyPatch,
     query: tuple[tuple[str, str], ...],
     drop_params: bool = False,
-    routing_order: int | None = None,
+    deployment_params: Mapping[str, object] = EMPTY_MAPPING,
     body: Mapping[str, object] | None = None,
 ) -> tuple[httpx.Response, tuple[httpx.Request, ...]]:
     import litellm.proxy.proxy_server as ps
@@ -1801,7 +1801,7 @@ async def _list_items_through_proxy(
                     "api_base": _RESUMED_UPSTREAM,
                     "api_key": "fixture-key",
                     "drop_params": drop_params,
-                    "order": routing_order,
+                    **deployment_params,
                 },
                 "model_info": {"id": "deployment-read"},
             }
@@ -1848,6 +1848,27 @@ async def _list_items_through_proxy(
             (("include", "message.input_image.image_url"),),
             [("include[]", "message.input_image.image_url"), ("limit", "20"), ("order", "desc")],
         ),
+        (
+            (("include", "message.input_image.image_url,file_search_call.results"),),
+            [
+                ("include[]", "file_search_call.results"),
+                ("include[]", "message.input_image.image_url"),
+                ("limit", "20"),
+                ("order", "desc"),
+            ],
+        ),
+        (
+            (("include[]", "message.input_image.image_url,file_search_call.results"),),
+            [
+                ("include[]", "message.input_image.image_url,file_search_call.results"),
+                ("limit", "20"),
+                ("order", "desc"),
+            ],
+        ),
+        (
+            (("after", ""), ("before", ""), ("include", ""), ("include[]", "")),
+            [("limit", "20"), ("order", "desc")],
+        ),
         ((), [("limit", "20"), ("order", "desc")]),
         ((("limit", "+1"),), [("limit", "1"), ("order", "desc")]),
     ],
@@ -1863,16 +1884,32 @@ async def test_listing_input_items_through_the_proxy_forwards_the_client_list_pa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "query, forwarded_order",
-    [((), "desc"), ((("order", "asc"),), "asc")],
+    "query, forwarded",
+    [
+        ((), [("limit", "20"), ("order", "desc")]),
+        (
+            (("include", "file_search_call.results"), ("order", "asc")),
+            [("include[]", "file_search_call.results"), ("limit", "20"), ("order", "asc")],
+        ),
+    ],
 )
-async def test_a_deployment_routing_order_never_becomes_the_input_items_order(
-    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], forwarded_order: str
+async def test_a_deployments_own_params_named_like_list_params_never_reach_the_input_items_listing(
+    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], forwarded: list[tuple[str, str]]
 ):
-    result, upstream_requests = await _list_items_through_proxy(monkeypatch, query, routing_order=1)
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch,
+        query,
+        deployment_params={
+            "order": 1,
+            "include": ["reasoning.encrypted_content"],
+            "limit": 50,
+            "after": "item_from_deployment",
+            "before": "item_from_deployment",
+        },
+    )
 
     assert result.status_code == 200, result.text
-    assert [request.url.params.get_list("order") for request in upstream_requests] == [[forwarded_order]]
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [forwarded]
 
 
 @pytest.mark.asyncio
@@ -1910,7 +1947,6 @@ async def test_an_input_items_query_param_wins_over_the_same_key_in_a_body_extra
     assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [
         [("limit", "2"), ("order", "asc")]
     ]
-
 
 
 @pytest.mark.asyncio
