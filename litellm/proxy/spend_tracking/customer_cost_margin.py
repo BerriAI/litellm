@@ -105,12 +105,19 @@ def request_customer_attribution(litellm_params: object, identity: Mapping[str, 
     }
 
 
-def failed_request_customer_attribution(litellm_params: object) -> Mapping[str, object]:
-    buckets: Final = _request_fields(litellm_params)
-    return request_customer_attribution(
-        buckets,
-        {**_request_fields(buckets.get("metadata")), **_request_fields(buckets.get("litellm_metadata"))},
-    )
+def failed_request_customer_attribution(row_kwargs: object) -> Mapping[str, object]:
+    """A failed request keeps the proxy's ``litellm_metadata`` beside ``litellm_params`` on routes whose
+    ``metadata`` belongs to the caller, so both places are read."""
+    row: Final = _request_fields(row_kwargs)
+    litellm_params: Final = _request_fields(row.get("litellm_params"))
+    buckets: Final = {
+        "metadata": _request_fields(litellm_params.get("metadata")),
+        "litellm_metadata": {
+            **_request_fields(row.get("litellm_metadata")),
+            **_request_fields(litellm_params.get("litellm_metadata")),
+        },
+    }
+    return request_customer_attribution(buckets, {**buckets["metadata"], **buckets["litellm_metadata"]})
 
 
 def key_customer_cost_margin(valid_token: object, hierarchy: CustomerHierarchyAuth | None) -> float | None:

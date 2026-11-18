@@ -4597,6 +4597,44 @@ def test_a_billed_failure_with_no_snapshot_records_the_surcharge_on_its_spend_ro
     assert customer_margin_share_of_spend(json.loads(spend_row["metadata"]), spend_row["spend"]) == pytest.approx(0.04)
 
 
+def test_a_billed_failure_is_surcharged_from_the_binding_the_proxy_stamped_beside_litellm_params() -> None:
+    from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = {
+        "litellm_metadata": {
+            CUSTOMER_USAGE_METADATA_KEY: CustomerUsageAttribution(customer_org_id="org-1").model_dump_json()
+        },
+        "litellm_params": {"metadata": {"trace": "t-1"}},
+        "standard_logging_object": {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}},
+    }
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.02)
+    recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
+    assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.02)
+
+
+def test_a_billed_failure_is_charged_the_app_surcharge_the_proxy_stamped_beside_litellm_params() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = {
+        "litellm_metadata": {
+            "user_api_key_customer_org_id": "org-1",
+            "user_api_key_customer_hierarchy": {
+                "customer_org_id": "org-1",
+                "app_id": "app-1",
+                "app_customer_margin": 0.05,
+            },
+        },
+        "litellm_params": {"metadata": {"trace": "t-1"}},
+        "standard_logging_object": {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}},
+    }
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, _ = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.05)
+
+
 @pytest.mark.parametrize("stamped_bucket", ["litellm_metadata", "metadata"])
 def test_a_billed_failure_is_charged_the_app_surcharge_from_either_metadata_bucket(stamped_bucket: str) -> None:
     from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
