@@ -272,17 +272,25 @@ def test_openai_encoding_strict_encoders_check_disallowed_special_before_surroga
     )
 
 
-def test_openai_encoding_raises_like_tiktoken_when_the_tokenizer_regex_fails() -> None:
-    reference: Final = tiktoken.get_encoding("cl100k_base")
-    encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
+@pytest.mark.parametrize(
+    "call",
+    (
+        pytest.param(lambda encoding, text: encoding.encode(text), id="encode"),
+        pytest.param(lambda encoding, text: encoding.encode(text, disallowed_special=()), id="encode-disallowing-none"),
+        pytest.param(lambda encoding, text: encoding.encode(text, allowed_special="all"), id="encode-allowing-all"),
+        pytest.param(lambda encoding, text: encoding.encode_batch([text]), id="encode_batch"),
+        pytest.param(lambda encoding, text: encoding.encode_to_numpy(text), id="encode_to_numpy"),
+    ),
+)
+def test_openai_encoding_raises_like_tiktoken_when_the_tokenizer_regex_fails(
+    call: Callable[[OpenAIEncoding | tiktoken.Encoding, str], object],
+) -> None:
     text: Final = " " * 1_000_000 + "x"
-    numpy_raised: Final = _raised(lambda: reference.encode_to_numpy(text))
+    expected: Final = _raised(lambda: call(tiktoken.get_encoding("cl100k_base"), text))
 
-    assert numpy_raised is not None
-    assert _raised(lambda: encoding.encode_to_numpy(text)) is numpy_raised
-    assert _raised(lambda: encoding.encode(text, allowed_special="all")) is _raised(
-        lambda: reference.encode(text, allowed_special="all")
-    )
+    # tiktoken 0.14.0, pinned in uv.lock, hits its regex backtrack limit on this text (checked 2026-11-17)
+    assert expected is not None
+    assert _raised(lambda: call(OpenAIEncoding.from_tiktoken("cl100k_base"), text)) is expected
 
 
 @pytest.mark.parametrize(

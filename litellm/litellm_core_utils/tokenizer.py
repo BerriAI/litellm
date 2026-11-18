@@ -90,8 +90,6 @@ class OpenAIEncoding:
         disallowed_special: SpecialTokens = "all",
     ) -> list[int]:  # mutable-ok: [LIT001] SDK return type
         allowed: Final = self._allowed(text, allowed_special, disallowed_special)
-        if not allowed:
-            return self.encode_ordinary(text)
         return self._native.encode_special(text, tuple(allowed))
 
     def encode_to_numpy(
