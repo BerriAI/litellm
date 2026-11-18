@@ -5525,9 +5525,42 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> No
         {"custom_llm_provider": "openai"},
         {"instructions": "Caller instructions", **continuation},
     )
-    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
-    if not continuation:
-        assert request["input"][0] == _system_input_item("Be brief.")
+    assert request["instructions"] == "Be brief.\nCaller instructions"
+    assert request["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("params", "optional", "system_in_input"),
+    [
+        ({}, {}, False),
+        ({}, {"store": True}, False),
+        ({}, {"store": False}, True),
+        ({}, {"extra_body": {"store": False}}, True),
+        ({}, {"store": False, "extra_body": {"store": True}}, False),
+        ({}, {"store": True, "extra_body": {"store": False}}, True),
+        ({"extra_body": {"store": False}}, {"store": True}, True),
+        ({"extra_body": {"store": True}}, {"store": False}, False),
+        ({"store": False}, {}, False),
+    ],
+)
+def test_system_placement_uses_effective_upstream_store(
+    params: dict[str, object], optional: dict[str, object], system_in_input: bool
+) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai", **params},
+        copy.deepcopy(optional),
+    )
+    upstream_store: Final = request.get("extra_body", {}).get("store", request.get("store"))
+    assert (upstream_store is False) == system_in_input
+    assert request.get("instructions") == (None if system_in_input else "Be brief.")
+    assert request["input"] == [
+        *([_system_input_item("Be brief.")] if system_in_input else []),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
@@ -5597,6 +5630,7 @@ def test_system_input_is_limited_to_openai_family_bridges(provider: str | None, 
         "gpt-6.2-sol",
         [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
         {"custom_llm_provider": provider},
+        {"store": False},
     )
     assert request.get("instructions") == (None if system_in_input else "Be brief.")
     assert request["input"] == [

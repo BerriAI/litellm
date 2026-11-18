@@ -57,6 +57,41 @@ def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, s
     ]
 
 
+@pytest.mark.parametrize(
+    ("forwarded", "system_in_input"),
+    [
+        ({}, False),
+        ({"store": True}, False),
+        ({"store": False}, True),
+        ({"extra_body": {"store": False}}, True),
+        ({"store": False, "extra_body": {"store": True}}, False),
+        ({"store": True, "extra_body": {"store": False}}, True),
+    ],
+)
+@pytest.mark.parametrize("system", ["Be brief.", [{"type": "text", "text": "Be brief."}]])
+def test_system_placement_uses_effective_upstream_store(
+    forwarded: dict[str, object], system_in_input: bool, system: object
+) -> None:
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=64,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system=system,
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    upstream_store: Final = kwargs.get("extra_body", {}).get("store", kwargs.get("store"))
+    assert (upstream_store is False) == system_in_input
+    assert kwargs.get("instructions") == (None if system_in_input else "Be brief.")
+    assert kwargs["input"] == [
+        *(
+            [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}]
+            if system_in_input
+            else []
+        ),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+    ]
+
+
 @pytest.mark.parametrize("nested", [False, True])
 def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> None:
     truncation: Final = {"truncation": "auto"}
@@ -92,13 +127,8 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         extra_kwargs={"custom_llm_provider": "openai", **forwarded, **request_params},
     )
     instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
-    assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
+    assert instructions == "Be brief.\nCaller instructions"
     assert kwargs["input"] == [
-        *(
-            []
-            if request_params
-            else [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}]
-        ),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
     ]
 

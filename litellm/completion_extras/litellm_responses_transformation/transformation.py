@@ -1128,7 +1128,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         client: object | None = None,
     ) -> dict:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
-        preserve_system_instructions: Final = any(
+        optional_params = self._extract_extra_body_params(optional_params)
+        upstream_store: Final = (as_str_mapping(litellm_params.get("extra_body")) or {}).get(
+            "store", optional_params.get("store")
+        )
+        preserve_system_instructions: Final = upstream_store is not False or any(
             params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
             for params in (
                 request_params,
@@ -1137,7 +1141,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 as_str_mapping(litellm_params.get("extra_body")) or {},
             )
         )
-        optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = _served_provider(litellm_params)
         base_model: Final = litellm_params.get("base_model")
         supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model, provider) or (
