@@ -86,7 +86,9 @@ def test_bineric_api_base_env_overrides_default(monkeypatch: pytest.MonkeyPatch)
 
 def test_bare_openai_model_on_bineric_api_base_keeps_openai_params():
     with respx.mock() as upstream:
-        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json={**_CHAT_COMPLETION, "model": "gpt-5-mini"})
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(
+            200, json={**_CHAT_COMPLETION, "model": "gpt-5-mini"}
+        )
         litellm.completion(
             model="gpt-5-mini",
             api_base=_DEFAULT_API_BASE,
