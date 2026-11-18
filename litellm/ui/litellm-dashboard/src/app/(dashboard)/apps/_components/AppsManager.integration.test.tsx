@@ -240,6 +240,21 @@ describe("Gateway app definition", () => {
     expect(screen.queryByRole("table", { name: "Applications" })).not.toBeInTheDocument();
   });
 
+  it("should show the definition setting when a linked application has no app definition to load", async () => {
+    render(<AppsManager />, { searchParams: "?app=team-chat" });
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it.each(["?page_size=0", "?page=-3", "?page_size=-5&page=9"])(
+    "should still list applications when the URL carries %s",
+    async (searchParams) => {
+      definition = { resource_type: "team" };
+      render(<AppsManager />, { searchParams });
+      expect(await screen.findByRole("button", { name: "chat" })).toBeInTheDocument();
+    },
+  );
+
   it("should narrow the list with the search box and say when nothing matches", async () => {
     definition = { resource_type: "team" };
     render(<AppsManager />);

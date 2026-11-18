@@ -51,7 +51,8 @@ export default function AppsManager() {
   const resource = resources.data?.find((row) => row.resource_id === selected);
   if (isLoading) return <p role="status">{t("apps.loading")}</p>;
   if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
-  if (selected && resources.isPending) return <p role="status">{t("apps.loading")}</p>;
+  if (selected && [definition, resources].some((query) => query.isLoading))
+    return <p role="status">{t("apps.loading")}</p>;
   if (selected && resource)
     return (
       <main className="mx-auto w-full max-w-[1200px] space-y-6 px-4 py-6 sm:px-6">
@@ -101,12 +102,16 @@ function ApplicationsList({
   const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(0));
-  const [pageSize, setPageSize] = useQueryState("page_size", parseAsInteger.withDefault(APPLICATIONS_PAGE_SIZE));
+  const [requestedPageSize, setPageSize] = useQueryState(
+    "page_size",
+    parseAsInteger.withDefault(APPLICATIONS_PAGE_SIZE),
+  );
+  const pageSize = requestedPageSize > 0 ? requestedPageSize : APPLICATIONS_PAGE_SIZE;
   const rows = useMemo(
     () => applicationRows(resources.data ?? [], apps.data ?? [], search),
     [resources.data, apps.data, search],
   );
-  const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
+  const currentPage = Math.max(0, Math.min(page, Math.ceil(rows.length / pageSize) - 1));
   return (
     <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
