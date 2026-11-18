@@ -91,7 +91,9 @@ jobs:
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py verify-isolation
 
       - name: Verify interpreter version
-        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py interpreter --expect ${{ matrix.python-version }}
+        env:
+          EXPECTED_PYTHON: ${{ matrix.python-version }}
+        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py interpreter --expect "$EXPECTED_PYTHON"
 
       - name: Import and CLI checks
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py cli
