@@ -24,6 +24,7 @@ use crate::{
     Ended, Error, Gateway, JsonObject, RequestId,
     caching::CacheHeaders,
     headers::Routing,
+    model_restamp::{ReportedModel, Stamp},
     request,
     routing::{self, Host, RouteAttempt},
     stream_outcome::{self, Streamed},
@@ -116,11 +117,35 @@ async fn handle<H: Host>(
     )
     .await?;
     let routing = Routing::served(&routed);
+    let reported = ReportedModel::of(&model, &routed);
     let (ran, cache) = routed.output.response;
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
+    let ran = reported.stream(reported.complete(ran), message_start);
     let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
     Ok((Extension(routing), cache.apply(response)).into_response())
+}
+
+/// Where a Messages stream names its model: the `message_start` event, the first one that is
+/// not a `ping`, as `AnthropicStreamModelRestamper` reads it. The event is edited as the JSON
+/// object it was sent as, so its other fields keep their values and their order.
+fn message_start(data: &str, model: &str) -> Stamp {
+    let Ok(mut event) = serde_json::from_str::<Map<String, Value>>(data) else {
+        return Stamp::Never;
+    };
+    match event.get("type").and_then(Value::as_str) {
+        Some("ping") => return Stamp::Later,
+        Some("message_start") => {}
+        _ => return Stamp::Never,
+    }
+    let Some(Value::Object(message)) = event.get_mut("message") else {
+        return Stamp::Never;
+    };
+    if message.get("model").and_then(Value::as_str) == Some(model) {
+        return Stamp::Never;
+    }
+    message.insert("model".to_owned(), Value::from(model));
+    Stamp::Now(Value::Object(event).to_string())
 }
 
 struct MessagesAttempt<'a, H> {
@@ -252,4 +277,46 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
         })
         .collect();
     (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::message_start(
+        r#"{"type":"message_start","index":0,"message":{"id":"msg_1","model":"provider-model","role":"assistant"}}"#,
+        Some(Some(
+            r#"{"type":"message_start","index":0,"message":{"id":"msg_1","model":"public","role":"assistant"}}"#
+        ))
+    )]
+    #[case::message_start_naming_no_model(
+        r#"{"type":"message_start","message":{"id":"msg_1"}}"#,
+        Some(Some(r#"{"type":"message_start","message":{"id":"msg_1","model":"public"}}"#))
+    )]
+    #[case::message_start_already_naming_it(
+        r#"{"type":"message_start","message":{"model":"public"}}"#,
+        Some(None)
+    )]
+    #[case::message_start_without_a_message(r#"{"type":"message_start"}"#, Some(None))]
+    #[case::another_event(
+        r#"{"type":"content_block_delta","delta":{"text":"message_start"}}"#,
+        Some(None)
+    )]
+    #[case::not_json("[DONE]", Some(None))]
+    #[case::a_ping(r#"{"type":"ping"}"#, None)]
+    fn the_message_start_event_names_a_streams_model_and_nothing_else_changes(
+        #[case] event: &str,
+        #[case] expected: Option<Option<&str>>,
+    ) {
+        let read = match message_start(event, "public") {
+            Stamp::Later => None,
+            Stamp::Never => Some(None),
+            Stamp::Now(data) => Some(Some(data)),
+        };
+
+        assert_eq!(read.as_ref().map(|named| named.as_deref()), expected);
+    }
 }

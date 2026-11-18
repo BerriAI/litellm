@@ -10,6 +10,7 @@ mod chat_completions;
 mod error;
 mod headers;
 pub mod messages;
+mod model_restamp;
 mod ocr;
 mod request;
 mod responses;
