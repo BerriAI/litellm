@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import reduce
 from types import SimpleNamespace
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -44,6 +44,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _team_soft_budget_check,
+    _user_soft_budget_check,
     can_team_access_model,
     check_opaque_inference_controls,
     common_checks,
@@ -2958,3 +2959,110 @@ def test_spent_proxy_budget_refuses_chat_routes(monkeypatch: pytest.MonkeyPatch,
     _global_proxy_budget_check(global_proxy_spend=0.4, skip_budget_checks=False, route=route)
     with pytest.raises(litellm.BudgetExceededError):
         _global_proxy_budget_check(global_proxy_spend=1.0, skip_budget_checks=False, route=route)
+
+
+@pytest.mark.parametrize(
+    "spend, soft_budget, expect_alert",
+    [
+        (100, 50, True),
+        (50, 50, True),
+        (25, 50, False),
+        (100, None, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_soft_budget_check(spend: float, soft_budget: float | None, expect_alert: bool) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+
+    alerts: list[tuple[str, CallInfo]] = []
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type: str, user_info: CallInfo) -> None:
+            alerts.append((type, user_info))
+
+    user_object: Final = LiteLLM_UserTable(
+        user_id="soft-budget-user",
+        user_email="soft@example.com",
+        max_budget=200,
+        soft_budget=soft_budget,
+        spend=spend,
+    )
+
+    proxy_logging_obj: Final = cast(ProxyLogging, MockProxyLogging())  # cast-ok: test double for budget_alerts
+    _user_soft_budget_check(user_object=user_object, user_spend=spend, proxy_logging_obj=proxy_logging_obj)
+    await asyncio.sleep(0.1)
+
+    assert (len(alerts) == 1) == expect_alert
+    if expect_alert:
+        alert_type, call_info = alerts[0]
+        assert alert_type == "soft_budget"
+        assert call_info.user_id == "soft-budget-user"
+        assert call_info.user_email == "soft@example.com"
+        assert call_info.soft_budget == soft_budget
+        assert call_info.max_budget is None
+        assert call_info.spend == spend
+        assert call_info.event_group == Litellm_EntityType.USER
+
+
+@pytest.mark.parametrize("max_budget", [None, 100.0])
+@pytest.mark.asyncio
+async def test_common_checks_alerts_user_over_soft_budget_without_blocking(max_budget: float | None) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    alerts: Final[list[tuple[str, CallInfo]]] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type: str, user_info: CallInfo) -> None:
+            alerts.append((type, user_info))
+
+    user_id: Final = f"soft-user-{uuid.uuid4().hex}"
+    result: Final = await common_checks(
+        request_body={"model": "gpt-4o-mini"},
+        team_object=None,
+        user_object=LiteLLM_UserTable(user_id=user_id, soft_budget=5.0, max_budget=max_budget, spend=7.0),
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=cast(ProxyLogging, RecordingProxyLogging()),  # cast-ok: test double for budget_alerts
+        valid_token=UserAPIKeyAuth(token=f"token-{user_id}", user_id=user_id),
+        request=MagicMock(),
+    )
+    await asyncio.sleep(0)
+
+    assert result is True
+    soft_alerts: Final = [info for alert_type, info in alerts if alert_type == "soft_budget"]
+    assert len(soft_alerts) == 1, alerts
+    assert soft_alerts[0].user_id == user_id
+    assert soft_alerts[0].spend == 7.0
+    assert soft_alerts[0].soft_budget == 5.0
+
+
+@pytest.mark.asyncio
+async def test_soft_budget_only_user_is_not_blocked_when_fail_closed_spend_is_unverifiable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_budget_enforcement", True)
+    user_id: Final = f"soft-only-{uuid.uuid4().hex}"
+
+    result: Final = await common_checks(
+        request_body={"model": "gpt-4o-mini"},
+        team_object=None,
+        user_object=LiteLLM_UserTable(user_id=user_id, soft_budget=5.0, spend=1.0),
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        valid_token=UserAPIKeyAuth(token=f"token-{user_id}", user_id=user_id),
+        request=MagicMock(),
+    )
+
+    assert result is True

@@ -212,7 +212,7 @@ async def test_creates_users_and_team_membership_in_every_store():
     response = await _run(
         prisma,
         [
-            {"user_id": "u1", "user_email": "a@example.com", "teams": ["t1", "t2"], "max_budget": 50},
+            {"user_id": "u1", "user_email": "a@example.com", "teams": ["t1", "t2"], "max_budget": 50, "soft_budget": 20},
             {"user_id": "u2", "user_email": "b@example.com", "teams": ["t1"]},
             {"user_id": "u3", "user_email": "c@example.com"},
         ],
@@ -225,6 +225,7 @@ async def test_creates_users_and_team_membership_in_every_store():
 
     users = prisma.db.litellm_usertable.rows
     assert users["u1"].teams == ["t1", "t2"] and users["u1"].max_budget == 50
+    assert users["u1"].soft_budget == 20 and getattr(users["u2"], "soft_budget", None) is None
     assert users["u2"].teams == ["t1"] and users["u3"].teams == []
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["existing", "u1", "u2"]
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t2"].members_with_roles] == ["u1"]

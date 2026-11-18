@@ -2821,6 +2821,40 @@ async def test_bulk_user_spend_reset_clears_every_users_spend_counters(
 
 
 @pytest.mark.asyncio
+async def test_bulk_user_soft_budget_is_checked_against_the_rows_locked_for_the_write(mocker: MockerFixture) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    writes: Final = mocker.AsyncMock(return_value=1)
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=[LiteLLM_UserTable(user_id="user-spruce", max_budget=None)]
+    )
+    transaction_db: Final = SimpleNamespace(
+        litellm_usertable=SimpleNamespace(
+            find_many=mocker.AsyncMock(return_value=[LiteLLM_UserTable(user_id="user-spruce", max_budget=10.0)]),
+            update_many=writes,
+        )
+    )
+    prisma_client.tx = lambda: _transaction_over(transaction_db)
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+
+    with pytest.raises(HTTPException) as refused:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates={"soft_budget": 20.0}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert refused.value.status_code == 400
+    writes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_bulk_user_update_that_expires_inside_the_transaction_changes_no_user(mocker: MockerFixture) -> None:
     from prisma.errors import TransactionExpiredError
 
@@ -3592,6 +3626,7 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker: MockerFixture
         user_role="internal_user",
         spend=42.5,
         max_budget=100.0,
+        soft_budget=80.0,
         tpm_limit=100000,
         rpm_limit=1000,
         models=["gpt-4"],
@@ -3645,6 +3680,7 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker: MockerFixture
     assert response.user_role == "internal_user"
     assert response.spend == 42.5
     assert response.max_budget == 100.0
+    assert response.soft_budget == 80.0
     assert response.tpm_limit == 100000
     assert response.rpm_limit == 1000
     assert response.models == ["gpt-4"]
@@ -4013,6 +4049,7 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role",
         "spend",
         "max_budget",
+        "soft_budget",
         "tpm_limit",
         "rpm_limit",
         "models",
@@ -6013,6 +6050,96 @@ async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_
     assert "Authentication Error" not in exc_info.value.message
 
 
+def test_update_internal_user_params_sets_and_clears_soft_budget() -> None:
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    set_request: Final = UpdateUserRequest(user_id="u1", soft_budget=25.5)
+    set_values: dict[str, object] = _update_internal_user_params(
+        data_json=set_request.model_dump(exclude_unset=True), data=set_request
+    )
+    assert set_values["soft_budget"] == 25.5
+
+    clear_request: Final = UpdateUserRequest(user_id="u1", soft_budget=None)
+    clear_values: dict[str, object] = _update_internal_user_params(
+        data_json=clear_request.model_dump(exclude_unset=True), data=clear_request
+    )
+    assert "soft_budget" in clear_values and clear_values["soft_budget"] is None
+
+    untouched_request: Final = UpdateUserRequest(user_id="u1", max_budget=10)
+    untouched_values: dict[str, object] = _update_internal_user_params(
+        data_json=untouched_request.model_dump(exclude_unset=True), data=untouched_request
+    )
+    assert "soft_budget" not in untouched_values
+
+
+@pytest.mark.parametrize("bad_soft_budget", [-1, float("inf"), float("nan")])
+def test_update_internal_user_params_rejects_invalid_soft_budget(bad_soft_budget: float) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    request: Final = UpdateUserRequest(user_id="u1", soft_budget=bad_soft_budget)
+    with pytest.raises(HTTPException) as exc_info:
+        _update_internal_user_params(data_json=request.model_dump(exclude_unset=True), data=request)
+    assert exc_info.value.status_code == 400
+
+
+def test_update_internal_new_user_params_keeps_soft_budget_below_max_budget() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+
+    ok: Final = NewUserRequest(user_id="u1", max_budget=100, soft_budget=50)
+    assert _update_internal_new_user_params(ok.model_dump(), ok)["soft_budget"] == 50
+
+    soft_only: Final = NewUserRequest(user_id="u1", soft_budget=50)
+    assert _update_internal_new_user_params(soft_only.model_dump(), soft_only)["soft_budget"] == 50
+
+    too_high: Final = NewUserRequest(user_id="u1", max_budget=100, soft_budget=100)
+    with pytest.raises(HTTPException) as exc_info:
+        _update_internal_new_user_params(too_high.model_dump(), too_high)
+    assert exc_info.value.status_code == 400
+
+
+def test_update_internal_new_user_params_checks_soft_budget_against_defaulted_max_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_internal_new_user_params
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"max_budget": 10})
+    request: Final = NewUserRequest(user_id="u1", soft_budget=50)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _update_internal_new_user_params(request.model_dump(), request)
+    assert exc_info.value.status_code == 400
+
+
+def test_validate_user_soft_budget_uses_existing_max_budget_on_update() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _validate_user_soft_budget,
+    )
+
+    _validate_user_soft_budget(soft_budget=None, max_budget=10)
+    _validate_user_soft_budget(soft_budget=5, max_budget=None)
+    _validate_user_soft_budget(soft_budget=5, max_budget=10)
+    with pytest.raises(HTTPException):
+        _validate_user_soft_budget(soft_budget=10, max_budget=10)
+    with pytest.raises(HTTPException):
+        _validate_user_soft_budget(soft_budget=20, max_budget=10)
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fips_mode")
 async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
@@ -6024,3 +6151,93 @@ async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: 
 
     assert pbkdf2_on_event_loop == [False]
     assert data["password"].startswith("pbkdf2:")
+
+
+def _soft_budget_prisma(mocker: MockerFixture, saved_users: tuple[LiteLLM_UserTable, ...]) -> MagicMock:
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_users[0] if saved_users else None)
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=list(saved_users))
+    prisma_client.get_data = mocker.AsyncMock(return_value=list(saved_users))
+    prisma_client.update_data = mocker.AsyncMock()
+    prisma_client.insert_data = mocker.AsyncMock()
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+    return prisma_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_users", "update"),
+    [
+        pytest.param(
+            (LiteLLM_UserTable(user_id="u-soft", user_role="proxy_admin_viewer", soft_budget=8),),
+            UpdateUserRequest(user_id="u-soft", user_role="internal_user"),
+            id="role-change-injects-lower-max",
+        ),
+        pytest.param(
+            (),
+            UpdateUserRequest(user_email="new@example.test", soft_budget=100, max_budget=50),
+            id="email-upsert-of-new-user",
+        ),
+        pytest.param(
+            (LiteLLM_UserTable(user_id="u-soft", soft_budget=8),),
+            UpdateUserRequest(user_id="u-soft", max_budget=8),
+            id="max-lowered-to-stored-soft",
+        ),
+    ],
+)
+async def test_user_update_rejects_soft_budget_at_or_above_effective_max_budget(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    saved_users: tuple[LiteLLM_UserTable, ...],
+    update: UpdateUserRequest,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    monkeypatch.setattr(litellm, "max_internal_user_budget", 5.0)
+    prisma_client: Final = _soft_budget_prisma(mocker, saved_users)
+
+    with pytest.raises(HTTPException) as caught:
+        await _update_single_user_helper(
+            user_request=update,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-soft", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert caught.value.status_code == 400
+    assert "soft_budget" in str(caught.value.detail)
+    prisma_client.update_data.assert_not_awaited()
+    prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_updates",
+    [{"soft_budget": 5.0}, {"max_budget": 4.0}],
+    ids=["soft-above-one-users-max", "max-below-one-users-soft"],
+)
+async def test_bulk_user_update_checks_soft_budget_against_each_user(
+    mocker: MockerFixture, user_updates: dict[str, float]
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    saved_users: Final = (
+        LiteLLM_UserTable(user_id="u-open"),
+        LiteLLM_UserTable(user_id="u-tight", max_budget=3.0, soft_budget=None),
+        LiteLLM_UserTable(user_id="u-soft", soft_budget=6.0),
+    )
+    prisma_client: Final = _soft_budget_prisma(mocker, saved_users)
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=len(saved_users))
+
+    with pytest.raises(HTTPException) as caught:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates=user_updates),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-soft", user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert caught.value.status_code == 400
+    prisma_client.db.litellm_usertable.update_many.assert_not_awaited()

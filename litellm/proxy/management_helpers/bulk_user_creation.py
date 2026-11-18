@@ -114,6 +114,7 @@ class _UserRow(LiteLLMBaseModel):
     user_role: str | None = None
     team_id: str | None = None
     max_budget: float | None = None
+    soft_budget: float | None = None
     spend: float | None = 0.0
     models: tuple[str, ...] | None = None
     metadata: Mapping[str, object] | None = None
@@ -375,6 +376,7 @@ class _UserCreateData(TypedDict):
     user_role: ReadOnly[str | None]
     team_id: ReadOnly[str | None]
     max_budget: ReadOnly[float | None]
+    soft_budget: ReadOnly[float | None]
     spend: ReadOnly[float]
     models: ReadOnly[tuple[str, ...]]
     metadata: ReadOnly[str]
@@ -409,6 +411,7 @@ def _user_create_payload(prepared: _PreparedUser) -> _UserCreateData:
         "user_role": row.user_role,
         "team_id": row.team_id,
         "max_budget": row.max_budget,
+        "soft_budget": row.soft_budget,
         "spend": row.spend or 0.0,
         "models": row.models or (),
         "metadata": metadata_json,

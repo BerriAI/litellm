@@ -5527,6 +5527,7 @@ async def generate_key_helper_fn(
 
         user_data: Final = {
             "max_budget": max_budget,
+            "soft_budget": soft_budget,
             "user_email": user_email,
             "user_id": user_id,
             "user_alias": user_alias,

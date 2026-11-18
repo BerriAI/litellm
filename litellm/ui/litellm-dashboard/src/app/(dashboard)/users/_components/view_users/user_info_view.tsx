@@ -35,7 +35,7 @@ import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { formatBudgetValue, formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
@@ -346,6 +346,7 @@ export default function UserInfoView({
         user_alias: formValues.user_alias ?? userData.user_alias,
         models: formValues.models ?? userData.models,
         max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+        soft_budget: formValues.soft_budget === undefined ? userData.soft_budget : formValues.soft_budget,
         tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
         budget_duration:
@@ -401,8 +402,7 @@ export default function UserInfoView({
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
   const unlimitedLabel = t("users.userInfo.unlimited");
-  const budgetLimit =
-    userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
+  const budgetLimit = formatBudgetValue(userData.max_budget, unlimitedLabel, 2);
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -414,6 +414,7 @@ export default function UserInfoView({
       user_role: userData.user_role,
       models: userData.models,
       max_budget: userData.max_budget,
+      soft_budget: userData.soft_budget,
       tpm_limit: userData.tpm_limit,
       rpm_limit: userData.rpm_limit,
       budget_duration: userData.budget_duration,
@@ -710,11 +711,12 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.maxBudget")}</p>
-                  <p>
-                    {userData.max_budget !== null && userData.max_budget !== undefined
-                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : unlimitedLabel}
-                  </p>
+                  <p>{formatBudgetValue(userData.max_budget, unlimitedLabel)}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">{t("users.userInfo.details.softBudget")}</p>
+                  <p>{formatBudgetValue(userData.soft_budget, t("users.userInfo.details.notSet"))}</p>
                 </div>
 
                 <div>

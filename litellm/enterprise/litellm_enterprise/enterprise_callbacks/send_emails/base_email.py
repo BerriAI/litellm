@@ -54,6 +54,9 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 _BUDGET_ALERT_CLAIMS_TARGET: Final = "budget_alert_claims"
+_USER_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = SOFT_BUDGET_ALERT_EMAIL_TEMPLATE.replace(
+    "Your LiteLLM API key has crossed", "Your LiteLLM account has crossed"
+)
 
 
 def _max_budget_alert_id(user_info: CallInfo) -> str:
@@ -281,7 +284,12 @@ class BaseEmailLogger(CustomLogger):
         if event.max_budget is not None:
             max_budget_info = f"<b>Maximum Budget:</b> ${event.max_budget} <br />"
 
-        email_html_content = SOFT_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+        template: Final = (
+            _USER_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE
+            if event.event_group == Litellm_EntityType.USER
+            else SOFT_BUDGET_ALERT_EMAIL_TEMPLATE
+        )
+        email_html_content = template.format(
             email_logo_url=email_params.logo_url,
             recipient_email=email_params.recipient_email,
             soft_budget=soft_budget_str,
@@ -524,6 +532,11 @@ class BaseEmailLogger(CustomLogger):
             else:
                 # For non-team alerts, require either max_budget or soft_budget
                 if user_info.max_budget is None and user_info.soft_budget is None:
+                    return
+                if user_info.event_group == Litellm_EntityType.USER and not user_info.user_email:
+                    verbose_proxy_logger.debug(
+                        "Skipping user soft budget email alert: user %s has no email", user_info.user_id
+                    )
                     return
             if (
                 user_info.soft_budget is not None

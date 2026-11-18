@@ -67,6 +67,7 @@ interface CreateUserFormValues {
   metadata?: string;
   send_invite_email: boolean;
   models?: string[];
+  soft_budget?: string;
 }
 
 const EMBEDDED_DEFAULTS: CreateUserFormValues = {
@@ -102,7 +103,8 @@ const withoutCollapsedModels = (values: CreateUserFormValues, isPersonalKeyOpen:
 };
 
 const buildCreatePayload = (values: CreateUserFormValues) => {
-  const { supply_user_id, user_id, ...fields } = values;
+  const { supply_user_id, user_id, soft_budget, ...formFields } = values;
+  const fields = soft_budget?.trim() ? { ...formFields, soft_budget: Number(soft_budget) } : formFields;
   const apiValues = supply_user_id ? { ...fields, user_id: user_id?.trim() } : fields;
   const withModels =
     (!values.models || values.models.length === 0) && values.user_role !== "proxy_admin"
@@ -316,6 +318,18 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     </FormField>
   );
 
+  const softBudgetField = (
+    <FormField
+      control={form.control}
+      name="soft_budget"
+      label={labelWithHint(t("users.createUser.fields.softBudget"), t("users.createUser.fields.softBudgetHint"))}
+    >
+      {({ ref, value, ...control }) => (
+        <Input {...control} ref={ref} value={value ?? ""} type="number" min={0} step="any" />
+      )}
+    </FormField>
+  );
+
   const metadataField = (
     <FormField control={form.control} name="metadata" label={t("users.createUser.fields.metadata")}>
       {({ ref, value, ...control }) => (
@@ -450,6 +464,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
                   )}
                 </FormField>
 
+                {softBudgetField}
                 {metadataField}
                 {sendInviteEmailField}
 

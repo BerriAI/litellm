@@ -109,3 +109,21 @@ describe("custom User ID invitation", () => {
     expect(screen.getByRole("textbox", { name: "User ID", exact: true })).toHaveValue("");
   });
 });
+
+describe("soft budget", () => {
+  it.each([
+    ["25.5", { soft_budget: 25.5 }],
+    ["", {}],
+  ])("sends Soft Budget %j as %j on /user/new", async (typed, expected) => {
+    const user = userEvent.setup();
+    renderForm(false);
+    await user.click(screen.getByRole("button", { name: "+ Invite User" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "User Email" }), { target: { value: "soft@example.test" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /Soft Budget/ }), { target: { value: typed } });
+    await user.click(screen.getByRole("button", { name: "Invite User", exact: true }));
+    await waitFor(() => expect(createUser).toHaveBeenCalledTimes(1));
+    const body = createUser.mock.calls[0][0];
+    expect(body).toMatchObject({ user_email: "soft@example.test", ...expected });
+    expect("soft_budget" in body).toBe("soft_budget" in expected);
+  });
+});

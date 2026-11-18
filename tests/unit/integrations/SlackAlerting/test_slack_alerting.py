@@ -1265,3 +1265,96 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
+
+
+@pytest.mark.parametrize("event_group", [Litellm_EntityType.USER, Litellm_EntityType.KEY, Litellm_EntityType.TEAM])
+def test_soft_budget_crossed_smtp_email_keeps_generic_body(event_group: Litellm_EntityType) -> None:
+    from litellm.integrations.SlackAlerting.slack_alerting import _budget_alert_email_html
+    from litellm.proxy._types import WebhookEvent
+
+    event: Final = WebhookEvent(
+        spend=6,
+        soft_budget=5,
+        token="hashed-token",
+        event="soft_budget_crossed",
+        event_group=event_group,
+        event_message="Soft budget crossed",
+    )
+    html: Final = _budget_alert_email_html(
+        webhook_event=event, email_logo_url="https://logo", email_support_contact="support@example.com"
+    )
+
+    assert html == "Alert from LiteLLM Server"
+
+
+def test_budget_crossed_email_keeps_the_max_budget_body() -> None:
+    from litellm.integrations.SlackAlerting.slack_alerting import _budget_alert_email_html
+    from litellm.proxy._types import Litellm_EntityType, WebhookEvent
+
+    event: Final = WebhookEvent(
+        spend=100,
+        max_budget=100,
+        user_id="user-a",
+        event="budget_crossed",
+        event_group=Litellm_EntityType.USER,
+        event_message="Budget crossed",
+    )
+    html: Final = _budget_alert_email_html(
+        webhook_event=event, email_logo_url="https://logo", email_support_contact="support@example.com"
+    )
+
+    assert "monthly budget of $100" in html
+    assert "will be rejected" in html
+
+
+def test_budget_email_escapes_user_id() -> None:
+    from litellm.integrations.SlackAlerting.slack_alerting import _budget_alert_email_html
+    from litellm.proxy._types import Litellm_EntityType, WebhookEvent
+
+    event: Final = WebhookEvent(
+        spend=60,
+        soft_budget=50,
+        max_budget=100,
+        user_id='<a href="https://evil.example">click</a>',
+        event="budget_crossed",
+        event_group=Litellm_EntityType.USER,
+        event_message="Budget alert",
+    )
+    html: Final = _budget_alert_email_html(
+        webhook_event=event, email_logo_url="https://logo", email_support_contact="support@example.com"
+    )
+
+    assert "<a href" not in html
+    assert "&lt;a href=&quot;https://evil.example&quot;&gt;click&lt;/a&gt;" in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_group", "recipients"), [(Litellm_EntityType.USER, []), (Litellm_EntityType.KEY, ["u1@example.com"])]
+)
+async def test_user_soft_budget_crossing_leaves_email_to_the_soft_budget_email_logger(
+    monkeypatch: pytest.MonkeyPatch, event_group: Litellm_EntityType, recipients: list[str]
+) -> None:
+    import litellm.proxy.utils as proxy_utils
+    from litellm.proxy._types import WebhookEvent
+
+    sent: Final[list[str]] = []
+
+    async def record_email(receiver_email: str, subject: str, html: str) -> None:
+        sent.append(receiver_email)
+
+    monkeypatch.setattr(proxy_utils, "send_email", record_email)
+    event: Final = WebhookEvent(
+        spend=6,
+        soft_budget=5,
+        user_id="u1",
+        user_email="u1@example.com",
+        token="hashed-token",
+        event="soft_budget_crossed",
+        event_group=event_group,
+        event_message="Soft budget crossed",
+    )
+
+    await SlackAlerting(alerting=["email"]).send_email_alert_using_smtp(webhook_event=event, alert_type="budget_alerts")
+
+    assert sent == recipients

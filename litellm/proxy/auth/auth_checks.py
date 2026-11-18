@@ -1670,7 +1670,7 @@ async def common_checks(
                 return
 
             await _user_multi_budget_check(user_object)
-            if user_object.max_budget is None:
+            if user_object.max_budget is None and user_object.soft_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
@@ -1681,6 +1681,9 @@ async def common_checks(
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
+            _user_soft_budget_check(user_object=user_object, user_spend=user_spend, proxy_logging_obj=proxy_logging_obj)
+            if user_budget is None:
+                return
             call_info: Final = CallInfo(
                 spend=user_spend,
                 max_budget=user_budget,
@@ -7736,6 +7739,34 @@ async def _team_multi_budget_check(
         )
         if native.refused:
             raise native.error()
+
+
+def _user_soft_budget_check(
+    user_object: LiteLLM_UserTable,
+    user_spend: float,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    if user_object.soft_budget is None or user_spend < user_object.soft_budget:
+        return
+    verbose_proxy_logger.debug(
+        "Crossed Soft Budget for user %s, spend %s, soft_budget %s",
+        user_object.user_id,
+        user_spend,
+        user_object.soft_budget,
+    )
+    call_info: Final = CallInfo(
+        spend=user_spend,
+        soft_budget=user_object.soft_budget,
+        user_id=user_object.user_id,
+        user_email=user_object.user_email,
+        event_group=Litellm_EntityType.USER,
+    )
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="soft_budget",
+            user_info=call_info,
+        )
+    )
 
 
 async def _team_soft_budget_check(
