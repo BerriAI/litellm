@@ -13,6 +13,7 @@ use crate::price::{CacheReadMode, CacheTtl, Residency, SearchContextSize, Servic
 use crate::row::RowRef;
 use crate::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage, WebSearch};
 
+pub use crate::image::{ImageCalculator, ImageQuery};
 pub use crate::ocr::OcrQuery;
 pub use crate::rerank::RerankQuery;
 pub use crate::search::SearchQuery;
@@ -30,7 +31,7 @@ pub use crate::video::VideoQuery;
 )]
 pub enum PriceQuery {
     Tokens(Box<TokensQuery>),
-    Image(Header),
+    Image(Box<ImageQuery>),
     Speech(Box<SpeechQuery>),
     Transcription(Box<TranscriptionQuery>),
     Ocr(Box<OcrQuery>),

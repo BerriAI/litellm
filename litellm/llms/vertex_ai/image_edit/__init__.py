@@ -6,14 +6,12 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_model_route,
 )
 
-from .cost_calculator import cost_calculator
 from .vertex_gemini_transformation import VertexAIGeminiImageEditConfig
 from .vertex_imagen_transformation import VertexAIImagenImageEditConfig
 
 __all__ = [
     "VertexAIGeminiImageEditConfig",
     "VertexAIImagenImageEditConfig",
-    "cost_calculator",
     "get_vertex_ai_image_edit_config",
 ]
 
