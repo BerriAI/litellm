@@ -247,6 +247,20 @@ def test_sarvam_chat_completion_request(model: str, url: str) -> None:
     assert response.choices[0].message.content == "Hello"
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_sarvam_forwards_reasoning_effort_without_allowed_openai_params() -> None:
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(200, json=_chat_response())
+        litellm.completion(
+            model="sarvam/gemma4",
+            messages=[{"role": "user", "content": "Is 221 a prime number?"}],
+            api_key="sarvam-test-key",
+            reasoning_effort="low",
+        )
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "low"
+
+
 def test_sarvam_responses_request_is_bridged_to_chat_completions() -> None:
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.sarvam.ai/v1/chat/completions").respond(
