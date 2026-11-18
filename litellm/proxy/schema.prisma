@@ -273,6 +273,7 @@ model LiteLLM_ModelTable {
 
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
+    cost_margin_percent Float?
 		team_id    String @id @default(uuid())
     team_alias  String? 
     organization_id String?

@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cost
+from litellm.proxy.spend_tracking.team_cost_margin import apply_callback_team_cost_margin
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
@@ -90,6 +91,36 @@ def response(cost: float = 0.5) -> ModelResponse:
     return result
 
 
+def test_callback_team_margin_bills_and_reconciles_once(logging_obj: Logging) -> None:
+    prepared: Final = logging_obj.prepare_response_cost(response(), NOW)
+    assert prepared is not None
+    amount: Final = apply_callback_team_cost_margin(prepared.payload, 0.5, 2)
+    assert amount == pytest.approx(0.51)
+    assert prepared.payload["response_cost"] == pytest.approx(0.51)
+    assert prepared.payload["cost_breakdown"]["team_cost_before_margin"] == 0.5
+    assert apply_callback_team_cost_margin(prepared.payload, amount, 2) == amount
+
+
+@pytest.mark.asyncio
+async def test_team_margin_reaches_the_final_cost_and_logging_once(logging_obj: Logging) -> None:
+    logging_obj.update_environment_variables(
+        model=MODEL,
+        custom_llm_provider="vertex_ai",
+        litellm_params={"metadata": {"user_api_key_team_cost_margin_percent": 2.0}},
+        optional_params={},
+    )
+    result: Final = response()
+    finalized: Final = await finalize_response_cost(logging_obj, result, Counter(2), NOW)
+    assert finalized is not None
+    assert finalized.amount == pytest.approx(0.5 * 1.02)
+    assert await finalize_response_cost(logging_obj, result, Counter(2), NOW) is finalized
+    logging_obj._success_handler_helper_fn(result=result, start_time=NOW, end_time=NOW)
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["response_cost"] == pytest.approx(0.5 * 1.02)
+    assert payload["cost_breakdown"]["team_cost_before_margin"] == 0.5
+    assert payload["cost_breakdown"]["team_cost_margin_percent"] == 2.0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("used", "expected"), [(0, 0.48), (1, 0.49), (2, 0.5)])
 async def test_header_and_logging_share_one_allowance_allocation(
@@ -112,7 +143,6 @@ async def test_header_and_logging_share_one_allowance_allocation(
     assert float(headers["x-litellm-response-cost"]) == pytest.approx(payload["response_cost"])
     assert payload["cost_finalized"] is True
     assert payload["cost_breakdown"] == costs[0].logging_breakdown()
-
 
 
 @pytest.mark.asyncio

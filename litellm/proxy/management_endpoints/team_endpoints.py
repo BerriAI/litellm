@@ -2043,10 +2043,7 @@ async def new_team(
             )
 
         ## ADD TO TEAM TABLE
-        complete_team_data: Final = LiteLLM_TeamTable(
-            **data_json,
-            model_id=_model_id,
-        )
+        complete_team_data: Final = LiteLLM_TeamTable.model_validate({**data_json, "model_id": _model_id})
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -6760,10 +6757,8 @@ async def list_team(
 
         try:
             returned_responses.append(
-                TeamListResponseObject(
-                    **team.model_dump(),
-                    team_memberships=_team_memberships,
-                    keys=keys,
+                TeamListResponseObject.model_validate(
+                    {**team.model_dump(), "team_memberships": _team_memberships, "keys": keys}
                 )
             )
         except Exception as e:

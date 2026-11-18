@@ -71,6 +71,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     should_store_prompts_for_call,
 )
+from litellm.proxy.spend_tracking.team_cost_margin import apply_callback_team_cost_margin
 from litellm.proxy.utils import (
     FAILURE_ROW_ALREADY_WRITTEN,
     FAILURE_ROW_ALREADY_WRITTEN_KEY,
@@ -873,7 +874,7 @@ class _ProxyDBLogger(CustomLogger):
                 sl_object if sl_object is not None else kwargs  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
             ).get("response_cost")
             priced_cost: Final = finite_cost(raw_cost)
-            response_cost: Final = (
+            allowance_adjusted_cost: Final = (
                 await apply_search_free_tier(
                     kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
                     sl_object=sl_object,  # pyright: ignore[reportUnknownArgumentType]  # payload carries untyped lists
@@ -887,6 +888,12 @@ class _ProxyDBLogger(CustomLogger):
                 and priced_cost is not None
                 and not sl_object.get("cost_finalized", False)
                 else priced_cost
+            )
+            margin_payload: Final = cast(StandardLoggingPayload | None, sl_object)  # cast-ok: callback payload contract
+            response_cost: Final = apply_callback_team_cost_margin(
+                margin_payload,
+                allowance_adjusted_cost,
+                _BATCH_CALLBACK_FIELDS.validate_python(metadata).get("user_api_key_team_cost_margin_percent"),
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,

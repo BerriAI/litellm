@@ -618,7 +618,7 @@ describe("Teams - access_group_ids in team create", () => {
     });
   });
 
-  it("should pass access_group_ids to teamCreateCall when creating team", async () => {
+  it("passes cost margin and access groups when creating a team", async () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
@@ -631,6 +631,7 @@ describe("Teams - access_group_ids in team create", () => {
     });
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.change(screen.getByLabelText("Cost margin (%)"), { target: { value: "2" } });
     fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
 
     fireEvent.click(screen.getByText("Additional Settings"));
@@ -651,6 +652,7 @@ describe("Teams - access_group_ids in team create", () => {
           team_alias: "Test Team",
           models: ["gpt-4"],
           access_group_ids: ["ag-1", "ag-2"],
+          cost_margin_percent: 2,
         }),
       );
     });

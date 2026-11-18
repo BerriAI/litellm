@@ -165,7 +165,7 @@ class ScimTransformations:
             raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         if isinstance(team, dict):
-            team = LiteLLM_TeamTable(**team)
+            team = LiteLLM_TeamTable.model_validate(team)
 
         # Get team members with proper display names
         scim_members: Final[list[SCIMMember]] = []

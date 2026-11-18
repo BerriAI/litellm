@@ -3157,6 +3157,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_max_budget: float | None
     user_api_key_team_spend: float | None
     user_api_key_team_max_budget: float | None
+    user_api_key_team_cost_margin_percent: NotRequired[ReadOnly[float | None]]
     user_api_key_org_id: str | None
     user_api_key_org_alias: str | None
     user_api_key_team_id: str | None
@@ -3878,6 +3879,8 @@ class CostBreakdown(TypedDict, total=False):
     from ``optional_params``, which no log record carries.
     """
 
+    team_cost_before_margin: ReadOnly[float]
+    team_cost_margin_percent: ReadOnly[float]
     service_tier: str | None
     data_residency: str | None
     vertex_location: ReadOnly[str | None]

@@ -8,12 +8,14 @@ budget-window value types and the team-model alias table). Re-exported from
 
 import json
 from datetime import datetime
-from typing import Final, Literal, Optional
+from typing import Annotated, Final, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+TeamCostMarginPercent: TypeAlias = Annotated[float, Field(ge=0, le=1000, allow_inf_nan=False)]
 
 
 class MemberBase(LiteLLMPydanticObjectBase):
@@ -61,6 +63,7 @@ class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
 
 
 class TeamBase(LiteLLMPydanticObjectBase):
+    cost_margin_percent: TeamCostMarginPercent | None = None
     team_alias: str | None = None
     team_id: str | None = None
     organization_id: str | None = None

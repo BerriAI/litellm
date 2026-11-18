@@ -321,6 +321,7 @@ export interface TeamData {
     tpd_limit?: number | null;
     max_budget: number | null;
     soft_budget?: number | null;
+    cost_margin_percent?: number | null;
     budget_duration: string | null;
     model_max_budget?: StoredModelMaxBudget | null;
     model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
@@ -381,6 +382,7 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
     team_alias: z.string().min(1, t("teams.teamInfo.validation.teamNameRequired")),
     models: z.array(z.string()).optional(),
     max_budget: numericInputSchema,
+    cost_margin_percent: z.union([z.literal(""), z.coerce.number().min(0).max(1000)]).nullish(),
     soft_budget: numericInputSchema,
     soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
     default_team_member_models: z.array(z.string()).optional(),
@@ -478,6 +480,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   team_alias: "",
   models: [],
   max_budget: undefined,
+  cost_margin_percent: undefined,
   soft_budget: undefined,
   soft_budget_alerting_emails: "",
   default_team_member_models: [],
@@ -528,6 +531,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   team_alias: info.team_alias,
   models: info.models.length === 0 ? [ALL_PROXY_MODELS] : info.models,
   max_budget: info.max_budget,
+  cost_margin_percent: info.cost_margin_percent,
   soft_budget: info.soft_budget,
   soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
     ? info.metadata.soft_budget_alerting_emails.join(", ")
@@ -1090,6 +1094,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
         max_budget: numberOrNull(values.max_budget),
+        ...(values.cost_margin_percent !== undefined
+          ? { cost_margin_percent: numberOrNull(values.cost_margin_percent) }
+          : {}),
         soft_budget: numberOrNull(values.soft_budget),
         budget_duration: values.budget_duration ?? null,
         metadata: {
@@ -1714,6 +1721,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
+                  <FormField control={form.control} name="cost_margin_percent" label="Cost margin (%)">
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} min={0} max={1000} step={0.01} />
+                    )}
+                  </FormField>
                   <FormField control={form.control} name="soft_budget" label={t("teams.teamInfo.editForm.softBudget")}>
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
@@ -2487,6 +2499,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </div>
               <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.teamBudget")}</p>
+                <div>Cost margin (%) {info.cost_margin_percent ?? 0}</div>
                 <div>
                   {t("teams.teamInfo.settingsView.maxBudget")}
                   {info.max_budget !== null

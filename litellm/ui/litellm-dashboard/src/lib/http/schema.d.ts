@@ -37093,6 +37093,8 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /** Cost Margin Percent */
+            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -38772,6 +38774,8 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /** Cost Margin Percent */
+            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -42310,6 +42314,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cost Margin Percent */
+            cost_margin_percent?: number | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -43833,6 +43839,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cost Margin Percent */
+            cost_margin_percent?: number | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -50653,6 +50661,8 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /** Cost Margin Percent */
+            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -50816,6 +50826,8 @@ export interface components {
             /** Budget Reset At */
             budget_reset_at?: string | null;
             caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
+            /** Cost Margin Percent */
+            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -53330,6 +53342,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cost Margin Percent */
+            cost_margin_percent?: number | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -54118,6 +54132,8 @@ export interface components {
              * @default false
              */
             team_blocked: boolean;
+            /** Team Cost Margin Percent */
+            team_cost_margin_percent?: number | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Max Budget */

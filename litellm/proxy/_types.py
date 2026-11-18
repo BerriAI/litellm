@@ -1988,6 +1988,7 @@ class OrgMember(MemberBase):
 
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
+from litellm.models.team import TeamCostMarginPercent
 
 RouterSettingsDict = Annotated[
     dict[str, object],
@@ -2074,6 +2075,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     """
 
     team_id: str  # required
+    cost_margin_percent: TeamCostMarginPercent | None = None
     team_alias: str | None = None
     organization_id: str | None = None
     metadata: dict | None = None

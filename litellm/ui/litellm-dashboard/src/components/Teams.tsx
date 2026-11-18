@@ -85,6 +85,7 @@ const buildTeamCreateFieldsSchema = (t: TFunction) =>
     organization_id: z.string().nullish(),
     models: z.array(z.string()).optional(),
     max_budget: numericInputSchema,
+    cost_margin_percent: z.union([z.literal(""), z.coerce.number().min(0).max(1000)]).nullish(),
     budget_duration: z.string().nullish(),
     tpm_limit: numericInputSchema,
     rpm_limit: numericInputSchema,
@@ -123,6 +124,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   organization_id: null,
   models: [],
   max_budget: undefined,
+  cost_margin_percent: undefined,
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
@@ -564,10 +566,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           }
         }
 
-        const { require_trace_id: requireTraceId, ...teamCreateValues } = formValues;
+        const {
+          require_trace_id: requireTraceId,
+          cost_margin_percent: costMarginPercent,
+          ...teamCreateValues
+        } = formValues;
         const teamMemberModelBudgets = modelMaxBudgetUpdate(teamMemberModelMaxBudget, {});
         await teamCreateCall(accessToken, {
           ...teamCreateValues,
+          ...(typeof costMarginPercent === "number" ? { cost_margin_percent: costMarginPercent } : {}),
           ...(requireTraceId === undefined ? {} : { require_trace_id: requireTraceId }),
           ...(teamMemberModelBudgets !== undefined ? { team_member_model_max_budget: teamMemberModelBudgets } : {}),
           models: normalizeTeamModelSelection(formValues.models),
@@ -831,6 +838,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                     )}
                   </FormField>
 
+                  <FormField control={form.control} name="cost_margin_percent" label="Cost margin (%)">
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} min={0} max={1000} step={0.01} />
+                    )}
+                  </FormField>
                   <FormField control={form.control} name="max_budget" label={t("teams.page.create.fields.maxBudget")}>
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} width={200} />
