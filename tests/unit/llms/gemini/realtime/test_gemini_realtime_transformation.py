@@ -1945,6 +1945,159 @@ def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
     assert response_done["response"]["status"] == "completed"
 
 
+_AUDIO_MODEL_TURN: Final = {
+    "serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}
+}
+_INTERRUPTION_USAGE: Final = {"promptTokenCount": 30, "responseTokenCount": 12, "totalTokenCount": 42}
+
+
+def _events_per_frame(config: GeminiRealtimeConfig, frames: list[dict]) -> list[list[dict]]:
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_interruption"
+    state: dict = {
+        "session_configuration_request": json.dumps(
+            {"setup": {"model": "gemini-2.5-flash-native-audio", "generationConfig": {"responseModalities": ["AUDIO"]}}}
+        ),
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+    events: list[list[dict]] = []
+    for frame in frames:
+        result = config.transform_realtime_response(
+            json.dumps(frame), "gemini-2.5-flash-native-audio", logging_obj, realtime_response_transform_input=state
+        )
+        state = {**state, **{key: value for key, value in result.items() if key != "response"}}
+        events.append(cast(list[dict], result["response"]))
+    return events
+
+
+def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_response_done():
+    opened, interrupted, turn_complete, next_turn, next_turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+    response_id = opened[0]["response"]["id"]
+    item_id = opened[1]["item"]["id"]
+
+    audio_done, part_done, item_done = interrupted
+    assert [
+        (audio_done["type"], audio_done["response_id"], audio_done["item_id"]),
+        (part_done["type"], part_done["response_id"], part_done["item_id"]),
+        (item_done["type"], item_done["response_id"], item_done["item"]["id"], item_done["item"]["status"]),
+    ] == [
+        ("response.output_audio.done", response_id, item_id),
+        ("response.content_part.done", response_id, item_id),
+        ("response.output_item.done", response_id, item_id, "incomplete"),
+    ], interrupted
+
+    assert [event["type"] for event in turn_complete] == ["response.done"], turn_complete
+    done = turn_complete[0]["response"]
+    assert (done["id"], done["status"], done["status_details"]) == (
+        response_id,
+        "cancelled",
+        {"type": "cancelled", "reason": "turn_detected"},
+    ), done
+    usage = done["usage"]
+    assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (30, 12, 42), usage
+
+    next_done = next_turn_complete[-1]["response"]
+    assert next_turn[0]["response"]["id"] != response_id
+    assert (next_done["status"], next_done["status_details"]) == ("completed", None), next_done
+
+
+def test_gemini_interruption_and_turn_complete_in_one_frame_reports_cancelled():
+    opened, closing = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True, "turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+        ],
+    )
+
+    assert [event["type"] for event in closing] == [
+        "response.output_audio.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.done",
+    ], closing
+    assert closing[2]["item"]["status"] == "incomplete"
+    done = closing[3]["response"]
+    assert (done["id"], done["status"], done["status_details"], done["usage"]["total_tokens"]) == (
+        opened[0]["response"]["id"],
+        "cancelled",
+        {"type": "cancelled", "reason": "turn_detected"},
+        42,
+    ), done
+
+
+def test_gemini_interruption_after_generation_complete_does_not_close_the_item_twice():
+    _, generation_complete, interrupted, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"generationComplete": True}},
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+
+    assert generation_complete[-1]["item"]["status"] == "completed", generation_complete
+    assert interrupted == []
+    statuses = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    assert statuses == [("response.done", "cancelled")], turn_complete
+
+
+def test_gemini_usage_on_the_interrupted_frame_is_billed_on_the_cancelled_response_done():
+    _, _, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}, "usageMetadata": _INTERRUPTION_USAGE},
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+
+    done = turn_complete[-1]["response"]
+    assert (done["status"], done["usage"]["total_tokens"]) == ("cancelled", 42), done
+
+
+def test_gemini_repeated_interruption_closes_the_item_once():
+    _, first, second, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+
+    assert [event["type"] for event in first] == [
+        "response.output_audio.done",
+        "response.content_part.done",
+        "response.output_item.done",
+    ], first
+    assert second == []
+    statuses = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    assert statuses == [("response.done", "cancelled")], turn_complete
+
+
+def test_gemini_interruption_with_no_open_response_emits_nothing():
+    (interrupted,) = _events_per_frame(GeminiRealtimeConfig(), [{"serverContent": {"interrupted": True}}])
+
+    assert interrupted == []
+
+
 @pytest.fixture(autouse=False)
 def patch_gemini_audio_cost_map_entries(monkeypatch):
     """Inject gemini_native_audio / gemini_audio_only_live into the cost map.

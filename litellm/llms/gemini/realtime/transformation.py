@@ -5,7 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -225,6 +225,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: dict | None = None
+        self._cancelled_response_id: str | None = None
+        self._closed_output_item_id: str | None = None
         self._unbilled_input_audio_bytes: int = 0
         self._manual_activity_open: bool = False
 
@@ -1072,6 +1074,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_response_id: str | None,
         delta_done_event: OpenAIRealtimeResponseTextDone | OpenAIRealtimeResponseAudioDone,
         delta_type: ALL_DELTA_TYPES,
+        item_status: Literal["completed", "incomplete"] = "completed",
     ) -> list[OpenAIRealtimeEvents]:
         """
         - return response.content_part.done
@@ -1112,7 +1115,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "id": current_output_item_id,
                 "object": "realtime.item",
                 "type": "message",
-                "status": "completed",
+                "status": item_status,
                 "role": "assistant",
                 "content": [
                     (
@@ -1255,6 +1258,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_conversation_id: str | None,
         output_items: list[OpenAIRealtimeOutputItemDone] | None,
         session_configuration_request: str | None = None,
+        cancelled: bool = False,
     ) -> OpenAIRealtimeDoneEvent:
         if current_conversation_id is None:
             current_conversation_id = f"conv_{uuid.uuid4()}"
@@ -1298,8 +1302,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             response=OpenAIRealtimeResponseDoneObject(
                 object="realtime.response",
                 id=current_response_id,
-                status="completed",
-                status_details=None,
+                status="cancelled" if cancelled else "completed",
+                status_details={"type": "cancelled", "reason": "turn_detected"} if cancelled else None,
                 output=([output_item["item"] for output_item in output_items] if output_items else []),
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
@@ -1376,6 +1380,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 delta_type=delta_type,
             )
             returned_message.extend(additional_items)
+            self._closed_output_item_id = resolved_item_id
 
         return {
             "returned_message": returned_message,
@@ -1754,6 +1759,35 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 current_output_item_id = None
                 current_response_id = None
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
+                if "interrupted" in json_message["serverContent"]:
+                    self._cancelled_response_id = current_response_id
+                    if (
+                        current_output_item_id is not None
+                        and current_delta_type is not None
+                        and current_output_item_id != self._closed_output_item_id
+                    ):
+                        interrupted_content_done_event = self.transform_content_done_event(
+                            delta_chunks=current_delta_chunks,
+                            current_output_item_id=current_output_item_id,
+                            current_response_id=current_response_id,
+                            delta_type=current_delta_type,
+                        )
+                        returned_message.append(interrupted_content_done_event)
+                        returned_message.extend(
+                            self.return_additional_content_done_events(
+                                current_output_item_id=current_output_item_id,
+                                current_response_id=current_response_id,
+                                delta_done_event=interrupted_content_done_event,
+                                delta_type=current_delta_type,
+                                item_status="incomplete",
+                            )
+                        )
+                        self._closed_output_item_id = current_output_item_id
+                    if "turnComplete" not in json_message["serverContent"]:
+                        if "usageMetadata" in json_message:
+                            self._pending_usage_metadata = json_message["usageMetadata"]
+                        server_content_handled = True
+                        continue
                 _has_pending_function_call = current_item_chunks and any(
                     chunk.get("item", {}).get("type") == "function_call" for chunk in current_item_chunks
                 )
@@ -1773,7 +1807,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     current_conversation_id=current_conversation_id,
                     session_configuration_request=session_configuration_request,
                     output_items=None,
+                    cancelled=current_response_id is not None and current_response_id == self._cancelled_response_id,
                 )
+                self._cancelled_response_id = None
                 returned_message.append(transformed_response_done_event)
                 current_output_item_id = None
                 current_response_id = None
