@@ -1,8 +1,6 @@
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
-const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "x-api-key", "api-key"];
-
 pub fn get_provider_specific_headers(
     provider_specific_header: Option<&ProviderSpecificHeaders>,
     custom_llm_provider: &str,
@@ -17,9 +15,7 @@ pub fn get_provider_specific_headers(
     entries
         .iter()
         .filter(|entry| applies_to_call(entry, custom_llm_provider, model))
-        .filter(|entry| {
-            !entry.configured_credential_only || configures_a_credential(configured_headers)
-        })
+        .filter(|entry| configures_a_listed_credential(entry, configured_headers))
         .flat_map(|entry| contributed_headers(entry, configured_headers))
         .collect()
 }
@@ -34,12 +30,17 @@ fn applies_to_call(entry: &ProviderSpecificHeader, custom_llm_provider: &str, mo
             .any(|scoped| scoped.trim() == custom_llm_provider)
 }
 
-fn configures_a_credential(configured_headers: &Map<String, Value>) -> bool {
-    configured_headers.keys().any(|configured| {
-        CREDENTIAL_HEADERS
-            .iter()
-            .any(|credential| configured.eq_ignore_ascii_case(credential))
-    })
+fn configures_a_listed_credential(
+    entry: &ProviderSpecificHeader,
+    configured_headers: &Map<String, Value>,
+) -> bool {
+    entry.configured_credential_headers.is_empty()
+        || configured_headers.keys().any(|configured| {
+            entry
+                .configured_credential_headers
+                .iter()
+                .any(|credential| configured.eq_ignore_ascii_case(credential))
+        })
 }
 
 fn contributed_headers(
@@ -208,15 +209,16 @@ mod tests {
     #[rstest]
     #[case::deployment_api_key(json!({"X-Api-Key": "sk-deployment"}), json!({"anthropic-user-profile-id": "uprof_pinned"}))]
     #[case::deployment_bearer(json!({"authorization": "Bearer deployment"}), json!({"anthropic-user-profile-id": "uprof_pinned"}))]
+    #[case::unlisted_deployment_credential(json!({"api-key": "deployment"}), json!({}))]
     #[case::no_deployment_credential(json!({"x-other": "deployment"}), json!({}))]
-    fn configured_credential_entries_apply_only_beside_a_configured_credential(
+    fn configured_credential_entries_apply_only_beside_a_listed_credential(
         #[case] configured: Value,
         #[case] expected: Value,
     ) {
         let pinned: ProviderSpecificHeaders = serde_json::from_value(json!({
             "custom_llm_provider": "anthropic",
             "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
-            "configured_credential_only": true
+            "configured_credential_headers": ["authorization", "x-api-key"]
         }))
         .unwrap();
         assert_eq!(

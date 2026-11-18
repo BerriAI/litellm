@@ -222,19 +222,19 @@ def test_a_yielding_entry_never_replaces_a_configured_header(
     [
         ({"X-Api-Key": "sk-ant-deployment"}, {"anthropic-user-profile-id": "uprof_pinned"}),
         ({"Authorization": "Bearer deployment"}, {"anthropic-user-profile-id": "uprof_pinned"}),
-        ({"api-key": "foundry-deployment"}, {"anthropic-user-profile-id": "uprof_pinned"}),
+        ({"api-key": "foundry-deployment"}, {}),
         ({"x-tenant": "a"}, {}),
         (None, {}),
     ],
-    ids=["configured_x_api_key", "configured_authorization", "configured_api_key", "no_credential", "nothing"],
+    ids=["configured_x_api_key", "configured_authorization", "unlisted_api_key", "no_credential", "nothing"],
 )
-def test_a_configured_credential_entry_applies_only_beside_a_configured_credential(
+def test_a_configured_credential_entry_applies_only_beside_a_listed_configured_credential(
     configured_headers: dict[str, str] | None, expected: dict[str, str]
 ) -> None:
     scoped_header: Final[ProviderSpecificHeader] = {
         "custom_llm_provider": "anthropic",
         "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
-        "configured_credential_only": True,
+        "configured_credential_headers": ("authorization", "X-Api-Key"),
     }
 
     assert (

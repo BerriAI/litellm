@@ -5018,15 +5018,27 @@ def _user_profile_id_header(
     )
 
 
-def _pin_where_messages_sends_the_configured_credential(
-    providers: frozenset[str], user_profile_id: str | None
+_CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY: Final = ("authorization", "x-api-key", "api-key")
+_CREDENTIAL_HEADERS_CHAT_SENDS_BESIDE_OR_OVER_A_CALLER_KEY: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        LlmProviders.ANTHROPIC.value: ("authorization",),
+        LlmProviders.AZURE_AI.value: ("authorization", "x-api-key"),
+    }
+)
+
+
+def _pin_where_a_configured_credential_authenticates(
+    providers: frozenset[str],
+    user_profile_id: str | None,
+    credential_headers: tuple[str, ...],
+    native_anthropic_messages_only: bool,
 ) -> ProviderSpecificHeader:
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
         extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
         claude_models_only=True,
-        native_anthropic_messages_only=True,
-        configured_credential_only=True,
+        native_anthropic_messages_only=native_anthropic_messages_only,
+        configured_credential_headers=credential_headers,
     )
 
 
@@ -5082,8 +5094,20 @@ def add_provider_specific_headers_to_request(
                 yields_to_configured=user_profile_id is None,
             ),
             _user_profile_id_header(caller_credential_providers, caller_profile),
-            _pin_where_messages_sends_the_configured_credential(
-                caller_api_key_providers - caller_oauth_providers, user_profile_id
+            _pin_where_a_configured_credential_authenticates(
+                caller_api_key_providers - caller_oauth_providers,
+                user_profile_id,
+                _CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY,
+                native_anthropic_messages_only=True,
+            ),
+            *(
+                _pin_where_a_configured_credential_authenticates(
+                    frozenset((provider,)) & (caller_api_key_providers - caller_oauth_providers),
+                    user_profile_id,
+                    credential_headers,
+                    native_anthropic_messages_only=False,
+                )
+                for provider, credential_headers in _CREDENTIAL_HEADERS_CHAT_SENDS_BESIDE_OR_OVER_A_CALLER_KEY.items()
             ),
             ProviderSpecificHeader(
                 custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
