@@ -1351,10 +1351,14 @@ if MCP_AVAILABLE:
             failure_headers: Final = await callback_headers(None)
             if not failure_headers:
                 raise
+            existing_headers: Final = Headers(e.headers or {})
             raise HTTPException(
                 status_code=e.status_code,
                 detail=e.detail,
-                headers={**failure_headers, **(e.headers or {})},
+                headers={
+                    **{name: value for name, value in failure_headers.items() if name not in existing_headers},
+                    **(e.headers or {}),
+                },
             ) from e
         response.headers.update(await callback_headers(result))
         return result

@@ -3489,6 +3489,11 @@ class TestCallToolRestAPI:
                 {"x-callback-trace": "trace-1"},
                 id="callback_cannot_replace_the_upstream_challenge",
             ),
+            pytest.param(
+                {"WWW-Authenticate": "Bearer from-callback", "x-callback-trace": "trace-1"},
+                {"x-callback-trace": "trace-1"},
+                id="callback_cannot_add_a_differently_cased_challenge",
+            ),
         ],
     )
     async def test_virtual_mcp_tool_call_relays_upstream_auth_failure(
