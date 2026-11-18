@@ -56,28 +56,6 @@ def pricing_row(model: str, stated: bool) -> ModelInfo | None:
         return None
 
 
-def billed_usage(usage: Usage) -> Usage:
-    """``usage`` with its reasoning tokens in the completion, as xAI bills them. The transformation layer may have
-    folded them already, which shows as a total that is prompt plus completion, and a caller that bypassed it (proxy
-    logs replayed into cost calc) reports them beside the completion."""
-    prompt_tokens: Final = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion_tokens: Final = int(getattr(usage, "completion_tokens", 0) or 0)
-    total_tokens: Final = int(getattr(usage, "total_tokens", 0) or 0)
-    reasoning_tokens: Final = (
-        int(getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0)
-        if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details
-        else 0
-    )
-    already_normalised: Final = total_tokens == prompt_tokens + completion_tokens
-    return Usage(
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=completion_tokens if already_normalised else completion_tokens + reasoning_tokens,
-        total_tokens=usage.total_tokens,
-        prompt_tokens_details=usage.prompt_tokens_details,
-        completion_tokens_details=None,
-    )
-
-
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculates the cost per token for a given XAI model, prompt tokens, and completion tokens.
@@ -94,7 +72,7 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     return branch_cost(
         model,
         "xai",
-        billed_usage(usage),
+        usage,
         pricing_row(model, stated=reported_cost is not None),
         branch=BranchFacts(
             reported=None if reported_cost is None else ReportedCost(source="usage.cost", usd=reported_cost)

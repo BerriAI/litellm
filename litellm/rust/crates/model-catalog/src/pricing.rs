@@ -318,6 +318,9 @@ mod tests {
             embedding: false,
             raw: Default::default(),
             decisions: false,
+            breakdown: Default::default(),
+            tool_fees: 0.0,
+            router_fee: None,
         }))
     }
 
@@ -382,10 +385,7 @@ mod tests {
 
         let priced = total(litellm_cost::price(
             &rows,
-            &query(PriceSource::Row {
-                row: at,
-                breakdown_by_name: false,
-            }),
+            &query(PriceSource::Row { row: at }),
         ));
 
         assert_eq!(priced, 1200.0);
@@ -569,10 +569,7 @@ mod batch_parity {
                     model: "parity-model".into(),
                     provider: provider.parse().expect("every provider parses"),
                 }],
-                source: PriceSource::Row {
-                    row: at,
-                    breakdown_by_name: false,
-                },
+                source: PriceSource::Row { row: at },
                 basis,
                 adjustments: AdjustmentPolicy::None,
                 reported: None,
@@ -871,13 +868,7 @@ mod tokens_parity {
                     row.clone(),
                     case["row_provider"].as_str().unwrap(),
                 );
-                (
-                    rows,
-                    PriceSource::Row {
-                        row: at,
-                        breakdown_by_name: false,
-                    },
-                )
+                (rows, PriceSource::Row { row: at })
             }
             _ => (snapshot.pricing_rows([], []), PriceSource::Catalog),
         };
@@ -938,6 +929,7 @@ mod tokens_parity {
     #[case::perplexity_reasoning_without_rate("perplexity_reasoning_without_rate")]
     #[case::perplexity_legacy_search_rate("perplexity_legacy_search_rate")]
     #[case::xai_normalized("xai_normalized")]
+    #[case::xai_reasoning_outside("xai_reasoning_outside")]
     #[case::xai_band_edge_inclusive("xai_band_edge_inclusive")]
     #[case::xai_reported_split("xai_reported_split")]
     #[case::xai_reported_unmapped("xai_reported_unmapped")]

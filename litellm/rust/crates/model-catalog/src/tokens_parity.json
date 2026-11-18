@@ -26,9 +26,11 @@
      "cached_tokens": 200,
      "citation_tokens": 0,
      "completion_tokens": 340,
+     "prompt_tokens": 1200,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1540
     },
     "reported": null,
     "rules": "branch",
@@ -342,9 +344,11 @@
      "cached_tokens": 1000,
      "citation_tokens": 0,
      "completion_tokens": 900,
+     "prompt_tokens": 5000,
      "reasoning_tokens": 300,
      "search_queries": 0,
-     "stated_reasoning_tokens": 300
+     "stated_reasoning_tokens": 300,
+     "total_tokens": 5900
     },
     "reported": null,
     "rules": "branch",
@@ -662,9 +666,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 900,
+     "prompt_tokens": 5000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 5900
     },
     "reported": null,
     "rules": "branch",
@@ -982,9 +988,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 50,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1050
     },
     "reported": null,
     "rules": "branch",
@@ -1298,9 +1306,11 @@
      "cached_tokens": 100,
      "citation_tokens": 0,
      "completion_tokens": 100,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1100
     },
     "reported": null,
     "rules": "branch",
@@ -1614,9 +1624,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 100,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1100
     },
     "reported": null,
     "rules": "branch",
@@ -1930,9 +1942,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 100,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1100
     },
     "reported": null,
     "rules": "branch",
@@ -2246,9 +2260,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 100,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1100
     },
     "reported": null,
     "rules": "branch",
@@ -2560,9 +2576,11 @@
      "cached_tokens": 1000,
      "citation_tokens": 0,
      "completion_tokens": 200,
+     "prompt_tokens": 3000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 3200
     },
     "reported": null,
     "rules": "branch",
@@ -2874,9 +2892,11 @@
      "cached_tokens": 50000,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 250000,
      "reasoning_tokens": 500,
      "search_queries": 0,
-     "stated_reasoning_tokens": 500
+     "stated_reasoning_tokens": 500,
+     "total_tokens": 252000
     },
     "reported": null,
     "rules": "branch",
@@ -3191,9 +3211,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 10000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 12000
     },
     "reported": null,
     "rules": "branch",
@@ -3508,9 +3530,11 @@
      "cached_tokens": 4000,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 10000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 12000
     },
     "reported": null,
     "rules": "branch",
@@ -3854,9 +3878,11 @@
      "cached_tokens": 4000,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 10000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 12000
     },
     "reported": null,
     "rules": "branch",
@@ -4200,9 +4226,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 10000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 12000
     },
     "reported": null,
     "rules": "branch",
@@ -4547,9 +4575,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 0,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1000
     },
     "reported": null,
     "rules": "branch",
@@ -4844,9 +4874,11 @@
      "cached_tokens": 100,
      "citation_tokens": 0,
      "completion_tokens": 100,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1100
     },
     "reported": null,
     "rules": "branch",
@@ -5141,9 +5173,11 @@
      "cached_tokens": 400,
      "citation_tokens": 0,
      "completion_tokens": 100,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1100
     },
     "reported": null,
     "rules": "branch",
@@ -5464,9 +5498,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 100,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1100
     },
     "reported": null,
     "rules": "branch",
@@ -5787,9 +5823,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 50,
+     "prompt_tokens": 100,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 150
     },
     "reported": {
      "source": "usage.cost",
@@ -5860,9 +5898,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 50,
+     "prompt_tokens": 100,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 150
     },
     "reported": {
      "source": "usage.cost",
@@ -5933,9 +5973,11 @@
      "cached_tokens": 100,
      "citation_tokens": 0,
      "completion_tokens": 300,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 3,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1300
     },
     "reported": null,
     "rules": "branch",
@@ -6232,9 +6274,11 @@
      "cached_tokens": 0,
      "citation_tokens": 700,
      "completion_tokens": 900,
+     "prompt_tokens": 2000,
      "reasoning_tokens": 400,
      "search_queries": 2,
-     "stated_reasoning_tokens": 400
+     "stated_reasoning_tokens": 400,
+     "total_tokens": 2900
     },
     "reported": null,
     "rules": "branch",
@@ -6532,9 +6576,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 900,
+     "prompt_tokens": 2000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 250
+     "stated_reasoning_tokens": 250,
+     "total_tokens": 2900
     },
     "reported": null,
     "rules": "branch",
@@ -6832,9 +6878,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 900,
+     "prompt_tokens": 2000,
      "reasoning_tokens": 400,
      "search_queries": 0,
-     "stated_reasoning_tokens": 400
+     "stated_reasoning_tokens": 400,
+     "total_tokens": 2900
     },
     "reported": null,
     "rules": "branch",
@@ -7132,9 +7180,11 @@
      "cached_tokens": 300,
      "citation_tokens": 0,
      "completion_tokens": 900,
+     "prompt_tokens": 2000,
      "reasoning_tokens": 0,
      "search_queries": 4,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 2900
     },
     "reported": null,
     "rules": "branch",
@@ -7426,9 +7476,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 200,
      "search_queries": 0,
-     "stated_reasoning_tokens": 200
+     "stated_reasoning_tokens": 200,
+     "total_tokens": 1500
     },
     "reported": null,
     "rules": "branch",
@@ -7730,9 +7782,11 @@
      "cached_tokens": 200,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 200,
      "search_queries": 0,
-     "stated_reasoning_tokens": 200
+     "stated_reasoning_tokens": 200,
+     "total_tokens": 1700
     },
     "reported": null,
     "rules": "branch",
@@ -8034,9 +8088,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 128000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 128500
     },
     "reported": null,
     "rules": "branch",
@@ -8338,9 +8394,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": {
      "source": "usage.cost",
@@ -8645,9 +8703,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": {
      "source": "usage.cost",
@@ -8718,9 +8778,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": null,
     "rules": "branch",
@@ -8788,9 +8850,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 300000,
      "reasoning_tokens": 700,
      "search_queries": 0,
-     "stated_reasoning_tokens": 700
+     "stated_reasoning_tokens": 700,
+     "total_tokens": 302000
     },
     "reported": null,
     "rules": "branch",
@@ -9128,9 +9192,11 @@
      "cached_tokens": 3000,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 20000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 22000
     },
     "reported": null,
     "rules": "branch",
@@ -9461,9 +9527,11 @@
      "cached_tokens": 500,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 5000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 5500
     },
     "reported": null,
     "rules": "branch",
@@ -9777,9 +9845,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": null,
     "rules": "branch",
@@ -10063,9 +10133,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": null,
     "rules": "branch",
@@ -10345,9 +10417,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": null,
     "rules": "branch",
@@ -10627,9 +10701,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": null,
     "rules": "branch",
@@ -10909,9 +10985,11 @@
      "cached_tokens": 200,
      "citation_tokens": 0,
      "completion_tokens": 500,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1500
     },
     "reported": null,
     "rules": "branch",
@@ -11191,9 +11269,11 @@
      "cached_tokens": 500,
      "citation_tokens": 0,
      "completion_tokens": 800,
+     "prompt_tokens": 2000,
      "reasoning_tokens": 100,
      "search_queries": 0,
-     "stated_reasoning_tokens": 100
+     "stated_reasoning_tokens": 100,
+     "total_tokens": 2800
     },
     "reported": null,
     "rules": "branch",
@@ -11499,9 +11579,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 800,
+     "prompt_tokens": 2000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 2800
     },
     "reported": null,
     "rules": "branch",
@@ -11807,9 +11889,11 @@
      "cached_tokens": 1000,
      "citation_tokens": 0,
      "completion_tokens": 2000,
+     "prompt_tokens": 150000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 152000
     },
     "reported": null,
     "rules": "branch",
@@ -12118,9 +12202,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 300,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1300
     },
     "reported": null,
     "rules": "branch",
@@ -12436,9 +12522,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 300,
+     "prompt_tokens": 40000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 40300
     },
     "reported": null,
     "rules": "branch",
@@ -12754,9 +12842,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 300,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1300
     },
     "reported": null,
     "rules": "branch",
@@ -13068,9 +13158,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 300,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1300
     },
     "reported": null,
     "rules": "branch",
@@ -13386,9 +13478,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 0,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1000
     },
     "reported": null,
     "rules": "branch",
@@ -13704,9 +13798,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 300,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1300
     },
     "reported": null,
     "rules": "branch",
@@ -14021,9 +14117,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 300,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1300
     },
     "reported": null,
     "rules": "branch",
@@ -14306,9 +14404,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 0,
+     "prompt_tokens": 10,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 10
     },
     "reported": null,
     "rules": "branch",
@@ -14591,9 +14691,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 0,
+     "prompt_tokens": 10,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 10
     },
     "reported": null,
     "rules": "branch",
@@ -14881,9 +14983,11 @@
      "cached_tokens": 300,
      "citation_tokens": 0,
      "completion_tokens": 200,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1200
     },
     "reported": null,
     "rules": "branch",
@@ -14957,9 +15061,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 200,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1200
     },
     "reported": null,
     "rules": "branch",
@@ -15027,9 +15133,11 @@
      "cached_tokens": 100,
      "citation_tokens": 0,
      "completion_tokens": 200,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1200
     },
     "reported": null,
     "rules": "override",
@@ -15108,9 +15216,11 @@
      "cached_tokens": 0,
      "citation_tokens": 0,
      "completion_tokens": 200,
+     "prompt_tokens": 1000,
      "reasoning_tokens": 0,
      "search_queries": 0,
-     "stated_reasoning_tokens": 0
+     "stated_reasoning_tokens": 0,
+     "total_tokens": 1200
     },
     "reported": null,
     "rules": "override",

@@ -14,12 +14,16 @@ use crate::adjust::{Discount, Margin};
 use crate::calculate;
 use crate::call::CallContext;
 use crate::money::{UnitPrice, Usd};
-use crate::price::Meter;
+use crate::price::{Channel, Meter};
 use crate::priced::{Line, Outcome, Quantity, Side};
-use crate::query::{Candidate, Kind, PriceSource, ReportedCost, TokensQuery};
+use crate::query::{
+    Basis, BreakdownRow, Candidate, FeeBilling, Kind, PriceSource, ReportedCost, RouterFee,
+    TokensQuery,
+};
 use crate::quote::Quote;
-use crate::receipt::{PriceOutcome, Receipt, Unpriced};
+use crate::receipt::{BilledRates, Breakdown, Part, PartOutcome, PriceOutcome, Receipt, Unpriced};
 use crate::row::{LoweredRow, RowRef, RowSource};
+use crate::units;
 
 use branch::Sides;
 use rule::{Lookup, Rule, Stated};
@@ -54,19 +58,13 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &TokensQuery) -> PriceOutco
         PriceSource::Rows { .. } | PriceSource::PerQuery { .. } => {
             Unpriced::NotPorted(Kind::Tokens).into()
         }
-        PriceSource::Row {
-            row: at,
-            breakdown_by_name,
-        } => source
+        PriceSource::Row { row: at } => source
             .row(at)
             .and_then(|row| {
-                let lookup = Lookup::Given {
-                    breakdown_by_name: *breakdown_by_name,
-                };
                 header
                     .candidates
                     .iter()
-                    .find_map(|candidate| attempt(source, query, candidate, at, row, lookup))
+                    .find_map(|candidate| attempt(source, query, candidate, at, row, Lookup::Given))
             })
             .unwrap_or_else(no_row),
         PriceSource::Catalog => header
@@ -150,27 +148,34 @@ fn stated_cost<S: RowSource>(
     rowless(source, query, candidate, sides)
 }
 
-/// A receipt no row priced: a stated cost, custom pricing per second or a free branch
+/// A receipt no row priced: a stated cost, custom pricing per second or a free branch. Only a breakdown row the
+/// caller looked up gives it billed rates
 fn rowless<S: RowSource>(
     source: &S,
     query: &TokensQuery,
     candidate: &Candidate,
     sides: Sides,
 ) -> PriceOutcome {
+    let counted = match &query.breakdown {
+        BreakdownRow::Row { row } => source.row(row),
+        BreakdownRow::Priced | BreakdownRow::Named | BreakdownRow::Absent => None,
+    };
+    let (rates, breakdown) = stored_breakdown(counted, query);
+    let extras = extras(source, query);
     let receipt = Receipt {
         candidate: Some(candidate.clone()),
         row: None,
         lines: sides.lines,
         defaulted_to_zero: sides.defaulted_to_zero,
-        rates: None,
-        prompt: sides.prompt,
+        rates,
+        prompt: sides.prompt + extras.prompt_fee,
         completion: sides.completion,
-        tools: Usd::ZERO,
-        additional: Usd::ZERO,
+        tools: extras.tools,
+        additional: extras.additional,
         discount: Discount::default(),
         margin: Margin::default(),
-        breakdown: Default::default(),
-        parts: Vec::new(),
+        breakdown,
+        parts: extras.parts,
         cache_savings: None,
         basis: query.header.basis.clone(),
         total: 0.0,
@@ -189,8 +194,7 @@ fn attempt<S: RowSource>(
     row: &S::Row,
     lookup: Lookup,
 ) -> Option<PriceOutcome> {
-    let usage = query.usage.billed();
-    let listed = row.prices().for_prompt(usage.prompt_tokens);
+    let listed = row.prices().for_prompt(query.usage.prompt_tokens);
     let request = query
         .decisions
         .then(|| decisions::request_price(row, listed))
@@ -204,10 +208,10 @@ fn attempt<S: RowSource>(
             Err(kind) => return Some(Unpriced::NotPorted(kind).into()),
         },
     };
+    let usage = rule::billed_usage(candidate, query).billed();
     let basis = &query.header.basis;
     let call = rule.call(basis, &query.usage, &row.facts().provider_entry)?;
     let prices = decided.as_ref().unwrap_or(listed);
-    let quote = prices.quote(&call, usage.prompt_tokens);
     let calculated = || match calculate(prices, row.adjustments(), &usage, &call) {
         Outcome::Priced(priced) => Sides {
             lines: priced.lines,
@@ -235,43 +239,30 @@ fn attempt<S: RowSource>(
         Some(Ok(fee)) => fee,
         None => Usd::ZERO,
     };
-    let breakdown_row = match lookup {
-        Lookup::Given {
-            breakdown_by_name: true,
-        } => named,
-        Lookup::Catalog | Lookup::Given { .. } => Some(row),
+    let counted = match &query.breakdown {
+        BreakdownRow::Priced => Some(row),
+        BreakdownRow::Named => named,
+        BreakdownRow::Row { row: at } => source.row(at),
+        BreakdownRow::Absent => None,
     };
-    let rates = breakdown_row.map(|counted| {
-        let multiplier = breakdown::multiplier(
-            counted.adjustments(),
-            basis,
-            &query.usage,
-            &counted.facts().provider_entry,
-        );
-        breakdown::billed_rates(
-            &quote_of(counted, &call, usage.prompt_tokens),
-            query.usage.cache_read.explicit,
-        )
-        .scaled(multiplier)
-    });
+    let (rates, breakdown) = stored_breakdown(counted, query);
+    let extras = extras(source, query);
     let receipt = Receipt {
         candidate: Some(candidate.clone()),
         row: Some(at.clone()),
         lines: sides.lines,
         defaulted_to_zero: sides.defaulted_to_zero,
-        breakdown: rates
-            .map(|rates| breakdown::breakdown(&rates, &query.usage, false))
-            .unwrap_or_default(),
+        breakdown,
         rates,
-        prompt: sides.prompt,
+        prompt: sides.prompt + extras.prompt_fee,
         completion: sides.completion,
-        tools,
-        additional: Usd::ZERO,
+        tools: tools + extras.tools,
+        additional: extras.additional,
         discount: Discount::default(),
         margin: Margin::default(),
-        parts: Vec::new(),
+        parts: extras.parts,
         cache_savings: Some(breakdown::cache_savings(
-            &quote,
+            &prices.quote(&basis_call(basis), usage.prompt_tokens),
             &query.usage,
             breakdown::savings_uplift(row.adjustments(), basis),
         )),
@@ -283,6 +274,109 @@ fn attempt<S: RowSource>(
             .settled(source, &query.header.adjustments, Some(&candidate.model))
             .into(),
     )
+}
+
+/// The call facts main's breakdown and savings quote a row with: the call's tier and endpoint, without the speed and
+/// geo the provider branches read, whose uplifts they multiply in apart (`call_context` in `llm_cost_calc/utils.py`)
+fn basis_call(basis: &Basis) -> CallContext {
+    CallContext {
+        tier: basis.service_tier,
+        channel: Channel::Online,
+        residency: basis.residency(),
+        fedramp_endpoint: basis.fedramp(),
+        non_global_endpoint: basis.non_global_endpoint(),
+        speed: None,
+        inference_geo: None,
+        at: basis.at,
+        overlay: None,
+    }
+}
+
+/// `get_token_type_cost_breakdown` on `counted`: the billed rates with every uplift the call names, and the cache and
+/// reasoning lines at them. No row bills no rates and a zero breakdown
+fn stored_breakdown<R: LoweredRow>(
+    counted: Option<&R>,
+    query: &TokensQuery,
+) -> (Option<BilledRates>, Breakdown) {
+    let basis = &query.header.basis;
+    let prompt_tokens = query.usage.billed().prompt_tokens;
+    let rates = counted.map(|counted| {
+        let multiplier = breakdown::multiplier(
+            counted.adjustments(),
+            basis,
+            &query.usage,
+            &counted.facts().provider_entry,
+        );
+        breakdown::billed_rates(
+            &quote_of(counted, &basis_call(basis), prompt_tokens),
+            query.usage.cache_read.explicit,
+        )
+        .scaled(multiplier)
+    });
+    let stored = rates
+        .map(|rates| breakdown::breakdown(&rates, &query.usage, false))
+        .unwrap_or_default();
+    (rates, stored)
+}
+
+/// What a call bills beside its tokens and the web search fee
+struct Extras {
+    tools: Usd,
+    prompt_fee: Usd,
+    additional: Usd,
+    parts: Vec<Part>,
+}
+
+/// The label main's stored breakdown lists the Model Router fee under in `additional_costs`
+pub const ROUTER_FEE: &str = "Azure Model Router Flat Cost";
+
+/// The tool fees the caller priced and the Azure AI Model Router fee. Main bills the fee only when it is positive
+/// (`calculate_azure_model_router_flat_cost`), and a router row that is gone bills none
+fn extras<S: RowSource>(source: &S, query: &TokensQuery) -> Extras {
+    let tools = Usd::new(query.tool_fees).unwrap_or(Usd::ZERO);
+    let fee = query.router_fee.as_ref().and_then(|fee| {
+        let rate = units::listed(source.row(&fee.row)?, &Meter::TEXT_INPUT, Channel::Online)?;
+        let amount = rate * Quantity::Count(query.usage.billed().prompt_tokens);
+        (amount.get() > 0.0).then_some((fee, amount))
+    });
+    match fee {
+        Some((
+            RouterFee {
+                billed: FeeBilling::Prompt,
+                ..
+            },
+            amount,
+        )) => Extras {
+            tools,
+            prompt_fee: amount,
+            additional: Usd::ZERO,
+            parts: Vec::new(),
+        },
+        Some((
+            RouterFee {
+                row,
+                billed: FeeBilling::Additional,
+            },
+            amount,
+        )) => Extras {
+            tools,
+            prompt_fee: Usd::ZERO,
+            additional: amount,
+            parts: vec![Part {
+                label: ROUTER_FEE.into(),
+                outcome: PartOutcome::Priced {
+                    row: Some(row.clone()),
+                    amount,
+                },
+            }],
+        },
+        None => Extras {
+            tools,
+            prompt_fee: Usd::ZERO,
+            additional: Usd::ZERO,
+            parts: Vec::new(),
+        },
+    }
 }
 
 fn quote_of<'a>(row: &'a impl LoweredRow, call: &CallContext, prompt_tokens: u64) -> Quote<'a> {
@@ -306,8 +400,8 @@ mod parity {
     use crate::call::{InferenceGeo, Speed};
     use crate::price::{SearchContextSize, ServiceTier};
     use crate::query::{
-        AdjustmentPolicy, Basis, CacheReads, CacheWrites, Header, Modalities, PriceSource,
-        Provider, TokenUsage, TokensQuery, WebSearchUse,
+        AdjustmentPolicy, Basis, BreakdownRow, CacheReads, CacheWrites, Header, Modalities,
+        PriceSource, Provider, TokenUsage, TokensQuery, WebSearchUse,
     };
     use crate::receipt::{PriceOutcome, Receipt};
     use crate::testing::{TestSource, basis, candidate, fixture_row, row_ref};
@@ -395,18 +489,19 @@ mod parity {
             .iter()
             .map(|(key, rule)| (key.clone(), margin(rule)))
             .collect();
-        let (source, price_source) = match case.get("named_row") {
+        let (source, price_source, breakdown) = match case.get("named_row") {
             Some(named) => (
                 TestSource::with_row(model, fixture_row(named))
                     .and_row(GIVEN, fixture_row(&case["row"])),
                 PriceSource::Row {
                     row: row_ref(GIVEN),
-                    breakdown_by_name: true,
                 },
+                BreakdownRow::Named,
             ),
             None => (
                 TestSource::with_row(model, fixture_row(&case["row"])),
                 PriceSource::Catalog,
+                BreakdownRow::Priced,
             ),
         };
         let source = source.with_discounts(&discounts).with_margins(margins);
@@ -431,6 +526,7 @@ mod parity {
             },
             usage(&case["usage"]),
         );
+        let query = TokensQuery { breakdown, ..query };
         match price(&source, &query) {
             PriceOutcome::Priced(receipt) => *receipt,
             PriceOutcome::Unpriced(unpriced) => panic!("unpriced: {unpriced:?}"),
@@ -544,10 +640,12 @@ mod tests {
     use super::*;
     use crate::call::{InferenceGeo, Speed};
     use crate::money::Multiplier;
-    use crate::price::{Adjustments, Meter, Uplift};
-    use crate::query::{AdjustmentPolicy, Provider, TokenUsage};
+    use crate::price::{Adjustments, Meter, ServiceTier, Uplift};
+    use crate::query::{AdjustmentPolicy, Provider, TokenRules, TokenUsage};
     use crate::row::{Provenance, ProviderEntry, RowFacts};
-    use crate::testing::{TestRow, TestSource, candidate, row_ref, text_row, tokens_query, usage};
+    use crate::testing::{
+        BASE, TestRow, TestSource, candidate, prices, row_ref, text_row, tokens_query, usage,
+    };
 
     fn priced(outcome: PriceOutcome) -> Receipt {
         match outcome {
@@ -614,6 +712,214 @@ mod tests {
                 .map(|line| line.amount.get())
                 .sum::<f64>()
         );
+    }
+
+    fn other_query(provider: &str, usage: TokenUsage) -> TokensQuery {
+        tokens_query(Provider::Other(provider.to_owned()), "model", usage)
+    }
+
+    #[rstest]
+    #[case::billed_on_the_prompt(FeeBilling::Prompt, 30.0 + 5.0, 0.0, None)]
+    #[case::billed_beside_the_tokens(FeeBilling::Additional, 30.0, 5.0, Some(5.0))]
+    fn the_router_fee_bills_the_router_rate_on_every_prompt_token(
+        #[case] billed: FeeBilling,
+        #[case] prompt: f64,
+        #[case] additional: f64,
+        #[case] part: Option<f64>,
+    ) {
+        let source =
+            TestSource::with_row("model", text_row(3.0, 1.0)).and_row("router", text_row(0.5, 0.0));
+        let query = TokensQuery {
+            router_fee: Some(RouterFee {
+                row: row_ref("router"),
+                billed,
+            }),
+            ..other_query("azure_ai", usage(10, 2))
+        };
+        let receipt = priced(price(&source, &query));
+
+        assert_eq!(receipt.prompt.get(), prompt);
+        assert_eq!(receipt.additional.get(), additional);
+        assert_eq!(
+            receipt
+                .parts
+                .iter()
+                .find(|part| &*part.label == ROUTER_FEE)
+                .and_then(Part::amount)
+                .map(Usd::get),
+            part
+        );
+        assert_eq!(receipt.total, 30.0 + 2.0 + 5.0);
+    }
+
+    #[rstest]
+    #[case::free_router_row(text_row(0.0, 0.0))]
+    #[case::router_row_without_an_input_rate(TestRow::default())]
+    fn a_router_row_with_no_positive_rate_bills_no_fee(#[case] router: TestRow) {
+        let source = TestSource::with_row("model", text_row(3.0, 1.0)).and_row("router", router);
+        let query = TokensQuery {
+            router_fee: Some(RouterFee {
+                row: row_ref("router"),
+                billed: FeeBilling::Additional,
+            }),
+            ..other_query("azure", usage(10, 2))
+        };
+        let receipt = priced(price(&source, &query));
+
+        assert!(receipt.parts.is_empty());
+        assert_eq!(receipt.total, 32.0);
+    }
+
+    #[rstest]
+    fn tool_fees_the_caller_priced_are_discounted_with_the_tokens() {
+        let source =
+            TestSource::with_row("model", text_row(3.0, 1.0)).with_discounts(&[("openai", 0.5)]);
+        let query = TokensQuery {
+            tool_fees: 8.0,
+            ..other_query("openai", usage(10, 2))
+        };
+        let receipt = priced(price(&source, &query));
+
+        assert_eq!(receipt.tools.get(), 8.0);
+        assert_eq!(receipt.original(), 40.0);
+        assert_eq!(receipt.total, 20.0);
+    }
+
+    fn reasoning(completion_tokens: u64, total_tokens: u64) -> TokensQuery {
+        let query = other_query(
+            "xai",
+            TokenUsage {
+                reasoning: 6,
+                ..usage(10, completion_tokens)
+            },
+        );
+        TokensQuery {
+            raw: crate::query::RawCounts {
+                prompt_tokens: 10,
+                completion_tokens,
+                total_tokens,
+                reasoning_tokens: 6,
+                ..Default::default()
+            },
+            ..query
+        }
+    }
+
+    #[rstest]
+    #[case::reported_beside_the_completion(reasoning(4, 20), 10.0)]
+    #[case::already_in_the_completion(reasoning(4, 14), 4.0)]
+    fn xai_bills_reasoning_as_completion_text(
+        #[case] query: TokensQuery,
+        #[case] completion_tokens: f64,
+    ) {
+        let row = TestRow {
+            prices: prices(&[
+                (Meter::TEXT_INPUT, ServiceTier::Standard, BASE, 1.0),
+                (Meter::TEXT_OUTPUT, ServiceTier::Standard, BASE, 2.0),
+                (Meter::REASONING, ServiceTier::Standard, BASE, 100.0),
+            ]),
+            ..TestRow::default()
+        };
+        let receipt = priced(price(&TestSource::with_row("model", row), &query));
+
+        assert_eq!(receipt.completion.get(), completion_tokens * 2.0);
+        assert_eq!(receipt.breakdown.reasoning, 600.0);
+    }
+
+    #[rstest]
+    fn the_stored_breakdown_reads_the_tier_a_branch_that_ignores_it_bills_at_standard() {
+        let row = TestRow {
+            prices: prices(&[
+                (Meter::TEXT_INPUT, ServiceTier::Standard, BASE, 1.0),
+                (Meter::TEXT_INPUT, ServiceTier::Priority, BASE, 2.0),
+                (Meter::TEXT_OUTPUT, ServiceTier::Standard, BASE, 1.0),
+            ]),
+            ..TestRow::default()
+        };
+        let query = other_query("deepseek", usage(10, 0));
+        let query = TokensQuery {
+            header: crate::query::Header {
+                basis: crate::query::Basis {
+                    service_tier: ServiceTier::Priority,
+                    ..query.header.basis.clone()
+                },
+                ..query.header
+            },
+            ..query
+        };
+        let receipt = priced(price(&TestSource::with_row("model", row), &query));
+
+        assert_eq!(receipt.total, 10.0);
+        assert_eq!(receipt.rates.map(|rates| rates.input), Some(2.0));
+    }
+
+    #[rstest]
+    #[case::generic(TokenRules::Generic, 11.0)]
+    #[case::generic_with_the_tier_alone(TokenRules::GenericTier, 10.0)]
+    fn generic_with_the_tier_alone_leaves_the_residency_to_the_breakdown(
+        #[case] rules: TokenRules,
+        #[case] total: f64,
+    ) {
+        let row = TestRow {
+            adjustments: Adjustments::new([(
+                Uplift::Residency(crate::price::Residency::Eu),
+                Multiplier::new(1.1).unwrap(),
+            )]),
+            ..text_row(1.0, 0.0)
+        };
+        let query = other_query("azure_ai", usage(10, 0));
+        let query = TokensQuery {
+            header: crate::query::Header {
+                basis: crate::query::Basis {
+                    data_residency: Some(crate::query::DataResidency::Eu),
+                    ..query.header.basis.clone()
+                },
+                ..query.header
+            },
+            rules,
+            ..query
+        };
+        let receipt = priced(price(&TestSource::with_row("model", row), &query));
+
+        assert_eq!(receipt.total, total);
+        assert_eq!(receipt.rates.map(|rates| rates.input), Some(1.1));
+    }
+
+    #[rstest]
+    #[case::a_row_looked_up_apart(true, Some(4.0))]
+    #[case::no_row(false, None)]
+    fn custom_pricing_per_second_reads_billed_rates_off_the_breakdown_row(
+        #[case] looked_up: bool,
+        #[case] input_rate: Option<f64>,
+    ) {
+        let query = other_query("openai", usage(10, 0));
+        let query = TokensQuery {
+            header: crate::query::Header {
+                source: PriceSource::PerSecond {
+                    rate: UnitPrice::new(0.5).unwrap(),
+                },
+                ..query.header
+            },
+            elapsed: Some(crate::query::Elapsed {
+                response_ms: 3000.0,
+                audio_seconds: 0.0,
+            }),
+            breakdown: if looked_up {
+                BreakdownRow::Row {
+                    row: row_ref("catalog"),
+                }
+            } else {
+                BreakdownRow::Absent
+            },
+            ..query
+        };
+        let receipt = priced(price(
+            &TestSource::with_row("catalog", text_row(4.0, 1.0)),
+            &query,
+        ));
+
+        assert_eq!(receipt.total, 1.5);
+        assert_eq!(receipt.rates.map(|rates| rates.input), input_rate);
     }
 
     #[rstest]
@@ -757,15 +1063,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::breakdown_off_the_given_row(false, true, Some(3.0))]
-    #[case::breakdown_off_the_named_row(true, true, Some(1.0))]
-    #[case::no_named_row_no_breakdown(true, false, None)]
+    #[case::breakdown_off_the_given_row(BreakdownRow::Priced, true, Some(3.0))]
+    #[case::breakdown_off_the_named_row(BreakdownRow::Named, true, Some(1.0))]
+    #[case::no_named_row_no_breakdown(BreakdownRow::Named, false, None)]
+    #[case::breakdown_off_a_row_looked_up_apart(BreakdownRow::Row { row: row_ref("looked-up") }, false, Some(5.0))]
+    #[case::no_row_looked_up_no_breakdown(BreakdownRow::Absent, true, None)]
     fn a_given_row_prices_the_total(
-        #[case] breakdown_by_name: bool,
+        #[case] breakdown: BreakdownRow,
         #[case] named_row: bool,
         #[case] breakdown_input_rate: Option<f64>,
     ) {
-        let given = TestSource::with_row("override", text_row(3.0, 3.0));
+        let given = TestSource::with_row("override", text_row(3.0, 3.0))
+            .and_row("looked-up", text_row(5.0, 5.0));
         let source = if named_row {
             given.and_row("claude", text_row(1.0, 1.0))
         } else {
@@ -776,10 +1085,10 @@ mod tests {
             header: crate::query::Header {
                 source: PriceSource::Row {
                     row: row_ref("override"),
-                    breakdown_by_name,
                 },
                 ..query.header
             },
+            breakdown,
             ..query
         };
         let receipt = priced(price(&source, &query));
@@ -841,7 +1150,15 @@ mod tests {
         #[case] expected: (f64, f64),
     ) {
         let source = row.map_or_else(TestSource::default, |row| TestSource::with_row("grok", row));
-        let query = stated(tokens_query(other("xai"), "grok", usage(10, 10)), 4.0);
+        let query = TokensQuery {
+            raw: crate::query::RawCounts {
+                prompt_tokens: 10,
+                completion_tokens: 10,
+                total_tokens: 20,
+                ..Default::default()
+            },
+            ..stated(tokens_query(other("xai"), "grok", usage(10, 10)), 4.0)
+        };
         assert_eq!(sides(price(&source, &query)), expected);
     }
 
