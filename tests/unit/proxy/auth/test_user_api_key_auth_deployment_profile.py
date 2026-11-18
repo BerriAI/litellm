@@ -263,8 +263,8 @@ async def _teams_by_alias(where: Mapping[str, object], **_: object) -> list[Lite
     return [team for team in TEAMS if team.team_alias is not None and team.team_alias == where.get("team_alias")]
 
 
-class _Tables:
-    """Every table is empty except the ones set on it."""
+class _Tables(SimpleNamespace):
+    """Every table is empty except the ones it is built with."""
 
     def __getattr__(self, table: str) -> SimpleNamespace:
         return SimpleNamespace(
@@ -282,10 +282,11 @@ def _prisma(users: UserTable, database: Database) -> MagicMock:
         if database == "up"
         else AsyncMock(side_effect=httpx.ConnectError("connection refused"))
     )
-    tables: Final = _Tables()
-    tables.litellm_teamtable = SimpleNamespace(find_unique=read, find_first=read, find_many=_teams_by_alias)
-    tables.litellm_usertable = users
-    tables.litellm_jwtkeymapping = SimpleNamespace(find_first=AsyncMock(side_effect=_mapping))
+    tables: Final = _Tables(
+        litellm_teamtable=SimpleNamespace(find_unique=read, find_first=read, find_many=_teams_by_alias),
+        litellm_usertable=users,
+        litellm_jwtkeymapping=SimpleNamespace(find_first=AsyncMock(side_effect=_mapping)),
+    )
     prisma: Final = MagicMock()
     prisma.get_data = read
     prisma.attempt_db_reconnect = AsyncMock(return_value=False)
