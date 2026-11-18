@@ -628,6 +628,7 @@ class ConfiguredModelInfo:
 
 _UNCONFIGURED: Final = ConfiguredModelInfo()
 _NO_CONFIGURED: Final[Mapping[str, ConfiguredModelInfo]] = MappingProxyType({})
+_ALL_PROXY_MODELS: Final = "all-proxy-models"
 _Pinned: Final = TypeVar("_Pinned", bound=Hashable)
 _Fetched: Final = TypeVar("_Fetched", bound=LiteLLMBaseModel)
 
@@ -734,18 +735,26 @@ def _fetch_configured(
         return _NO_CONFIGURED
     named: Final = _configured_names(deployments, lambda info: info.display_name)
     tiered: Final = _configured_names(deployments, lambda info: info.service_tiers)
-    undeployed: Final = frozenset(m.id for m in models) - frozenset(_public_name(d) for d in deployments)
+    undeployed: Final = frozenset(m.id for m in models if m.id != _ALL_PROXY_MODELS) - frozenset(
+        _public_name(d) for d in deployments
+    )
     if not named | tiered | undeployed:
         return _NO_CONFIGURED
     if client_version is None:
-        warn("litellm: Codex keeps its own display names and service tiers: `codex --version` printed no version")
-        return _NO_CONFIGURED
+        return _keep_codex_values(named | tiered, "`codex --version` printed no version", warn)
     url: Final = f"{base_url.rstrip('/')}/v1/models?{urlencode({'client_version': client_version})}"
     served: Final = _fetch_validated(url, api_key, CodexStockCatalog, get=get)
     if served is None:
-        warn(f"litellm: Codex keeps its own display names and service tiers: {url} served no Codex catalog")
-        return _NO_CONFIGURED
+        return _keep_codex_values(named | tiered, f"{url} served no Codex catalog", warn)
     return MappingProxyType({m.slug: _served_info(m, named | undeployed, tiered | undeployed) for m in served.models})
+
+
+def _keep_codex_values(
+    configured: frozenset[str], reason: str, warn: Callable[[str], None]
+) -> Mapping[str, ConfiguredModelInfo]:
+    if configured:
+        warn(f"litellm: Codex keeps its own display names and service tiers: {reason}")
+    return _NO_CONFIGURED
 
 
 class _OpenCodeLimit(LiteLLMBaseModel):

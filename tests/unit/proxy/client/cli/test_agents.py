@@ -1272,14 +1272,30 @@ class TestCodexModelSync:
 
         assert captured["warnings"] == expected
 
+    @pytest.mark.parametrize("run", [None, _FakeRun(version=None)], ids=["older_proxy", "codex_version_unreadable"])
+    def test_an_alias_left_on_the_installed_codex_values_with_nothing_configured_is_not_reported(self, tmp_path, run):
+        captured, result = self._sync(
+            self._listing(self._row("gpt-5.5"), self._row("sol-alias")),
+            tmp_path,
+            model_info=self._deployments(self._deployment("gpt-5.5")),
+            run=run,
+        )
+
+        assert isinstance(result, ModelSyncArgs)
+        assert captured["warnings"] == []
+
     @pytest.mark.parametrize(
-        ("model_info", "run"),
-        [({}, None), ({"display_name": "Configured"}, _FakeRun(version=None))],
-        ids=["nothing_configured", "codex_version_unreadable"],
+        ("listed", "model_info", "run"),
+        [
+            (("gpt-5.5",), {}, None),
+            (("gpt-5.5",), {"display_name": "Configured"}, _FakeRun(version=None)),
+            (("all-proxy-models", "gpt-5.5"), {}, None),
+        ],
+        ids=["nothing_configured", "codex_version_unreadable", "team_without_a_model_limit"],
     )
-    def test_the_proxy_is_not_asked_for_its_catalog(self, tmp_path, model_info, run):
+    def test_the_proxy_is_not_asked_for_its_catalog(self, tmp_path, listed, model_info, run):
         captured, _ = self._sync(
-            self._listing(self._row("gpt-5.5")),
+            self._listing(*(self._row(model_id) for model_id in listed)),
             tmp_path,
             model_info=self._deployments(self._deployment("gpt-5.5", **model_info)),
             run=run,
