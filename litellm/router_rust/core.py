@@ -2995,12 +2995,9 @@ class RustCore(
                 self._usage_read_scope(str(prepared.get("model")), prepared),
             ):
                 driver, step = await self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
-            try:
-                if step["kind"] == "failed":
-                    raise driver.failed(step)
-                return await driver.finish_async(step)
-            finally:
-                driver.clear_errors()
+            if step["kind"] == "failed":
+                raise driver.failed(step)
+            return await driver.finish_async(step)
 
     async def _run(
         self,
@@ -3076,12 +3073,9 @@ class RustCore(
             call, prepared = self._start(plan, request, overrides)
             with picks_reserve(plan.endpoint not in _UNRESERVED_OPS):
                 driver, step = self._run_sync(plan, call, prepared, fresh=True)
-            try:
-                if step["kind"] == "failed":
-                    raise driver.failed(step)
-                return driver.finish(step)
-            finally:
-                driver.clear_errors()
+            if step["kind"] == "failed":
+                raise driver.failed(step)
+            return driver.finish(step)
 
     def _run_sync(
         self,
@@ -3184,12 +3178,9 @@ class RustCore(
         driver, step = await self._run(
             plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
         )
-        try:
-            if step["kind"] == "failed":
-                raise driver.failed(step)
-            return await driver.finish_async(step)
-        finally:
-            driver.clear_errors()
+        if step["kind"] == "failed":
+            raise driver.failed(step)
+        return await driver.finish_async(step)
 
     def recover_stream_sync(
         self,
@@ -3203,12 +3194,9 @@ class RustCore(
         driver, step = self._run_sync(
             plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
         )
-        try:
-            if step["kind"] == "failed":
-                raise driver.failed(step)
-            return driver.finish(step)
-        finally:
-            driver.clear_errors()
+        if step["kind"] == "failed":
+            raise driver.failed(step)
+        return driver.finish(step)
 
     async def retry_stream(
         self, op: str, request: Mapping[str, object], origin: Mapping[str, object], failure: BaseException
