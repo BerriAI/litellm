@@ -1453,7 +1453,7 @@ def test_get_user_role(user_obj, expected_role):
     assert get_user_role(user_obj) == expected_role
 
 
-def _user_with_role(user_role):
+def _user_with_role(user_role: str | None) -> LiteLLM_UserTable:
     return LiteLLM_UserTable(
         user_role=user_role,
         user_id="1234",
@@ -1492,7 +1492,12 @@ def _user_with_role(user_role):
         "explicit_proxy_admin_ignores_viewer_default",
     ],
 )
-def test_get_user_role_for_unset_or_invalid_stored_role(monkeypatch, stored_role, default_params, expected_role):
+def test_get_user_role_for_unset_or_invalid_stored_role(
+    monkeypatch: pytest.MonkeyPatch,
+    stored_role: str | None,
+    default_params: dict[str, object] | None,
+    expected_role: LitellmUserRoles,
+) -> None:
     from litellm.proxy.auth.auth_checks import get_user_role
 
     monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
@@ -1509,14 +1514,18 @@ def test_get_user_role_for_unset_or_invalid_stored_role(monkeypatch, stored_role
     ],
     ids=["no_default_configured", "viewer_default_configured"],
 )
-async def test_auth_object_role_for_user_with_null_stored_role(monkeypatch, default_params, expected_role):
+async def test_auth_object_role_for_user_with_null_stored_role(
+    monkeypatch: pytest.MonkeyPatch,
+    default_params: dict[str, object] | None,
+    expected_role: LitellmUserRoles,
+) -> None:
     from datetime import datetime
 
     from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
 
     monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
 
-    auth_obj = await return_user_api_key_auth_obj(
+    auth_obj: Final = await return_user_api_key_auth_obj(
         user_obj=_user_with_role(None),
         api_key="test-api-key",
         parent_otel_span=None,
