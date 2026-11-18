@@ -24,6 +24,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.mcp import (
+    JsonRpcFailure,
     McpPeer,
     ScriptedTool,
     mcp_peer,
@@ -648,6 +649,50 @@ def test_auto_approved_gateway_tool_is_listed_executed_once_and_fed_back(gateway
         assert len(requests) == 2, requests
         assert all(rig.tool in names for names in requests), requests
         assert rig.final_text(response.json()) == ANSWER, response.text
+
+
+URL_ELICITATION: Final = {
+    "code": -32042,
+    "message": "This request requires more information.",
+    "data": {"elicitations": [{"mode": "url", "elicitationId": "el-1", "url": "https://consent.example.invalid/a"}]},
+}
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_auto_executed_tool_asking_for_url_elicitation_hands_the_model_the_flattened_error_text(
+    gateway: Gateway, surface: Surface
+) -> None:
+    alias: Final = "llm" + uuid.uuid4().hex[:8]
+
+    def plan(body: Mapping[str, JsonValue]) -> Turn:
+        return Turn(f"{alias}-add", json.dumps(ADD), _tool_result_text(body) or "")
+
+    with (
+        scripted_peer(ScriptedTool("add", lambda _: JsonRpcFailure(URL_ELICITATION))) as peer,
+        wire_server(_model_double(plan)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        server_id: Final = register_mcp(scenario, peer, alias)
+        model: Final = scenario.model(model=_upstream_model(surface), api_base=wire.url + "/v1")
+        rig: Final = Rig(gateway, scenario, peer, wire, alias, server_id, model, surface)
+        peer.drain()
+        key: Final = _granted_key(rig)
+        response: Final = rig.send(key, [AUTO])
+        assert response.status_code == 200, response.text
+        tool_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT status FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=%s',
+                (sha256(key.encode()).hexdigest(), "call_mcp_tool"),
+            ),
+            lambda found: len(found) >= 1,
+            seconds=70,
+            return_last_on_timeout=True,
+        )
+        assert (rig.final_text(response.json()), [row["status"] for row in tool_rows]) == (
+            "MCPError: This request requires more information.",
+            ["success"],
+        ), response.text
+        assert len(_peer_add_calls(peer)) == 1
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
