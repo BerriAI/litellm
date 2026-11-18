@@ -69,6 +69,9 @@ That's it! The provider will be automatically loaded and available.
     // convert_content_list_to_string keeps only the text of every content list
     // convert_text_content_list_to_string joins a list of only text parts with
     // newlines and sends a list with any other part as it is
+    // round_reasoning_effort_to_declared_levels sends reasoning_effort as the
+    // nearest level in the model's reasoning_effort_levels cost map row, and
+    // drops a level the row does not declare under drop_params
     "special_handling": {
       "convert_content_list_to_string": true
     },
