@@ -4786,12 +4786,49 @@ class _NoneAsDefaultDict(dict[str, object]):
         return default if value is None else value
 
 
+class _UnreadableIndexChunk(_DelegatingChunk):
+    def __contains__(self, key: object) -> bool:
+        return key == "index" or super().__contains__(key)
+
+    def __getitem__(self, key: str) -> object:
+        if key == "index":
+            raise ValueError("index is not set")
+        return super().__getitem__(key)
+
+
+class _KeyIterableChunk:
+    def __init__(self, fields: dict[str, object]) -> None:
+        self._fields: Final = fields
+
+    def __getitem__(self, key: str) -> object:
+        return self._fields[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._fields)
+
+    def get(self, key: str, default: object = None) -> object:
+        return self._fields.get(key, default)
+
+
+class _SelfIteratingKeysChunk(_KeyIterableChunk):
+    def __init__(self, fields: dict[str, object]) -> None:
+        super().__init__(fields)
+        self._keys: Final = iter(fields)
+
+    def __iter__(self) -> Iterator[str]:
+        return self
+
+    def __next__(self) -> str:
+        return next(self._keys)
+
+
 @pytest.mark.parametrize(
     "as_chunk",
     [
         pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
         pytest.param(_ValueErrorForMissingKeyChunk, id="object-raising-value-error-for-missing-key"),
         pytest.param(_EmptyStringForMissingKeyChunk, id="object-returning-empty-string-for-missing-key"),
+        pytest.param(_UnreadableIndexChunk, id="object-with-unreadable-index"),
     ],
 )
 def test_custom_provider_stream_reads_dict_like_chunk_objects(
@@ -4814,6 +4851,51 @@ def test_custom_provider_stream_reads_dict_like_chunk_objects(
 
     assert assembled.choices[0].message.content == "hello"
     assert assembled.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(_DelegatingChunk, id="object-with-contains"),
+        pytest.param(_KeyIterableChunk, id="object-iterating-its-keys"),
+        pytest.param(_SelfIteratingKeysChunk, id="object-that-is-its-own-key-iterator"),
+    ],
+)
+def test_custom_provider_stream_keeps_tool_call_and_provider_fields_of_chunk_objects(
+    monkeypatch: pytest.MonkeyPatch,
+    as_chunk: Callable[[dict[str, object]], object],
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{}"},
+        "index": 0,
+    }
+    chunks: Final = (
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "tool_use": tool_call,
+            "provider_specific_fields": {"citations": ["https://example.com"]},
+        },
+        {"text": "", "is_finished": True, "finish_reason": "tool_calls", "usage": None},
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    streamed: Final = list(wrapper)
+    assembled: Final = litellm.stream_chunk_builder(chunks=streamed)
+
+    assert ["https://example.com"] in [getattr(chunk, "citations", None) for chunk in streamed]
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert assembled.choices[0].finish_reason == "tool_calls"
 
 
 @pytest.mark.parametrize(
