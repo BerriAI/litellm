@@ -51,7 +51,7 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_vrtx_011CfjuySsPewSSfasuPiaHg",
+        "id": "msg_vrtx_011ChAaNpNLwBkXbEMxMPqgt",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -65,6 +65,7 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -98,6 +99,7 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
@@ -129,7 +131,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-4-6",
-        "id": "msg_vrtx_011CfjuxUbJsRvQZCN21qNQq",
+        "id": "msg_vrtx_011ChAaNvFJLvXfeQGip24yv",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello!"}],
@@ -143,6 +145,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -176,6 +179,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
@@ -207,7 +211,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-5",
-        "id": "msg_vrtx_011CfjuygPVDgzuMXdyyW9UP",
+        "id": "msg_vrtx_011ChAaNwJKFWL9SYygQZLDD",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -222,6 +226,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -255,6 +260,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
@@ -286,7 +292,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-opus-4-8",
-        "id": "msg_vrtx_011CfjuyofoMgSaV8Pbt16N9",
+        "id": "msg_vrtx_011ChAaNxfQxdStruGWRTFQb",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -301,6 +307,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -334,6 +341,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
@@ -479,7 +487,11 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
         "x-api-key": "scripted-token",
     },
     expected_provider_request=VERTEX_AI_ANTHROPIC_MESSAGES_REQUEST,
-    mock_provider_response={**VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE, "model": "claude-sonnet-5-5"},
+    mock_provider_response={
+        **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-sonnet-5-5",
+        "usage": {**object_value(VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE["usage"]), "speed": "standard"},
+    },
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
         "model": "vertex_ai/claude-sonnet-5-5@default",
@@ -572,6 +584,7 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 876,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
@@ -642,6 +655,7 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 348,
             "output_tokens_details": {"thinking_tokens": 168},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
@@ -720,6 +734,7 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 876,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
@@ -772,6 +787,7 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 265,
             "output_tokens_details": {"thinking_tokens": 167},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
@@ -857,6 +873,7 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 876,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
@@ -1432,6 +1449,7 @@ CLAUDE_OPUS_5_TEST_CASE: Final = TranslationTestCase(
             "input_tokens": 1180,
             "output_tokens": 105,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
@@ -1476,6 +1494,7 @@ CLAUDE_OPUS_5_TEST_CASE: Final = TranslationTestCase(
             },
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
+            "speed": "standard",
         },
     },
 )
