@@ -210,3 +210,16 @@ async def test_0g_anthropic_messages_request_is_bridged_to_chat_completions(monk
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert body["max_tokens"] == 32
     assert any(block.get("text") == "Hello from 0G" for block in response["content"])
+
+
+def test_0g_missing_key_error_names_og_api_key(monkeypatch: pytest.MonkeyPatch):
+    # "0G_API_KEY" (the slug upper-cased) is not a valid shell variable name; the
+    # provider reads OG_API_KEY, so that is the name the error must give.
+    monkeypatch.delenv("OG_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        litellm.completion(model="0g/glm-5.3-flash", messages=[{"role": "user", "content": "hi"}])
+
+    assert "OG_API_KEY" in str(excinfo.value)
+    assert "0G_API_KEY" not in str(excinfo.value)
