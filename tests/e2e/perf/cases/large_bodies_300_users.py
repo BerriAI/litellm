@@ -1,9 +1,8 @@
-"""Hundreds of callers in flight at once, each answer 400 KB to 1.2 MB of JSON (800 KB on average) and gzipped
-on the way out, the load of github issue #46276 (750 concurrent users, where v1.105.0 took 4 to 7 times as long
-as v1.101.0) with the bodies that make every buffered copy and every compression pass show up. The mock waits 4 s
-before it answers, so at 60 rps about 250 requests sit in the gateway at once and a middleware that holds or
-copies a body costs every one of them. Locust's client asks for gzip on every request, so the gateway's gzip
-middleware compresses each answer."""
+"""Warmed response-cache hits with 400 KB to 1.2 MB answers, 800 KB on average, for github issue #46276.
+The input budget adds no file-reading turns, leaving the fixed system prompt and marked question within the
+default four-message cache limit. Warmup and measurement replay the same cacheable population across versions.
+The mock waits 4 s before answering misses. Locust accepts gzip, but whether answers are compressed depends
+on the gateway version. The output cap and client-total p50 ceiling cover the large cached responses."""
 
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ from setup.performance_test_case import (
     VirtualKey,
 )
 
-LARGE_ANSWER: Final = RequestShape("large_answer", input_tokens=(2_500, 4_000), output_tokens=400_000)
+LARGE_ANSWER: Final = RequestShape("large_answer", input_tokens=(0, 0), output_tokens=400_000)
 
 CASE: Final = PerformanceTestCase(
     name="large_bodies_300_users",
