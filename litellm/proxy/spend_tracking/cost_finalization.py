@@ -10,10 +10,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost, finalize_cost
-from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY
 from litellm.proxy.hooks.search_free_tier import SharedCounter, allocate_search_free_tier
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin,
+    request_customer_attribution,
     request_customer_cost_margin,
 )
 from litellm.types.utils import CostBreakdown, StandardLoggingPayload
@@ -29,18 +29,9 @@ def _request_fields(value: object) -> Mapping[str, object]:
 
 
 def _customer_attribution(logging_obj: Logging, payload: StandardLoggingPayload) -> Mapping[str, object]:
-    """The payload's customer identity plus the key's customer binding, which only the request metadata carries.
-
-    The proxy stamps the binding into ``litellm_metadata`` on routes whose ``metadata`` belongs to the caller."""
-    litellm_params: Final = _request_fields(logging_obj.model_call_details.get("litellm_params"))
-    bindings: Final = tuple(
-        _request_fields(litellm_params.get(bucket)).get(CUSTOMER_USAGE_METADATA_KEY)
-        for bucket in ("litellm_metadata", "metadata")
+    return request_customer_attribution(
+        logging_obj.model_call_details.get("litellm_params"), _request_fields(payload["metadata"])
     )
-    return {
-        CUSTOMER_USAGE_METADATA_KEY: next((binding for binding in bindings if binding is not None), None),
-        **_request_fields(payload["metadata"]),
-    }
 
 
 def prepare_response_cost(logging_obj: Logging, response: object, now: datetime) -> PreparedCost | None:
