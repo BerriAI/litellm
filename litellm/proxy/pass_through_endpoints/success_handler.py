@@ -20,7 +20,7 @@ from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThr
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import StandardPassThroughResponseObject
+from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
 from .background_response_settlement import BackgroundResponseSettlementStore, PrismaBackgroundResponseSettlementStore
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (

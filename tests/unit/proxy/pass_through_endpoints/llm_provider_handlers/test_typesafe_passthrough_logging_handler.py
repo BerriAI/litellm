@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from typing import Final, Literal
 from unittest.mock import MagicMock
@@ -548,10 +549,12 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row(
     expected_cost: Final = 12 * pricing["input_cost_per_token"] + 1 * pricing["output_cost_per_token"]
 
     captured: dict = {}
+    dispatched = asyncio.Event()
 
     async def capture_dispatch(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         captured["kwargs"] = kwargs
         captured["details"] = dict(self.model_call_details)
+        dispatched.set()
 
     monkeypatch.setattr(Logging, "dispatch_success_handlers", capture_dispatch)
     await PassThroughEndpointLogging().pass_through_async_success_handler(
@@ -570,7 +573,7 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row(
         finalize_before_dispatch=True,
         **caller_kwargs,
     )
-    await asyncio.sleep(0.1)
+    await asyncio.wait_for(dispatched.wait(), timeout=10)
 
     assert captured, "finalize-before-dispatch never reached the success dispatch"
     dispatched_usage = captured["details"].get("combined_usage_object")
