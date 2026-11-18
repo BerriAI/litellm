@@ -1514,6 +1514,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if current_output_item_id is None:
                     current_output_item_id = f"item_{uuid.uuid4()}"
                     current_conversation_id = current_conversation_id or f"conv_{uuid.uuid4()}"
+                    current_delta_type = "audio"  # rebind-ok: a transcript-first response opens the audio item
                     returned_message.extend(
                         self.return_new_content_delta_events(
                             session_configuration_request=session_configuration_request,
