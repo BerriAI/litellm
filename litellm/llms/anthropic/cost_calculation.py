@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import ValidationError
 
+import litellm
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import price_model
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
@@ -17,25 +19,29 @@ from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
-import litellm
 
 
 def cost_per_token(
     model: str, usage: "Usage", service_tier: str | None = None, model_info: "ModelInfo | None" = None
 ) -> tuple[float, float]:
     """
-    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
+    Prompt and completion cost of ``usage`` on an Anthropic model, with the speed and geo uplifts its row carries.
 
-    Input:
-        - model: str, the model name without provider prefix
-        - usage: LiteLLM Usage block, containing anthropic caching information
-        - service_tier: the service tier the request was served at (e.g. "priority"),
-          read from the Anthropic response usage and used to select tier-specific pricing
-        - model_info: effective deployment prices, when they override public rates
-
-    Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+    ``model`` is the model name without provider prefix, ``service_tier`` the tier the response was served at and
+    ``model_info`` the deployment's effective prices when they override the public rates.
     """
+    priced: Final = price_model(
+        model=model, provider="anthropic", usage=usage, service_tier=service_tier, row=model_info
+    )
+    if priced is not None:
+        return priced
+    return _python_cost_per_token(model, usage, service_tier, model_info)
+
+
+def _python_cost_per_token(
+    model: str, usage: "Usage", service_tier: str | None, model_info: "ModelInfo | None"
+) -> tuple[float, float]:
+    """Main's pricing, for a call the Rust core leaves to Python."""
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
@@ -43,28 +49,17 @@ def cost_per_token(
         service_tier=service_tier,
         model_info=model_info,
     )
-
-    # Apply provider_specific_entry multipliers for geo/speed routing
     try:
         effective_info: Final = (
             model_info
             if model_info is not None
             else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
         )
-        geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
-        speed_multiplier: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
-
-        if speed_multiplier != 1.0:
-            prompt_cost *= speed_multiplier
-            completion_cost *= speed_multiplier
-
-        if geo_multiplier != 1.0:
-            prompt_cost *= geo_multiplier
-            completion_cost *= geo_multiplier
-    except Exception:
-        pass
-
-    return prompt_cost, completion_cost
+        geo: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
+        speed: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
+    except Exception:  # noqa: BLE001  # copied from main: an unreadable uplift prices the call without either uplift
+        return prompt_cost, completion_cost
+    return prompt_cost * speed * geo, completion_cost * speed * geo
 
 
 class _AnthropicServerToolUseProbe(LiteLLMBaseModel):
