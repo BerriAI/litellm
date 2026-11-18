@@ -6,6 +6,7 @@ https://datatracker.ietf.org/doc/draft-sibiryakov-ztds-protocol/
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -21,6 +22,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
+    async_record_served_output_texts,
+    async_record_served_response_output,
+    async_sanitize_logged_output_str,
     record_served_output_texts,
     register_served_output_sanitizer,
     sanitize_logged_output_str,
@@ -1193,6 +1197,127 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         assert adv_recorded is not None
         self.assertNotIn("different@example.com", adv_recorded[0])
         self.assertTrue(adv_recorded[0].endswith("[EMAIL_TOKEN_1001]"))
+
+    async def test_output_log_reverse_ac_and_async_offload_do_not_block_event_loop(self) -> None:
+        # Case 1: nested non-terminal patterns ("a"*1..499 + "a"*500+"Z") on 80 KB "a"*80000
+        nested_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-nested-ac",
+            function_id="",
+        )
+        nested_pairs: Final = tuple((("a" * i), f"[EMAIL_TOKEN_{i}]") for i in range(1, 500)) + (
+            (("a" * 500) + "Z", "[EMAIL_TOKEN_500]"),
+        )
+        register_served_output_sanitizer(
+            nested_logging_obj,
+            nested_logging_obj.model_call_details,
+            nested_pairs,
+            "sid-nested-ac",
+        )
+        t0_nested: Final = time.perf_counter()
+        record_served_output_texts(nested_logging_obj.model_call_details, ("a" * 80000,))
+        nested_elapsed: Final = time.perf_counter() - t0_nested
+        self.assertLess(nested_elapsed, 0.25, f"Nested AC took {nested_elapsed:.4f}s")
+        self.assertEqual(
+            nested_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY),
+            (("[EMAIL_TOKEN_499]" * 160) + "[EMAIL_TOKEN_160]",),
+        )
+
+        # Case 2: periodic spine + 1,000 branches on 80 KB "b" + "a"*80000
+        spine_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-spine-ac",
+            function_id="",
+        )
+        spine_pairs: Final = tuple((chr(1000 + i) + ("a" * 500), f"[EMAIL_TOKEN_{i}]") for i in range(1, 1001)) + (
+            ("a" * 500, "[EMAIL_TOKEN_1001]"),
+        )
+        register_served_output_sanitizer(
+            spine_logging_obj,
+            spine_logging_obj.model_call_details,
+            spine_pairs,
+            "sid-spine-ac",
+        )
+        t0_spine: Final = time.perf_counter()
+        record_served_output_texts(spine_logging_obj.model_call_details, ("b" + ("a" * 80000),))
+        spine_elapsed: Final = time.perf_counter() - t0_spine
+        self.assertLess(spine_elapsed, 0.25, f"Spine AC took {spine_elapsed:.4f}s")
+        self.assertEqual(
+            spine_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY),
+            ("b" + ("[EMAIL_TOKEN_1001]" * 160),),
+        )
+
+        # Case 3: async offload helpers yield to event loop while sanitizing 80 KB responses
+        offload_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-offload-ac",
+            function_id="",
+        )
+        offload_pairs: Final = tuple(
+            (("a" * 60) + f"@d{i:05d}.example.com", f"[EMAIL_TOKEN_{i}]") for i in range(1, 1001)
+        ) + (("different@example.com", "[EMAIL_TOKEN_1001]"),)
+        register_served_output_sanitizer(
+            offload_logging_obj,
+            offload_logging_obj.model_call_details,
+            offload_pairs,
+            "sid-offload-ac",
+        )
+        payload_80kb: Final = (("a" * 60) + "@d00001.example.net ") * 1000 + "different@example.com"
+        offload_resp: Final = ModelResponse(
+            choices=[{"index": 0, "message": {"role": "assistant", "content": payload_80kb}}]
+        )
+        offload_req: Final[dict[str, object]] = {  # mutable-ok: proxy request payload fixture
+            "litellm_logging_obj": offload_logging_obj,
+        }
+
+        loop_turns: Final[list[None]] = []  # mutable-ok: records concurrent event loop ticks
+        done: Final = asyncio.Event()
+
+        async def count_loop_turns() -> None:
+            while not done.is_set():
+                loop_turns.append(None)
+                await asyncio.sleep(0)
+
+        counter: Final = asyncio.create_task(count_loop_turns())
+        await asyncio.sleep(0)
+        turns_before: Final = len(loop_turns)
+        try:
+            await async_record_served_response_output(offload_logging_obj.model_call_details, offload_resp)
+            resp_recorded: Final = offload_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY)
+            self.assertIsNotNone(resp_recorded)
+            assert resp_recorded is not None
+            self.assertNotIn("different@example.com", resp_recorded[0])
+            self.assertTrue(resp_recorded[0].endswith("[EMAIL_TOKEN_1001]"))
+
+            offload_logging_obj.model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
+            await async_record_served_output_texts(offload_logging_obj.model_call_details, (payload_80kb,))
+            texts_recorded: Final = offload_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY)
+            self.assertIsNotNone(texts_recorded)
+            assert texts_recorded is not None
+            self.assertNotIn("different@example.com", texts_recorded[0])
+            self.assertTrue(texts_recorded[0].endswith("[EMAIL_TOKEN_1001]"))
+
+            sanitized_otel: Final = await async_sanitize_logged_output_str(offload_req, payload_80kb)
+            self.assertIsNotNone(sanitized_otel)
+            assert sanitized_otel is not None
+            self.assertNotIn("different@example.com", sanitized_otel)
+            self.assertTrue(sanitized_otel.endswith("[EMAIL_TOKEN_1001]"))
+        finally:
+            done.set()
+            await counter
+        self.assertGreater(len(loop_turns) - turns_before, 0)
 
 
 if __name__ == "__main__":

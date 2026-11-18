@@ -4,64 +4,94 @@ post-call guardrail rewrote rather than the provider response the proxy assemble
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
+import anyio
+import anyio.lowlevel
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 
 SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
 _SERVED_OUTPUT_SANITIZER_KEY: Final = "_served_output_sanitizer_id"
+_SANITIZER_MAX_CONCURRENT_JOBS: Final = 4
+_SANITIZER_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter](
+    "litellm_served_output_sanitizer_limiter"
+)
+_FAILURE_SKIP_MAX_EDGES: Final = 8
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
 _TEXTS: Final = TypeAdapter(tuple[str | None, ...])
 
 
-class _AhoCorasickMatcher:
+def _sanitizer_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
+    existing: Final = _SANITIZER_OFFLOAD_LIMITER.get(None)
+    if existing is not None:
+        return existing
+    created: Final = anyio.CapacityLimiter(_SANITIZER_MAX_CONCURRENT_JOBS)
+    _SANITIZER_OFFLOAD_LIMITER.set(created)
+    return created
+
+
+def _can_skip_failure_state(fu_edges: Mapping[str, int], u_edges: Mapping[str, int]) -> bool:
+    return (
+        len(fu_edges) <= _FAILURE_SKIP_MAX_EDGES and len(fu_edges) <= len(u_edges) and fu_edges.keys() <= u_edges.keys()
+    )
+
+
+class _ReverseAhoCorasickMatcher:
+    """Linear-time O(N + M) leftmost-longest multi-pattern matcher over reversed keys.
+
+    Scanning right-to-left means every suffix matching at step ``idx`` starts at the exact same
+    forward index ``idx``, so each state only needs a single ``max_len`` integer (no dict-link walks).
+    """
+
     def __init__(self, mapping: Mapping[str, str]) -> None:
         trie: Final[list[dict[str, int]]] = [{}]  # mutable-ok: automaton transition table built once
         fail: Final[list[int]] = [0]  # mutable-ok: failure links indexed by state id
+        alt_fail: Final[list[int]] = [0]  # mutable-ok: shortcut failure links skipping subset key sets
         depth: Final[list[int]] = [0]  # mutable-ok: trie depth per state id
-        own_len: Final[list[int]] = [0]  # mutable-ok: terminal key length per state id
-        dict_link: Final[list[int]] = [0]  # mutable-ok: nearest terminal ancestor per state id
+        max_len: Final[list[int]] = [0]  # mutable-ok: longest terminal key length per state id
 
         for key in mapping:
             if not key:
                 continue
             node = 0
-            for ch in key:
+            for ch in reversed(key):
                 nxt = trie[node].get(ch)
                 if nxt is None:
                     nxt = len(trie)
                     trie[node][ch] = nxt
                     trie.append({})
                     fail.append(0)
+                    alt_fail.append(0)
                     depth.append(depth[node] + 1)
-                    own_len.append(0)
-                    dict_link.append(0)
+                    max_len.append(0)
                 node = nxt
-            own_len[node] = depth[node]
+            max_len[node] = depth[node]
 
-        self._populate_links(trie, fail, own_len, dict_link)
-        self._trie: list[dict[str, int]] = trie  # mutable-ok: cleared on explicit zeroization
-        self._fail: list[int] = fail  # mutable-ok: cleared on explicit zeroization
-        self._depth: list[int] = depth  # mutable-ok: cleared on explicit zeroization
-        self._own_len: list[int] = own_len  # mutable-ok: cleared on explicit zeroization
-        self._dict_link: list[int] = dict_link  # mutable-ok: cleared on explicit zeroization
+        self._populate_links(trie, fail, alt_fail, max_len)
+        self._trie: Sequence[Mapping[str, int]] = trie
+        self._alt_fail: Sequence[int] = alt_fail
+        self._max_len: Sequence[int] = max_len
 
     @staticmethod
     def _populate_links(
         trie: Sequence[Mapping[str, int]],
         fail: list[int],  # mutable-ok: populated in BFS order
-        own_len: Sequence[int],
-        dict_link: list[int],  # mutable-ok: populated in BFS order
+        alt_fail: list[int],  # mutable-ok: populated in BFS order
+        max_len: list[int],  # mutable-ok: propagated from failure ancestor in BFS order
     ) -> None:
         queue: Final[list[int]] = list(trie[0].values())  # mutable-ok: flat BFS state queue
+        for u in queue:
+            alt_fail[u] = 0  # rebind-ok: initialize root-child shortcut failure link
         head = 0  # rebind-ok: advances through BFS queue without popleft overhead
         while head < len(queue):
             r = queue[head]
@@ -70,130 +100,52 @@ class _AhoCorasickMatcher:
                 queue.append(u)
                 f = fail[r]
                 while f and ch not in trie[f]:
-                    f = fail[f]
+                    f = alt_fail[f]
                 fu = trie[f].get(ch, 0)
                 fail[u] = fu  # rebind-ok: assign failure transition for child state
-                dict_link[u] = fu if own_len[fu] else dict_link[fu]  # rebind-ok: link nearest word suffix
+                alt_fail[u] = (  # rebind-ok: skip failure states whose key set is a subset of child's
+                    alt_fail[fu] if (fu and _can_skip_failure_state(trie[fu], trie[u])) else fu
+                )
+                max_len[u] = max(max_len[u], max_len[fu])  # rebind-ok: inherit longest match length
 
     @staticmethod
-    def _step_state(trie: Sequence[Mapping[str, int]], fail: Sequence[int], state: int, ch: str) -> int:
-        cur = state  # rebind-ok: walks failure links until character transition found
+    def _step_fallback(
+        trie: Sequence[Mapping[str, int]],
+        alt_fail: Sequence[int],
+        state: int,
+        ch: str,
+    ) -> int:
+        cur = alt_fail[state]  # rebind-ok: walks shortcut failure links until character transition found
         while cur and ch not in trie[cur]:
-            cur = fail[cur]
+            cur = alt_fail[cur]
         return trie[cur].get(ch, 0)
 
-    def _record_suffix_matches(
-        self,
-        start_state: int,
-        end: int,
-        guaranteed_until: int,
-        best_end: dict[int, int],  # mutable-ok: updates earliest-start longest-end map in place
-        current_max_end: int,
-    ) -> int:
-        own_len: Final = self._own_len
-        dict_link: Final = self._dict_link
-        max_end = current_max_end  # rebind-ok: tracks furthest match end seen so far
-        u = start_state  # rebind-ok: follows terminal dict links in O(matches)
-        while u:
-            s = end - own_len[u]
-            if s >= guaranteed_until:
-                if end > best_end.get(s, 0):
-                    best_end[s] = end  # rebind-ok: record longer match for start offset
-                max_end = max(max_end, end)
-            u = dict_link[u]
-        return max_end
-
-    def collect_best_ends(self, text: str) -> Mapping[int, int]:
+    def _collect_matches_descending(self, text: str) -> Sequence[tuple[int, int]]:
         trie: Final = self._trie
-        fail: Final = self._fail
-        depth: Final = self._depth
-        own_len: Final = self._own_len
-        dict_link: Final = self._dict_link
+        alt_fail: Final = self._alt_fail
+        max_len: Final = self._max_len
+        matches: Final[list[tuple[int, int]]] = []  # mutable-ok: accumulates (start, length) spans in descending order
+        state = 0  # rebind-ok: current reverse Aho-Corasick state
 
-        best_end: Final[dict[int, int]] = {}  # mutable-ok: start-index to longest-end-index table
-        guaranteed_until = 0  # rebind-ok: advances as non-overlappable matches finalize
-        max_recorded_end = 0  # rebind-ok: furthest match end recorded so far
-        locked_start: int | None = None  # rebind-ok: active unoverlapped leftmost match start
-        state = 0  # rebind-ok: current Aho-Corasick automaton state
+        for idx in range(len(text) - 1, -1, -1):
+            ch = text[idx]
+            nxt = trie[state].get(ch)
+            state = nxt if nxt is not None else self._step_fallback(trie, alt_fail, state, ch)
+            ml = max_len[state]
+            if ml:
+                matches.append((idx, ml))
+        return matches
 
-        for idx, ch in enumerate(text):
-            state = self._step_state(trie, fail, state, ch)
-            if not state:
-                if locked_start is not None:
-                    guaranteed_until = best_end[locked_start]
-                    locked_start = None
-                continue
-
-            end = idx + 1
-            trie_start = end - depth[state]
-            if locked_start is not None and trie_start > locked_start:
-                guaranteed_until = best_end[locked_start]
-                locked_start = None
-                if guaranteed_until == idx:
-                    state = trie[0].get(ch, 0)
-                    if not state:
-                        continue
-                    trie_start = idx
-
-            u = state if own_len[state] else dict_link[state]
-            if not u:
-                continue
-
-            if own_len[state] and (trie_start >= max_recorded_end or trie_start == locked_start):
-                best_end[trie_start] = end
-                max_recorded_end = end
-                locked_start = trie_start
-                if not trie[state]:
-                    guaranteed_until = end
-                    locked_start = None
-                    state = 0
-                continue
-
-            max_recorded_end = self._record_suffix_matches(u, end, guaranteed_until, best_end, max_recorded_end)
-
-        return best_end
-
-    def clear(self) -> None:
-        self._trie.clear()
-        self._fail.clear()
-        self._depth.clear()
-        self._own_len.clear()
-        self._dict_link.clear()
-
-
-class _OutputLogSanitizer:
-    def __init__(self, pairs: Sequence[tuple[str, str]]) -> None:
-        mapping: Final[dict[str, str]] = {}  # mutable-ok: build deduplicated cleartext-to-surrogate map locally
-        for cleartext, token in pairs:
-            if not cleartext or cleartext == token:
-                continue
-            for variant in (
-                cleartext,
-                json.dumps(cleartext)[1:-1],
-                json.dumps(cleartext, ensure_ascii=False)[1:-1],
-            ):
-                if variant and variant != token:
-                    mapping[variant] = token
-        self._mapping: dict[str, str] = mapping  # mutable-ok: cleared on logging completion zeroization
-        self._matcher: _AhoCorasickMatcher | None = None
-
-    def sanitize_text(self, text: str) -> str:
-        if not text or not self._mapping:
+    def sanitize(self, text: str, mapping: Mapping[str, str]) -> str:
+        matches: Final = self._collect_matches_descending(text)
+        if not matches:
             return text
-        matcher = self._matcher  # rebind-ok: lazily built linear-time Aho-Corasick automaton
-        if matcher is None:
-            matcher = _AhoCorasickMatcher(self._mapping)  # rebind-ok: cache built automaton
-            self._matcher = matcher
-        best_end: Final = matcher.collect_best_ends(text)
-        if not best_end:
-            return text
-        mapping: Final = self._mapping
         out: Final[list[str]] = []  # mutable-ok: linear output piece buffer
         pos = 0  # rebind-ok: tracks end of last emitted replacement
-        for s in sorted(best_end):
+        for s, ml in reversed(matches):
             if s < pos:
                 continue
-            e = best_end[s]
+            e = s + ml
             if s > pos:
                 out.append(text[pos:s])
             out.append(mapping[text[s:e]])
@@ -202,11 +154,69 @@ class _OutputLogSanitizer:
             out.append(text[pos:])
         return "".join(out)
 
+
+def _build_sanitization_mapping(
+    pairs: Sequence[tuple[str, str]],
+) -> dict[str, str]:  # mutable-ok: returns deduplicated cleartext-to-surrogate map built once
+    mapping: Final[dict[str, str]] = {}  # mutable-ok: build deduplicated cleartext-to-surrogate map locally
+    for cleartext, token in pairs:
+        if not cleartext or cleartext == token:
+            continue
+        for variant in (
+            cleartext,
+            json.dumps(cleartext)[1:-1],
+            json.dumps(cleartext, ensure_ascii=False)[1:-1],
+        ):
+            if variant and variant != token:
+                mapping[variant] = token
+    return mapping
+
+
+class _OutputLogSanitizer:
+    def __init__(self, pairs: tuple[tuple[str, str], ...]) -> None:
+        self._pairs: tuple[tuple[str, str], ...] = pairs
+        self._lock: Final = threading.Lock()
+        self._compiled: tuple[Mapping[str, str], _ReverseAhoCorasickMatcher] | None = None
+        self._cleared: bool = False
+
+    def matches_pairs(self, pairs: tuple[tuple[str, str], ...]) -> bool:
+        with self._lock:
+            return not self._cleared and self._pairs == pairs
+
+    def is_active(self) -> bool:
+        with self._lock:
+            return not self._cleared and bool(self._pairs)
+
+    def _get_compiled(self) -> tuple[Mapping[str, str], _ReverseAhoCorasickMatcher] | None:
+        with self._lock:
+            if self._cleared or not self._pairs:
+                return None
+            if self._compiled is not None:
+                return self._compiled
+            mapping: Final = _build_sanitization_mapping(self._pairs)
+            if not mapping:
+                self._pairs = ()
+                return None
+            compiled: Final = (mapping, _ReverseAhoCorasickMatcher(mapping))
+            self._compiled = compiled
+            return compiled
+
+    def sanitize_text(self, text: str) -> str:
+        if not text:
+            return text
+        compiled: Final = self._get_compiled()
+        if compiled is None:
+            return text
+        return compiled[1].sanitize(text, compiled[0])
+
+    def sanitize_texts(self, texts: ServedTexts) -> ServedTexts:
+        return tuple(self.sanitize_text(t) if t is not None else None for t in texts)
+
     def clear(self) -> None:
-        self._mapping.clear()
-        if self._matcher is not None:
-            self._matcher.clear()
-            self._matcher = None
+        with self._lock:
+            self._cleared = True
+            self._pairs = ()
+            self._compiled = None
 
 
 _LOGGING_SANITIZERS: Final = WeakKeyDictionary[object, _OutputLogSanitizer]()
@@ -357,6 +367,30 @@ def _indexed_texts_by_choice(indexed_texts: Sequence[tuple[int, str | None]]) ->
     return texts if any(text is not None for text in texts) else None
 
 
+def _active_logging_sanitizer(request_data: Mapping[str, object]) -> _OutputLogSanitizer | None:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if logging_obj is None:
+        return None
+    try:
+        sanitizer: Final = _LOGGING_SANITIZERS.get(logging_obj)
+    except TypeError:
+        return None
+    return sanitizer if sanitizer is not None and sanitizer.is_active() else None
+
+
+def _active_details_sanitizer(model_call_details: Mapping[str, object]) -> _OutputLogSanitizer | None:
+    sanitizer_id: Final = model_call_details.get(_SERVED_OUTPUT_SANITIZER_KEY)
+    if not isinstance(sanitizer_id, str):
+        return None
+    sanitizer: Final = _DETAILS_SANITIZERS.get(sanitizer_id)
+    return sanitizer if sanitizer is not None and sanitizer.is_active() else None
+
+
+def _extract_and_sanitize_response(response: object, sanitizer: _OutputLogSanitizer) -> ServedTexts | None:
+    texts: Final = served_output_texts(response)
+    return sanitizer.sanitize_texts(texts) if texts is not None else None
+
+
 def register_served_output_sanitizer(
     logging_obj: object,
     model_call_details: dict[str, object] | None,  # mutable-ok: stamps sanitizer id on Logging.model_call_details
@@ -365,11 +399,17 @@ def register_served_output_sanitizer(
 ) -> None:
     if logging_obj is None or not pairs:
         return
-    sanitizer: Final = _OutputLogSanitizer(pairs)
+    normalized_pairs: Final = tuple(pairs)
     try:
-        _LOGGING_SANITIZERS[logging_obj] = sanitizer
+        existing: Final = _LOGGING_SANITIZERS.get(logging_obj)
     except TypeError:
         return
+    sanitizer: Final = (
+        existing
+        if existing is not None and existing.matches_pairs(normalized_pairs)
+        else _OutputLogSanitizer(normalized_pairs)
+    )
+    _LOGGING_SANITIZERS[logging_obj] = sanitizer
     _DETAILS_SANITIZERS[sanitizer_id] = sanitizer
     if model_call_details is not None:
         model_call_details[_SERVED_OUTPUT_SANITIZER_KEY] = sanitizer_id  # rebind-ok: bind sanitizer id to call details
@@ -389,25 +429,55 @@ def clear_served_output_sanitizer(logging_obj: object) -> None:
 def sanitize_logged_output_str(request_data: Mapping[str, object], rendered: str | None) -> str | None:
     if rendered is None:
         return None
-    logging_obj: Final = request_data.get("litellm_logging_obj")
-    if logging_obj is None:
-        return rendered
-    try:
-        sanitizer: Final = _LOGGING_SANITIZERS.get(logging_obj)
-    except TypeError:
-        return rendered
+    sanitizer: Final = _active_logging_sanitizer(request_data)
     return sanitizer.sanitize_text(rendered) if sanitizer is not None else rendered
+
+
+async def async_sanitize_logged_output_str(request_data: Mapping[str, object], rendered: str | None) -> str | None:
+    if rendered is None:
+        return None
+    sanitizer: Final = _active_logging_sanitizer(request_data)
+    if sanitizer is None:
+        return rendered
+    return await asyncify(sanitizer.sanitize_text, limiter=_sanitizer_offload_limiter_for_this_loop())(rendered)
 
 
 def record_served_output_texts(model_call_details: dict[str, object], texts: ServedTexts | None) -> None:
     if texts is None:
         return
-    sanitizer_id: Final = model_call_details.get(_SERVED_OUTPUT_SANITIZER_KEY)
-    sanitizer: Final = _DETAILS_SANITIZERS.get(sanitizer_id) if isinstance(sanitizer_id, str) else None
+    sanitizer: Final = _active_details_sanitizer(model_call_details)
+    recorded: Final = sanitizer.sanitize_texts(texts) if sanitizer is not None else texts
+    model_call_details[SERVED_OUTPUT_TEXTS_KEY] = recorded  # rebind-ok: model_call_details is the shared kwargs bag
+
+
+async def async_record_served_output_texts(
+    model_call_details: dict[str, object],  # mutable-ok: writes SERVED_OUTPUT_TEXTS_KEY on Logging.model_call_details
+    texts: ServedTexts | None,
+) -> None:
+    if texts is None:
+        return
+    sanitizer: Final = _active_details_sanitizer(model_call_details)
     recorded: Final = (
-        tuple(sanitizer.sanitize_text(t) if t is not None else None for t in texts) if sanitizer is not None else texts
+        await asyncify(sanitizer.sanitize_texts, limiter=_sanitizer_offload_limiter_for_this_loop())(texts)
+        if sanitizer is not None
+        else texts
     )
     model_call_details[SERVED_OUTPUT_TEXTS_KEY] = recorded  # rebind-ok: model_call_details is the shared kwargs bag
+
+
+async def async_record_served_response_output(
+    model_call_details: dict[str, object],  # mutable-ok: writes SERVED_OUTPUT_TEXTS_KEY on Logging.model_call_details
+    response: object,
+) -> None:
+    sanitizer: Final = _active_details_sanitizer(model_call_details)
+    if sanitizer is None:
+        record_served_output_texts(model_call_details, served_output_texts(response))
+        return
+    recorded: Final = await asyncify(
+        _extract_and_sanitize_response, limiter=_sanitizer_offload_limiter_for_this_loop()
+    )(response, sanitizer)
+    if recorded is not None:
+        model_call_details[SERVED_OUTPUT_TEXTS_KEY] = recorded  # rebind-ok: model_call_details is the shared kwargs bag
 
 
 def overlay_served_output_texts(
