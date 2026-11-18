@@ -1,10 +1,13 @@
 import asyncio
 import os
+import re
 from collections.abc import Callable, Mapping
 from functools import partial
 from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlparse
+
+import httpx
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -50,6 +53,54 @@ def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None)
 
 
 AZURE_AI_AGENTS_SCOPE: Final = "https://ai.azure.com/.default"
+FOUNDRY_PROJECT_PATH_PREFIX: Final = ("api", "projects")
+OPENAI_V1_PATH: Final = ("openai", "v1")
+CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")
+FOUNDRY_PROJECT_NEXT_SEGMENTS: Final = ((), ("openai",), ("models",), ("v1",))
+FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
+
+
+def _path_segments(base_url: httpx.URL) -> tuple[str, ...]:
+    return tuple(segment for segment in base_url.path.split("/") if segment)
+
+
+def foundry_project_root(base_url: httpx.URL) -> tuple[str, ...]:
+    segments: Final = _path_segments(base_url)
+    project_ends: Final = (
+        index + 3
+        for index in range(len(segments) - 2)
+        if segments[index : index + 2] == FOUNDRY_PROJECT_PATH_PREFIX
+        and segments[index + 3 : index + 4] in FOUNDRY_PROJECT_NEXT_SEGMENTS
+    )
+    project_end: Final = next(project_ends, None)
+    return () if project_end is None else segments[:project_end]
+
+
+def without_api_version(base_url: httpx.URL) -> httpx.QueryParams:
+    return base_url.params.remove("api-version")
+
+
+def foundry_v1_root(base_url: httpx.URL) -> tuple[str, ...] | None:
+    project_root: Final = foundry_project_root(base_url)
+    if project_root:
+        return (*project_root, *OPENAI_V1_PATH)
+    segments: Final = _path_segments(base_url)
+    route_free: Final = segments[:-2] if segments[-2:] == CHAT_COMPLETIONS_PATH else segments
+    return route_free if route_free[-2:] == OPENAI_V1_PATH else None
+
+
+def foundry_resource_path(base_url: httpx.URL) -> str:
+    return FOUNDRY_ROUTE_SUFFIX.sub("", base_url.path.rstrip("/"))
+
+
+def with_foundry_project_scope(params: GenericLiteLLMParams, api_base: str | None) -> GenericLiteLLMParams:
+    if api_base is None or not foundry_project_root(httpx.URL(api_base)):
+        return params
+    return params.model_copy(
+        update={"azure_scope": params.azure_scope or os.getenv("AZURE_SCOPE") or AZURE_AI_AGENTS_SCOPE}
+    )
+
+
 AZURE_ENTRA_CREDENTIAL_PARAM_KEYS: Final = frozenset({"azure_ad_token", "client_secret", "azure_password"})
 AZURE_ENTRA_LITELLM_PARAM_KEYS: Final = AZURE_ENTRA_CREDENTIAL_PARAM_KEYS | frozenset(
     {"tenant_id", "client_id", "azure_username", "azure_scope"}
@@ -200,7 +251,9 @@ def is_foundry_project_agent(model: str | None) -> bool:
 
 def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
-    if resolved_base is not None and not is_azure_openai_v1_host(resolved_base):
+    if resolved_base is not None and not (
+        is_azure_openai_v1_host(resolved_base) or foundry_project_root(httpx.URL(resolved_base))
+    ):
         return False
     if model is None:
         return True

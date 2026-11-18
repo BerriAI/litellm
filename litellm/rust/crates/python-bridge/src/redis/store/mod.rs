@@ -14,11 +14,12 @@ use value::PyValue;
 
 use std::{
     pin::Pin,
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
 use litellm_python_compat::number::{SecondsError, seconds};
+use litellm_redis_client::CallTag;
 use litellm_redis_store::{Error, FromValue, IntoValue, Number, Pending, Remote};
 use pyo3::{
     IntoPyObjectExt,
@@ -41,6 +42,32 @@ fn call(py: Python<'_>, call_type: &'static str) -> PyResult<RedisCall> {
         event_loop: EventLoop::running(py),
         call_type,
     })
+}
+
+pub(crate) fn targeted_call(
+    py: Python<'_>,
+    target: &Bound<'_, PyAny>,
+    call_type: &'static str,
+) -> PyResult<RedisCall> {
+    let scope = py
+        .import("litellm._internal_context")?
+        .call_method1("service_target", (target,))?;
+    scope.call_method0("__enter__")?;
+    let captured = call(py, call_type);
+    scope.call_method1("__exit__", (py.None(), py.None(), py.None()))?;
+    captured
+}
+
+pub(crate) fn relabel(tag: &CallTag, call_type: &'static str) -> CallTag {
+    match tag.downcast_ref::<RedisCall>() {
+        Some(call) => RedisCall {
+            context: call.context.clone(),
+            event_loop: call.event_loop.clone(),
+            call_type,
+        }
+        .tag(),
+        None => Arc::clone(tag),
+    }
 }
 
 /// Runs one Redis operation as a Python awaitable, reported to `ServiceLogging` as `call_type`.

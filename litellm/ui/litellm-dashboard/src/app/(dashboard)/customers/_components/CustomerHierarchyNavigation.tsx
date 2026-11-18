@@ -53,7 +53,10 @@ export default function CustomerHierarchyNavigation({
   if (scope.team) pages = ["usage", "members", "settings"];
   if (scope.member) pages = ["usage", "settings"];
   return (
-    <nav aria-label={t("customerPortal.hierarchy.customerNavigation")} className="flex gap-6 border-b">
+    <nav
+      aria-label={t("customerPortal.hierarchy.customerNavigation")}
+      className="flex flex-wrap gap-x-6 gap-y-3 border-b"
+    >
       {pages.map((page) => {
         const organizationMembers = page === "members" && !scope.team;
         const explicitTab = page === "settings" || page === "budget_groups" || organizationMembers;
@@ -67,7 +70,7 @@ export default function CustomerHierarchyNavigation({
             }
             aria-current={active === page ? "page" : undefined}
             className={cn(
-              "border-b-2 border-transparent px-0.5 pb-3 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
+              "shrink-0 whitespace-nowrap border-b-2 border-transparent px-0.5 pb-3 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
               active === page && "border-primary text-foreground",
             )}
           >

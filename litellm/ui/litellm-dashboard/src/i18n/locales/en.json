@@ -1767,6 +1767,7 @@
         "securityScan": "Security scan"
       },
       "notRecorded": "Not recorded",
+      "identitySortHelp": "Sort by user ID. Emails are display labels only.",
       "scanHelp": "Yes means this published version has a completed scan with no findings and a risk score of 0. No means it has not passed a recorded scan."
     },
     "addForm": {
@@ -1790,12 +1791,16 @@
         "keywords": "Tags (Optional)",
         "version": "Version (Optional)",
         "authorName": "Author Name (Optional)",
-        "authorEmail": "Author Email (Optional)"
+        "authorEmail": "Author Email (Optional)",
+        "homepage": "Homepage (Optional)"
       },
       "hints": {
         "archive": "Choose a ZIP from your computer, up to 10 MiB. Include SKILL.md at the root or inside one skill folder, along with any supporting files. The skill will use the same visibility settings as skills added by URL.",
         "sourceUrl": "Link to a Git repository, a skill folder, or a ZIP archive containing SKILL.md and any supporting files. For private repositories, use an SSH clone URL with access configured in your agent.",
-        "subPath": "Path within the repository where the skill lives (e.g., skills/my-skill). Leave empty if the skill is at the repo root.",
+        "subPath": "Optional directory within the repository, such as skills/my-skill.",
+        "skill": "Match the name inside SKILL.md. If you also select a path, both must match. Clear this field to select by path only.",
+        "skillFromUrl": "This skills.sh URL supplies the skill name. Change the URL to select a different skill.",
+        "ref": "For browser URLs, match the ref in the URL, including any slashes. For clone URLs, choose a branch, tag, or 40-character commit SHA.",
         "sha256": "Optional SHA-256 digest for verifying the ZIP archive’s integrity.",
         "name": "Unique identifier in kebab-case format (e.g., my-skill)",
         "domain": "Top-level grouping in the Skills Hub (e.g., Productivity)",
@@ -1829,12 +1834,15 @@
         "zipRequired": "Please choose a .zip file",
         "zipTooLarge": "The ZIP file must be 10 MiB or smaller",
         "urlRequired": "Please enter a repository or zip archive URL",
+        "browserRefRequired": "Enter the full Git ref from this URL, including any slashes, to confirm where the repository path starts",
+        "importUrlInvalid": "Use a public GitHub repository, tree or SKILL.md URL, or a skills.sh skill URL. Check the ref and remove query parameters and fragments.",
         "subPathInvalid": "Subfolder must be a relative path like skills/my-skill (letters, numbers, dots, hyphens, underscores)",
         "sha256Invalid": "SHA-256 must be a 64-character hex digest",
         "nameRequired": "Please enter skill name",
         "nameInvalid": "Name must be kebab-case (lowercase, numbers, hyphens only)",
         "emailInvalid": "Please enter a valid email",
-        "descriptionTooLong": "Description must be 1024 characters or fewer"
+        "metadataNameRequired": "Enter a registry name to register a source or set custom metadata",
+        "authorNameRequired": "Enter an author name when providing an email"
       },
       "toasts": {
         "noToken": "No access token available",
@@ -1857,21 +1865,35 @@
       "versionOverrideHint": "Leave blank to assign the next patch version when this change is published",
       "modes": {
         "upload": "Upload ZIP",
-        "import": "Import URL",
-        "metadata": "Edit metadata"
+        "metadata": "Edit metadata",
+        "register": "Add from URL",
+        "replace": "Replace source"
       },
       "neutralLabels": {
         "url": "Source URL",
         "skill": "Skill selector (optional)",
-        "ref": "Git ref (optional)",
+        "ref": "Git ref",
         "path": "Path (optional)",
         "domain": "Domain (optional)",
         "namespace": "Namespace (optional)",
         "keywords": "Tags (optional)"
       },
-      "uploadHint": "Choose a ZIP up to 10 MiB containing SKILL.md. Its frontmatter supplies the skill name and description.",
-      "replacementHint": "The replacement SKILL.md supplies the description. Domain, namespace, and keywords are preserved.",
-      "importHint": "Enter the original source URL. Use a skill selector or path when the repository contains several skills. Leave the ref blank to use HEAD.",
+      "uploadHint": "Choose a ZIP up to 10 MiB containing SKILL.md. Its frontmatter supplies the skill name and description. For a legacy ZIP without frontmatter, enter a registry name below.",
+      "replacementHint": "The replacement SKILL.md updates its default description. Custom descriptions and other metadata are preserved.",
+      "urlStorage": "URL storage",
+      "urlModes": {
+        "register": "Use the external source",
+        "import": "Store a copy in LiteLLM"
+      },
+      "urlStorageHint": "Store public GitHub or skills.sh content in LiteLLM, or let clients install from an external repository or archive. skills.sh links require a stored copy.",
+      "importHint": "Store a portable skill from public GitHub or skills.sh for downloads and installation across supported agents. Use a selector or path for repositories with several skills. Browser URLs supply their revision; repository URLs use HEAD unless you set a ref.",
+      "registerHint": "Register a Git repository, subfolder, or HTTPS ZIP for clients to install. LiteLLM stores the reference without downloading its contents.",
+      "replaceHint": "Replace the published source with this reference. This removes the current managed archive and portable descriptor when published. Previous versions remain available.",
+      "registryName": "Registry name",
+      "optionalRegistryName": "Registry name (optional)",
+      "registryNameHint": "Use a unique kebab-case name. An explicit name is required for custom metadata and legacy ZIPs. It does not change the files.",
+      "advancedMetadata": "Advanced metadata (optional)",
+      "authorOverrideHint": "Leave author fields empty to use the submitter's profile. Fill them in to credit a different author. The submitter is recorded automatically from the authenticated account.",
       "saving": "Saving..."
     },
     "scanning": {
@@ -1917,7 +1939,8 @@
       "noCurrent": "No currently published skill is available for comparison",
       "pendingNotice": "Awaiting admin approval. The published skill remains unchanged",
       "submittedBy": "Submitted by {{name}}",
-      "reviewedBy": "Reviewed by {{name}} on {{date}}",
+      "approvedBy": "Approved by {{name}} on {{date}}",
+      "rejectedBy": "Rejected by {{name}} on {{date}}",
       "rejectionReason": "Rejection reason: {{reason}}",
       "reasonLabel": "Rejection reason (optional)",
       "approve": "Approve and publish",
@@ -1949,7 +1972,6 @@
         "category": "Category",
         "domain": "Domain",
         "namespace": "Namespace",
-        "installation_preference": "Installation preference",
         "agent_skill": "Portable skill descriptor"
       },
       "nextPatchVersion": "Next patch version on approval",
@@ -1973,7 +1995,7 @@
       "allScans": "All scan statuses",
       "scanned": "Security scan: Yes",
       "notScanned": "Security scan: No",
-      "search": "Search skills, tags, or people…",
+      "search": "Search skills, tags, or user IDs…",
       "clear": "Clear filters"
     }
   },
@@ -2045,6 +2067,7 @@
         "namespace": "Namespace",
         "version": "Version",
         "author": "Author",
+        "authorEmail": "Author email",
         "added": "Added"
       },
       "overview": {
@@ -2496,6 +2519,59 @@
       "loading": "Loading keys...",
       "empty": "No keys found",
       "searchPlaceholder": "Search by key alias or ID…",
+      "bulkActions": {
+        "select": "Select keys",
+        "cancel": "Cancel selection",
+        "menu": "Actions"
+      },
+      "bulkDelete": {
+        "selectKey": "Select {{key}}",
+        "selected_one": "{{count}} key selected",
+        "selected_other": "{{count}} keys selected",
+        "action": "Delete selected ({{count}})",
+        "title_one": "Delete {{count}} Virtual Key",
+        "title_other": "Delete {{count}} Virtual Keys",
+        "warning": "Deleted keys immediately stop authenticating requests. This action cannot be undone.",
+        "message": "Confirm deletion of only the keys listed above.",
+        "requiredConfirmation": "confirm delete",
+        "keyAlias": "Key {{number}} alias",
+        "keyId": "Key {{number}} ID",
+        "noAlias": "No alias",
+        "selectionChanged": "Some selected keys are no longer available to delete. Close this dialog and review your selection.",
+        "success_one": "{{count}} Virtual Key deleted",
+        "success_other": "{{count}} Virtual Keys deleted"
+      },
+      "bulkEdit": {
+        "team": "Move to team",
+        "user": "Assign to user",
+        "budget": "Set budget",
+        "selected_one": "{{count}} key selected",
+        "selected_other": "{{count}} keys selected",
+        "apply_one": "Apply to {{count}} key",
+        "apply_other": "Apply to {{count}} keys",
+        "pending": "Applying...",
+        "cancel": "Cancel",
+        "success_one": "{{count}} Virtual Key updated",
+        "success_other": "{{count}} Virtual Keys updated",
+        "partialFailure_one": "{{count}} key could not be updated. Review the reason below and try again.",
+        "partialFailure_other": "{{count}} keys could not be updated. Review the reasons below and try again.",
+        "selectionChanged": "Some selected keys are no longer available to edit. Close this dialog and review your selection.",
+        "projectTeamLocked": "Project keys keep their project’s team",
+        "descriptions": {
+          "team": "Only the team will be updated. User, model, and budget settings stay unchanged.",
+          "user": "Only the assigned user will be updated. Team, model, and budget settings stay unchanged.",
+          "budget": "Apply the same budget and reset period to each key separately. Existing spend stays unchanged."
+        },
+        "fields": {
+          "team": "Team",
+          "user": "User",
+          "budget": "Budget per key (USD)",
+          "resetPeriod": "Reset period"
+        },
+        "invalidBudget": "Enter a finite amount of 0 or more.",
+        "resetPeriodPlaceholder": "Select a reset period",
+        "resetPeriodRequired": "Select a reset period."
+      },
       "filters": {
         "title": "Filters",
         "description": "Narrow down virtual keys",
@@ -3155,6 +3231,7 @@
     "page": {
       "title": "Projects",
       "description": "Manage projects within your teams",
+      "enterpriseNotice": "This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <pricing>here</pricing>.",
       "createButton": "Create Project",
       "searchPlaceholder": "Search projects by name, ID, description, or team...",
       "clearSearch": "Clear search"
@@ -5868,6 +5945,23 @@
       },
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
+      "promptCache": {
+        "title": "Prompt cache usage advisory for {{name}}",
+        "description": "{{misses}} observed requests to {{model}} reported no cache usage for a prefix the provider had cached before. Delayed, missing or unlogged observations mean these requests are not necessarily consecutive and do not prove a caching outage.",
+        "evidenceHeading": "What was observed",
+        "deployment": "Deployment",
+        "model": "Model",
+        "misses": "Observed requests with no cache usage",
+        "provenWrite": "Earlier cache write that proved the prefix",
+        "provenWriteTokens_one": "{{count}} token",
+        "provenWriteTokens_other": "{{count}} tokens",
+        "ttl": "Cache lifetime",
+        "ttlMinutes_one": "{{count}} minute",
+        "ttlMinutes_other": "{{count}} minutes",
+        "window": "Misses observed",
+        "windowValue": "{{start}} to {{end}} UTC",
+        "scope": "Only non-streaming Anthropic Chat Completions requests with one five-minute cache breakpoint are checked, after the provider confirmed a cache write for that prefix. Prefixes never confirmed as cached are not assessed."
+      },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
       "retires": "Retires",
@@ -5913,7 +6007,8 @@
           "milliseconds": "Mean response time per day",
           "ratio": "Daily error rate"
         }
-      }
+      },
+      "promptCacheError": "Could not load prompt cache alerts."
     },
     "page": {
       "tabs": {
@@ -6078,6 +6173,45 @@
       "upgrade": "Upgrade to Enterprise",
       "loadError": "Could not load monitoring settings.",
       "saveError": "Could not save monitoring settings. Try again."
+    },
+    "bulk": {
+      "resolve": "Resolve all",
+      "dismiss": "Dismiss all",
+      "cancel": "Cancel",
+      "saving": "Updating alerts…",
+      "description": "This updates all open alerts matching “{{type}}”, including results you have not loaded. You can reopen individual alerts later.",
+      "error": "Some alerts could not be updated. Saved changes were kept. Try again to update the remaining open alerts."
+    },
+    "thresholds": {
+      "title": "Performance alert thresholds",
+      "description": "Usual values come from the previous seven days. Both conditions must be met.",
+      "enterpriseOnly": "Editing thresholds requires Enterprise.",
+      "edit": "Edit thresholds",
+      "cancel": "Cancel",
+      "multiplier": "Times the usual value",
+      "multiplierInvalid": "Use a multiplier greater than 1.",
+      "rules": {
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Latency",
+        "reliability": "Error rate"
+      },
+      "minimum": {
+        "spend": "Minimum increase ($)",
+        "traffic": "Minimum increase (requests)",
+        "latency": "Minimum increase (ms)",
+        "reliability": "Minimum increase (percentage points)"
+      },
+      "summary": {
+        "spend": "At least {{multiplier}}× the usual spend and ${{minimum}} higher.",
+        "traffic": "At least {{multiplier}}× the usual requests and {{minimum}} more requests.",
+        "latency": "At least {{multiplier}}× the usual latency and {{minimum}} ms higher.",
+        "reliability": "At least {{multiplier}}× the usual error rate and {{minimum}} percentage points higher."
+      },
+      "safeguards": "Requires four active baseline days. Latency also needs 100 timed requests; error rate needs 500 requests. Changes apply to future checks.",
+      "save": "Save thresholds",
+      "saving": "Saving…",
+      "saved": "Thresholds saved."
     }
   },
   "caching": {
@@ -8565,10 +8699,6 @@
       "plugin": "Plugin",
       "configure": "Configure the plugin URL in settings"
     },
-    "dashboardShell": {
-      "navigation": "Navigation",
-      "openNavigation": "Open navigation"
-    },
     "telemetryEnvNotice": {
       "vetoed": "Telemetry is turned off by an environment variable",
       "set": "Telemetry environment variables are set",
@@ -8768,6 +8898,11 @@
     },
     "sheet": {
       "close": "Close"
+    },
+    "sidebar": {
+      "title": "Sidebar",
+      "description": "Displays the mobile sidebar.",
+      "toggle": "Toggle Sidebar"
     },
     "spinner": {
       "loading": "Loading"
@@ -9279,10 +9414,7 @@
       "organizationLogo": "Organization logo",
       "settings": "Settings",
       "signOut": "Sign out",
-      "chatNavigation": "Chat navigation",
-      "openChatNavigation": "Open chat navigation",
-      "sheetTitle": "LiteLLM Chat",
-      "sheetDescription": "Conversations and chat workspace navigation"
+      "chatNavigation": "Chat navigation"
     },
     "conversationList": {
       "yesterday": "Yesterday",
@@ -15461,7 +15593,13 @@
       },
       "avgCostPerRequest": "Avg cost / request",
       "avgLatency": "Avg latency",
-      "successRateHint": "{{rate}}% success rate"
+      "successRateHint": "{{rate}}% success rate",
+      "spendDisplay": {
+        "label": "Spend display",
+        "option": "{{code}} · {{name}}",
+        "estimate": "≈ {{amount}} estimated at the ECB reference rate of {{date}}",
+        "unavailable": "Reference rates are unavailable, spend is shown in USD"
+      }
     },
     "overview": {
       "topVirtualKeys": "Top Virtual Keys",
@@ -17693,7 +17831,11 @@
         "empty": "Type to add a keyword"
       },
       "scoringRulesAllowance": "Custom scoring rules",
-      "keywordOverridesTitle": "Heuristic Keyword Overrides"
+      "keywordOverridesTitle": "Heuristic Keyword Overrides",
+      "contextLimit": {
+        "label": "Max conversation tokens before judge",
+        "help": "Above this estimated size, ask the judge even for short follow-ups. Counts text and tool results. Existing session and tool-continuation pins still apply. Leave blank to disable."
+      }
     },
     "autoRouterClassifierTabs": {
       "option": {
@@ -18275,7 +18417,8 @@
       "selectClassifierOrHeuristic": "Please select a classifier model, or switch back to Heuristic",
       "reasoningEffortUnsupported": "{{effort}} reasoning effort is not supported by every deployment in {{model}}. Choose Default or a supported value.",
       "selectEmbeddingModel": "Select an embedding model to use semantic keyword matching",
-      "addKeywordRuleForSemantic": "Add at least one keyword tier rule to use semantic keyword matching"
+      "addKeywordRuleForSemantic": "Add at least one keyword tier rule to use semantic keyword matching",
+      "contextLimitPositiveInteger": "Conversation limit must be a positive whole number"
     },
     "adaptiveRoutingConfig": {
       "enable": "Enable adaptive bandit selection",
@@ -18817,6 +18960,13 @@
     "decisionModelSelect": {
       "label": "Decision model",
       "placeholder": "Select the decision model"
+    },
+    "nimModelDiscovery": {
+      "ready": "Enter your connection settings, then click Refresh NIM models",
+      "loading": "Loading models from NVIDIA NIM",
+      "success": "Models listed by your NIM endpoint. Inference access and capabilities may vary",
+      "unavailable": "Could not refresh NIM models. Showing the built-in catalog. You can also enter a custom model",
+      "refresh": "Refresh NIM models"
     }
   },
   "modelAdd": {
@@ -20681,9 +20831,6 @@
       "usage": "Usage",
       "manage": "Manage",
       "title": "Customer Management",
-      "subtitle": "Manage customer teams, customer members, and settings for this customer organization.",
-      "teamSubtitle": "Manage customer members and settings for this customer team.",
-      "memberSubtitle": "Manage settings and budget for this customer member.",
       "organization": "$t(customerPortal.entities.organization)",
       "team": "$t(customerPortal.entities.team)",
       "member": "$t(customerPortal.entities.member)",
@@ -20697,13 +20844,10 @@
       "spend": "Recorded spend",
       "budget": "Budget",
       "noBudget": "No budget",
-      "organizationMembersHint": "Customer members across this customer organization. Open a customer team to create a customer member.",
       "chooseTeam": "Choose a customer team",
-      "teamsHint": "Choose a customer team to manage its customer members and settings.",
-      "membersHint": "Choose a customer member to manage their settings and budget.",
       "emptyTeams": "No customer teams in this customer organization.",
       "emptyMembers": "No customer members in this customer team.",
-      "searchMembers": "Search customer members by name or ID",
+      "searchMembers": "Search members by name or ID",
       "noMemberMatches": "No customer members match your search.",
       "error": "Unable to load customer",
       "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
@@ -20718,12 +20862,11 @@
       "membersLoadError": "Unable to load customer members",
       "settingsTitle": "Settings",
       "profileTitle": "General",
-      "profileHint": "Update the display name without changing its identifier or parent.",
       "alias": "Display name",
       "identifier": "Identifier",
       "budgetTitle": "Budget and limits",
       "budgetHint": "Leave a limit blank for no limit. Zero is a valid limit.",
-      "memberBudgetHint": "Blank limits inherit from the selected budget template. Without a template, blank limits add no restriction. Zero is a valid limit.",
+      "memberBudgetHint": "Blank limits inherit from the budget template. Without a template, blank means no limit.",
       "budgetEnabled": "Set a budget and limits",
       "maxBudget": "Spend limit (USD)",
       "softBudget": "Soft budget (USD)",
@@ -20732,13 +20875,12 @@
       "tpm": "Tokens per minute",
       "rpm": "Requests per minute",
       "allowedModels": "Allowed models",
-      "allowedModelsHint": "By default, use the gateway key’s model permissions. Selected models add a further restriction for this customer; they cannot grant access beyond the gateway key or parent customer permissions.",
+      "allowedModelsHint": "Selected models must also be allowed by the gateway key and parent customer.",
       "template": "Budget template",
       "noTemplate": "No template",
       "unknownTemplate": "Unavailable template ({{id}})",
       "defaultTemplate": "{{name}} (default)",
       "overrideEnabled": "Override the template budget",
-      "overrideHint": "An active override changes only the fields you set. Other limits continue to come from the selected budget template.",
       "overrideExpiry": "Override expires",
       "overrideExpiryHint": "Uses your local time. Leave blank for no expiry.",
       "save": "Save changes",
@@ -20758,8 +20900,8 @@
       "budgetRequired": "Select a budget template or enable an override for this customer member.",
       "createTeam": "Create customer team",
       "createMember": "Create customer member",
-      "createTeamHint": "Create a customer team within {{organization}}.",
-      "createMemberHint": "Create a customer member within {{team}}.",
+      "createTeamHint": "Customer organization: {{organization}}",
+      "createMemberHint": "Customer team: {{team}}",
       "create": "Create",
       "creating": "Creating…",
       "created": "Created {{kind}}",
@@ -20819,16 +20961,13 @@
     },
     "list": {
       "title": "$t(customerPortal.entities.organizations)",
-      "subtitle": "Usage across each customer organization’s customer teams and customer members.",
-      "create": "Create customer organization",
-      "searchPlaceholder": "Search by customer organization ID or alias",
+      "create": "Create organization",
+      "searchPlaceholder": "Search by name or ID",
       "overallUsage": "Overall customer usage",
-      "overallUsageHelp": "Usage across all external customer organizations for the selected dates.",
       "newestFirst": "Newest first",
-      "budgetAndShareHelp": "Budget spend follows each configured reset period. Share of overall spend uses the current UTC calendar month across all customer organizations, regardless of search or pagination. Status reflects all configured budget limits. The date picker controls the summary above.",
       "columns": {
         "customer": "$t(customerPortal.entities.organization)",
-        "overallSpendShare": "Share of overall spend",
+        "overallSpendShare": "Overall spend share",
         "spend": "Spend",
         "requests": "Requests",
         "tokens": "Tokens",
@@ -20841,7 +20980,6 @@
       "empty": "No customer organizations yet. Create one to get started.",
       "noMatches": "No customer organizations match your search.",
       "error": "Could not load customer organization usage.",
-      "attribution": "Usage is attributed to the customer organization and customer team recorded for each customer member request. Dates are inclusive UTC calendar days. Tokens include input and output tokens.",
       "budgetUsage": "{{spend}} / {{max}}",
       "currentBudget": "Recorded budget spend {{budget}}",
       "budgetUsed": "{{percentage}} used",
@@ -20856,7 +20994,7 @@
       "tpm": "{{val}} TPM",
       "rpm": "{{val}} RPM",
       "keysTitle": "Keys",
-      "keysSubtitle": "Keys that sent requests as this customer this month.",
+      "keysSubtitle": "Active this month",
       "keysEmpty": "No traffic from this customer this month.",
       "columns": {
         "key": "Key",
@@ -20869,28 +21007,25 @@
     },
     "usage": {
       "title": "Usage",
-      "description": "Daily activity by model across this customer's keys.",
       "error": "Could not load customer usage"
     },
     "createDialog": {
       "title": "Create customer",
-      "description": "Set up a customer organization and its member budgets.",
       "name": "Customer name",
       "namePlaceholder": "e.g. Example customer",
       "customerId": "Customer organization id",
       "customerIdPlaceholder": "e.g. customer-001",
       "alias": "Alias",
       "aliasPlaceholder": "Optional display name",
-      "customerIdHelp": "Optional customer ID for the API. Leave blank to generate one.",
+      "customerIdHelp": "Leave blank to generate an ID.",
       "maxBudget": "Customer monthly budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "tpm": "TPM limit",
       "rpm": "RPM limit",
       "noLimit": "No limit",
       "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
-      "budgetHelp": "Total monthly cap across all teams and members.",
       "groups": "Member budget groups",
-      "groupsHelp": "Reusable budget profiles. Limits are in USD per member. Leave an amount blank for no limit.",
+      "groupsHelp": "Limits in USD per member. Blank means no limit.",
       "groupName": "Group name",
       "groupNameLabel": "Group {{index}} name",
       "monthly": "Monthly budget",
@@ -20902,8 +21037,6 @@
       "useDefault": "Use {{name}} as default",
       "removeGroup": "Remove {{name}}",
       "addGroup": "Add budget group",
-      "defaultHelp": "The selected default group is assigned to new members automatically.",
-      "resetHelp": "Each group's At the cap setting decides what happens when a member reaches either cap.",
       "advanced": "Advanced limits",
       "creating": "Creating customer...",
       "errors": {
@@ -20935,12 +21068,8 @@
       "breadcrumb": "Customer hierarchy",
       "selectOrganization": "Open a customer organization to explore its usage.",
       "backToCustomers": "Back to customer organizations",
-      "organizationUsage": "Customer organization usage",
-      "teamUsage": "Customer team usage",
-      "memberUsage": "Customer member usage",
-      "subtitle": "Understand usage across your customer organization, customer teams, and customer members.",
+      "allCustomers": "All customers",
       "trend": "Usage over time",
-      "trendHint": "Daily activity, broken down by {{dimension}}.",
       "metric": "Usage metric",
       "spend": "Spend",
       "tokens": "Tokens",
@@ -20961,7 +21090,6 @@
       "search": "Search breakdown",
       "rank": "Rank",
       "share": "Share",
-      "rankingHint": "Share of the selected metric across this customer scope. Click a customer team or customer member to explore its usage.",
       "useCaseHint": "Use cases recorded with requests. Unattributed activity appears as Unassigned.",
       "noMatches": "No results match your search.",
       "noBreakdown": "No usage recorded for this breakdown.",
@@ -20969,7 +21097,6 @@
       "previous": "Previous",
       "next": "Next",
       "allOrganizationUsage": "View all customer organization usage",
-      "freshness": "Usage appears after accounting completes. Date ranges use UTC. Budget resets follow the configured period.",
       "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "invalidIdentifier": "Select a valid customer identifier.",
       "incompletePages": "Could not load the complete usage range. Please choose fewer days.",
@@ -20989,15 +21116,14 @@
       "topTeams": "Top customer teams",
       "topMembers": "Top customer members",
       "memberSpend": "Customer member spend",
-      "memberSpendHint": "Budget spend follows each configured reset period. Share and tokens use the current UTC calendar month. These values are independent of the chart date range.",
       "searchMembers": "Search customer members",
       "member": "$t(customerPortal.entities.member)",
       "currentBudget": "Spend / limit",
       "status": "Status",
       "noLimit": "No limit",
       "limitConfigured": "Limit configured",
-      "monthlySpend": "Spend this month / monthly limit",
-      "yearlySpend": "Yearly spend / yearly limit",
+      "monthlySpend": "Monthly spend / limit",
+      "yearlySpend": "Yearly spend / limit",
       "customerSpendShare": "Share of customer spend",
       "noMonthlyLimit": "No monthly limit",
       "noYearlyLimit": "No yearly limit",
@@ -21008,7 +21134,6 @@
       "budgetRemaining": "{{amount}} remains",
       "budgetOver": "{{amount}} over",
       "calendarMonth": "Current UTC calendar month",
-      "budgetUsageHint": "Recorded spend updates after accounting completes. Pending requests are excluded.",
       "budgetUsageUnavailable": "Budget usage unavailable",
       "unknownSpend": "Unavailable",
       "atBudget": "At budget",

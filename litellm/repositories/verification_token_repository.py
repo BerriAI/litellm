@@ -13,12 +13,15 @@ from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
 )
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import (
     BaseRepository,
     DbRecord,
     record_to_dict,
 )
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.rust_bridge._native import RustKeyRepository
+from litellm.types.proxy.auth.user_api_key_auth import LiteLLM_VerificationTokenView
 
 if TYPE_CHECKING:
     from prisma.models import (
@@ -90,6 +93,18 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     @property
     def model_class(self) -> type[LiteLLM_VerificationToken]:
         return LiteLLM_VerificationToken
+
+    async def find_for_auth(
+        self, hashed_token: str, *, use_writer: bool = False
+    ) -> LiteLLM_VerificationTokenView | None:
+        """The key's ``combined_view`` row as auth reads it, read by the Rust repository.
+
+        A hash rotated away from a key within its grace period answers with the active key's row, so the deprecated
+        token fallback needs no second call. ``use_writer`` reads the writer instead of a replica."""
+        payload: Final = await rust_database.required_repository(RustKeyRepository).find(
+            hashed_token, use_writer=use_writer
+        )
+        return rust_database.decode(LiteLLM_VerificationTokenView, payload)
 
     def _to_model(self, record: DbRecord | None) -> LiteLLM_VerificationToken | None:
         """Convert a database record to a VerificationToken model."""
