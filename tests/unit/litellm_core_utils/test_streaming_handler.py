@@ -4621,7 +4621,8 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             "missing ['finish_reason', 'text', 'usage'], unexpected ['content']",
             id="placeholder-flag-with-foreign-key",
         ),
-        pytest.param("hello", "expected a dict, got str", id="not-a-dict"),
+        pytest.param("hello", "str is missing ['finish_reason', 'is_finished', 'text', 'usage']", id="plain-string"),
+        pytest.param(42, "expected a dict, got int", id="not-subscriptable"),
         pytest.param(
             litellm.ModelResponse(),
             "ModelResponse is missing ['finish_reason', 'is_finished', 'text', 'usage']",
@@ -4744,6 +4745,28 @@ class _DictLikeChunk(BaseModel):
         return getattr(self, key)
 
 
+class _NoneAsDefaultChunk(_DictLikeChunk):
+    def get(self, key: str, default: object = None) -> object:
+        value: Final = getattr(self, key, None)
+        return default if value is None else value
+
+
+class _DelegatingChunk:
+    def __init__(self, fields: dict[str, object]) -> None:
+        self._fields: Final = fields
+
+    def __getitem__(self, key: str) -> object:
+        return self._fields[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._fields
+
+    def __getattr__(self, name: str) -> object:
+        if name != "get":
+            raise AttributeError(name)
+        return self._fields.get
+
+
 def test_custom_provider_stream_reads_dict_like_chunk_objects(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
     wrapper: Final = CustomStreamWrapper(
@@ -4761,7 +4784,16 @@ def test_custom_provider_stream_reads_dict_like_chunk_objects(monkeypatch: pytes
     assert assembled.choices[0].finish_reason == "length"
 
 
-@pytest.mark.parametrize("as_chunk", [dict, MappingProxyType, _DictLikeChunk.model_validate])
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(dict, id="dict"),
+        pytest.param(MappingProxyType, id="mapping"),
+        pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
+        pytest.param(_NoneAsDefaultChunk.model_validate, id="object-whose-get-skips-none"),
+        pytest.param(_DelegatingChunk, id="object-with-get-from-getattr"),
+    ],
+)
 def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_finish_reason(
     monkeypatch: pytest.MonkeyPatch,
     as_chunk: Callable[[dict[str, object]], object],
