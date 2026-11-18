@@ -2,14 +2,15 @@
 //! `parallel_ai_search_cost` and the search branch of `completion_cost`: queries at the first table's
 //! `input_cost_per_query`, with discount and margin when the query asks for them. Parallel AI bills each request at
 //! its mode's row and each result past the ones a request includes at a fixed rate the cost map does not list. A row
-//! that prices queries by the results the request asks for (`max_results_range` tiers) is `NotPorted`
+//! listing `tiered_pricing` bills each query at the tier whose `max_results_range` holds the results the request
+//! asks for, the last tier when none does, ahead of its flat query rate
 
 use crate::money::UnitPrice;
 use crate::price::{Channel, Feature, InputUnit, Meter};
 use crate::priced::{Quantity, Side};
-use crate::query::{Header, Kind, Provider};
+use crate::query::{Header, Provider};
 use crate::receipt::{PriceOutcome, Unpriced};
-use crate::row::{LoweredRow, RowSource};
+use crate::row::{LoweredRow, ResultTier, RowSource};
 use crate::units::{self, Billed};
 
 const QUERY: Meter = Meter::Input(InputUnit::Query { over_results: None });
@@ -17,6 +18,8 @@ const ADDITIONAL_RESULT: Meter = Meter::Feature(Feature::AdditionalResult);
 const PARALLEL_AI: &str = "parallel_ai";
 /// `PARALLEL_AI_ADDITIONAL_RESULT_COST` (`llms/parallel_ai/search/cost_calculator.py`)
 const PARALLEL_AI_ADDITIONAL_RESULT: f64 = 0.001;
+/// The results `search_provider_cost_per_query` assumes a request asks for when it names none
+const DEFAULT_MAX_RESULTS: f64 = 10.0;
 
 /// One search call. The header's `Rows` are the caller's configured per-query price, read ahead of the catalog row
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +32,9 @@ pub struct SearchQuery {
     /// Parallel AI results past the ones a request includes
     #[cfg_attr(feature = "serde", serde(default))]
     pub additional_results: u64,
+    /// The request's `max_results`, which picks a `tiered_pricing` tier
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub max_results: Option<f64>,
 }
 
 pub(crate) fn price<S: RowSource>(source: &S, query: &SearchQuery) -> PriceOutcome {
@@ -36,12 +42,17 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &SearchQuery) -> PriceOutco
     let Some((first, _)) = layers.first() else {
         return units::no_row(&query.header);
     };
-    let priced = layers.iter().find_map(|(at, row)| {
-        units::listed(*row, &QUERY, Channel::Online).map(|rate| (at, *row, rate))
-    });
-    if layers.iter().any(|(_, row)| row.facts().prices_by_results) {
-        return Unpriced::NotPorted(Kind::Search).into();
-    }
+    let tiered = layers
+        .iter()
+        .find(|(_, row)| row.facts().prices_by_results());
+    let priced = match tiered {
+        Some((at, row)) => {
+            tier_rate(&row.facts().result_tiers, query.max_results).map(|rate| (at, *row, rate))
+        }
+        None => layers.iter().find_map(|(at, row)| {
+            units::listed(*row, &QUERY, Channel::Online).map(|rate| (at, *row, rate))
+        }),
+    };
     let parallel = query
         .header
         .candidates
@@ -59,7 +70,7 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &SearchQuery) -> PriceOutco
         });
     let Some((at, row, rate)) = priced else {
         return Unpriced::MissingRates {
-            row: first.clone(),
+            row: tiered.map_or(first, |(at, _)| at).clone(),
             missing: vec![QUERY],
         }
         .into();
@@ -91,6 +102,19 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &SearchQuery) -> PriceOutco
         Billed::of(lines, Vec::new()),
     )
     .into()
+}
+
+/// The query rate of the first tier whose inclusive range holds `max_results`, else of the last tier
+fn tier_rate(tiers: &[ResultTier], max_results: Option<f64>) -> Option<UnitPrice> {
+    let results = max_results.unwrap_or(DEFAULT_MAX_RESULTS);
+    tiers
+        .iter()
+        .find(|tier| {
+            tier.results
+                .is_some_and(|(low, high)| low <= results && results <= high)
+        })
+        .or(tiers.last())
+        .and_then(|tier| tier.rate)
 }
 
 #[cfg(test)]
@@ -127,6 +151,7 @@ mod parity {
             header: header(case["provider"].as_str().unwrap(), model),
             queries,
             additional_results,
+            max_results: None,
         };
         let receipt = priced(price(&source, &query));
         assert_eq!(
@@ -159,6 +184,7 @@ mod tests {
             header: header(provider, model),
             queries,
             additional_results,
+            max_results: None,
         }
     }
 
@@ -223,22 +249,71 @@ mod tests {
         assert!(receipt.total < receipt.original());
     }
 
-    /// Main reads a row's result tiers ahead of its flat query rate
-    #[rstest]
-    #[case::tiers_only(TestRow::default())]
-    #[case::tiers_beside_a_flat_rate(rated(0.01))]
-    fn a_row_priced_by_requested_results_is_not_ported(#[case] row: TestRow) {
-        let tiered = TestRow {
+    fn tiered(tiers: &[((f64, f64), f64)], beside: TestRow) -> TestRow {
+        TestRow {
             facts: RowFacts {
-                prices_by_results: true,
+                result_tiers: tiers
+                    .iter()
+                    .map(|(results, rate)| ResultTier {
+                        results: Some(*results),
+                        rate: UnitPrice::new(*rate),
+                    })
+                    .collect(),
                 ..RowFacts::default()
             },
-            ..row
-        };
-        let source = TestSource::with_row("exa_ai/search", tiered);
-        assert_eq!(
-            price(&source, &query("exa_ai", "exa_ai/search", 1, 0)),
-            Unpriced::NotPorted(Kind::Search).into()
+            ..beside
+        }
+    }
+
+    /// Main reads a row's result tiers ahead of its flat query rate, inclusive at both ends, the first tier that holds
+    /// the request's results winning and the last one billing results no tier holds
+    #[rstest]
+    #[case::default_results(None, 0.005)]
+    #[case::lower_edge(Some(0.0), 0.005)]
+    #[case::upper_edge(Some(25.0), 0.005)]
+    #[case::overlap_picks_the_first(Some(30.0), 0.025)]
+    #[case::next_tier(Some(31.0), 0.04)]
+    #[case::past_every_tier(Some(101.0), 0.05)]
+    #[case::below_every_tier(Some(-1.0), 0.05)]
+    fn a_row_priced_by_requested_results_bills_the_tier_they_fall_in(
+        #[case] max_results: Option<f64>,
+        #[case] rate: f64,
+    ) {
+        let row = tiered(
+            &[
+                ((0.0, 25.0), 0.005),
+                ((26.0, 30.0), 0.025),
+                ((30.0, 100.0), 0.04),
+                ((200.0, 300.0), 0.05),
+            ],
+            rated(0.9),
         );
+        let source = TestSource::with_row("exa_ai/search", row);
+        let asked = SearchQuery {
+            max_results,
+            ..query("exa_ai", "exa_ai/search", 3, 0)
+        };
+        assert_eq!(priced(price(&source, &asked)).prompt.get(), rate * 3.0);
+    }
+
+    #[rstest]
+    fn a_tier_without_a_query_rate_is_missing_it() {
+        let source = TestSource::with_row(
+            "exa_ai/search",
+            TestRow {
+                facts: RowFacts {
+                    result_tiers: vec![ResultTier {
+                        results: Some((0.0, 10.0)),
+                        rate: None,
+                    }],
+                    ..RowFacts::default()
+                },
+                ..rated(0.01)
+            },
+        );
+        assert!(matches!(
+            price(&source, &query("exa_ai", "exa_ai/search", 1, 0)),
+            PriceOutcome::Unpriced(Unpriced::MissingRates { .. })
+        ));
     }
 }

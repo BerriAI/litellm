@@ -1,9 +1,8 @@
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost, per_image_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
-    flat_image_cost,
     resolve_image_model_info,
 )
 from litellm.types.utils import ImageResponse, ModelInfo, Usage
@@ -37,8 +36,9 @@ def image_cost_calculator(model: str, image_response: ImageResponse, model_info:
     resolved_model_info: Final = resolve_image_model_info(
         model=model, custom_llm_provider="tencent", model_info=_deployment_image_token_pricing(model_info)
     )
+    images: Final = len(image_response.data or ())
     if _deployment_prices_per_image_only(model_info):
-        return flat_image_cost(resolved_model_info, image_response)
+        return per_image_cost(model, "tencent", images, resolved_model_info)
     token_based_cost: Final = calculate_image_response_cost_from_usage(
         model=model,
         image_response=image_response,
@@ -47,4 +47,4 @@ def image_cost_calculator(model: str, image_response: ImageResponse, model_info:
     )
     if token_based_cost is not None:
         return token_based_cost
-    return flat_image_cost(resolved_model_info, image_response)
+    return per_image_cost(model, "tencent", images, resolved_model_info)
