@@ -321,6 +321,21 @@ def test_responses_call_keeps_a_developer_item_with_non_text_parts_in_place_as_a
     )
 
 
+def test_responses_call_forwards_a_developer_item_without_content_unchanged() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            input=[{"role": "user", "content": "What is the capital of France?"}, {"type": "message", "role": "developer"}],
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "What is the capital of France?"},
+        {"type": "message", "role": "developer"},
+    )
+
+
 def test_responses_call_forwards_string_input_and_instructions_unchanged() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):

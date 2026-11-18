@@ -23,6 +23,7 @@ from typing_extensions import ReadOnly
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
+from litellm.exceptions import MalformedRequestFieldError
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -1138,6 +1139,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     )
                 except _S3MediaInBatchRecord as e:
                     raise _batch_line_error(idx + 1, str(e)) from e
+                except MalformedRequestFieldError as e:
+                    raise _batch_line_error(idx + 1, f"could not be converted to a Bedrock batch record: {e}") from e
 
             # Create Bedrock batch record
             record_id = _openai_jsonl_content.get("custom_id", f"CALL{str(idx).zfill(7)}")

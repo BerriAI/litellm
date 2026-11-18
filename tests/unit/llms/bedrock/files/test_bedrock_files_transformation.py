@@ -4527,6 +4527,35 @@ async def test_create_file_refuses_a_batch_line_with_s3_media_with_a_400_before_
 
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.asyncio
+async def test_create_file_names_the_batch_line_whose_developer_message_has_no_content(
+    respx_mock: respx.MockRouter,
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+    developer_without_content: Final = _nova_chat_batch_line(
+        "req-2", messages=[{"role": "user", "content": "Hello"}, {"role": "developer"}]
+    )
+
+    with pytest.raises(BedrockError) as exc_info:
+        await litellm.acreate_file(
+            file=("batch.jsonl", f"{_VALID_BATCH_LINE}\n{developer_without_content}\n".encode(), "application/jsonl"),
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="litellm-batch-bucket",
+            aws_region_name="us-west-2",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == (
+        "Batch input file line 2 could not be converted to a Bedrock batch record: "
+        "litellm.BadRequestError: Missing required parameter: 'messages[1].content'."
+    )
+    assert not put_route.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
 async def test_create_file_uploads_s3_values_that_no_converse_record_sends_as_an_s3_source(
     respx_mock: respx.MockRouter,
 ) -> None:
