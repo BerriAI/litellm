@@ -331,6 +331,12 @@ impl NativeModelCostMap {
         )
     }
 
+    /// Bills a cost a provider or the gateway in front of it reported, by the policy of the source that stated it: a
+    /// receipt whose prompt and completion split the billed total as `split_by` does
+    fn price_reported(&self, py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        cost::price_reported(py, &*self.cost_snapshot(py)?, document)
+    }
+
     /// The built-in tool fees `document` names, every fee a call's tools bill or one tool's calculator, `None` where
     /// main's calculator returned `None`. `rows` are the rows the document names by index
     fn price_tools(
