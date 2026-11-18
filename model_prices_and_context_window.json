@@ -16343,6 +16343,7 @@
         "mode": "chat",
         "output_cost_per_token": 5.5e-07,
         "source": "https://api.bineric.com/v1/models",
+        "supports_reasoning": true,
         "supports_function_calling": true,
         "supports_vision": true
     },
@@ -16410,6 +16411,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.2e-05,
         "source": "https://api.bineric.com/v1/models",
+        "supports_reasoning": true,
         "supports_function_calling": true,
         "supports_vision": true
     },
@@ -16443,6 +16445,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "source": "https://api.bineric.com/v1/models",
+        "supports_reasoning": true,
         "supports_function_calling": true,
         "supports_vision": true
     },
@@ -16657,6 +16660,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "source": "https://api.bineric.com/v1/models",
+        "supports_reasoning": true,
         "supports_function_calling": true
     },
     "bineric/gpt-oss-20b": {
@@ -16667,6 +16671,7 @@
         "mode": "chat",
         "output_cost_per_token": 3e-07,
         "source": "https://api.bineric.com/v1/models",
+        "supports_reasoning": true,
         "supports_function_calling": true
     },
     "bineric/o1": {
