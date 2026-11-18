@@ -1826,6 +1826,11 @@ def _redact_prompt_fields_in_guardrail_entry(
     return {**redacted, "guardrail_response": preserved_stats}
 
 
+def redact_prompt_leaks_in_error_string(text: str) -> str:
+    """The prompt-leak redaction spend logs apply to provider error strings, for other request records."""
+    return _redact_prompt_leaks_in_error_string(text)
+
+
 def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,

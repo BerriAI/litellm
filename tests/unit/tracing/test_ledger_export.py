@@ -323,3 +323,46 @@ async def test_only_a_lens_that_answers_without_ledger_v1_counts_as_unsupported(
 
     assert isinstance(await probe_lens(_client(handler)), expected)
     assert paths == ["/prefix/internal/status"]
+
+
+@pytest.mark.asyncio
+async def test_a_body_upload_that_cannot_connect_is_retried_not_parked() -> None:
+    store: Final = FakeStore(payloads=(_payload("e"),))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    assert await UploadRunner(store, _client(handler), SETTINGS, lambda: True).step() == 0
+    assert store.retried == [("e/messages", "ConnectError")]
+    assert store.parked == []
+    assert store.acknowledged == []
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_ledger_response_reschedules_the_claim() -> None:
+    store: Final = FakeStore(events=(_event("a"),))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b" " * (16 * 1024 * 1024 + 1))
+
+    assert await CostRunner(store, _client(handler), SETTINGS).step() == 0
+    assert store.retried == [("a", "ResponseTooLarge")]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_pass_is_retried_on_the_next_tick() -> None:
+    store: Final = FakeStore()
+    stop: Final = asyncio.Event()
+    attempts: Final[list[int]] = []  # mutable-ok: counts passes
+
+    async def step() -> int:
+        attempts.append(len(attempts))
+        if len(attempts) == 1:
+            raise RuntimeError("database unavailable")
+        stop.set()
+        return 1
+
+    await asyncio.wait_for(run_loop(step, store.release, stop=stop, active=lambda: True, idle_seconds=0.01), timeout=5)
+
+    assert attempts == [0, 1]
+    assert store.releases == 1

@@ -926,7 +926,7 @@ class DBSpendUpdateWriter:
 
                 payload[LENS_EXPORT_KEY] = safe_lens_export(
                     payload,
-                    kwargs or {},
+                    request_fields,
                     start_time=start_time,
                     end_time=end_time,
                     keep_content=keep_spend_logs,

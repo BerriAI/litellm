@@ -1679,10 +1679,11 @@ def _lens_ledger_options(database: "PrismaClient | None") -> "LedgerExportOption
     from litellm.repositories.accounting_delivery_repository import LedgerDatabase
     from litellm.tracing.ledger_export import ExportSettings
 
-    if database is None or general_settings.get("use_spend_logs_ledger", True) is False:
+    settings: Final = general_settings_view()
+    if database is None or settings.get("use_spend_logs_ledger", True) is False:
         return None
     return LedgerExportOptions(
-        enabled=general_settings.get("lens_ledger_export") is True,
+        enabled=settings.get("lens_ledger_export") is True,
         database=cast(LedgerDatabase, database),  # cast-ok: PrismaClient.tx owns writer routing for the outbox
         publish=lens_ledger_publication.publish,
         settings=ExportSettings.from_env(),

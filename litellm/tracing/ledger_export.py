@@ -16,7 +16,7 @@ from functools import reduce
 from typing import Final, Protocol, TypeAlias
 
 import httpx
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.lens_export_repository import ClaimedEvent, ClaimedPayload
@@ -28,6 +28,7 @@ _RESULT_BYTES: Final = 16 * 1024 * 1024
 _PERMANENT_BATCH: Final = frozenset({400, 413})
 _REJECTED_UPLOAD: Final = frozenset({400, 413, 422})
 _JSON_HEADERS: Final = {"Content-Type": "application/json"}
+_RECORD: Final = TypeAdapter(dict[str, object])
 UNREACHABLE_CAPABILITIES: Final = LedgerCapabilities(
     versions=(LEDGER_VERSION,), payload_store=True, inline_bytes=1024 * 1024, preview_bytes=1024 * 1024
 )
@@ -129,10 +130,9 @@ def _encode(value: object) -> bytes:
 
 def _decoded(event: ClaimedEvent) -> Mapping[str, object] | None:
     try:
-        record: Final = json.loads(event.event)
-    except ValueError:
+        return _RECORD.validate_json(event.event)
+    except ValidationError:
         return None
-    return record if isinstance(record, dict) else None
 
 
 _Claimed: TypeAlias = tuple[ClaimedEvent, Mapping[str, object]]

@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -68,11 +69,9 @@ def _millis(moment: datetime) -> int:
 def _redacted_error(error: object) -> object:
     if not isinstance(error, str) or litellm.turn_off_message_logging is not True:
         return error
-    from litellm.proxy.spend_tracking.spend_tracking_utils import (
-        _redact_prompt_leaks_in_error_string,
-    )
+    from litellm.proxy.spend_tracking.spend_tracking_utils import redact_prompt_leaks_in_error_string
 
-    return _redact_prompt_leaks_in_error_string(error)
+    return redact_prompt_leaks_in_error_string(error)
 
 
 def _correlated_row(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -93,30 +92,51 @@ def _correlated_row(kwargs: Mapping[str, object]) -> Mapping[str, object] | None
     }
 
 
-def _accounting_row(payload: "SpendLogsPayload") -> Mapping[str, object]:
-    return {
-        "call_type": payload.get("call_type") or "",
-        "api_key": payload.get("api_key") or "",
-        "team_id": payload.get("team_id") or "",
-        "organization_id": payload.get("organization_id") or "",
-        "user": payload.get("user") or "",
-        "model": payload.get("model") or "",
-        "model_group": payload.get("model_group") or "",
-        "custom_llm_provider": payload.get("custom_llm_provider") or "",
-        "status": payload.get("status") or "",
-        "session_id": payload.get("session_id") or "",
-    }
+class _ChargedRequest(TypedDict, total=False):
+    """The accounting payload fields a Lens record reads, typed narrowly."""
+
+    call_type: ReadOnly[str | None]
+    api_key: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
+    organization_id: ReadOnly[str | None]
+    user: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    model_group: ReadOnly[str | None]
+    custom_llm_provider: ReadOnly[str | None]
+    status: ReadOnly[str | None]
+    session_id: ReadOnly[str | None]
 
 
-def _charge_scope(payload: "SpendLogsPayload") -> Mapping[str, object]:
+_CHARGED: Final = TypeAdapter(_ChargedRequest)
+_ACCOUNTING_TEXT: Final = (
+    "call_type",
+    "api_key",
+    "team_id",
+    "organization_id",
+    "user",
+    "model",
+    "model_group",
+    "custom_llm_provider",
+    "status",
+    "session_id",
+)
+_SCOPE: Final = ("api_key", "team_id", "user", "organization_id")
+
+
+def _charged(payload: "SpendLogsPayload") -> _ChargedRequest:
+    try:
+        return _CHARGED.validate_python(payload)
+    except ValidationError:
+        return _ChargedRequest()
+
+
+def _accounting_row(charged: _ChargedRequest) -> Mapping[str, object]:
+    return {name: charged.get(name) or "" for name in _ACCOUNTING_TEXT}
+
+
+def _charge_scope(charged: _ChargedRequest) -> Mapping[str, object]:
     """The key, team, user and organization the accounting delivery charged, which outrank the callback's view."""
-    scope: Final = {
-        "api_key": payload.get("api_key"),
-        "team_id": payload.get("team_id"),
-        "user": payload.get("user"),
-        "organization_id": payload.get("organization_id"),
-    }
-    return {name: value for name, value in scope.items() if value}
+    return {name: value for name in _SCOPE if (value := charged.get(name))}
 
 
 def _spill(
@@ -163,11 +183,12 @@ def lens_export(
     payload_limit: int,
 ) -> LensExport:
     correlated: Final = _correlated_row(kwargs)
-    base: Final = correlated if correlated is not None else _accounting_row(payload)
+    charged: Final = _charged(payload)
+    base: Final = correlated if correlated is not None else _accounting_row(charged)
     event_time_ms: Final = _millis(start_time)
     owner: Final = {
         **{name: _storable(value) for name, value in base.items()},
-        **_charge_scope(payload),
+        **_charge_scope(charged),
         "request_id": payload["request_id"],
         "spend": payload["spend"],
         "start_time": event_time_ms,
@@ -226,7 +247,7 @@ def safe_lens_export(
     except Exception as error:  # noqa: BLE001  # the row builder reads arbitrary callback data; the charge must not fail
         verbose_proxy_logger.warning(
             "Lens export could not describe request %s (%s); exporting its cost only",
-            payload.get("request_id"),
+            payload["request_id"],
             type(error).__name__,
         )
         return accounting_only_export(payload, start_time=start_time, end_time=end_time, capabilities=capabilities)

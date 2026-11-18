@@ -226,3 +226,28 @@ def test_message_logging_off_still_exports_no_body(monkeypatch: pytest.MonkeyPat
 
     assert export["payloads"] == ()
     assert export["record"]["messages"] == ""
+
+
+def test_an_unreadable_accounting_scope_falls_back_to_the_callback_scope() -> None:
+    export = lens_export(
+        {**_accounting(), "team_id": 5},  # pyright: ignore[reportArgumentType]  # deliberately mistyped accounting payload
+        _kwargs(),
+        start_time=START,
+        end_time=END,
+        keep_content=True,
+        capabilities=INLINE,
+        payload_limit=1024,
+    )
+
+    assert export["record"]["spend"] == 0.25
+    assert export["record"]["request_id"] == "accounting-request"
+    assert export["record"]["team_id"] == "team"
+    assert export["record"]["api_key"] == "hash"
+
+
+def test_message_logging_off_keeps_an_error_without_echoed_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    kwargs = _kwargs()
+    kwargs["standard_logging_object"] = {**dict(kwargs["standard_logging_object"]), "error_str": "rate limited"}  # pyright: ignore[reportArgumentType]  # test-built mapping
+
+    assert _export(kwargs)["record"]["error_str"] == "rate limited"
