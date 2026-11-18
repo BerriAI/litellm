@@ -1,5 +1,7 @@
 import { useTranslation } from "react-i18next";
 
+const BREAKDOWN_DIGITS = { minimumFractionDigits: 2, maximumFractionDigits: 4 } as const;
+
 export const customerSurchargeBreakdown = (spend: number, surcharge: number | null | undefined) => {
   const applied = Math.min(Math.max(surcharge ?? 0, 0), Math.max(spend, 0));
   return applied > 0 ? { baseCost: spend - applied, surcharge: applied } : null;
@@ -22,11 +24,11 @@ export default function CustomerSurchargeBreakdown({
     >
       <div className="flex gap-1">
         <dt>{t("customerPortal.analytics.baseCost")}</dt>
-        <dd className="tabular-nums text-foreground">{t("format.usd", { val: breakdown.baseCost })}</dd>
+        <dd className="tabular-nums text-foreground">{t("format.usd", { val: breakdown.baseCost, ...BREAKDOWN_DIGITS })}</dd>
       </div>
       <div className="flex gap-1">
         <dt>{t("customerPortal.analytics.surcharge")}</dt>
-        <dd className="tabular-nums text-foreground">{t("format.usd", { val: breakdown.surcharge })}</dd>
+        <dd className="tabular-nums text-foreground">{t("format.usd", { val: breakdown.surcharge, ...BREAKDOWN_DIGITS })}</dd>
       </div>
     </dl>
   );
