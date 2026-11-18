@@ -1,7 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::{path::Path, sync::Arc};
 
-use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{Extension, Json, extract::State, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_inference_transcription::{AudioTranscriptionRoute, types::AudioTranscriptionRequest};
 use litellm_router_core::{Attempt, Op, Served};
@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     Error, Gateway,
+    headers::Routing,
     request::{self, InferenceBody},
     routing::{self, Host, RouteAttempt},
 };
@@ -20,7 +21,7 @@ pub(crate) async fn create<H: Host>(
 ) -> Result<impl IntoResponse, Error> {
     handle(&gateway, &identity, body)
         .await
-        .map(|(headers, body)| (headers, Json(body)))
+        .map(|(routing, body)| (routing, Json(body)))
 }
 
 async fn handle<H: Host>(
@@ -30,7 +31,7 @@ async fn handle<H: Host>(
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<(HeaderMap, Value), Error> {
+) -> Result<(Extension<Routing>, Value), Error> {
     let model = request::model(&body)?.to_owned();
     let audio = match upload {
         Some(upload) => {
@@ -58,7 +59,7 @@ async fn handle<H: Host>(
         &attempt,
     )
     .await?;
-    Ok((routing::headers(&routed), routed.output.response))
+    Ok((Extension(Routing::served(&routed)), routed.output.response))
 }
 
 struct TranscriptionAttempt<'a> {

@@ -2,7 +2,7 @@ use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::State,
     response::{IntoResponse, Response},
 };
@@ -18,6 +18,8 @@ use serde_json::{Map, Value};
 use crate::{
     Error, Gateway, JsonObject,
     caching::CacheHeaders,
+    headers::Routing,
+    model_restamp::ReportedModel,
     request::{self, Path},
     routing::{self, Host, RouteAttempt},
 };
@@ -76,12 +78,15 @@ async fn handle<H: Host>(
         &attempt,
     )
     .await?;
-    let routed_headers = routing::headers(&routed);
+    let routing = Routing::served(&routed);
+    let reported = ReportedModel::of(&model, &routed);
     let (response, cache) = routed.output.response;
-    Ok(routing::respond(
-        routed_headers,
+    Ok((
+        Extension(routing),
+        Extension(reported),
         cache.apply(Json(response).into_response()),
-    ))
+    )
+        .into_response())
 }
 
 struct ChatAttempt<'a, H> {

@@ -64,9 +64,13 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    let answer = support::json(response).await;
     assert_eq!(
-        support::json(response).await["choices"][0]["message"]["content"],
-        "hello"
+        (
+            &answer["choices"][0]["message"]["content"],
+            &answer["model"]
+        ),
+        (&json!("hello"), &json!("public/model"))
     );
 }
 

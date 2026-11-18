@@ -6,10 +6,6 @@
 
 use std::{future::Future, time::Duration};
 
-use axum::{
-    http::{HeaderMap, HeaderName, HeaderValue},
-    response::Response,
-};
 use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Permissions};
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
@@ -286,41 +282,6 @@ pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
                 .or(count("completion_tokens"))
                 .unwrap_or(0)
     })
-}
-
-/// What the router did to serve a response, as the proxy's `x-litellm-*` headers.
-pub(crate) fn headers<R>(routed: &RouterResponse<R>) -> HeaderMap {
-    [
-        ("x-litellm-model-id", Some(routed.deployment_id.clone())),
-        ("x-litellm-model-group", Some(routed.model_group.clone())),
-        (
-            "x-litellm-attempted-retries",
-            Some(routed.attempted_retries.to_string()),
-        ),
-        (
-            "x-litellm-attempted-fallbacks",
-            Some(routed.attempted_fallbacks.to_string()),
-        ),
-        (
-            "x-litellm-max-retries",
-            routed.max_retries.map(|max| max.to_string()),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(name, value)| {
-        Some((
-            HeaderName::from_static(name),
-            HeaderValue::from_str(&value?).ok()?,
-        ))
-    })
-    .collect()
-}
-
-/// `response` with the routing headers of the call that served it.
-pub(crate) fn respond(routing: HeaderMap, response: Response) -> Response {
-    let (mut parts, body) = response.into_parts();
-    parts.headers.extend(routing);
-    Response::from_parts(parts, body)
 }
 
 #[cfg(test)]
