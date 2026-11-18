@@ -7,6 +7,7 @@ Provides:
 """
 
 import base64
+import dataclasses
 import json
 import re
 from collections.abc import Mapping
@@ -55,6 +56,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_team_provider_deployment,
     is_base64_encoded_unified_file_id,
     managed_file_copy_on_deployment,
+    model_the_caller_reaches_deployment_by,
     provider_file_id_from_managed_id,
     team_deployment_the_caller_may_use,
 )
@@ -480,7 +482,12 @@ async def _with_registered_upload(
     managed_file_id: Final = await managed_files_obj.register_provider_file(
         provider_file_id=provider_file_id,
         content_type=content_type,
-        deployment=upload_deployment,
+        deployment=dataclasses.replace(
+            upload_deployment,
+            public_model_name=model_the_caller_reaches_deployment_by(
+                upload_deployment.public_model_name, _TEAM_CREDENTIAL_PROVIDER, llm_router, user_api_key_dict
+            ),
+        ),
         owner=user_api_key_dict,
         llm_router=llm_router,
     )
@@ -948,7 +955,7 @@ async def rag_ingest(
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         credential_deployment: Final = None if forwarded_credentials else team_deployment
         upload_deployment: Final = await team_deployment_the_caller_may_use(
-            credential_deployment, llm_router, user_api_key_dict
+            credential_deployment, _TEAM_CREDENTIAL_PROVIDER, llm_router, user_api_key_dict
         )
         ingest_file_id: Final = await _provider_file_id_for_ingest(
             file_id, credential_deployment, managed_files_obj, user_api_key_dict

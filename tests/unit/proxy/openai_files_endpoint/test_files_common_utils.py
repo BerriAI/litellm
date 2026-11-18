@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
@@ -11,6 +12,10 @@ from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFi
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.fallback_generalizations import (
+    get_fallback_generalization_rules,
+    set_fallback_generalizations,
+)
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -25,6 +30,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     map_raw_file_ids_to_unified,
     prepare_data_with_credentials,
     provider_file_id_spellings,
+    team_deployment_the_caller_may_use,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
@@ -663,21 +669,33 @@ def _family_wildcard_of_a_model_in(known_models: set[str]) -> str:
     return f"{family}-*"
 
 
-def _team_wildcard_credentials(custom_llm_provider: str, key_wildcard: str) -> dict[str, object] | None:
+def _team_wildcard_router(custom_llm_provider: str) -> Router:
     team_wildcard: Final = f"{custom_llm_provider}/*"
+    return Router(
+        model_list=[
+            {
+                "model_name": team_wildcard,
+                "litellm_params": {"model": team_wildcard, "api_key": f"team-{custom_llm_provider}-key"},
+                "model_info": {"id": "team-a-wildcard", "team_id": "team-a", "team_public_model_name": team_wildcard},
+            }
+        ]
+    )
+
+
+def _team_wildcard_caller(custom_llm_provider: str, key_wildcard: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-a",
+        team_models=[f"{custom_llm_provider}/*"],
+        models=[key_wildcard],
+    )
+
+
+def _team_wildcard_credentials(custom_llm_provider: str, key_wildcard: str) -> dict[str, object] | None:
     return get_team_provider_credentials(
-        llm_router=Router(
-            model_list=[
-                {
-                    "model_name": team_wildcard,
-                    "litellm_params": {"model": team_wildcard, "api_key": f"team-{custom_llm_provider}-key"},
-                    "model_info": {"id": "team-a-wildcard", "team_id": "team-a", "team_public_model_name": team_wildcard},
-                }
-            ]
-        ),
-        user_api_key_dict=UserAPIKeyAuth(
-            api_key="test-key", user_id="test-user", team_id="team-a", team_models=[team_wildcard], models=[key_wildcard]
-        ),
+        llm_router=_team_wildcard_router(custom_llm_provider),
+        user_api_key_dict=_team_wildcard_caller(custom_llm_provider, key_wildcard),
         custom_llm_provider=custom_llm_provider,
         include_accessible_deployments=False,
     )
@@ -700,6 +718,45 @@ def test_a_wildcard_key_never_resolves_a_team_wildcard_deployment_of_another_pro
     key_provider_models: set[str], team_provider: str
 ):
     assert _team_wildcard_credentials(team_provider, _family_wildcard_of_a_model_in(key_provider_models)) is None
+
+
+@pytest.fixture
+def family_only_a_routing_rule_maps_to_anthropic() -> Iterator[str]:
+    previous_rules: Final = get_fallback_generalization_rules()
+    family: Final = "lit-unlisted-family"
+    set_fallback_generalizations(
+        [*previous_rules, {"name": family, "pattern": rf"^{family}-\d+$", "model_info": {"litellm_provider": "anthropic"}}]
+    )
+    yield family
+    set_fallback_generalizations(previous_rules)
+
+
+def test_a_wildcard_key_resolves_the_team_wildcard_deployment_for_a_family_the_cost_map_does_not_list(
+    family_only_a_routing_rule_maps_to_anthropic: str,
+):
+    credentials: Final = _team_wildcard_credentials("anthropic", f"{family_only_a_routing_rule_maps_to_anthropic}-9*")
+
+    assert credentials is not None
+    assert credentials["api_key"] == "team-anthropic-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_provider_models, may_use",
+    [(litellm.open_ai_chat_completion_models, True), (litellm.anthropic_models, False)],
+)
+async def test_the_team_wildcard_deployment_is_usable_only_by_a_key_wildcard_reaching_a_model_it_serves(
+    key_provider_models: set[str], may_use: bool
+):
+    llm_router: Final = _team_wildcard_router("openai")
+    team_member: Final = _team_wildcard_caller("openai", "openai/*")
+    deployment: Final = get_team_provider_deployment(llm_router, team_member, "openai")
+    caller: Final = _team_wildcard_caller("openai", _family_wildcard_of_a_model_in(key_provider_models))
+
+    usable: Final = await team_deployment_the_caller_may_use(deployment, "openai", llm_router, caller)
+
+    assert deployment is not None
+    assert (usable == deployment) is may_use
 
 
 @pytest.mark.parametrize(

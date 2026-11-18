@@ -68,6 +68,7 @@ OWNED_PROXY_CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 PREFIXED: Final = re.compile(r"^/(team|wildcard|shared|environment|credential|caller|gemini|azure|bedrock)(/[^?]*)")
 STORE_FILES: Final = re.compile(r"^/v1/vector_stores/([^/]+)/files$")
+STORE_FILE: Final = re.compile(r"^/v1/vector_stores/([^/]+)/files/([^/]+)$")
 FILE_CONTENT: Final = re.compile(r"^/v1/files/([^/]+)/content$")
 FILE_ITEM: Final = re.compile(r"^/v1/files/([^/]+)$")
 BATCH_ITEM: Final = re.compile(r"^/v1/batches/([^/]+)$")
@@ -268,9 +269,24 @@ def _owned_reply(prefix: str, identity: str, payload: Mapping[str, JsonValue]) -
     return _json_reply(payload) if _owned_by(prefix, identity) else _error_reply(404)
 
 
+def _store_file_object(store_id: str, file_id: str) -> dict[str, JsonValue]:
+    return {
+        "id": file_id,
+        "object": "vector_store.file",
+        "created_at": int(time.time()),
+        "vector_store_id": store_id,
+        "status": "completed",
+        "last_error": None,
+        "usage_bytes": len(DOCUMENT[1]),
+    }
+
+
 def _openai_get(route: str, prefix: str) -> Reply:
-    if route in {"/v1/files", "/v1/batches"}:
+    if route in {"/v1/files", "/v1/batches"} or STORE_FILES.match(route) is not None:
         return _list_reply()
+    store_file: Final = STORE_FILE.match(route)
+    if store_file is not None:
+        return _owned_reply(prefix, store_file[2], _store_file_object(store_file[1], store_file[2]))
     content: Final = FILE_CONTENT.match(route)
     if content is not None:
         return _batch_input_reply() if _owned_by(prefix, content[1]) else _error_reply(404)
@@ -284,6 +300,11 @@ def _openai_get(route: str, prefix: str) -> Reply:
 
 
 def _openai_delete(route: str, prefix: str) -> Reply:
+    store_file: Final = STORE_FILE.match(route)
+    if store_file is not None:
+        return _owned_reply(
+            prefix, store_file[2], {"id": store_file[2], "object": "vector_store.file.deleted", "deleted": True}
+        )
     file_item: Final = FILE_ITEM.match(route)
     if file_item is None:
         return _error_reply(404)
@@ -1048,8 +1069,8 @@ def test_key_restricted_to_a_model_under_the_team_wildcard_uses_the_team_deploym
 
     ingested: Final = _ingest(rag_rig.gateway, key)
     store_id: Final = _completed_store(rag_rig, ingested)
-    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
-    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
+    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+    assert _provider_file_id(ingested).startswith("file-wildcard-"), ingested.text
     rows: Final = _store_rows(store_id)
     assert [row["team_id"] for row in rows] == [rag_rig.tenants.team_w], rows
     assert WILDCARD_API_KEY not in json.dumps(rows), rows
@@ -1068,8 +1089,8 @@ def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and
 
     ingested: Final = _ingest(rag_rig.gateway, tenants.wildcard_global_key)
     store_id: Final = _completed_store(rag_rig, ingested)
-    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
-    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
+    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+    assert _provider_file_id(ingested).startswith("file-wildcard-"), ingested.text
 
     response: Final = _query(
         rag_rig.gateway, tenants.wildcard_global_key, tenants.global_model, {**OPENAI, "vector_store_id": store_id}
@@ -1082,12 +1103,54 @@ def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and
     )
 
 
+def _restricted_wildcard_key(tenants: Tenants, caller: Literal["wildcard_bare_key", "wildcard_family_key"]) -> str:
+    match caller:
+        case "wildcard_bare_key":
+            return tenants.wildcard_bare_key
+        case "wildcard_family_key":
+            return tenants.wildcard_family_key
+
+
+@pytest.mark.parametrize(
+    ("method", "file_path"),
+    (("GET", ""), ("GET", "/{file_id}"), ("DELETE", "/{file_id}")),
+    ids=("list", "retrieve", "delete"),
+)
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
+def test_vector_store_file_calls_by_a_key_restricted_under_the_team_wildcard_use_the_team_deployment(
+    rag_rig: RagRig,
+    caller: Literal["wildcard_bare_key", "wildcard_family_key"],
+    method: Literal["GET", "DELETE"],
+    file_path: str,
+) -> None:
+    key: Final = _restricted_wildcard_key(rag_rig.tenants, caller)
+    ingested: Final = _ingest(rag_rig.gateway, key)
+    store_id: Final = _completed_store(rag_rig, ingested)
+    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+
+    response: Final = rag_rig.gateway.request(
+        method,
+        f"/v1/vector_stores/{store_id}/files{file_path.format(file_id=_ingested_file_id(ingested))}",
+        key=key,
+    )
+
+    assert response.status_code == 200, response.text
+    assert rag_rig.signatures() == (
+        (
+            "wildcard",
+            method,
+            f"/v1/vector_stores/{store_id}/files{file_path.format(file_id=_provider_file_id(ingested))}",
+            f"Bearer {WILDCARD_API_KEY}",
+        ),
+    )
+
+
 @pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
 def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_deployment(
     rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
 ) -> None:
     response: Final = rag_rig.gateway.request_multipart(
-        "/v1/files", {"purpose": "assistants"}, {"file": DOCUMENT}, key=getattr(rag_rig.tenants, caller)
+        "/v1/files", {"purpose": "assistants"}, {"file": DOCUMENT}, key=_restricted_wildcard_key(rag_rig.tenants, caller)
     )
 
     assert response.status_code == 200, response.text
@@ -1998,7 +2061,7 @@ def _bearer(key: str) -> Mapping[str, str]:
 def test_files_and_batches_calls_by_a_key_restricted_under_the_team_wildcard_use_the_team_deployment(
     rag_rig: RagRig, method: str, path: str, route: str, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
 ) -> None:
-    key: Final = getattr(rag_rig.tenants, caller)
+    key: Final = _restricted_wildcard_key(rag_rig.tenants, caller)
     file_id, batch_id = _batch_for(rag_rig, _bearer(key))
 
     response: Final = rag_rig.gateway.request(method, path.format(file_id=file_id, batch_id=batch_id), key=key)

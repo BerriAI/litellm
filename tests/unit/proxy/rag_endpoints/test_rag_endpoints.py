@@ -874,8 +874,9 @@ def _team_wildcard_router() -> Router:
 _ONE_MODEL_TEAM_KEY: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=["openai/gpt-5.4-mini"])
 
 
-def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_checks_reject(client_team_a):
-    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+def test_rag_ingest_registers_the_upload_under_the_model_a_restricted_key_reaches_the_team_wildcard_by(client_team_a):
+    managed_file_id: Final = _managed_file_id("file_123")
+    hook: Final = _ManagedFilesHookStub(managed_file_id=managed_file_id)
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
         {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
@@ -892,8 +893,9 @@ def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_che
         response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
 
     assert response.status_code == 200, response.json()
-    assert response.json()["file_id"] == "file_123"
-    assert hook.registrations == ()
+    assert response.json()["file_id"] == managed_file_id
+    (registration,) = hook.registrations
+    assert registration.deployment.public_model_name == _ONE_MODEL_TEAM_KEY.models[0]
     assert aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
 
 

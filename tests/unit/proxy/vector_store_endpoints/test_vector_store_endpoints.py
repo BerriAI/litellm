@@ -453,6 +453,63 @@ async def test_vector_store_file_list_uses_single_team_model_for_router_routing(
     assert "api_base" not in result
 
 
+def _family_wildcard_of_a_model_in(known_models: set[str]) -> str:
+    family, _, _ = min(model for model in known_models if "-" in model and "/" not in model).partition("-")
+    return f"{family}-*"
+
+
+def _team_openai_deployment(public_model_name: str, model: str, api_key: str) -> dict:
+    return {
+        "model_name": public_model_name,
+        "litellm_params": {"model": model, "api_key": api_key},
+        "model_info": {"id": f"team-a-{api_key}", "team_id": "team-a", "team_public_model_name": public_model_name},
+    }
+
+
+async def _list_fallback_data_for_a_key_wildcard_over(
+    key_provider_models: set[str], other_team_deployments: tuple[dict, ...] = ()
+) -> dict:
+    llm_router: Final = litellm.Router(
+        model_list=[*other_team_deployments, _team_openai_deployment("openai/*", "openai/*", "sk-team-openai")]
+    )
+    return await _update_request_data_with_model_routing_hint(
+        data={"vector_store_id": "vs_123"},
+        request=Request(scope={"type": "http", "query_string": b"", "headers": []}),
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-a",
+            team_models=[*(deployment["model_name"] for deployment in other_team_deployments), "openai/*"],
+            models=[_family_wildcard_of_a_model_in(key_provider_models)],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_gives_a_key_wildcard_the_team_openai_wildcard_serving_its_models():
+    result: Final = await _list_fallback_data_for_a_key_wildcard_over(litellm.open_ai_chat_completion_models)
+
+    assert result["api_key"] == "sk-team-openai"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_skips_a_team_openai_model_the_key_wildcard_cannot_use():
+    result: Final = await _list_fallback_data_for_a_key_wildcard_over(
+        litellm.open_ai_chat_completion_models,
+        other_team_deployments=(_team_openai_deployment("team-shared", "openai/team-shared", "sk-team-shared"),),
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_refuses_the_team_openai_wildcard_to_a_key_wildcard_of_another_provider():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    with pytest.raises(ProxyException):
+        await _list_fallback_data_for_a_key_wildcard_over(litellm.anthropic_models)
+
+
 @pytest.mark.asyncio
 async def test_vector_store_file_list_authorizes_inferred_team_model():
     from litellm.proxy.auth.auth_checks import ProxyException

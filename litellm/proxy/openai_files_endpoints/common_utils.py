@@ -1,4 +1,5 @@
 import base64
+import fnmatch
 import itertools
 import logging
 import mimetypes
@@ -603,26 +604,51 @@ async def authorize_model_for_key(
 
 async def team_deployment_the_caller_may_use(
     deployment: TeamProviderDeployment | None,
+    custom_llm_provider: str,
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
 ) -> TeamProviderDeployment | None:
     if deployment is None:
         return None
     return (
-        deployment if await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict) else None
+        deployment
+        if await caller_may_use_model(deployment.public_model_name, custom_llm_provider, llm_router, user_api_key_dict)
+        else None
     )
 
 
 async def caller_may_use_model(
     public_model_name: str,
+    custom_llm_provider: str,
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
 ) -> bool:
     try:
-        await authorize_model_for_key(public_model_name, llm_router, user_api_key_dict)
+        await authorize_model_for_key(
+            model_the_caller_reaches_deployment_by(
+                public_model_name, custom_llm_provider, llm_router, user_api_key_dict
+            ),
+            llm_router,
+            user_api_key_dict,
+        )
     except ProxyException:
         return False
     return True
+
+
+def model_the_caller_reaches_deployment_by(
+    public_model_name: str,
+    custom_llm_provider: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> str:
+    key_model_allowlist: Final = () if llm_router is None else _key_model_allowlist(llm_router, user_api_key_dict)
+    if not key_model_allowlist:
+        return public_model_name
+    return (
+        _model_the_key_allowlist_reaches(public_model_name, key_model_allowlist, custom_llm_provider)
+        or public_model_name
+    )
 
 
 async def get_authorized_credentials_for_model(
@@ -656,47 +682,77 @@ def deployment_drop_params(
     return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
 
 
-def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[str], custom_llm_provider: str) -> bool:
+def _key_model_allowlist(llm_router: "Router", user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    raw_key_models: Final = user_api_key_dict.models or []
+    sentinel_values: Final = {
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+    }
+    if not raw_key_models or set(raw_key_models) & sentinel_values:
+        return ()
+    registry: Final = llm_router.registry()
+    return tuple(
+        dict.fromkeys(
+            get_key_models(
+                user_api_key_dict=user_api_key_dict,
+                proxy_model_list=registry.names(team_id=user_api_key_dict.team_id),
+                model_access_groups=registry.access_groups(),
+            )
+        )
+    )
+
+
+def _model_the_key_allowlist_reaches(
+    public_model_name: str, key_model_allowlist: Sequence[str], custom_llm_provider: str
+) -> str | None:
     from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 
-    if public_model_name in key_model_allowlist:
-        return True
-    if model_matches_any_wildcard_pattern_in_list(model=public_model_name, allowed_model_list=key_model_allowlist):
-        return True
-    if any(
-        model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
-        for key_model in key_model_allowlist
+    if public_model_name in key_model_allowlist or model_matches_any_wildcard_pattern_in_list(
+        model=public_model_name, allowed_model_list=key_model_allowlist
     ):
-        return True
-    return "*" in public_model_name and any(
-        _wildcards_share_a_known_model(key_model, public_model_name, custom_llm_provider)
-        for key_model in key_model_allowlist
-        if "*" in key_model
+        return public_model_name
+    key_model_under_the_deployment: Final = next(
+        (
+            key_model
+            for key_model in key_model_allowlist
+            if model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
+        ),
+        None,
+    )
+    if key_model_under_the_deployment is not None or "*" not in public_model_name:
+        return key_model_under_the_deployment
+    return next(
+        itertools.chain.from_iterable(
+            _models_both_wildcards_reach(key_pattern, public_model_name, custom_llm_provider)
+            for key_pattern in key_model_allowlist
+            if "*" in key_pattern
+        ),
+        None,
     )
 
 
-def _bare_or_provider_prefixed_name_matches(
-    pattern_regex: re.Pattern[str], model: str, custom_llm_provider: str
-) -> bool:
-    return bool(pattern_regex.match(model) or pattern_regex.match(f"{custom_llm_provider}/{model}"))
+def _spelled_like(model: str, pattern: str, custom_llm_provider: str) -> bool:
+    return fnmatch.fnmatchcase(model, pattern) or fnmatch.fnmatchcase(f"{custom_llm_provider}/{model}", pattern)
 
 
-def _wildcards_share_a_known_model(key_pattern: str, public_model_name: str, custom_llm_provider: str) -> bool:
+def _models_both_wildcards_reach(key_pattern: str, public_model_name: str, custom_llm_provider: str) -> Iterator[str]:
     import litellm
-    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list, wildcard_pattern_regex
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 
-    key_regex: Final = wildcard_pattern_regex(key_pattern)
-    public_regex: Final = wildcard_pattern_regex(public_model_name)
-    models_spelled_like_both: Final = (
+    known_models_spelled_like_both: Final = sorted(
         model
         for model in litellm.models_by_provider.get(custom_llm_provider, ())
-        if _bare_or_provider_prefixed_name_matches(key_regex, model, custom_llm_provider)
-        and _bare_or_provider_prefixed_name_matches(public_regex, model, custom_llm_provider)
+        if _spelled_like(model, key_pattern, custom_llm_provider)
+        and _spelled_like(model, public_model_name, custom_llm_provider)
     )
-    return any(
-        model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(key_pattern,))
+    return (
+        model
+        for model in (*known_models_spelled_like_both, key_pattern.replace("*", ""))
+        if model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(key_pattern,))
         and model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(public_model_name,))
-        for model in models_spelled_like_both
     )
 
 
@@ -801,7 +857,7 @@ def _resolve_provider_credentials(
 
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
-    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
+    from litellm.proxy.auth.model_checks import get_complete_model_list
 
     team_id: Final = user_api_key_dict.team_id
     team_models: Final = user_api_key_dict.team_models or []
@@ -809,32 +865,12 @@ def _resolve_provider_credentials(
     registry: Final = llm_router.registry()
     proxy_model_list: Final = registry.names(team_id=team_id)
     model_access_groups: Final = registry.access_groups()
+    key_model_allowlist: Final = _key_model_allowlist(llm_router, user_api_key_dict)
 
-    raw_key_models: Final = user_api_key_dict.models or []
-    sentinel_values: Final = {
-        SpecialModelNames.all_proxy_models.value,
-        SpecialModelNames.all_team_models.value,
-    }
-    key_is_restricted: Final = bool(raw_key_models) and not (set(raw_key_models) & sentinel_values)
-    key_model_allowlist: Final = (
-        tuple(
-            dict.fromkeys(
-                get_key_models(
-                    user_api_key_dict=user_api_key_dict,
-                    proxy_model_list=proxy_model_list,
-                    model_access_groups=model_access_groups,
-                )
-            )
-        )
-        if key_is_restricted
-        else ()
-    )
-
-    def _key_may_use(public_model_name: object) -> bool:
-        if not key_model_allowlist:
-            return True
-        return isinstance(public_model_name, str) and _key_allowlist_covers(
-            public_model_name, key_model_allowlist, custom_llm_provider
+    def _key_may_use(public_model_name: str) -> bool:
+        return (
+            not key_model_allowlist
+            or _model_the_key_allowlist_reaches(public_model_name, key_model_allowlist, custom_llm_provider) is not None
         )
 
     def _provider_credentials(model_id: str) -> dict[str, object] | None:

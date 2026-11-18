@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
@@ -176,7 +176,10 @@ async def _caller_team_copy_of_managed_file(
     if provider is None:
         return None
     team_deployment: Final = await team_deployment_the_caller_may_use(
-        get_team_provider_deployment(llm_router, user_api_key_dict, provider.value), llm_router, user_api_key_dict
+        get_team_provider_deployment(llm_router, user_api_key_dict, provider.value),
+        provider.value,
+        llm_router,
+        user_api_key_dict,
     )
     provider_file_id: Final = await managed_file_copy_on_deployment(
         file_id, team_deployment, managed_files_obj, user_api_key_dict.parent_otel_span
@@ -210,6 +213,13 @@ def _keys_a_pinned_call_drops(data: Mapping[str, object]) -> frozenset[str]:
     if explicit_request_credentials(data):
         return frozenset({"custom_llm_provider"})
     return frozenset({"custom_llm_provider", *_CALLER_DESTINATION_KEYS})
+
+
+def _deployment_provider(deployment: Deployment) -> str:
+    model: Final = deployment.litellm_params.model
+    return deployment.litellm_params.custom_llm_provider or (
+        model.split("/", 1)[0] if "/" in model else LlmProviders.OPENAI.value
+    )
 
 
 def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, team_id: str | None) -> str | None:
@@ -313,6 +323,7 @@ async def _update_request_data_with_managed_file_id(
                 and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
                 and await caller_may_use_model(
                     stored_deployment.model_info.team_public_model_name or stored_deployment.model_name,
+                    _deployment_provider(stored_deployment),
                     llm_router,
                     user_api_key_dict,
                 )
@@ -457,6 +468,21 @@ def _replace_file_id_in_response(response, original_file_id: str):
     return response
 
 
+_TEAM_MODEL_SENTINELS: Final = frozenset({"all-team-models", "all-proxy-models", "no-default-models"})
+
+
+def _team_model_names(team_models: Sequence[object]) -> tuple[str, ...]:
+    return tuple(model_name for model_name in team_models if isinstance(model_name, str))
+
+
+def _credentials_provider(credentials: Mapping[str, object]) -> object:
+    provider: Final = credentials.get("custom_llm_provider")
+    model: Final = credentials.get("model")
+    if provider is None and isinstance(model, str) and "/" in model:
+        return model.split("/", 1)[0]
+    return provider
+
+
 async def _authorize_model_routing_hint(
     *,
     model: str,
@@ -519,40 +545,36 @@ async def _update_request_data_with_model_routing_hint(
     if not isinstance(team_models, list):
         return data
 
-    model_names_to_check: Final = []
-    for model_name in team_models:
-        if not isinstance(model_name, str) or model_name in {
-            "all-team-models",
-            "all-proxy-models",
-            "no-default-models",
-        }:
-            continue
-        model_names_to_check.append(model_name)
+    model_names_to_check: Final = tuple(
+        model_name for model_name in _team_model_names(team_models) if model_name not in _TEAM_MODEL_SENTINELS
+    )
 
-    openai_credentials = None
-    for model_name in model_names_to_check:
-        credentials = llm_router.registry().credentials(model_name, form="with_provider", team_id=caller_team_id)
-        if credentials is None:
-            continue
-
-        provider = credentials.get("custom_llm_provider")
-        model = credentials.get("model")
-        if provider is None and isinstance(model, str) and "/" in model:
-            provider = model.split("/", 1)[0]
-        if provider != LlmProviders.OPENAI.value:
-            continue
-
+    team_model_credentials: Final = tuple(
+        (model_name, llm_router.registry().credentials(model_name, form="with_provider", team_id=caller_team_id))
+        for model_name in model_names_to_check
+    )
+    openai_team_models: Final = tuple(
+        (model_name, team_credentials)
+        for model_name, team_credentials in team_model_credentials
+        if team_credentials is not None and _credentials_provider(team_credentials) == LlmProviders.OPENAI.value
+    )
+    usable_openai_credentials: Final = tuple(
+        [
+            team_credentials
+            for model_name, team_credentials in openai_team_models
+            if await caller_may_use_model(model_name, LlmProviders.OPENAI.value, llm_router, user_api_key_dict)
+        ]
+    )
+    if len(usable_openai_credentials) > 1:
+        return data
+    if usable_openai_credentials:
+        prepare_data_with_credentials(data=data, credentials=usable_openai_credentials[0])
+    elif openai_team_models:
         await _authorize_model_routing_hint(
-            model=model_name,
+            model=openai_team_models[0][0],
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
         )
-        if openai_credentials is not None:
-            return data
-        openai_credentials = credentials
-
-    if openai_credentials is not None:
-        prepare_data_with_credentials(data=data, credentials=openai_credentials)
     elif len(model_names_to_check) == 1:
         await _authorize_model_routing_hint(
             model=model_names_to_check[0],

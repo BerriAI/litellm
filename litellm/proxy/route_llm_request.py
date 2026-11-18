@@ -766,7 +766,10 @@ async def _authorized_team_file_deployment(
     llm_router: LitellmRouter | None, call: _ModelLessTeamFileCall
 ) -> TeamProviderDeployment | None:
     return await team_deployment_the_caller_may_use(
-        get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider), llm_router, call.caller
+        get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider),
+        call.custom_llm_provider,
+        llm_router,
+        call.caller,
     )
 
 
