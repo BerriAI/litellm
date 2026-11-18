@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -308,6 +309,7 @@ class HashicorpSecretManager(BaseSecretManager):
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
         raise_if_unsafe_secret_name(secret_name)
+        encoded_secret_name: Final = self._quote_path_component(secret_name)
         resolved_namespace: Final = self._sanitize_path_component(
             namespace if namespace is not None else self.vault_secret_namespace
         )
@@ -321,7 +323,12 @@ class HashicorpSecretManager(BaseSecretManager):
 
         namespace_part: Final = f"{resolved_namespace}/" if resolved_namespace else ""
         path_prefix_part: Final = f"{resolved_path_prefix}/" if resolved_path_prefix else ""
-        return f"{self.vault_addr}/v1/{namespace_part}{resolved_mount}/data/{path_prefix_part}{secret_name}"
+        return f"{self.vault_addr}/v1/{namespace_part}{resolved_mount}/data/{path_prefix_part}{encoded_secret_name}"
+
+    @staticmethod
+    def _quote_path_component(component: str) -> str:
+        segments: Final = component.split("/")
+        return "/".join(urllib.parse.quote(seg, safe="") for seg in segments)
 
     def _sanitize_plain_value(self, value: object) -> str | None:
         if value is None:
@@ -339,7 +346,7 @@ class HashicorpSecretManager(BaseSecretManager):
         if not stripped_value:
             return None
         raise_if_unsafe_secret_name(stripped_value)
-        return stripped_value
+        return self._quote_path_component(stripped_value)
 
     def _extract_secret_manager_settings(self, optional_params: Mapping[str, object] | None) -> dict[str, object]:
         if not isinstance(optional_params, dict):
