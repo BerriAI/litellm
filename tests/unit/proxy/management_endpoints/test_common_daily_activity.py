@@ -711,6 +711,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "guardrail_spend": 0.0,
+        "customer_margin_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
@@ -1296,6 +1297,7 @@ def test_update_breakdown_metrics_includes_user_email():
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
         guardrail_spend=0,
+        customer_margin_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=2,
@@ -1378,6 +1380,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.gateway_injected_caching_savings_spend = 0.0
     mock_record_1.autorouter_savings_spend = 0.0
     mock_record_1.guardrail_spend = 0.0
+    mock_record_1.customer_margin_spend = 0.0
     mock_record_1.total_response_time_ms = 18_000
     mock_record_1.timed_requests = 9
     mock_record_1.api_requests = 10
@@ -1405,6 +1408,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.gateway_injected_caching_savings_spend = 0.0
     mock_record_2.autorouter_savings_spend = 0.0
     mock_record_2.guardrail_spend = 0.0
+    mock_record_2.customer_margin_spend = 0.0
     mock_record_2.total_response_time_ms = 2_500
     mock_record_2.timed_requests = 5
     mock_record_2.api_requests = 5
@@ -1478,6 +1482,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "guardrail_spend": 0.0,
+        "customer_margin_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
@@ -1575,6 +1580,7 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "guardrail_spend": 0.0,
+        "customer_margin_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "api_requests": 1,
@@ -1646,6 +1652,7 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         guardrail_spend=guardrail_spend,
+        customer_margin_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=1,
@@ -1828,6 +1835,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "gateway_injected_caching_savings_spend": None,
             "autorouter_savings_spend": None,
             "guardrail_spend": None,
+            "customer_margin_spend": None,
             "total_response_time_ms": None,
             "timed_requests": None,
             "api_requests": None,
@@ -1877,6 +1885,7 @@ def _no_spend_record():
         gateway_injected_caching_savings_spend=None,
         autorouter_savings_spend=None,
         guardrail_spend=None,
+        customer_margin_spend=None,
         total_response_time_ms=None,
         timed_requests=None,
         api_requests=None,
@@ -2017,6 +2026,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
         guardrail_spend=0,
+        customer_margin_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=0,
@@ -2064,6 +2074,7 @@ def _grouping_row(
     spend=0.0,
     ptu_flat_cost=0.0,
     guardrail_spend=None,
+    customer_margin_spend=None,
 ):
     return GroupingSetsRow(
         date="2024-01-01",
@@ -2087,6 +2098,7 @@ def _grouping_row(
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         guardrail_spend=guardrail_spend,
+        customer_margin_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=0,
@@ -2282,6 +2294,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
         guardrail_spend=0,
+        customer_margin_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=0,
@@ -2638,6 +2651,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "guardrail_spend": 0.0,
+        "customer_margin_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,

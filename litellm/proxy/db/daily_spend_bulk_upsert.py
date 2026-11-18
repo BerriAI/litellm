@@ -126,6 +126,7 @@ _SPEND_COLUMNS: Final = (
     "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
     "guardrail_spend",
+    "customer_margin_spend",
 )
 
 _CASTS: Final[Mapping[str, str]] = MappingProxyType(

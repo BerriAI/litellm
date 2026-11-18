@@ -49,6 +49,11 @@ from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_callback_customer_cost_margin,
+    customer_cost_margin,
+    request_has_customer,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -876,7 +881,7 @@ class _ProxyDBLogger(CustomLogger):
                 sl_object if sl_object is not None else kwargs  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
             ).get("response_cost")
             priced_cost: Final = finite_cost(raw_cost)
-            response_cost: Final = (
+            allowance_adjusted_cost: Final = (
                 await apply_search_free_tier(
                     kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
                     sl_object=sl_object,  # pyright: ignore[reportUnknownArgumentType]  # payload carries untyped lists
@@ -890,6 +895,12 @@ class _ProxyDBLogger(CustomLogger):
                 and priced_cost is not None
                 and not sl_object.get("cost_finalized", False)
                 else priced_cost
+            )
+            margin_payload: Final = cast(StandardLoggingPayload | None, sl_object)  # cast-ok: callback payload contract
+            response_cost: Final = apply_callback_customer_cost_margin(
+                margin_payload,
+                allowance_adjusted_cost,
+                customer_cost_margin(request_has_customer(_BATCH_CALLBACK_FIELDS.validate_python(metadata))),
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,

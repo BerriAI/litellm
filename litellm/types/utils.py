@@ -3880,6 +3880,8 @@ class CostBreakdown(TypedDict, total=False):
     from ``optional_params``, which no log record carries.
     """
 
+    customer_margin_percent: ReadOnly[float]
+    customer_margin_amount: ReadOnly[float]
     service_tier: str | None
     data_residency: str | None
     vertex_location: ReadOnly[str | None]
