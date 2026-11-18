@@ -6841,6 +6841,7 @@
         "columns": {
           "name": "Callback Name",
           "mode": "Mode",
+          "source": "Source",
           "actions": "Actions"
         },
         "modes": {
@@ -6848,6 +6849,11 @@
           "failure": "Failure",
           "successAndFailure": "Success & Failure"
         },
+        "sources": {
+          "config": "Config",
+          "db": "DB"
+        },
+        "configOwnedHint": "Set in config.yaml. Remove it from the file to delete it.",
         "readOnly": "Read only",
         "readOnlyHint": "Active callback that was not added through the dashboard. Edit it where it was configured.",
         "actions": {

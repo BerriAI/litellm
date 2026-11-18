@@ -408,6 +408,8 @@ class OCRPricing(TypedDict, total=False):
 
 
 _WALL_CLOCK_PRICED_MODES: Final = frozenset({"audio_transcription", "chat", "completion", "embedding", "responses"})
+_GROQ_WHISPER_TRANSCRIPTION_MODELS: Final = frozenset({"whisper-large-v3", "whisper-large-v3-turbo"})
+_GROQ_MINIMUM_TRANSCRIPTION_SECONDS: Final = 10.0
 
 
 def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
@@ -785,10 +787,19 @@ def cost_per_token(
                 data_residency=data_residency,
             )
 
+        billed_duration: Final = (
+            max(audio_transcription_file_duration, _GROQ_MINIMUM_TRANSCRIPTION_SECONDS)
+            if (
+                custom_llm_provider == "groq"
+                and model_without_prefix in _GROQ_WHISPER_TRANSCRIPTION_MODELS
+                and audio_transcription_file_duration > 0
+            )
+            else audio_transcription_file_duration
+        )
         return openai_cost_per_second(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
-            duration=audio_transcription_file_duration,
+            duration=billed_duration,
         )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
