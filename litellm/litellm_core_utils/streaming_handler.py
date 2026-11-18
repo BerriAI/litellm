@@ -2665,9 +2665,9 @@ def generic_chunk_shape_error(chunk: object, read_fields: Mapping[str, object]) 
     if fields is None:
         return _chunk_object_shape_error(chunk, read_fields)
     unexpected: Final = sorted(key for key in fields if key not in _GCHUNK_FIELDS)
-    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))
-    has_text: Final = isinstance(fields.get("text"), str)
-    if not unexpected or not missing or has_text or any(fields.get(key) for key in _GCHUNK_VALUE_FIELDS):
+    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(read_fields))
+    has_text: Final = isinstance(read_fields.get("text"), str)
+    if not unexpected or not missing or has_text or any(read_fields.get(key) for key in _GCHUNK_VALUE_FIELDS):
         return None
     return f"missing {missing}, unexpected {unexpected}"
 
