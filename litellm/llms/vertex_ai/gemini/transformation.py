@@ -152,6 +152,14 @@ def _get_highest_media_resolution(current: str | None, new_detail: str | None) -
     return current
 
 
+def gemini_part_media_resolution(model: str | None, detail: str | None) -> Mapping[str, str] | None:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    if model is None or not VertexGeminiConfig.is_gemini_3_or_newer(model):
+        return None
+    return _convert_detail_to_media_resolution_enum(detail)
+
+
 def _extract_max_media_resolution_from_messages(
     messages: list[AllMessageValues],
 ) -> str | None:
@@ -626,6 +634,7 @@ _snake_to_camel = snake_to_camel
 def encode_gemini_file_inspection_metadata(
     document_metadata: Mapping[str, object] | None,
     spreadsheet_metadata: Mapping[str, object] | None,
+    media_resolution: Mapping[str, str] | None = None,
 ) -> GeminiFileInspectionMetadata:
     return gemini_file_inspection_metadata(
         {snake_to_camel(key): value for key, value in document_metadata.items()}
@@ -634,21 +643,26 @@ def encode_gemini_file_inspection_metadata(
         {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()}
         if spreadsheet_metadata is not None
         else None,
+        media_resolution,
     )
 
 
 def gemini_file_inspection_metadata(
     document_metadata: Mapping[str, object] | None,
     spreadsheet_metadata: Mapping[str, object] | None,
+    media_resolution: Mapping[str, str] | None = None,
 ) -> GeminiFileInspectionMetadata:
     document: Final = (
         GeminiFileInspectionMetadata(document_metadata=document_metadata)
         if document_metadata is not None
         else GeminiFileInspectionMetadata()
     )
-    if spreadsheet_metadata is None:
-        return document
-    return {**document, "spreadsheet_metadata": spreadsheet_metadata}
+    selection: Final[GeminiFileInspectionMetadata] = (
+        {**document, "spreadsheet_metadata": spreadsheet_metadata} if spreadsheet_metadata is not None else document
+    )
+    if media_resolution is None:
+        return selection
+    return {**selection, "media_resolution": media_resolution}
 
 
 def camel_to_snake(camel_str: str) -> str:

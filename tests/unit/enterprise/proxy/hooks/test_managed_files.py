@@ -6605,6 +6605,42 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize("role", ["user", "tool", "responses-tool"])
+@pytest.mark.parametrize("has_access", [True, False], ids=["owner", "different-key"])
+async def test_chat_file_references_use_managed_file_access(version, role, has_access):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    caller: Final = (
+        UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+        if has_access
+        else UserAPIKeyAuth(user_id="other", team_id="team-other")
+    )
+    file: Final = {
+        "file_id": f"https://generativelanguage.googleapis.com/{version}/files/batch-out1",
+        "format": "application/pdf",
+    }
+    model: Final = "gemini/gemini-4-argon"
+    if role == "responses-tool":
+        request = {
+            "model": model,
+            "input": [
+                {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_file", **file}]}
+            ],
+        }
+        call_type = "aresponses"
+    else:
+        request = {"model": model, "messages": [{"role": role, "content": [{"type": "file", "file": file}]}]}
+        call_type = "acompletion"
+    if has_access:
+        result: Final = await managed_files.async_pre_call_hook(caller, DualCache(), request, call_type)
+        assert result == request
+    else:
+        with pytest.raises(HTTPException) as denied:
+            await managed_files.async_pre_call_hook(caller, DualCache(), request, call_type)
+        assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("spelling", _GEMINI_OUTPUT_SPELLINGS)
 async def test_enforce_provider_file_access_denies_every_spelling_of_another_keys_output_file(spelling: str):
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())

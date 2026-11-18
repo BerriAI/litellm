@@ -1647,6 +1647,7 @@ def _gemini_tool_media_part(
     from litellm.llms.vertex_ai.gemini.transformation import (
         encode_gemini_file_inspection_metadata,
         encode_gemini_media_source,
+        gemini_part_media_resolution,
     )
 
     source: Final = gemini_media_source(content)
@@ -1687,9 +1688,14 @@ def _gemini_tool_media_part(
                 )
             return part
         inline: Final = convert_to_anthropic_image_obj(source.url, format=source.format)
+        resolution: Final = (
+            gemini_part_media_resolution(model, source.detail)
+            if custom_llm_provider == "gemini" and content.get("type") in ("file", "input_file")
+            else None
+        )
         return {
             "inline_data": {"data": inline["data"], "mime_type": inline["media_type"]},
-            **encode_gemini_file_inspection_metadata(source.document_metadata, source.spreadsheet_metadata),
+            **encode_gemini_file_inspection_metadata(source.document_metadata, source.spreadsheet_metadata, resolution),
         }
     except litellm.ImageFetchError as exc:
         verbose_logger.warning("Failed to process media in tool response: %s", exc)
@@ -1699,6 +1705,25 @@ def _gemini_tool_media_part(
     except Exception as exc:
         verbose_logger.warning("Failed to process media in tool response: %s", exc)
         return None
+
+
+def _gemini_function_response_part(
+    part: VertexPartType, *, include_file_inspection: bool
+) -> FunctionResponsePartType | None:
+    from litellm.llms.vertex_ai.gemini.transformation import gemini_file_inspection_metadata
+
+    metadata: Final = (
+        gemini_file_inspection_metadata(
+            part.get("document_metadata"), part.get("spreadsheet_metadata"), part.get("media_resolution")
+        )
+        if include_file_inspection
+        else GeminiFileInspectionMetadata()
+    )
+    if "inline_data" in part:
+        return FunctionResponsePartType(inline_data=part["inline_data"], **metadata)
+    if "file_data" in part:
+        return FunctionResponsePartType(file_data=part["file_data"], **metadata)
+    return None
 
 
 def convert_to_gemini_tool_call_result(
@@ -1830,20 +1855,16 @@ def convert_to_gemini_tool_call_result(
     if media_parts:
         if not supports_multimodal_function_responses:
             return [_part, *media_parts]
-        from litellm.llms.vertex_ai.gemini.transformation import gemini_file_inspection_metadata
-
-        nested_parts: Final[list[FunctionResponsePartType]] = []  # mutable-ok: preserve tool result media order
-        for part in media_parts:
-            metadata: Final = (
-                gemini_file_inspection_metadata(part.get("document_metadata"), part.get("spreadsheet_metadata"))
-                if custom_llm_provider == "gemini"
-                else GeminiFileInspectionMetadata()
+        _function_response["parts"] = [
+            nested_part
+            for part in media_parts
+            if (
+                nested_part := _gemini_function_response_part(
+                    part, include_file_inspection=custom_llm_provider == "gemini"
+                )
             )
-            if "inline_data" in part:
-                nested_parts.append(FunctionResponsePartType(inline_data=part["inline_data"], **metadata))
-            elif "file_data" in part:
-                nested_parts.append(FunctionResponsePartType(file_data=part["file_data"], **metadata))
-        _function_response["parts"] = nested_parts
+            is not None
+        ]
         return [_part]
 
     return _part

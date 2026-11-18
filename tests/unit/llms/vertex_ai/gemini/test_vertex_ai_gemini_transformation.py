@@ -132,7 +132,12 @@ def test_chat_tool_file_inspection_preserves_nested_selection(source, mime_type,
         {
             "role": "tool",
             "tool_call_id": "call_media",
-            "content": [{"type": "file", "file": {**file, **selection, "format": mime_type}}],
+            "content": [
+                {
+                    "type": "file",
+                    "file": {**file, **selection, "format": mime_type, "resolution": "low", "detail": "high"},
+                }
+            ],
         },
     ]
     result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
@@ -142,7 +147,9 @@ def test_chat_tool_file_inspection_preserves_nested_selection(source, mime_type,
                 "id": "call_media",
                 "name": "get_media",
                 "response": {"content": ""},
-                "parts": [{**expected_part, **expected_selection}],
+                "parts": [
+                    {**expected_part, **expected_selection, "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"}}
+                ],
             }
         }
     ]
