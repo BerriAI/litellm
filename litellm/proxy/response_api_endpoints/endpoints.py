@@ -53,7 +53,11 @@ from litellm.integrations.custom_guardrail import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup, turn_proxy_server_request
+from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
+    turn_proxy_server_request,
+    turn_request_body,
+)
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
@@ -2483,11 +2487,13 @@ def _turn_failure_row(
 ) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
     socket_bucket: Final = socket.get(metadata_key)
     socket_request: Final = socket.get("proxy_server_request")
+    connection_request: Final[Mapping[str, object]] = (
+        _PROXY_SERVER_REQUEST_ADAPTER.validate_python(socket_request) if isinstance(socket_request, dict) else {}
+    )
     turn_bucket: Final = turn.get(metadata_key)
     turn_metadata: Final = _WS_FRAME.validate_python(turn_bucket) if isinstance(turn_bucket, dict) else {}
     request_tags: Final = StandardLoggingPayloadSetup.get_request_tags(
-        {metadata_key: turn_metadata},
-        _PROXY_SERVER_REQUEST_ADAPTER.validate_python(socket_request) if isinstance(socket_request, dict) else {},
+        {metadata_key: turn_metadata}, connection_request
     )
     socket_metadata: Final = _WS_FRAME.validate_python(socket_bucket) if isinstance(socket_bucket, dict) else {}
     model_group: Final = socket_metadata.get("model_group")
@@ -2514,17 +2520,22 @@ def _turn_failure_row(
         },
         "call_type": CallTypes.aresponses_websocket.value,
         "start_time": started_at,
-        "proxy_server_request": _turn_stored_request(metadata_key, turn),
+        "proxy_server_request": _turn_stored_request(metadata_key, connection_request, turn),
     }
 
 
-def _turn_stored_request(metadata_key: str, turn: Mapping[str, object]) -> Mapping[str, object]:
+def _turn_stored_request(
+    metadata_key: str, connection_request: Mapping[str, object], turn: Mapping[str, object]
+) -> Mapping[str, object]:
     return {
-        "body": {
-            key: _without_untrusted_metadata(key, value)
-            for key, value in without_server_streaming_classification(turn).items()
-            if key not in _UNTRUSTED_TURN_FIELDS and key not in (metadata_key, "litellm_call_id")
-        }
+        "body": turn_request_body(
+            connection_request,
+            {
+                key: _without_untrusted_metadata(key, value)
+                for key, value in without_server_streaming_classification(turn).items()
+                if key not in _UNTRUSTED_TURN_FIELDS and key not in (metadata_key, "litellm_call_id", "user")
+            },
+        )
     }
 
 

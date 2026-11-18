@@ -650,19 +650,22 @@ _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 
 
-def turn_proxy_server_request(
+def turn_request_body(
     connection_request: Mapping[str, object], request_body: Mapping[str, object]
 ) -> Mapping[str, object]:
-    """A long-lived connection's request with one turn's request body in place of the connection's, keeping the
-    connection's ``user``, the end user the turn's rows are billed to."""
+    """One turn's request body with the long-lived connection's ``user``, the end user the turn's rows are billed to."""
     connection_body: Final = connection_request.get("body")
     end_user: Final = (
         _LITELLM_PARAMS.validate_python(connection_body).get("user") if isinstance(connection_body, dict) else None
     )
-    return {
-        **connection_request,
-        "body": {**request_body, "user": end_user} if end_user is not None else dict(request_body),
-    }
+    return {**request_body, "user": end_user} if end_user is not None else dict(request_body)
+
+
+def turn_proxy_server_request(
+    connection_request: Mapping[str, object], request_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A long-lived connection's request with one turn's request body in place of the connection's."""
+    return {**connection_request, "body": turn_request_body(connection_request, request_body)}
 
 
 _REDACTED_RESULT: Final = TypeAdapter(object)

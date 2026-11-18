@@ -2895,7 +2895,10 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("outcome", ["blocked", "refused"])
-    async def test_frame_guard_bills_a_blocked_or_refused_turn_as_its_own_failed_request(self, outcome: str):
+    @pytest.mark.parametrize("connection_user", [None, "proxy-set-end-user"])
+    async def test_frame_guard_bills_a_blocked_or_refused_turn_as_its_own_failed_request(
+        self, outcome: str, connection_user: str | None
+    ):
         from datetime import datetime
         from unittest.mock import create_autospec
 
@@ -2935,7 +2938,12 @@ class TestResponsesWSFirstFrameModelAuth:
         socket_bucket = {"tags": ["ws-tag"], "standard_logging_guardrail_information": [{"guardrail_cost": 9.0}]}
         refused_turns = []
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": socket_bucket, "litellm_logging_obj": socket_logging_obj},
+            {
+                "model": "gpt-4o-mini",
+                "litellm_metadata": socket_bucket,
+                "litellm_logging_obj": socket_logging_obj,
+                "proxy_server_request": {"body": {"user": connection_user} if connection_user else {}},
+            },
             UserAPIKeyAuth(
                 api_key="sk-socket",
                 request_route="/v1/responses",
@@ -2945,7 +2953,14 @@ class TestResponsesWSFirstFrameModelAuth:
             lambda records, refusal: refused_turns.append((records, refusal)),
         )
         socket_bucket["model_group"] = "mini-group"
-        frame = json.dumps({"type": "response.create", "input": "my email is a@b.co", "metadata": {"trace": "t1"}})
+        frame = json.dumps(
+            {
+                "type": "response.create",
+                "input": "my email is a@b.co",
+                "metadata": {"trace": "t1"},
+                "user": "frame-chosen-user",
+            }
+        )
 
         with (
             patch.object(litellm, "callbacks", [rate_limiter, ProxyDBLogger(spend_writer=lambda: spend_writer)]),
@@ -2984,6 +2999,7 @@ class TestResponsesWSFirstFrameModelAuth:
             "input": "my email is <EMAIL_ADDRESS>" if outcome == "refused" else "my email is a@b.co",
             "metadata": {"trace": "t1"},
             "model": "gpt-4o-mini",
+            **({"user": connection_user} if connection_user else {}),
         }
 
     @pytest.mark.asyncio
