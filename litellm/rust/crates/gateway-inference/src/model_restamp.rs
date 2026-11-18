@@ -251,6 +251,7 @@ mod tests {
             &RouterResponse {
                 output: Served::new((), 0),
                 deployment_id: "d1".to_owned(),
+                name: "public".to_owned(),
                 model_group: "public".to_owned(),
                 attempted_retries: 0,
                 max_retries: None,
