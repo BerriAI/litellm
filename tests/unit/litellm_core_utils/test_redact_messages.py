@@ -2114,6 +2114,17 @@ def test_one_callback_opting_out_redacts_a_query_image_only_for_itself() -> None
     assert SECRET in json.dumps(details, default=str)
 
 
+def test_one_callback_opting_out_redacts_an_image_sent_to_apply_guardrail_only_for_itself() -> None:
+    details: Final[dict[str, object]] = {
+        "litellm_params": {"proxy_server_request": {"body": {"images": [f"data:image/png;base64,{SECRET}"]}}},
+    }
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
+
+    assert SECRET not in json.dumps(redacted, default=str)
+    assert SECRET in json.dumps(details, default=str)
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_redaction_responses_api_stream():

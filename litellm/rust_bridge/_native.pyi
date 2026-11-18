@@ -15,7 +15,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_OrganizationTable, Lit
 from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
-from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativeDatabaseEvents
+from litellm.rust_bridge.database import NativeClientIdentity, NativeDatabaseEvents
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation
@@ -657,6 +657,8 @@ class _HostFacts(Protocol):
     def premium(self) -> bool: ...
     @property
     def has_db(self) -> bool: ...
+    @property
+    def db_configured(self) -> bool: ...
     @property
     def ui_login(self) -> bool: ...
     @property
@@ -1808,10 +1810,21 @@ class NativeSpendCounters:
     def snapshot(self) -> dict[str, float]: ...
 
 @final
+class DatabaseEndpoint:
+    @staticmethod
+    def resolve(
+        url: str,
+        max_connections: int,
+        *,
+        replica: bool = False,
+        client_identity: NativeClientIdentity | None = None,
+    ) -> Future[DatabaseEndpoint]: ...
+
+@final
 class NativeDatabase:
     @staticmethod
     def connect(
-        events: NativeDatabaseEvents, writer: NativeDatabaseEndpoint, reader: NativeDatabaseEndpoint | None = None
+        events: NativeDatabaseEvents, writer: DatabaseEndpoint, reader: DatabaseEndpoint | None = None
     ) -> Future[NativeDatabase]: ...
     def set_writer_password(self, password: str) -> None: ...
     def set_reader_password(self, password: str) -> None: ...
@@ -1877,6 +1890,52 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+
+@final
+class NativeModelCapacityState:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    def take_output_cap(self) -> tuple[int, str | None] | None: ...
+
+@final
+class NativeModelCapacity:
+    def __new__(
+        cls,
+        delegate: object,
+        rate_limits: NativeRateLimits,
+        window_size: int,
+        tpm_reservation_enabled: bool,
+        now: Callable[[], float] | None = None,
+    ) -> NativeModelCapacity: ...
+    def callback(self) -> RustHandle: ...
+    def request_state(self) -> NativeModelCapacityState: ...
+    def handle(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        state: NativeModelCapacityState | None,
+        facts: Mapping[str, object],
+        /,
+        request: NativeRequestRedis | None = None,
+    ) -> Future[object]: ...
+    def post_call_headers(self, key: Mapping[str, object]) -> list[list[object]]: ...
+    def fallback_target_allowed(
+        self,
+        state: NativeModelCapacityState,
+        key: Mapping[str, object],
+        model: str,
+        commit: bool,
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
+    def enforce_frame(
+        self,
+        connection: NativeModelCapacityState | None,
+        key: Mapping[str, object],
+        model: str,
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
 
 @final
 class ResponsesWebSocketConnection:
@@ -2005,6 +2064,7 @@ __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
     "AttemptShape",
+    "DatabaseEndpoint",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
     "GaugesAcquired",
@@ -2025,6 +2085,8 @@ __all__ = [
     "NativeFetchPolicy",
     "NativeFetched",
     "NativeInstalled",
+    "NativeModelCapacity",
+    "NativeModelCapacityState",
     "NativeModelCostMap",
     "NativeModelCostMapState",
     "NativeParallelRequestLimiter",

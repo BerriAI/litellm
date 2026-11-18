@@ -86,9 +86,6 @@ export default function CustomerHierarchyBudgetFields({
             )}
           </Label>
         </div>
-        {kind === "member" && (
-          <p className="text-xs text-muted-foreground">{t("customerPortal.hierarchy.overrideHint")}</p>
-        )}
       </div>
       {fields.budgetEnabled && (
         <div className="space-y-4">

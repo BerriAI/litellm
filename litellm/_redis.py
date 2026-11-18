@@ -933,8 +933,12 @@ def get_redis_async_client(
     )
 
 
+def _tls_only_settings(redis_kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(name for name in redis_kwargs if name.startswith("ssl_"))
+
+
 def get_redis_connection_pool(
-    **env_overrides,
+    **env_overrides: object,
 ) -> async_redis.BlockingConnectionPool | None:
     redis_kwargs: Final = _credential_provider_auth_kwargs(_get_redis_client_logic(**env_overrides))
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
@@ -959,6 +963,9 @@ def get_redis_connection_pool(
 
     if redis_kwargs.pop("ssl", None):
         redis_kwargs["connection_class"] = async_redis.SSLConnection
+    else:
+        for tls_only_setting in _tls_only_settings(redis_kwargs):
+            del redis_kwargs[tls_only_setting]
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 
 

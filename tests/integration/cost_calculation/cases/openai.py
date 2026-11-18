@@ -7037,8 +7037,8 @@ GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
     ),
 )
 
-GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
-    name="gpt-6-luna-responses_cache_write_12h_no_12h_rate",
+GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_cache_write_12h",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
     model="gpt-6-luna",
     endpoint="/v1/responses",
@@ -7078,12 +7078,12 @@ GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.0016078,
-        input_cost=0.0014178,
+        spend=0.0018578,
+        input_cost=0.0016678,
         output_cost=0.00019,
         prompt_tokens=12928,
         completion_tokens=380,
-        cache_creation_cost=0.000625,
+        cache_creation_cost=0.000875,
     ),
 )
 
@@ -12169,12 +12169,12 @@ GPT_6_LUNA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=3.561e-05, input_cost=3.361e-05, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_read_cost=3.331e-05),
 )
 GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-luna",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
     {"input_tokens": 3334, "input_tokens_details": {"cache_write_tokens": 3331, "cache_write_tokens_details": {"ttl_12h_tokens": 3331, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3339},
-    ExactExpected(spend=0.000419175, input_cost=0.000416675, output_cost=2.5e-06, prompt_tokens=3334, completion_tokens=5, cache_creation_cost=0.000416375),
+    ExactExpected(spend=0.00083555, input_cost=0.00083305, output_cost=2.5e-06, prompt_tokens=3334, completion_tokens=5, cache_creation_cost=0.00083275),
 )
 GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
     GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
@@ -12201,7 +12201,7 @@ GPT_6_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.00078386, input_cost=0.00073986, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_read_cost=0.00073326),
 )
 GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-sol",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12233,7 +12233,7 @@ GPT_6_ASTRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.004272, input_cost=0.004032, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.003996),
 )
 GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-astra",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12265,7 +12265,7 @@ GPT_6_1_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.000379, input_cost=0.000339, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000333),
 )
 GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-sol",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12297,7 +12297,7 @@ GPT_6_1_TERRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.000195185, input_cost=0.000174585, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000171495),
 )
 GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-terra",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12313,7 +12313,7 @@ GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.0204604225, input_cost=0.0100638725, output_cost=0.00039655, prompt_tokens=8657, completion_tokens=77, tool_usage_cost=0.01, cache_creation_cost=0.0057358125),
 )
 GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-luna",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12321,7 +12321,7 @@ GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.00041855, input_cost=0.00041605, output_cost=2.5e-06, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.00041575),
 )
 GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-sol",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12329,7 +12329,7 @@ GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.00921635, input_cost=0.00915035, output_cost=6.6e-05, prompt_tokens=3328, completion_tokens=6, cache_creation_cost=0.00914375),
 )
 GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-astra",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12337,7 +12337,7 @@ GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.050196, input_cost=0.049896, output_cost=0.0003, prompt_tokens=3327, completion_tokens=5, cache_creation_cost=0.04986),
 )
 GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-sol",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12345,7 +12345,7 @@ GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.008371, input_cost=0.008321, output_cost=5e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.008315),
 )
 GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-terra",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12467,9 +12467,16 @@ GPT_4O_MINI_TTS_SPEECH: Final = CostTrackingTestCase(
     model="gpt-4o-mini-tts",
     endpoint="/v1/audio/speech",
     request={"input": "The pricing harness says hello.", "voice": "alloy", "response_format": "mp3"},
-    response=BinaryResponse(content_type="audio/mpeg", length=2048),
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'data: {"type":"speech.audio.delta","audio":"c2NyaXB0ZWQgYXVkaW8="}',
+            'data: {"type":"speech.audio.done","usage":{"input_tokens":6,"output_tokens":50,"total_tokens":56}}',
+            "data: [DONE]",
+        ),
+    ),
     expected=ExactExpected(
-        spend=3.66e-06, input_cost=3.66e-06, output_cost=0.0, prompt_tokens=0, completion_tokens=0
+        spend=0.00060366, input_cost=3.66e-06, output_cost=0.0006, prompt_tokens=6, completion_tokens=50
     ),
 )
 
@@ -12661,7 +12668,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
     GPT_5_6_RESPONSES_CACHE_WRITE_12H,
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,
