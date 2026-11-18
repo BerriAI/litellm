@@ -46,10 +46,21 @@ class Table:
 
 
 @dataclass(frozen=True, slots=True)
+class EmptyTable:
+    async def find_unique(self, where: Mapping[str, object]) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class Database:
     litellm_customerorganizationtable: Table
     litellm_customerteamtable: Table
     litellm_customermembertable: Table
+
+    def __getattr__(self, name: str) -> "EmptyTable":
+        if not name.startswith("litellm_"):
+            raise AttributeError(name)
+        return EmptyTable()
 
 
 DATABASE: Final = cast(  # cast-ok: the external Prisma fake implements the lookup subset used by attribution

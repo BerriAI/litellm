@@ -39,7 +39,7 @@ def _customer_attribution(logging_obj: Logging, payload: StandardLoggingPayload)
     )
     return {
         CUSTOMER_USAGE_METADATA_KEY: next((binding for binding in bindings if binding is not None), None),
-        **payload["metadata"],
+        **_request_fields(payload["metadata"]),
     }
 
 
