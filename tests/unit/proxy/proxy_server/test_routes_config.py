@@ -947,6 +947,7 @@ def test_config_callback_delete_happy_admin(client, auth_as, mock_prisma, monkey
     )
     fake_proxy_config.save_config = AsyncMock()
     fake_proxy_config.add_deployment = AsyncMock()
+    fake_proxy_config.litellm_settings.owned_by_config = frozenset().__contains__
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
@@ -1007,10 +1008,11 @@ def _delete_callback_roundtrip(
     litellm_settings: dict[str, object],
     callback_name: str,
     owned_by_config: frozenset[str] = frozenset(),
-) -> tuple[httpx.Response, dict[str, object]]:
+) -> tuple[httpx.Response, dict[str, object] | None]:
     """POST /config/callback/delete as admin against a stubbed config, and
     return (response, saved litellm_settings) so each case pins the full body
-    plus the exact config persisted."""
+    plus the exact config persisted. The saved settings are None when the
+    handler refused the delete and never called save_config."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1027,7 +1029,11 @@ def _delete_callback_roundtrip(
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response: Final = client.post("/config/callback/delete", json={"callback_name": callback_name})
-    saved: Final = fake_proxy_config.save_config.await_args.kwargs["new_config"]["litellm_settings"]
+    saved: Final = (
+        fake_proxy_config.save_config.await_args.kwargs["new_config"]["litellm_settings"]
+        if fake_proxy_config.save_config.await_args is not None
+        else None
+    )
     return response, saved
 
 
@@ -1104,14 +1110,15 @@ def test_config_callback_delete_from_multiple_lists(
     assert response.json()["remaining_callbacks"] == ["slack", "langfuse"]
 
 
-def test_config_callback_delete_skips_lists_the_config_file_owns(
+def test_config_callback_delete_refuses_when_a_matching_list_is_config_owned(
     client: TestClient,
     auth_as: Callable[..., contextlib.AbstractContextManager[None]],
     mock_prisma: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A name in a database-owned list and a config-file-owned list is removed
-    from the database-owned one only, so the save is not refused."""
+    """A name in a database-owned list and a config-file-owned list is refused
+    outright, because the config-file copy would stay active and a success
+    response would be false. Nothing is saved, so the database copy is kept."""
     response, saved = _delete_callback_roundtrip(
         client,
         auth_as,
@@ -1121,19 +1128,22 @@ def test_config_callback_delete_skips_lists_the_config_file_owns(
         "datadog",
         owned_by_config=frozenset({"failure_callback"}),
     )
-    assert response.status_code == 200
-    assert saved == {"success_callback": ["slack"], "failure_callback": ["datadog"]}
-    assert response.json()["remaining_callbacks"] == ["slack"]
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["keys"] == ["failure_callback"]
+    assert detail["section"] == "litellm_settings"
+    assert "set in the config file" in detail["error"]
+    assert saved is None
 
 
-def test_config_callback_delete_removes_database_copy_when_config_file_owns_success_callback(
+def test_config_callback_delete_refuses_when_config_file_owns_success_callback(
     client: TestClient,
     auth_as: Callable[..., contextlib.AbstractContextManager[None]],
     mock_prisma: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A name the config file sets in success_callback is left there while its
-    database-owned failure_callback copy is removed."""
+    """A name the config file sets in success_callback refuses the whole
+    delete, so its database-owned failure_callback copy is not removed either."""
     response, saved = _delete_callback_roundtrip(
         client,
         auth_as,
@@ -1143,9 +1153,37 @@ def test_config_callback_delete_removes_database_copy_when_config_file_owns_succ
         "datadog",
         owned_by_config=frozenset({"success_callback"}),
     )
-    assert response.status_code == 200
-    assert saved == {"success_callback": ["datadog"], "failure_callback": ["sentry"]}
-    assert response.json()["remaining_callbacks"] == ["sentry"]
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["keys"] == ["success_callback"]
+    assert detail["section"] == "litellm_settings"
+    assert "set in the config file" in detail["error"]
+    assert saved is None
+
+
+def test_config_callback_delete_refuses_when_the_config_file_owns_the_only_matching_list(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A name only the config file lists is refused with the config-owned
+    list named, and nothing is saved."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"callbacks": ["datadog"]},
+        "datadog",
+        owned_by_config=frozenset({"callbacks"}),
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["keys"] == ["callbacks"]
+    assert detail["section"] == "litellm_settings"
+    assert "set in the config file" in detail["error"]
+    assert saved is None
 
 
 def test_config_callback_delete_from_string_valued_list(
