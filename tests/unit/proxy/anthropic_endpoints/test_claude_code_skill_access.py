@@ -338,7 +338,9 @@ async def test_access_group_skills_marks_scope_unresolved_when_a_listed_group_is
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_scope", ["key", "team"])
-async def test_access_group_skills_marks_scope_unresolved_through_the_real_group_lookup(monkeypatch, missing_scope):
+async def test_access_group_skills_marks_scope_unresolved_through_the_real_group_lookup(
+    monkeypatch, rust_auth_stores, missing_scope
+):
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_AccessGroupTable
     from litellm.proxy.auth import auth_checks
@@ -366,13 +368,12 @@ async def test_access_group_skills_marks_scope_unresolved_through_the_real_group
             access_group_id=group.access_group_id, access_group_table=group, user_api_key_cache=cache
         )
     prisma = MagicMock()
-    prisma.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=_team("team-1", team_groups)))
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
 
     assert await access_group_skills(caller) == AccessGroupSkills(unresolved=True)
-    prisma.db.litellm_accessgrouptable.find_unique.assert_awaited_once()
+    assert [use_writer for _, use_writer in rust_auth_stores.access_group.lookups] == [False]
 
 
 def test_skill_visibility_is_public_only_while_a_group_scope_is_unresolved():
@@ -454,10 +455,10 @@ def dashboard_db(
     rust_auth_stores.user.writer = {"dashboard-member": LiteLLM_UserTable(
         user_id="dashboard-member", teams=[team_id], object_permission_id="user-permission",
     ).model_dump()}
-    prisma.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=_perm(["user-only"]).model_copy(
-        update={"object_permission_id": "user-permission"},
-    ))
-    prisma.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=LiteLLM_AccessGroupTable(
+    rust_auth_stores.object_permission.seed(
+        "user-permission", _perm(["user-only"]).model_copy(update={"object_permission_id": "user-permission"})
+    )
+    rust_auth_stores.access_group.seed("team-group", LiteLLM_AccessGroupTable(
         access_group_id="team-group", access_group_name="team-group", access_skill_names=["group-skill"],
     ))
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
@@ -518,7 +519,8 @@ async def test_dashboard_revocation_is_visible_with_warm_caches(
     elif change == "team":
         del dashboard_teams.rows[team_id]
     elif change == "group":
-        dashboard_db.writer_db.litellm_accessgrouptable.find_unique.return_value = None
+        rust_auth_stores.access_group.reader.pop("team-group")
+        rust_auth_stores.access_group.writer.pop("team-group")
     elif change == "memberships":
         _update_dashboard_user(rust_auth_stores, teams=[])
     else:
@@ -547,14 +549,14 @@ async def test_dashboard_unions_independent_team_grants(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ("team", "litellm_accessgrouptable"))
 async def test_dashboard_team_read_fault_keeps_only_independent_grants(
-    dashboard_db: MagicMock, dashboard_teams: FakeTeamStore, source: str,
+    dashboard_db: MagicMock, dashboard_teams: FakeTeamStore, rust_auth_stores: RustAuthStores, source: str,
 ) -> None:
     caller: Final = _dashboard_caller()
     assert (await resolve_skill_visibility(caller)).granted == frozenset({"team-skill", "group-skill", "user-only"})
     if source == "team":
         dashboard_teams.rows.update(dict.fromkeys(dashboard_teams.rows, RuntimeError("database unavailable")))
     else:
-        getattr(dashboard_db.writer_db, source).find_unique.side_effect = RuntimeError("database unavailable")
+        rust_auth_stores.access_group.seed("team-group", RuntimeError("database unavailable"))
     assert (await resolve_skill_visibility(caller)).granted == frozenset({"user-only"})
 
 
@@ -576,17 +578,18 @@ async def test_dashboard_direct_grant_revocation_preserves_independent_team_gran
 ) -> None:
     caller: Final = _dashboard_caller()
     assert "user-only" in (await resolve_skill_visibility(caller)).granted
-    permissions: Final = dashboard_db.writer_db.litellm_objectpermissiontable
+    permissions: Final = rust_auth_stores.object_permission
     if change == "clear":
-        permissions.find_unique.return_value = _perm([])
+        permissions.seed("user-permission", _perm([]))
     elif change == "unlink":
         _update_dashboard_user(rust_auth_stores, object_permission_id=None)
     elif change == "deleted":
-        permissions.find_unique.return_value = None
+        permissions.reader.pop("user-permission")
+        permissions.writer.pop("user-permission")
     elif change == "malformed":
-        permissions.find_unique.return_value = _perm([]).model_copy(update={"skills": 42})
+        permissions.seed("user-permission", _perm([]).model_copy(update={"skills": 42}))
     else:
-        permissions.find_unique.side_effect = RuntimeError("database unavailable")
+        permissions.seed("user-permission", RuntimeError("database unavailable"))
     assert (await resolve_skill_visibility(caller)).granted == frozenset({"team-skill", "group-skill"})
 
 

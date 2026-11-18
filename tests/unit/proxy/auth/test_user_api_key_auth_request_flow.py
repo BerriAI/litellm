@@ -5390,14 +5390,8 @@ async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
     request: Final = Request(scope={"type": "http"})
     request._url = URL(url="/v1/rag/query")
     database: Final = prisma_with_empty_config()
-    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: (
-            LiteLLM_ObjectPermissionTable(
-                object_permission_id=where["object_permission_id"], vector_stores=["KBSTOREA"]
-            )
-            if where["object_permission_id"] == "key-permission"
-            else None
-        )
+    install_rust_auth_stores(monkeypatch).object_permission.reader["key-permission"] = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-permission", vector_stores=["KBSTOREA"]
     )
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
@@ -5466,11 +5460,6 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
         "user-grants-a": ["KBSTOREA"],
     }
     database: Final = prisma_with_empty_config()
-    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: LiteLLM_ObjectPermissionTable(
-            object_permission_id=where["object_permission_id"], vector_stores=grants[where["object_permission_id"]]
-        )
-    )
     install_rust_auth_stores(
         monkeypatch,
         RustAuthStores(
@@ -5484,6 +5473,11 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
                 }
             )
         ),
+    ).object_permission.reader.update(
+        {
+            permission_id: LiteLLM_ObjectPermissionTable(object_permission_id=permission_id, vector_stores=stores)
+            for permission_id, stores in grants.items()
+        }
     )
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
@@ -5540,11 +5534,8 @@ async def test_keyless_proxy_admin_keeps_personal_vector_store_grants_under_deny
     request: Final = Request(scope={"type": "http"})
     request._url = URL(url="/v1/rag/query")
     database: Final = prisma_with_empty_config()
-    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: SimpleNamespace(
-            dict=lambda: {"object_permission_id": where["object_permission_id"], "vector_stores": ["KBSTOREA"]},
-            vector_stores=["KBSTOREA"],
-        )
+    install_rust_auth_stores(monkeypatch).object_permission.reader["admin-grants-a"] = LiteLLM_ObjectPermissionTable(
+        object_permission_id="admin-grants-a", vector_stores=["KBSTOREA"]
     )
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
@@ -9218,7 +9209,8 @@ class TestCheckTeamMemberModelBudgetWithFallback:
             access_model_names=["claude-haiku-4-5"],
             assigned_team_ids=["team-1"],
         )
-        prisma_client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group_row)
+        stored_access_groups: Final = install_rust_auth_stores(monkeypatch).access_group
+        stored_access_groups.reader[access_group_id] = group_row
         monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
 
         await _check_team_member_model_budget_with_fallback(
@@ -9236,9 +9228,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         )
 
         assert request_data["model"] == "claude-haiku-4-5"
-        prisma_client.db.litellm_accessgrouptable.find_unique.assert_awaited_once_with(
-            where={"access_group_id": access_group_id}
-        )
+        assert stored_access_groups.lookups == [(access_group_id, False)]
 
     @pytest.mark.asyncio
     async def test_fallback_without_team_or_key_access_group_grants_keeps_budget_error(self) -> None:

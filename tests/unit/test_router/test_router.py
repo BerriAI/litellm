@@ -13559,7 +13559,9 @@ class TestMemberAutoRouterInference:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("group_owner", ("team", "key"))
-    async def test_access_group_grants_are_cached_and_revoked(self, group_owner: str) -> None:
+    async def test_access_group_grants_are_cached_and_revoked(
+        self, group_owner: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
@@ -13567,7 +13569,8 @@ class TestMemberAutoRouterInference:
             access_group_name="Router targets",
             access_model_names=["permitted-model"],
         )
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group
+        stores: Final = self.stores
+        stores.access_group.seed("router-group", group)
         self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if group_owner == "team" else self.team.models,
@@ -13585,14 +13588,12 @@ class TestMemberAutoRouterInference:
         router: Final = self._router()
         assert (await self._route(router, request)).model == "permitted-model"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(
-            update={"access_model_names": []}
-        )
+        assert len(stores.access_group.lookups) == 1
+        stores.access_group.seed("router-group", group.model_copy(update={"access_model_names": []}))
         await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
         with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, request)
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 2
+        assert len(stores.access_group.lookups) == 2
 
     @pytest.mark.asyncio
     async def test_sdk_router_does_not_import_proxy_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:

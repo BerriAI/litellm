@@ -1935,6 +1935,29 @@ class RustOrganizationRepository:
     def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
 
 @final
+class RustProjectRepository:
+    def __new__(cls, database: NativeDatabase) -> RustProjectRepository: ...
+    def find_with_budget(self, project_id: str) -> Future[str | None]: ...
+
+@final
+class RustTagRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTagRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def find_many_with_budgets(self, names: Sequence[str]) -> Future[list[str]]: ...
+
+@final
+class RustAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAccessGroupRepository: ...
+    def find_by_access_group_id(self, access_group_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustObjectPermissionRepository:
+    def __new__(cls, database: NativeDatabase) -> RustObjectPermissionRepository: ...
+    def find_by_object_permission_id(
+        self, object_permission_id: str, *, use_writer: bool = False
+    ) -> Future[str | None]: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -2219,6 +2242,7 @@ __all__ = [
     "ResponsesWebSocketConnection",
     "RouterCall",
     "RouterCoreHandle",
+    "RustAccessGroupRepository",
     "RustAuth",
     "RustAuthOutcome",
     "RustAuthSettings",
@@ -2235,8 +2259,11 @@ __all__ = [
     "RustKeyRepository",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",
+    "RustObjectPermissionRepository",
     "RustOrganizationRepository",
     "RustPlan",
+    "RustProjectRepository",
+    "RustTagRepository",
     "RustTeamGrant",
     "RustTeamMembershipRepository",
     "RustTeamRepository",
