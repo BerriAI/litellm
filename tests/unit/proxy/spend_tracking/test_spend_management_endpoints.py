@@ -6075,6 +6075,81 @@ def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+@pytest.mark.parametrize(
+    "filters, expected_status",
+    [
+        ({}, 200),
+        ({"api_key": "sk-own-key"}, 200),
+        ({"api_key": "sk-another-key"}, 403),
+        ({"user_id": "someone-else"}, 403),
+    ],
+)
+def test_view_spend_logs_key_without_a_role_reads_only_its_own_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, filters: dict[str, str], expected_status: int
+) -> None:
+    mock_client: Final = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+    own_key_hash: Final = hash_token_if_needed("sk-own-key")
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(token=own_key_hash)
+    try:
+        response: Final = client.get(
+            "/spend/logs",
+            params={"start_date": "2024-01-01", "end_date": "2024-12-31", "summarize": "false", **filters},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == expected_status, response.text
+        captured_where: Final = mock_client.db.captured_where
+        if expected_status == 200:
+            assert captured_where["api_key"] == own_key_hash
+        else:
+            assert captured_where is None
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    "filters, expected_status",
+    [
+        ({}, 200),
+        ({"api_key": "sk-another-key"}, 403),
+        ({"user_id": "someone-else"}, 403),
+    ],
+)
+def test_spend_logs_v2_key_without_a_role_reads_only_its_own_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, filters: dict[str, str], expected_status: int
+) -> None:
+    own_key_hash: Final = hash_token_if_needed("sk-own-key")
+    logs: Final = [
+        {"id": "own", "request_id": "own", "api_key": own_key_hash, "startTime": "2024-06-01T00:00:00Z"},
+        {
+            "id": "other",
+            "request_id": "other",
+            "api_key": hash_token_if_needed("sk-another-key"),
+            "startTime": "2024-06-01T00:00:00Z",
+        },
+    ]
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs, lambda where: [log for log in logs if log["api_key"] == where.get("api_key", log["api_key"])]
+        ),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(token=own_key_hash)
+    try:
+        response: Final = client.get(
+            "/spend/logs/v2",
+            params={"start_date": "2024-01-01 00:00:00", "end_date": "2024-12-31 23:59:59", **filters},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == expected_status, response.text
+        if expected_status == 200:
+            assert [row["request_id"] for row in response.json()["data"]] == ["own"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 @pytest.mark.asyncio
 async def test_view_spend_logs_internal_user_combines_user_with_request_id(client, monkeypatch):
     """Internal users must have their user filter applied alongside request_id."""
