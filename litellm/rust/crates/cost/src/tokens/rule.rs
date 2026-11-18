@@ -146,6 +146,12 @@ fn branch(candidate: &Candidate) -> Option<Branch> {
 }
 
 impl Rule {
+    /// `cost_per_token`'s Decisions branch prices a row with `_decisions` prices by `generic_cost_per_token`, with the
+    /// service tier and the residency
+    pub(super) fn decisions() -> Self {
+        Self::Generic(Reads::TIER_AND_RESIDENCY)
+    }
+
     /// `Err` names the kind the caller has to price the old way
     pub(super) fn new(
         candidate: &Candidate,

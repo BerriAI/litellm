@@ -7,11 +7,11 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import finite_reported_cost
-from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
 )
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import BranchFacts, branch_cost
 from litellm.llms.eu_jev.common_utils import EU_JEV_LATEST_MODEL, eu_jev_registry_model
 from litellm.llms.laya.common_utils import laya_response_model
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -32,13 +32,7 @@ class _TypeSafeResponse(LiteLLMBaseModel):
     usage: _TypeSafeUsage | None = None
 
 
-class _RegistryPricing(LiteLLMBaseModel):
-    input_cost_per_token: float = 0.0
-    output_cost_per_token: float = 0.0
-
-
 _TYPESAFE_RESPONSE_ADAPTER: Final = TypeAdapter(_TypeSafeResponse)
-_REGISTRY_PRICING_ADAPTER: Final = TypeAdapter(_RegistryPricing)
 
 
 def _parse_typesafe_response(response_body: Mapping[str, object]) -> _TypeSafeResponse:
@@ -48,19 +42,19 @@ def _parse_typesafe_response(response_body: Mapping[str, object]) -> _TypeSafeRe
         return _TypeSafeResponse()
 
 
-def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
-    for model_key in model_keys:
-        if model_key not in litellm.model_cost:  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
-            continue
-        try:
-            return _REGISTRY_PRICING_ADAPTER.validate_python(
-                apply_decisions_pricing(
-                    litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry is dynamically typed
-                )
-            )
-        except ValidationError:
-            continue
-    return _RegistryPricing()
+def _registry_cost(model_keys: tuple[str, ...], provider: str, usage: Usage) -> float:
+    """The Decisions price of ``usage`` on the first registry row a candidate key names, 0.0 when none does."""
+    model_key: Final = next((key for key in model_keys if key in litellm.model_cost), None)  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+    if model_key is None:
+        return 0.0
+    prompt_cost, completion_cost = branch_cost(
+        model_key,
+        provider,
+        usage,
+        litellm.model_cost[model_key],  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry is dynamically typed
+        branch=BranchFacts(rules="generic", decisions=True),
+    )
+    return prompt_cost + completion_cost
 
 
 class TypeSafePassthroughLoggingHandler:
@@ -100,17 +94,16 @@ class TypeSafePassthroughLoggingHandler:
         candidate_model_keys: Final = tuple(
             f"{custom_llm_provider}/{model}" for model in candidate_models if model is not None
         )
-        pricing: Final = _pricing_for(candidate_model_keys)
-        reported_cost: Final = finite_reported_cost(usage.cost) if custom_llm_provider == "openrouter" else None
-        response_cost: Final = (
-            reported_cost
-            if reported_cost is not None
-            else input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
-        )
         usage_object: Final = Usage(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
+        )
+        reported_cost: Final = finite_reported_cost(usage.cost) if custom_llm_provider == "openrouter" else None
+        response_cost: Final = (
+            reported_cost
+            if reported_cost is not None
+            else _registry_cost(candidate_model_keys, custom_llm_provider, usage_object)
         )
         updated_kwargs: Final = {
             **kwargs,

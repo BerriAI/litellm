@@ -215,6 +215,34 @@ impl Prices {
     pub fn billing(&self) -> Billing {
         self.billing
     }
+
+    /// The prices a Decisions call reads: each `_decisions` price in place of the online price of the same meter and
+    /// condition, every other price as listed
+    pub fn decisions_view(&self) -> Prices {
+        let decided = self
+            .rates
+            .iter()
+            .filter(|(price, _)| price.channel == Channel::Decisions)
+            .map(|(price, rate)| {
+                (
+                    Price {
+                        channel: Channel::Online,
+                        ..price.clone()
+                    },
+                    *rate,
+                )
+            });
+        Prices {
+            rates: self
+                .rates
+                .iter()
+                .map(|(price, rate)| (price.clone(), *rate))
+                .chain(decided)
+                .collect(),
+            off_peak: self.off_peak.clone(),
+            billing: self.billing,
+        }
+    }
 }
 
 impl OffPeak {
