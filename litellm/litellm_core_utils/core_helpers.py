@@ -6,6 +6,7 @@ import math
 import re
 import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -18,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
+from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -102,11 +104,30 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None
+    return value if isinstance(value, (dict, Mapping)) else None
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
+
+
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
 
 
 _Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
@@ -123,7 +144,7 @@ def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str
 
 def stream_cost_injection_requested(request_headers: Mapping[str, object] | None) -> bool:
     """The global include_cost_in_streaming_usage flag or the per-request header asks for usage.cost on streams."""
-    if bool(getattr(litellm, "include_cost_in_streaming_usage", False)):
+    if litellm.include_cost_in_streaming_usage:
         return True
     if not request_headers:
         return False
@@ -139,6 +160,13 @@ def without(
 ) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
     """``mapping`` without ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
     return {key: value for key, value in mapping.items() if key not in keys}
+
+
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
 
 
 def decoded_json_object(value: object) -> Mapping[str, object]:
@@ -165,6 +193,23 @@ def attribute_or_none(source: object, name: str) -> object:
 _Shape: Final = TypeVar("_Shape")
 
 
+@dataclass(frozen=True, slots=True)
+class FinishEvidence:
+    """Finish reasons a stream received from the provider. ``unindexed`` is a received reason whose
+    choice the stream could not tell, so it is only evidence for a single-choice response."""
+
+    by_choice: Mapping[int, str]
+    unindexed: str | None
+
+
+NO_FINISH_EVIDENCE: Final = FinishEvidence(by_choice=MappingProxyType({}), unindexed=None)
+
+
+def finish_evidence_of(stream: object) -> FinishEvidence:
+    evidence: Final[object] = getattr(stream, "finish_evidence", None)
+    return evidence if isinstance(evidence, FinishEvidence) else NO_FINISH_EVIDENCE
+
+
 def has_attributes(
     value: object,
     shape: type[_Shape],
@@ -180,7 +225,24 @@ def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shap
     raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
 
 
+class KeywordArguments(Protocol):
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    raise TypeError(
+        f"{target.__module__}.{target.__qualname__}() argument after ** must be a mapping, not {type(value).__name__}"
+    )
+
+
 def iter_items(value: object) -> Iterable[object]:
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return listed
     if isinstance(value, _SupportsIter):
         return value
     if isinstance(value, _SupportsGetItem):
@@ -242,17 +304,19 @@ def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
 
 
-def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
-    configured: Final = environ.get(DROP_PARAMS_ENV_VAR, "").strip()
+def env_flag(environ: Mapping[str, str], name: str, logger: logging.Logger) -> bool:
+    configured: Final = environ.get(name, "").strip()
     if configured == "":
         return False
-    normalized: Final = normalize_drop_params(configured)
+    normalized: Final = lax_bool(configured)
     if normalized is None:
-        logger.warning(
-            "%s=%r is not a flag value, treating it as on. Set it to true or false", DROP_PARAMS_ENV_VAR, configured
-        )
+        logger.warning("%s=%r is not a flag value, treating it as on. Set it to true or false", name, configured)
         return True
     return normalized
+
+
+def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
+    return env_flag(environ, DROP_PARAMS_ENV_VAR, logger)
 
 
 def safe_divide(
@@ -746,17 +810,22 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
-def preserve_upstream_non_openai_attributes(
-    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
-):
+def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream", original_chunk: object):
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
+    chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
+    if chunk_model is None:
+        raise AttributeError(
+            f"type object '{type(original_chunk).__name__}' has no attribute 'model_fields'",
+            name="model_fields",
+            obj=type(original_chunk),
+        )
     candidate_keys: Final = tuple(
         key
-        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
+        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
         if key not in expected_keys
     )
     if not candidate_keys:
@@ -766,7 +835,7 @@ def preserve_upstream_non_openai_attributes(
             key,
             cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
                 object,
-                getattr(original_chunk, key),
+                getattr(chunk_model, key),
             ),
         )
         for key in candidate_keys
@@ -774,7 +843,7 @@ def preserve_upstream_non_openai_attributes(
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
         _assign_attributes(model_response, candidate_values)
         return
-    _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
+    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
 
 
 def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:
@@ -955,36 +1024,8 @@ def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
         return data
 
 
-def filter_internal_params(data: dict, additional_internal_params: set | None = None) -> dict:
-    """
-    Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
-
-    This removes internal/MCP-related parameters that are used by LiteLLM internally
-    but should not be included in API requests to providers.
-
-    Args:
-        data: Dictionary of parameters to filter
-        additional_internal_params: Optional set of additional internal parameter names to filter
-
-    Returns:
-        Filtered dictionary with internal parameters removed
-    """
-    if not isinstance(data, dict):
-        return data
-
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params: Final = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
-
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
-    return {k: v for k, v in data.items() if k not in internal_params}
+def filter_internal_params(data: Mapping[str, _Value]) -> dict[str, _Value]:
+    return {k: v for k, v in data.items() if k not in MCP_HANDLER_KWARG_NAMES}
 
 
 def redact_nested_match_and_regex_keys(

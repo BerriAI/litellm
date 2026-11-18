@@ -5,7 +5,7 @@ import time
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Any, Final, Literal, NoReturn
+from typing import Any, Final, NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -20,7 +20,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_api import RouterSettings, RoutingContext
 from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
-from litellm.types.utils import Choices, Message, ModelResponse, StandardLoggingPayload, Usage
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     PRE_ROUTING_SELECTED_MODEL_KEY,
@@ -45,6 +44,7 @@ from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
 )
 from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
+from litellm.types.utils import Choices, Message, ModelResponse, StandardLoggingPayload, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -2445,6 +2445,40 @@ def _provider_error(status_code: int) -> httpx.Response:
             True,
             id="provider 400",
         ),
+        *(
+            pytest.param(
+                litellm.BadRequestError(
+                    message="request rejected", model="m", llm_provider="openai", response=_provider_error(status)
+                ),
+                True,
+                id=f"provider {status}",
+            )
+            for status in (413, 422)
+        ),
+        *(
+            pytest.param(
+                litellm.BadRequestError(
+                    message="request rejected", model="m", llm_provider="", response=_provider_error(status)
+                ),
+                False,
+                id=f"providerless {status} keeps falling back",
+            )
+            for status in (413, 422)
+        ),
+        pytest.param(
+            litellm.BadRequestError(
+                message="conflict", model="m", llm_provider="openai", response=_provider_error(409)
+            ),
+            False,
+            id="provider 409 wrapped as BadRequestError",
+        ),
+        pytest.param(
+            litellm.UnprocessableEntityError(
+                message="unprocessable", model="m", llm_provider="replicate", response=_provider_error(422)
+            ),
+            False,
+            id="422 outside BadRequestError still falls back",
+        ),
         pytest.param(
             litellm.UnsupportedParamsError(
                 message="reasoning_effort is not supported", model="m", llm_provider="openai"
@@ -2496,8 +2530,153 @@ def _provider_error(status_code: int) -> httpx.Response:
         ),
     ],
 )
-def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_is_off(
+def test_is_bad_request_without_fallback_only_stops_on_a_provider_bad_request_when_the_flag_is_off(
     exception: Exception, stops_fallbacks: bool
 ) -> None:
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=False) is stops_fallbacks
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=True) is False
+
+
+@pytest.mark.asyncio
+async def test_a_role_less_request_is_not_retried_on_the_fallback_group() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "house",
+                "litellm_params": {"model": "house-model", "custom_llm_provider": "openai", "mock_response": "ok"},
+            },
+            {"model_name": "backup", "litellm_params": {"model": "openai/gpt-5.6", "mock_response": "ok"}},
+        ],
+        fallbacks=[{"house": ["backup"]}],
+        fallback_on_unsupported_params=False,
+    )
+
+    with pytest.raises(litellm.MalformedRequestFieldError, match="Missing required parameter") as exc_info:
+        await router.acompletion(model="house", messages=json.loads('[{"content": "hi"}]'))
+    assert "Fallback to backup" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_skips_a_target_the_rate_limit_check_rejects() -> None:
+    checked: Final = []  # mutable-ok: records the targets the check saw
+
+    async def refuse(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        checked.append(model)
+        return False
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "mock_response": "served"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+        fallback_rate_limit_check=refuse,
+    )
+    with pytest.raises(
+        Exception, match="Fallback to fallback was skipped because the caller is over its per-model rate limit"
+    ):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert checked == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_serves_a_target_the_rate_limit_check_admits() -> None:
+    async def admit(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        return True
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "mock_response": "served"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+        fallback_rate_limit_check=admit,
+    )
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert response.choices[0].message.content == "served"
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_reserves_a_repeated_target_once() -> None:
+    checked: Final = []  # mutable-ok: records the targets the check saw
+
+    async def admit(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        checked.append(model)
+        return True
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback", "fallback"]}],
+        num_retries=0,
+        fallback_rate_limit_check=admit,
+    )
+    with pytest.raises(Exception, match="model group 'primary' failed"):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert checked == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_never_re_reserves_the_requested_model_group() -> None:
+    checked: Final = []  # mutable-ok: records the targets the check saw
+
+    async def admit(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        checked.append(model)
+        return True
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}, {"fallback": ["primary"]}],
+        num_retries=0,
+        fallback_rate_limit_check=admit,
+    )
+    with pytest.raises(Exception, match="model group 'primary' failed"):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert checked == ["fallback"]
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge import catalog
+    from litellm.rust_bridge.configuration import Rollout
+
+    monkeypatch.setattr(
+        catalog,
+        "RULES",
+        tuple(
+            rule
+            for rule in catalog.RULES
+            if not (rule.route is catalog.Route.MESSAGES and rule.rollout is Rollout.RUST_REQUIRED)
+        ),
+    )

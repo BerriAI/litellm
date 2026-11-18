@@ -2,10 +2,10 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
 from contextlib import nullcontext
 from itertools import chain
-from typing import Final, cast
+from typing import Final, Protocol, cast, runtime_checkable
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -41,6 +41,14 @@ RESPONSES_SSE_BODY = (
     b'"object":"response","created_at":1,"status":"completed","model":"gpt-5.6-luna","output":[],'
     b'"parallel_tool_calls":true,"tool_choice":"auto","tools":[],'
     b'"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}\n\n'
+)
+
+CHAT_COMPLETIONS_SSE_BODY = (
+    b'data: {"id":"chatcmpl-lit6825","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+    b'data: {"id":"chatcmpl-lit6825","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+    b"data: [DONE]\n\n"
 )
 
 
@@ -566,7 +574,9 @@ def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, 
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": drop_params},
         max_tokens=1024,
-        messages=[{"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}],
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}
+        ],
     )
     return responses_kwargs["input"]
 
@@ -1114,8 +1124,7 @@ async def test_input_tokens_trigger_counts_the_text_blocks_of_a_system_list_with
     assert _cleared_outputs(body) == expect_cleared
 
 
-@pytest.mark.asyncio
-async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
+def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
@@ -1134,11 +1143,158 @@ async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
         custom_llm_provider="openai",
         context_management={"edits": [dict(CLEAR_EDIT)]},
     )
-    events: Final = [
-        json.loads(chunk.decode().split("data: ", 1)[1]) async for chunk in cast(AsyncIterator[bytes], sse)
-    ]
+    events: Final = [json.loads(chunk.decode().split("data: ", 1)[1]) for chunk in cast(Iterator[bytes], sse)]
     message_delta: Final = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
+
+
+class _RecordingSSEBody(httpx.SyncByteStream):
+    def __init__(self, sse_body: bytes = RESPONSES_SSE_BODY) -> None:
+        self.sse_body: Final = sse_body
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.sse_body
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@runtime_checkable
+class _ClosableByteStream(Iterator[bytes], Protocol):
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class _AsyncClosableByteStream(AsyncIterable[bytes], Protocol):
+    async def aclose(self) -> None: ...
+
+
+def _sync_stream_from_create(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    body: _RecordingSSEBody,
+    model: str = "openai/gpt-5.6-luna",
+    upstream_url: str = "https://api.openai.com/v1/responses",
+) -> _ClosableByteStream:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-sync-stream-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(upstream_url).mock(
+        return_value=httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=body)
+    )
+    stream: Final = litellm.anthropic.messages.create(model=model, max_tokens=16, messages=MESSAGES, stream=True)
+    assert isinstance(stream, _ClosableByteStream)
+    return stream
+
+
+def test_a_sync_streamed_create_on_an_openai_model_is_read_with_a_plain_for_loop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+
+    frames: Final = [frame.decode() for frame in stream]
+
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: message_start",
+        "event: message_delta",
+        "event: message_stop",
+    ]
+    assert json.loads(frames[1].split("data: ", 1)[1])["usage"] == {"input_tokens": 3, "output_tokens": 4}
+
+
+@pytest.mark.parametrize(
+    ("model", "upstream_url", "sse_body"),
+    [
+        ("openai/gpt-5.6-luna", "https://api.openai.com/v1/responses", RESPONSES_SSE_BODY),
+        (
+            "openai/chat_completions/gpt-5.6-luna",
+            "https://api.openai.com/v1/chat/completions",
+            CHAT_COMPLETIONS_SSE_BODY,
+        ),
+    ],
+    ids=["responses", "chat_completions"],
+)
+def test_closing_a_sync_stream_part_way_closes_the_upstream_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, upstream_url: str, sse_body: bytes
+) -> None:
+    body: Final = _RecordingSSEBody(sse_body)
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body, model, upstream_url)
+
+    first: Final = next(stream)
+    assert not body.closed
+    stream.close()
+
+    assert first.startswith(b"event: message_start\n")
+    assert body.closed
+    assert list(stream) == []
+
+
+@pytest.mark.asyncio
+async def test_closing_a_sync_stream_also_ends_an_async_read_of_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body: Final = _RecordingSSEBody()
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body)
+    assert isinstance(stream, AsyncIterator)
+
+    stream.close()
+
+    assert [frame async for frame in stream] == []
+    assert body.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_mode", ["unread", "sync", "async"])
+@pytest.mark.parametrize(
+    ("model", "upstream_url", "sse_body"),
+    [
+        ("openai/gpt-5.6-luna", "https://api.openai.com/v1/responses", RESPONSES_SSE_BODY),
+        (
+            "openai/chat_completions/gpt-5.6-luna",
+            "https://api.openai.com/v1/chat/completions",
+            CHAT_COMPLETIONS_SSE_BODY,
+        ),
+    ],
+    ids=["responses", "chat_completions"],
+)
+async def test_aclose_closes_the_upstream_and_ends_both_read_modes(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    upstream_url: str,
+    sse_body: bytes,
+    read_mode: str,
+) -> None:
+    body: Final = _RecordingSSEBody(sse_body)
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body, model, upstream_url)
+    assert isinstance(stream, _AsyncClosableByteStream)
+    if read_mode == "sync":
+        next(stream)
+    elif read_mode == "async":
+        await anext(aiter(stream))
+
+    await stream.aclose()
+
+    assert body.closed
+    assert list(stream) == []
+    assert [frame async for frame in stream] == []
+
+
+@pytest.mark.asyncio
+async def test_a_sync_streamed_create_on_an_openai_model_can_still_be_read_with_async_for(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+    assert isinstance(stream, AsyncIterator)
+
+    frames: Final = [frame.decode() async for frame in stream]
+
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: message_start",
+        "event: message_delta",
+        "event: message_stop",
+    ]
 
 
 REJECTED_REPLAYED_REASONING: Final = {
@@ -1162,7 +1318,10 @@ def _history(*, replayed_reasoning: bool) -> list[dict[str, object]]:
     )
     return [
         {"role": "user", "content": "List the logs."},
-        {"role": "assistant", "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}]},
+        {
+            "role": "assistant",
+            "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}],
+        },
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "app.log"}]},
     ]
 

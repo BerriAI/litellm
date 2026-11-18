@@ -272,8 +272,8 @@ async def test_an_order_chain_that_serves_nothing_raises_its_last_hop_error_from
 @pytest.mark.parametrize(
     ("error", "raised", "hint"),
     [
-        (context_window, litellm.ContextWindowExceededError, "Set 'context_window_fallback'"),
-        (content_policy, litellm.ContentPolicyViolationError, "content_policy_fallback"),
+        (context_window, litellm.ContextWindowExceededError, "To give context-window errors their own chain"),
+        (content_policy, litellm.ContentPolicyViolationError, "To retry content-policy errors on another model"),
     ],
     ids=["context_window", "content_policy"],
 )

@@ -21,11 +21,25 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
 )
-from litellm.repositories.table_repositories import JWTKeyMappingRepository
+from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
 
 router: Final = APIRouter()
 
 _TOKEN_HASH_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
+
+
+def _mapping_cache_keys(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None) -> tuple[str, ...]:
+    """A global mapping also answers lookups from every configured issuer, which cache their misses per issuer."""
+    from litellm.proxy.proxy_server import litellm_jwtauth
+
+    own_key: Final = jwt_key_mapping_cache_key(jwt_claim_name, jwt_claim_value, jwt_issuer)
+    if jwt_issuer:
+        return (own_key,)
+    issuer_keys: Final = tuple(
+        jwt_key_mapping_cache_key(jwt_claim_name, jwt_claim_value, issuer_config.issuer)
+        for issuer_config in litellm_jwtauth.issuers or ()
+    )
+    return tuple(dict.fromkeys((own_key, *issuer_keys)))
 
 
 def _validated_token_hash(token: str) -> str:
@@ -174,8 +188,10 @@ async def create_jwt_key_mapping(
 
         new_mapping: Final = await _mapping_table(prisma_client).create(data=create_data)
 
-        cache_key: Final = jwt_key_mapping_cache_key(data.jwt_claim_name, data.jwt_claim_value, data.jwt_issuer)
-        await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
+        await evict_and_broadcast(
+            cache_keys=_mapping_cache_keys(data.jwt_claim_name, data.jwt_claim_value, data.jwt_issuer),
+            user_api_key_cache=user_api_key_cache,
+        )
 
         return _to_response(new_mapping)
     except HTTPException:
@@ -239,13 +255,18 @@ async def update_jwt_key_mapping(
         # Evict only after the write commits: a concurrent request between an
         # early eviction and the commit would re-cache the old mapping and keep
         # it authorized until TTL.
-        old_cache_key: Final = jwt_key_mapping_cache_key(
-            old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+        cache_keys: Final = tuple(
+            dict.fromkeys(
+                (
+                    *_mapping_cache_keys(
+                        old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+                    ),
+                    *_mapping_cache_keys(
+                        updated_mapping.jwt_claim_name, updated_mapping.jwt_claim_value, updated_mapping.jwt_issuer
+                    ),
+                )
+            )
         )
-        new_cache_key: Final = jwt_key_mapping_cache_key(
-            updated_mapping.jwt_claim_name, updated_mapping.jwt_claim_value, updated_mapping.jwt_issuer
-        )
-        cache_keys: Final = (old_cache_key,) if old_cache_key == new_cache_key else (old_cache_key, new_cache_key)
         await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
 
         return _to_response(updated_mapping)
@@ -290,10 +311,12 @@ async def delete_jwt_key_mapping(
 
         # Evict only after the row is gone, else a concurrent request can
         # re-cache the deleted mapping and keep it authorized until TTL.
-        cache_key: Final = jwt_key_mapping_cache_key(
-            old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+        await evict_and_broadcast(
+            cache_keys=_mapping_cache_keys(
+                old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+            ),
+            user_api_key_cache=user_api_key_cache,
         )
-        await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
         return {"status": "success"}
     except HTTPException:
         raise
