@@ -3,10 +3,39 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
-from litellm.rust_bridge.host.model_cost import kept, merged, resolve
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry, write
+from litellm.rust_bridge.host.model_cost import generation, kept, merged, published, resolve
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
+
+def test_generation_moves_with_a_table_write_and_keeps_the_published_table() -> None:
+    before: Final = generation()
+
+    write(published(), {"lit-generation-probe": {"input_cost_per_token": 1.0}})
+    after: Final = generation()
+
+    assert after[0] is published()
+    assert (after[3], after[2]) == (before[3] + 1, before[2] + 1)
+
+
+@pytest.mark.parametrize("config", ["cost_discount_config", "cost_margin_config"])
+def test_generation_moves_when_a_cost_config_is_replaced(monkeypatch: pytest.MonkeyPatch, config: str) -> None:
+    before: Final = generation()
+
+    monkeypatch.setattr(litellm, config, {"anthropic": 0.1})
+    replaced: Final = generation()
+
+    assert replaced[1:4] == before[1:4]
+    assert replaced[4:] != before[4:]
+
+
+def test_generation_stays_when_a_cost_config_is_edited_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    before: Final = generation()
+
+    monkeypatch.setitem(litellm.cost_discount_config, "anthropic", 0.1)
+
+    assert generation() == before
 
 
 def test_resolve_lands_on_the_row_a_lookup_in_the_published_table_resolves() -> None:
