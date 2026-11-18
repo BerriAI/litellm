@@ -1793,7 +1793,7 @@ async def test_writing_a_global_mapping_evicts_what_a_configured_issuer_cached_f
             "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
         ),
         patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-            "litellm.proxy.proxy_server.litellm_jwtauth", _JWTAUTH_WITH_ISSUER
+            "litellm.proxy.proxy_server.jwt_handler.litellm_jwtauth", _JWTAUTH_WITH_ISSUER, create=True
         ),
     ):
         await write_global_mapping()
