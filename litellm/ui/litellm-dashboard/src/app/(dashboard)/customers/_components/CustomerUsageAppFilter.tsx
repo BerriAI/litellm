@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources } from "../../apps/_components/appApi";
+import { loadApps } from "../../apps/_components/appApi";
 
 export default function CustomerUsageAppFilter({
   value,
@@ -15,20 +15,10 @@ export default function CustomerUsageAppFilter({
   onChange: (value: string | null) => void;
 }) {
   const { t } = useTranslation();
-  const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition });
-  const resourceType = definition.data?.resource_type ?? null;
-  const resources = useQuery({
-    queryKey: appResourcesKey(resourceType),
-    queryFn: () => loadAppResources(resourceType!),
-    enabled: resourceType !== null,
-  });
-  const error = definition.error ?? resources.error;
-  const ready = Boolean(definition.data) && (resourceType === null || Boolean(resources.data));
+  const apps = useQuery({ queryKey: ["apps"], queryFn: () => loadApps() });
   const options = [
     { value: "__all__", label: t("apps.allApps") },
-    ...(resources.data ?? []).flatMap((resource) =>
-      resource.app_id ? [{ value: resource.app_id, label: resource.alias }] : [],
-    ),
+    ...(apps.data ?? []).map((app) => ({ value: app.app_id, label: app.alias })),
   ];
   return (
     <div className="w-full space-y-1.5 sm:w-56">
@@ -41,17 +31,9 @@ export default function CustomerUsageAppFilter({
         value={value ?? "__all__"}
         onValueChange={(next) => onChange(next === "__all__" ? null : next)}
         allowClear={false}
-        disabled={!ready}
+        disabled={!apps.data}
       />
-      {error && (
-        <ErrorState
-          message={extractProxyErrorMessage(error)}
-          onRetry={() => {
-            void definition.refetch();
-            void resources.refetch();
-          }}
-        />
-      )}
+      {apps.error && <ErrorState message={extractProxyErrorMessage(apps.error)} onRetry={() => void apps.refetch()} />}
     </div>
   );
 }

@@ -738,8 +738,6 @@ class LiteLLMRoutes(enum.Enum):
             "/management/v1/customer_organizations",
             "/management/v1/apps",
             "/management/v1/apps/{app_id}",
-            "/management/v1/apps/{app_id}/tiers",
-            "/management/v1/apps/{app_id}/customer_organizations",
             "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
             "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
             "/management/v1/customer_organizations/daily/activity/aggregated",

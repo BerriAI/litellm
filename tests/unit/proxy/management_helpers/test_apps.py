@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.proxy.management_helpers.apps import AppStore
+from litellm.proxy.management_helpers.apps import AppStore, app_scope_id, app_scope_identity
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.apps import (
     App,
@@ -189,6 +189,7 @@ async def test_apps_are_opt_in_and_discovery_does_not_configure_a_resource() -> 
     await seed_resources(database)
     assert await store.definition() == AppDefinition()
     assert await store.resources(0, 100) == ()
+    assert await store.list(0, 100) == ()
     preview: Final = await store.resources(0, 100, AppResourceType.TEAM)
     assert tuple(resource.resource_id for resource in preview) == ("chat", "search")
     assert all(resource.app_id is None for resource in preview)
@@ -202,7 +203,7 @@ async def test_apps_are_opt_in_and_discovery_does_not_configure_a_resource() -> 
 async def test_binding_is_idempotent_and_locks_the_gateway_definition(
     app_store: tuple[AppDatabase, AppStore, App],
 ) -> None:
-    _, store, app = app_store
+    database, store, app = app_store
     again: Final = await store.create(AppCreate(resource_id="chat"), "admin")
     assert isinstance(again, App) and again.app_id == app.app_id
     assert app.resource_type == AppResourceType.TEAM and app.resource_id == "chat" and app.alias == "Chat"
@@ -210,7 +211,7 @@ async def test_binding_is_idempotent_and_locks_the_gateway_definition(
     assert isinstance(rejected, AppFailure) and rejected.status == 409
     same: Final = await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
     assert same == AppDefinition(resource_type=AppResourceType.TEAM)
-    assert await store.delete(app.app_id) is None
+    await database.litellm_apptable.delete(where={"app_id": app.app_id})
     disabled: Final = await store.put_definition(AppDefinition())
     assert isinstance(disabled, AppFailure) and disabled.status == 409
 
@@ -348,8 +349,13 @@ async def test_arbitrary_budget_rows_are_not_profiles(
         app.app_id, "org", AppOrganizationPut(tier_budget_id=private_budget), "admin"
     )
     default: Final = await store.patch(app.app_id, AppPatch(default_tier_budget_id=private_budget), "admin")
+    created: Final = await store.create(
+        AppCreate(resource_id="search", default_tier_budget_id=private_budget), "admin"
+    )
     assert isinstance(assigned, AppFailure) and assigned.status == 422
     assert isinstance(default, AppFailure) and default.status == 422
+    assert isinstance(created, AppFailure) and created.status == 422
+    assert await store.by_resource(AppResourceType.TEAM, "search") is None
 
 
 @pytest.mark.asyncio
@@ -465,3 +471,91 @@ async def test_scoped_usage_reports_all_effective_windows_and_keeps_app_balances
     assert chat_usage.budget_usage is not None and search_usage.budget_usage is not None
     assert tuple((usage.spend, usage.max_budget) for usage in chat_usage.budget_usage) == ((7, 10), (62, 100))
     assert tuple(usage.spend for usage in search_usage.budget_usage) == (0, 0)
+
+
+def test_should_preserve_customer_identifier_colons_in_app_scope_keys() -> None:
+    assert app_scope_identity(app_scope_id("chat", "customer:external")) == ("chat", "customer:external")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state, status", (("unset", 409), ("missing", 404), ("mismatched", 409)))
+async def test_should_reject_budget_changes_when_the_app_binding_is_unavailable(
+    app_store: tuple[AppDatabase, AppStore, App], state: str, status: int
+) -> None:
+    database, store, app = app_store
+    if state == "unset":
+        await database.litellm_config.delete(where={"param_name": "customer_app_definition"})
+    elif state == "missing":
+        await database.litellm_apptable.delete(where={"app_id": app.app_id})
+    else:
+        await database.litellm_apptable.update(
+            where={"app_id": app.app_id}, data={"resource_type": AppResourceType.PROJECT.value}
+        )
+    results: Final = (
+        await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=7)), "admin"),
+        await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"),
+        await store.put_member(app.app_id, "member", AppMemberPut(budget_override=Budget(max_budget=1)), "admin"),
+    )
+    assert all(isinstance(result, AppFailure) and result.status == status for result in results)
+    assert not database.litellm_budgettable.rows
+    assert not database.litellm_appcustomerorgtable.rows
+    assert not database.litellm_appcustomermembertable.rows
+    if state == "missing":
+        assert await store.get_member(app.app_id, "member") == AppFailure(404, "App not found.")
+
+
+@pytest.mark.asyncio
+async def test_should_reject_budget_assignments_to_missing_customers(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    organization: Final = await store.put_organization(
+        app.app_id, "missing-org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"
+    )
+    member: Final = await store.put_member(
+        app.app_id, "missing-member", AppMemberPut(budget_override=Budget(max_budget=1)), "admin"
+    )
+    assert organization == AppFailure(404, "Customer organization not found.")
+    assert member == AppFailure(404, "Customer member not found.")
+    assert await store.get_member(app.app_id, "missing-member") == member
+    assert not database.litellm_budgettable.rows
+    assert not database.litellm_appcustomerorgtable.rows
+    assert not database.litellm_appcustomermembertable.rows
+
+
+@pytest.mark.asyncio
+async def test_should_report_a_binding_removed_before_its_budget_update(
+    app_store: tuple[AppDatabase, AppStore, App], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database, store, app = app_store
+    update: Final = database.litellm_apptable.update
+
+    async def remove_before_update(where: Mapping[str, object], data: Mapping[str, object]) -> Record | None:
+        await database.litellm_apptable.delete(where=where)
+        return await update(where=where, data=data)
+
+    monkeypatch.setattr(database.litellm_apptable, "update", remove_before_update)
+    assert await store.patch(app.app_id, AppPatch(), "admin") == AppFailure(404, "App not found.")
+    assert await store.get(app.app_id) == AppFailure(404, "App not found.")
+
+
+@pytest.mark.asyncio
+async def test_should_skip_a_key_rotated_during_identity_backfill(monkeypatch: pytest.MonkeyPatch) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    update_many: Final = database.litellm_verificationtoken.update_many
+
+    async def rotate_before_backfill(where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        await database.litellm_verificationtoken.update(
+            where={"token": "token-a"}, data={"token": "rotated-token"}
+        )
+        return await update_many(where=where, data=data)
+
+    with monkeypatch.context() as backfill:
+        backfill.setattr(database.litellm_verificationtoken, "update_many", rotate_before_backfill)
+        assert await store.resources(0, 100, AppResourceType.VIRTUAL_KEY) == ()
+    discovered: Final = await store.resources(0, 100, AppResourceType.VIRTUAL_KEY)
+    assert len(discovered) == 1 and discovered[0].alias == "Service key"
+    assert "rotated-token" not in discovered[0].model_dump_json()
+    assert await store.key_resource_id("rotated-token") == discovered[0].resource_id

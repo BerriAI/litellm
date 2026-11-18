@@ -9745,8 +9745,7 @@ export interface paths {
         get: operations["get_app_management_v1_apps__app_id__get"];
         put?: never;
         post?: never;
-        /** Delete App */
-        delete: operations["delete_app_management_v1_apps__app_id__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         /** Patch App */
@@ -9764,23 +9763,6 @@ export interface paths {
         get: operations["get_app_member_management_v1_apps__app_id__customer_members__customer_member_id__get"];
         /** Put App Member */
         put: operations["put_app_member_management_v1_apps__app_id__customer_members__customer_member_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/apps/{app_id}/customer_organizations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List App Organizations */
-        get: operations["list_app_organizations_management_v1_apps__app_id__customer_organizations_get"];
-        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -70329,35 +70311,6 @@ export interface operations {
             };
         };
     };
-    delete_app_management_v1_apps__app_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                app_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     patch_app_management_v1_apps__app_id__patch: {
         parameters: {
             query?: never;
@@ -70448,40 +70401,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AppMember"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_app_organizations_management_v1_apps__app_id__customer_organizations_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                app_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AppOrganization"][];
                 };
             };
             /** @description Validation Error */

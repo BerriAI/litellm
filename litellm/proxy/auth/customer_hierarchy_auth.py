@@ -197,7 +197,7 @@ def customer_identity_from_request(
     return identity if identity.customer_member_id is not None or identity.customer_org_alias is not None else None
 
 
-def _scope(
+def customer_scope(
     key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget | None, budget_reset_at: datetime | None = None
 ) -> CustomerScopeAuth:
     if budget is None:
@@ -221,7 +221,7 @@ def _scope(
 def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
     budget: Final = related_budget(team.budget, now)
     override: Final = related_budget(team.budget_override, now, budget.max_budget if budget is not None else None)
-    return _scope(
+    return customer_scope(
         "customer_team",
         team.customer_team_id,
         team.spend,
@@ -251,7 +251,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -259,7 +259,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
                 customer_row_reset_at(organization, now),
             ),
             *team_scopes[:1],
-            _scope(
+            customer_scope(
                 "customer_member",
                 member.customer_member_id,
                 member.spend,
@@ -292,7 +292,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -398,7 +398,7 @@ async def _accounting_scope(
     if row is None:
         return None
     values: Final = row.model_dump()
-    return _scope(
+    return customer_scope(
         key, entity_id, _SPEND.validate_python(values.get("spend", 0)), related_budget(values.get("budget"), now)
     )
 
