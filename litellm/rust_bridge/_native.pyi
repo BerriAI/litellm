@@ -235,7 +235,9 @@ class NativeModelCostMap:
         row: Mapping[str, object] | None = None,
         breakdown_row: Mapping[str, object] | None = None,
         fee_row: Mapping[str, object] | None = None,
+        tool_rows: Sequence[Mapping[str, object]] = ...,
     ) -> NativeReceipt | None: ...
+    def price_tools(self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]) -> float | None: ...
     def bound(
         self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]
     ) -> tuple[float | None, float | None]: ...

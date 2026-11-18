@@ -9,7 +9,7 @@ mod session;
 pub(crate) use fees::price_fee;
 pub(crate) use kinds::{NativeUnpriced, price_many, price_units};
 pub(crate) use query::{
-    NativeRateCard, RoutePricing, adjust, adjustment_config, bound, price, rates,
+    NativeRateCard, RoutePricing, adjust, adjustment_config, bound, price, price_tools, rates,
 };
 pub(crate) use session::price_session;
 

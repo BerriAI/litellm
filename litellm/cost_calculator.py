@@ -62,6 +62,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     SpeechDocument,
     TokenCandidateUse,
     TokenClip,
+    ToolsOfCall,
     TranscriptionDocument,
     TranslationUse,
     VectorStoreSearchDocument,
@@ -74,6 +75,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     part_costs,
     price,
     price_session,
+    price_tools,
     price_units,
     priced_usage,
     prompt_and_completion,
@@ -2011,7 +2013,7 @@ def _candidate_cost(
 ) -> float:
     """One candidate's ``completion_cost``: its token receipt with the tool fees, the Model Router fee and the row the
     stored breakdown reads, stored on the logging object."""
-    tool_fees: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+    tools, tool_rows = StandardBuiltInToolCostTracking.built_in_tool_use(
         model=model,
         response_object=completion_response,
         usage=usage,
@@ -2037,7 +2039,8 @@ def _candidate_cost(
         receipt=ReceiptFacts(
             breakdown=stored_row[0],
             breakdown_row=stored_row[1],
-            tool_fees=tool_fees,
+            tools=tools,
+            tool_rows=tool_rows,
             router_fee=None if fee_row is None else "additional",
             fee_row=fee_row,
         ),
@@ -2053,7 +2056,7 @@ def _candidate_cost(
             data_residency=data_residency,
             vertex_location=vertex_location,
             stored_row=stored_row,
-            tool_fees=tool_fees,
+            tool_fees=price_tools(ToolsOfCall(call=tools), tool_rows) or 0.0,
             fee_row=fee_row,
             adjust=adjust,
             litellm_logging_obj=litellm_logging_obj,
@@ -3210,6 +3213,51 @@ def transcription_cost(model: str, custom_llm_provider: str | None, duration: fl
     return openai_cost_per_second(model=model, custom_llm_provider=custom_llm_provider, duration=duration)
 
 
+def default_image_row_key(
+    model: str, custom_llm_provider: str | None, quality: str | None, size: str | None
+) -> tuple[str | None, int, tuple[str | None, ...]]:
+    """The ``litellm.model_cost`` key ``default_image_cost_calculator`` reads for an image of ``size`` at ``quality``,
+    ``None`` when no name it tries is a key, the image's pixels and the names it tried. Raises on a size that is not
+    two numbers."""
+    size_text: Final = size or "1024-x-1024"
+    size_str: Final = size_text.replace("x", "-x-") if "x" in size_text and "-x-" not in size_text else size_text
+    height, width = map(int, size_str.split("-x-"))
+    without_provider: Final = (
+        model.replace(f"{custom_llm_provider}/", "")
+        if custom_llm_provider and model.startswith(f"{custom_llm_provider}/")
+        else None
+    )
+    base_model_name: Final = (
+        f"{custom_llm_provider}/{size_str}/{without_provider}"
+        if without_provider is not None
+        else f"{size_str}/{model}"
+    )
+    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{without_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
+    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
+    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
+    model_with_quality_without_provider: Final = (
+        f"{quality}/{model_without_provider}" if quality else model_without_provider
+    )
+    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
+    models_to_check: Final = (
+        model_name_with_quality,
+        provider_first_model_name_with_quality,
+        base_model_name,
+        model_name_with_v2_quality,
+        model_with_quality_without_provider,
+        model_without_provider,
+        model,
+        without_provider,
+    )
+    matched: Final = next((name for name in models_to_check if name is not None and name in litellm.model_cost), None)
+    return matched, height * width, models_to_check
+
+
 def default_image_cost_calculator(
     model: str,
     custom_llm_provider: str | None = None,
@@ -3236,47 +3284,7 @@ def default_image_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Standardize size format to use "-x-"
-    size_str: str = size or "1024-x-1024"
-    size_str = size_str.replace("x", "-x-") if "x" in size_str and "-x-" not in size_str else size_str
-
-    # Parse dimensions
-    height, width = map(int, size_str.split("-x-"))
-
-    # Build model names for cost lookup
-    base_model_name = f"{size_str}/{model}"
-    model_name_without_custom_llm_provider: str | None = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
-        base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
-    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
-    provider_first_model_name_with_quality: Final = (
-        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
-        if quality and custom_llm_provider
-        else None
-    )
-
-    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
-    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
-
-    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
-
-    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
-    model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
-
-    models_to_check: Final = (
-        model_name_with_quality,
-        provider_first_model_name_with_quality,
-        base_model_name,
-        model_name_with_v2_quality,
-        model_with_quality_without_provider,
-        model_without_provider,
-        model,
-        model_name_without_custom_llm_provider,
-    )
-    matched_model: Final = next(
-        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
-    )
+    matched_model, pixels, models_to_check = default_image_row_key(model, custom_llm_provider, quality, size)
     if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
@@ -3288,7 +3296,7 @@ def default_image_cost_calculator(
             provider=custom_llm_provider,
             calculator="default",
             images=image_count,
-            pixels=height * width * image_count,
+            pixels=pixels * image_count,
             input_images=0,
         ),
         (model_info,) if model_info is not None else (),
