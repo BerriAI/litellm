@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
@@ -5180,8 +5181,21 @@ def _managed_logging_obj():
 def _provider_response_event(event_type: str, status: str) -> dict[str, object]:
     return {
         "type": event_type,
-        "response": {"id": "resp_1", "model": "gpt-5.4-mini-2026-03-17", "status": status, "output": []},
+        "response": {
+            "id": "resp_1",
+            "model": "gpt-5.4-mini-2026-03-17",
+            "status": status,
+            "instructions": "Réponds en 日本語 ✓",
+            "output": [],
+        },
     }
+
+
+class _ProviderChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: str
+    response: Mapping[str, object] | None = None
+    delta: str | None = None
 
 
 class TestResponsesWebSocketClientModel:
@@ -5197,17 +5211,18 @@ class TestResponsesWebSocketClientModel:
 
         from litellm.responses import main as responses_main
 
-        provider_frames: Final = iter(
-            json.dumps(_provider_response_event(event_type, status))
+        provider_frames: Final = tuple(
+            json.dumps(_provider_response_event(event_type, status), separators=(",", ":"), ensure_ascii=False)
             for event_type, status in (("response.created", "in_progress"), ("response.completed", "completed"))
         )
+        unread_frames: Final = iter(provider_frames)
 
         class FakeBackend:
             async def send(self, message: str) -> None:
                 pass
 
             async def recv(self, decode: bool = False) -> str:
-                frame = next(provider_frames, None)
+                frame = next(unread_frames, None)
                 if frame is None:
                     raise RuntimeError("backend closed")
                 return frame
@@ -5258,14 +5273,15 @@ class TestResponsesWebSocketClientModel:
             )
         await asyncio.sleep(0)
 
-        sent: Final = [json.loads(sent_call.args[0]) for sent_call in client_ws.send_text.await_args_list]
-        assert [event["response"]["model"] for event in sent] == [reported_model, reported_model]
+        sent_frames: Final = [sent_call.args[0] for sent_call in client_ws.send_text.await_args_list]
+        assert [json.loads(frame)["response"]["model"] for frame in sent_frames] == [reported_model, reported_model]
+        assert [json.dumps(json.loads(frame)) for frame in sent_frames] == sent_frames
         logged: Final = logging_obj.dispatch_success_handlers.await_args.args[0]
         assert {event["response"]["model"] for event in logged} == {"gpt-5.4-mini-2026-03-17"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("frame_model, reported_model", [(None, "oai-alias"), ("gpt-mini", "gpt-mini")])
-    async def test_managed_relay_sends_the_client_model_while_the_provider_chunks_keep_theirs(
+    async def test_managed_relay_sends_the_provider_frame_with_only_its_model_renamed(
         self, monkeypatch: pytest.MonkeyPatch, frame_model: str | None, reported_model: str
     ):
         from unittest.mock import AsyncMock
@@ -5274,10 +5290,10 @@ class TestResponsesWebSocketClientModel:
         from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
 
         provider_chunks: Final = (
-            _provider_response_event("response.created", "in_progress"),
-            {"type": "response.in_progress", "response": {"id": "resp_1", "status": "in_progress"}},
-            {"type": "response.output_text.delta", "delta": "hi"},
-            _provider_response_event("response.completed", "completed"),
+            _ProviderChunk.model_validate(_provider_response_event("response.created", "in_progress")),
+            _ProviderChunk(type="response.in_progress", response={"id": "resp_1", "status": "in_progress"}),
+            _ProviderChunk(type="response.output_text.delta", delta="hi"),
+            _ProviderChunk.model_validate(_provider_response_event("response.completed", "completed")),
         )
 
         async def provider_stream():
@@ -5300,13 +5316,11 @@ class TestResponsesWebSocketClientModel:
             json.dumps(frame_body if frame_model is None else {**frame_body, "model": frame_model})
         )
 
-        sent: Final = [json.loads(sent_call.args[0]) for sent_call in websocket.send_text.await_args_list]
-        assert [event.get("response", {}).get("model") for event in sent] == [reported_model, None, None, reported_model]
-        assert [chunk.get("response", {}).get("model") for chunk in provider_chunks] == [
-            "gpt-5.4-mini-2026-03-17",
-            None,
-            None,
-            "gpt-5.4-mini-2026-03-17",
+        assert [sent_call.args[0] for sent_call in websocket.send_text.await_args_list] == [
+            chunk.model_dump_json(exclude_none=True).replace(
+                '"model":"gpt-5.4-mini-2026-03-17"', f'"model":"{reported_model}"'
+            )
+            for chunk in provider_chunks
         ]
 
     @pytest.mark.asyncio

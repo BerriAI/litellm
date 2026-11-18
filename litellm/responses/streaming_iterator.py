@@ -2386,14 +2386,18 @@ def _json_object_or_none(message: object) -> Mapping[str, object] | None:
 _NESTED_RESPONSE_MARKER: Final = '"response"'
 
 
-def _with_client_response_model(frame: str, client_model: str | None) -> str:
+def _compact_json(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def _with_client_response_model(frame: str, client_model: str | None, encode: Callable[[object], str]) -> str:
     if not client_model or _NESTED_RESPONSE_MARKER not in frame:
         return frame
     event: Final = _json_object_or_none(frame)
     response: Final = None if event is None else event.get("response")
     if event is None or not _is_json_object(response) or response.get("model") in (None, client_model):
         return frame
-    return json.dumps({**event, "response": {**response, "model": client_model}})
+    return encode({**event, "response": {**response, "model": client_model}})
 
 
 def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
@@ -2785,7 +2789,7 @@ class ResponsesWebSocketStreaming:
                 # guardrails does not appear in success logs.
                 await self._record_backend_event(wrapped_str)
 
-                await self.websocket.send_text(_with_client_response_model(wrapped_str, self.client_model))
+                await self.websocket.send_text(_with_client_response_model(wrapped_str, self.client_model, json.dumps))
 
         except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
@@ -3567,7 +3571,7 @@ class ManagedResponsesWebSocketHandler:
                     pass
             try:
                 await self.websocket.send_text(
-                    _with_client_response_model(self._unmask_for_client(serialized), client_model)
+                    _with_client_response_model(self._unmask_for_client(serialized), client_model, _compact_json)
                 )
             except Exception as send_exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
