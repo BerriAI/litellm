@@ -82,6 +82,7 @@ export default function CustomerBudgetGroups({
       <fieldset disabled={pending}>
         <CustomerBudgetGroupsEditor
           groups={groups}
+          showHeading={false}
           defaultGroupId={defaultGroupId}
           disabled={pending}
           onChange={changeGroups}
@@ -92,15 +93,15 @@ export default function CustomerBudgetGroups({
           {error}
         </p>
       )}
-      <div className="flex gap-3">
-        <Button type="submit" disabled={pending || !draft || unchanged}>
-          {t("customerPortal.hierarchy.save")}
-        </Button>
+      <div className="flex justify-end gap-2 border-t pt-4">
         {draft && (
           <Button type="button" variant="outline" disabled={pending} onClick={() => void reload()}>
             {t("customerPortal.budgetGroups.discard")}
           </Button>
         )}
+        <Button type="submit" disabled={pending || !draft || unchanged}>
+          {t("customerPortal.hierarchy.save")}
+        </Button>
       </div>
     </form>
   );

@@ -4088,6 +4088,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/nvidia_nim/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Nim Models
+         * @description List upstream NIM models using a saved credential or submitted connection settings.
+         *
+         *     Requires a proxy administrator. Returns model IDs only, without asserting inference access,
+         *     pricing or capabilities. Upstream failures return unavailable so the UI can use its catalog.
+         */
+        post: operations["discover_nim_models_credentials_nvidia_nim_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/user_connections": {
         parameters: {
             query?: never;
@@ -10171,6 +10194,46 @@ export interface paths {
          * @description The distinct internal users appearing in spend logs the caller can read.
          */
         get: operations["list_spend_log_users_management_v1_spend_logs_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/teams/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Team Members
+         * @description One team's members, paged, sortable and filterable. Readable by whoever can read the team
+         *     through `/team/info`: proxy admins and admin viewers, a key of the team, its members, and
+         *     admins of its organization. An unknown team is a 404.
+         *
+         *     Each row is a roster entry (`user_id`, `user_email`, `user_alias`, `role`) with the fields
+         *     `/team/info` reports for that member in `team_memberships` (`spend`, `total_spend`,
+         *     `budget_id`, `litellm_budget_table`, `budget_source`). `/team/info` returns the whole roster
+         *     on every call; this route reads one page of it.
+         *
+         *     `sort` takes a comma-separated list of `user_id`, `user_email`, `user_alias`, `role`, `spend`,
+         *     `total_spend`, `max_budget` (the member's own limit, else the team default), `budget_reset_at`
+         *     or `position` (roster order, the default and the tiebreaker), each optionally prefixed with `-`
+         *     for descending. `q` is a case-insensitive substring match on `user_id`, `user_email` and
+         *     `user_alias`. `page_size` defaults to 50 and is capped at 100. Filters are
+         *     `filter[role][eq|in]` and `filter[user_id][eq|in]`. `in` splits its value on commas, so name a `user_id`
+         *     that contains a comma with `eq`.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=jane&sort=-spend&filter[role][eq]=user'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *     ```
+         */
+        get: operations["list_team_members_management_v1_teams__team_id__members_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -18299,6 +18362,7 @@ export interface paths {
          *
          *     Parameters:
          *     - team_id: str - Required. The unique identifier of the team to get info on.
+         *     - include_members: bool - Optional, default true. Pass false to get the team's settings without its roster.
          *
          *     ```
          *     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here'     --header 'Authorization: Bearer your_api_key_here'
@@ -36848,6 +36912,13 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
+        /** ListResponse[TeamMemberListItem] */
+        ListResponse_TeamMemberListItem_: {
+            /** Data */
+            data: components["schemas"]["TeamMemberListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /** ListResponse[Team] */
         ListResponse_Team_: {
             /** Data */
@@ -42690,6 +42761,32 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** NimModelDiscoveryConnection */
+        NimModelDiscoveryConnection: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** NimModelDiscoveryRequest */
+        NimModelDiscoveryRequest: {
+            /** Credential Name */
+            credential_name?: string | null;
+            credential_values?: components["schemas"]["NimModelDiscoveryConnection"] | null;
+        };
+        /** NimModelDiscoveryResponse */
+        NimModelDiscoveryResponse: {
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "unavailable";
         };
         /** NoulAnswer */
         NoulAnswer: {
@@ -51050,6 +51147,38 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /** TeamMemberListItem */
+        TeamMemberListItem: {
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Litellm Budget Table */
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Role */
+            role: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Team Id */
+            team_id: string;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * TeamMemberRef
@@ -62093,6 +62222,39 @@ export interface operations {
             };
         };
     };
+    discover_nim_models_credentials_nvidia_nim_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NimModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NimModelDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_user_connections_credentials_user_connections_get: {
         parameters: {
             query?: never;
@@ -70730,6 +70892,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_team_members_management_v1_teams__team_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_TeamMemberListItem_"];
                 };
             };
             /** @description Validation Error */
@@ -81773,6 +81966,8 @@ export interface operations {
                 team_id?: string;
                 /** @description Limit the number of keys returned */
                 key_limit?: number | null;
+                /** @description Set to false to skip loading the roster: `team_info.members_with_roles` and `team_memberships` come back empty. Page through members with `GET /management/v1/teams/{team_id}/members` */
+                include_members?: boolean;
             };
             header?: never;
             path?: never;

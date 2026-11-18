@@ -1689,6 +1689,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         proxy_batch_polling_interval, \
         shared_aiohttp_session
     global ui_login_enabled  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
+    global database_url_configured  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
     import json
 
     resources.callback(_forget_prisma_client)
@@ -1796,9 +1797,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Final[str | None] = get_secret("DATABASE_URL", None)
+        database_url_configured = isinstance(_db_url, str) and _db_url.strip() != ""  # rebind-ok: set once at startup
         prisma_client = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await ProxyStartupEvent.setup_prisma_client(
-                database_url=_db_url,
+                database_url=_db_url if database_url_configured else None,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_cache=user_api_key_cache,
             )
@@ -3344,6 +3346,7 @@ disable_spend_logs = False
 litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()
 jwt_http_handler: Final = JwksHTTPHandler()
 ui_login_enabled: bool = True
+database_url_configured: bool = False  # rebind-ok: set once at startup so auth does not look the secret up per request
 prompt_injection_detection_obj: Final[OPTIONAL_PromptInjectionDetection | None] = None
 store_model_in_db: bool = False
 open_telemetry_logger: OpenTelemetry | None = None
