@@ -22,7 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.auth_checks import get_jwt_key_mapping_object
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import hash_token
-from litellm.repositories.table_repositories import JWTKeyMappingRepository
+from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
 if TYPE_CHECKING:

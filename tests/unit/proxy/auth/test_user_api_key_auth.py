@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ProxyErrorTypes,
     ProxyException,
 )
 from litellm.proxy.auth import auth_checks
@@ -52,10 +53,20 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import hash_token
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerRequestIdentity, CustomerScopeAuth
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerHierarchyAuth,
+    CustomerRequestIdentity,
+    CustomerScopeAuth,
+)
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @pytest.mark.asyncio
@@ -183,7 +194,10 @@ def test_custom_header_auth_logs_names_without_provider_or_gateway_credentials(
     request: Final = StarletteRequest(
         {
             "type": "http",
-            "headers": [(b"x-litellm-api-key", f"Bearer {gateway}".encode()), (b"authorization", f"Bearer {provider}".encode())],
+            "headers": [
+                (b"x-litellm-api-key", f"Bearer {gateway}".encode()),
+                (b"authorization", f"Bearer {provider}".encode()),
+            ],
         }
     )
     monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
@@ -226,6 +240,7 @@ def _serve_jwks(monkeypatch: pytest.MonkeyPatch, litellm_jwtauth: LiteLLM_JWTAut
 )
 async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
     monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
     model: str,
     fallbacks: list[str],
     allowed: bool,
@@ -233,12 +248,11 @@ async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
     server: Final = litellm.proxy.proxy_server
     cache: Final = UserApiKeyCache()
     key: Final = "sk-central-model-check"
-    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), models=["model-a"])
-    database: Final = MagicMock(get_data=AsyncMock(side_effect=(stored, AssertionError("unexpected cache miss"))))
+    rust_auth_stores.key.rows[server.hash_token(key)] = {"token": server.hash_token(key), "models": ["model-a"]}
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", cache)
-    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     for _ in range(2):
@@ -260,14 +274,52 @@ async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
                 await user_api_key_auth(request=request, api_key=f"Bearer {key}")
             assert denied.value.code == "403"
             assert "model-b" in denied.value.message
+    assert rust_auth_stores.key.lookups == [(server.hash_token(key), False)]
 
 
 @pytest.mark.asyncio
-async def test_scim_deactivation_precedes_central_key_model_denial(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_endpoint_reads_the_auth_its_dependency_resolved(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+) -> None:
+    from fastapi import Depends, FastAPI
+
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    server: Final = litellm.proxy.proxy_server
+    key: Final = "sk-request-auth"
+    rust_auth_stores.key.rows[server.hash_token(key)] = {"token": server.hash_token(key), "key_alias": "alias-a"}
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    app: Final = FastAPI()
+
+    @app.post("/chat/completions")
+    async def endpoint(auth: UserAPIKeyAuth = Depends(user_api_key_auth)) -> dict[str, object]:
+        bound: Final = REQUEST_AUTH.get()
+        return {"same": bound is auth, "key_alias": None if bound is None else bound.key_alias}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        response: Final = await client.post(
+            "/chat/completions", json={"model": "m"}, headers={"Authorization": f"Bearer {key}"}
+        )
+    assert response.json() == {"same": True, "key_alias": "alias-a"}
+
+
+@pytest.mark.asyncio
+async def test_scim_deactivation_precedes_central_key_model_denial(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+) -> None:
     server: Final = litellm.proxy.proxy_server
     key: Final = "sk-deactivated-owner"
     cache: Final = UserApiKeyCache()
-    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), models=["model-a"], user_id="inactive-owner")
+    rust_auth_stores.key.rows[server.hash_token(key)] = {
+        "token": server.hash_token(key),
+        "models": ["model-a"],
+        "user_id": "inactive-owner",
+    }
     cache.set_cache(
         "inactive-owner",
         LiteLLM_UserTable(user_id="inactive-owner", metadata={"scim_active": False}),
@@ -276,7 +328,7 @@ async def test_scim_deactivation_precedes_central_key_model_denial(monkeypatch: 
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", cache)
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
@@ -859,9 +911,9 @@ def test_is_api_route_allowed(route, user_role, expected_result):
 
 
 @pytest.mark.asyncio
-async def test_auth_not_connected_to_db():
+async def test_auth_not_connected_to_db(monkeypatch: pytest.MonkeyPatch):
     """
-    ensure requests don't fail when `prisma_client` = None
+    ensure requests don't fail when a configured database is not connected
     """
     from fastapi import Request
     from starlette.datastructures import URL
@@ -874,6 +926,7 @@ async def test_auth_not_connected_to_db():
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "database_url_configured", True)
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
@@ -887,6 +940,11 @@ async def test_auth_not_connected_to_db():
     print("got valid token", valid_token)
     assert valid_token.key_name == "failed-to-connect-to-db"
     assert valid_token.token == "failed-to-connect-to-db"
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "database_url_configured", False)
+    with pytest.raises(ProxyException) as no_database:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    assert (no_database.value.code, no_database.value.type) == ("401", ProxyErrorTypes.auth_error)
 
 
 def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
@@ -1627,7 +1685,7 @@ async def test_auth_custom_key_header_precedence_and_fallback(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom_header_value", [b"Bearer sk-wrong", b""])
 async def test_auth_rejects_wrong_or_empty_present_custom_header(
-    custom_header_value: bytes, monkeypatch: pytest.MonkeyPatch
+    custom_header_value: bytes, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ):
     from fastapi import Request
     from starlette.datastructures import URL
@@ -1637,7 +1695,7 @@ async def test_auth_rejects_wrong_or_empty_present_custom_header(
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-lit9211-master")
     monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Custom-Key"})
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=None)))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
 
     request = Request(
         scope={
@@ -2280,7 +2338,6 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     assert user_model_budget_check.await_count == (1 if expect_user_model_budget_check else 0)
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", [{}, {"scope": "litellm_proxy_admin"}])
 @pytest.mark.parametrize(
@@ -2319,6 +2376,7 @@ async def test_jwt_links_the_sign_in_email_only_when_the_token_does_not_mark_it_
         )
 
     assert table.row("owner").sso_user_id == ("idp-new" if links else None)
+
 
 def _qa_websocket(messages):
     async def receive():
@@ -2563,9 +2621,7 @@ async def _presented_key(pairs: tuple[tuple[str, str], ...]) -> str | None:
         pytest.param(
             (("authorization", "Bearer sk-2"), ("x-litellm-api-key", "sk-1")), "sk-1", id="litellm_header_wins"
         ),
-        pytest.param(
-            (("x-api-key", "sk-2"), ("authorization", "Bearer sk-1")), "sk-1", id="authorization_before_raw"
-        ),
+        pytest.param((("x-api-key", "sk-2"), ("authorization", "Bearer sk-1")), "sk-1", id="authorization_before_raw"),
         pytest.param((("x-api-key", "sk-2"), ("api-key", "sk-1")), "sk-1", id="azure_before_anthropic"),
         pytest.param((("authorization", ""), ("x-api-key", "sk-1")), "sk-1", id="empty_header_is_absent"),
         pytest.param(
@@ -2601,14 +2657,14 @@ async def test_a_request_without_a_key_is_told_no_key_was_passed(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_user(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ) -> None:
     from litellm.proxy.auth import customer_hierarchy_auth as hierarchy_module
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 
     server: Final = litellm.proxy.proxy_server
     key: Final = "sk-hierarchy-member"
-    stored: Final = UserAPIKeyAuth(token=server.hash_token(key))
+    rust_auth_stores.key.rows[server.hash_token(key)] = {"token": server.hash_token(key)}
     hierarchy: Final = CustomerHierarchyAuth(
         customer_member_id="m1",
         customer_team_id="t1",
@@ -2620,7 +2676,7 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
@@ -2647,7 +2703,7 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key_org,allowed", (("o1", True), ("o2", False), (None, True)))
 async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
-    monkeypatch: pytest.MonkeyPatch, key_org: str | None, allowed: bool
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores, key_org: str | None, allowed: bool
 ) -> None:
     from litellm.proxy.auth import customer_hierarchy_auth as hierarchy_module
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
@@ -2655,7 +2711,7 @@ async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
     server: Final = litellm.proxy.proxy_server
     key: Final = "sk-hierarchy-scoped"
     metadata: Final = {"customer_org_id": key_org} if key_org is not None else {}
-    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), metadata=metadata)
+    rust_auth_stores.key.rows[server.hash_token(key)] = {"token": server.hash_token(key), "metadata": metadata}
     hierarchy: Final = CustomerHierarchyAuth(
         customer_member_id="m1",
         customer_team_id="t1",
@@ -2666,7 +2722,7 @@ async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
@@ -2695,14 +2751,14 @@ async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
 
 @pytest.mark.asyncio
 async def test_customer_model_access_is_checked_against_the_model_the_route_serves(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ) -> None:
     from litellm.proxy.auth import customer_hierarchy_auth as hierarchy_module
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 
     server: Final = litellm.proxy.proxy_server
     key: Final = "sk-hierarchy-route-model"
-    stored: Final = UserAPIKeyAuth(token=server.hash_token(key))
+    rust_auth_stores.key.rows[server.hash_token(key)] = {"token": server.hash_token(key)}
     hierarchy: Final = CustomerHierarchyAuth(
         customer_member_id="m1",
         customer_team_id="t1",
@@ -2713,7 +2769,7 @@ async def test_customer_model_access_is_checked_against_the_model_the_route_serv
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
