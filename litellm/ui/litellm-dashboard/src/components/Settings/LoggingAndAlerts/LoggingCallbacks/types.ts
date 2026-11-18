@@ -9,6 +9,7 @@ export interface AlertingObject {
   type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
   read_only?: boolean;
+  source?: "config";
 }
 
 export interface AlertingVariables {

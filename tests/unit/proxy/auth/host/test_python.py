@@ -28,6 +28,7 @@ from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 JWKS_URL: Final = "https://idp.example/jwks"
 JWT_AUTH: Final = LiteLLM_JWTAuth(user_id_jwt_field="sub")
@@ -104,32 +105,28 @@ async def test_newer_cached_team_values_replace_the_keys_copy() -> None:
     assert (token.token, token.team_id, token.team_models, token.team_max_budget) == ("hashed", "t", ["new"], 5.0)
 
 
-class _FailingTeams:
-    def __init__(self, error: Exception) -> None:
-        self.error: Final = error
-
-    async def find_unique(self, **_: object) -> None:
-        raise self.error
-
-
-def _host_whose_team_read_fails(error: Exception) -> PythonAuthHost:
-    tables: Final = SimpleNamespace(litellm_teamtable=_FailingTeams(error))
-    return replace(_host(), prisma_client=SimpleNamespace(db=tables, writer_db=tables))  # pyright: ignore[reportArgumentType]  # only the team table is read
+def _host_whose_team_read_fails(monkeypatch: pytest.MonkeyPatch, error: Exception) -> PythonAuthHost:
+    install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"team-a": error})))
+    return replace(_host(), prisma_client=SimpleNamespace())  # pyright: ignore[reportArgumentType]  # the team read goes through the repository
 
 
 @pytest.mark.asyncio
-async def test_a_team_read_the_database_cannot_serve_raises_the_connection_error() -> None:
+async def test_a_team_read_the_database_cannot_serve_raises_the_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     outage: Final = httpx.ConnectError("connection refused")
 
     with pytest.raises(httpx.ConnectError) as raised:
-        await _host_whose_team_read_fails(outage).team("team-a", upsert=False)
+        await _host_whose_team_read_fails(monkeypatch, outage).team("team-a", upsert=False)
 
     assert raised.value is outage
 
 
 @pytest.mark.asyncio
-async def test_a_team_read_that_fails_for_another_reason_reads_as_unreadable() -> None:
-    read: Final = await _host_whose_team_read_fails(ValueError("row does not validate")).team("team-a", upsert=False)
+async def test_a_team_read_that_fails_for_another_reason_reads_as_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
+    read: Final = await _host_whose_team_read_fails(monkeypatch, ValueError("row does not validate")).team(
+        "team-a", upsert=False
+    )
 
     assert read is TeamMissing.UNREADABLE
 

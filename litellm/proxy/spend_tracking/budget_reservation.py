@@ -55,8 +55,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin_to_estimate,
-    customer_cost_margin,
-    key_has_customer,
+    key_customer_cost_margin,
 )
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
@@ -301,7 +300,7 @@ async def reserve_budget_for_request(
             input_token_counts=input_token_counts,
             path_params=path_params,
         ),
-        customer_cost_margin(key_has_customer(valid_token, valid_token.customer_hierarchy is not None)),
+        key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -321,7 +320,7 @@ async def reserve_budget_for_request(
                 input_token_counts=input_token_counts,
                 path_params=path_params,
             ),
-            customer_cost_margin(key_has_customer(valid_token, valid_token.customer_hierarchy is not None)),
+            key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )

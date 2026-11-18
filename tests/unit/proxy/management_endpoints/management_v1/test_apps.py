@@ -36,7 +36,7 @@ def client(
 
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
     http, store = client()
-    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None}
+    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None, "auto_create_customers_without_app": True}
     assert http.get("/management/v1/apps/resources").json() == []
     preview: Final = http.get("/management/v1/apps/resources", params={"resource_type": "team"})
     assert preview.status_code == 200 and len(preview.json()) == 2
@@ -204,4 +204,8 @@ def test_app_definition_uses_database_or_reports_unavailability(
     with TestClient(app) as http:
         response: Final = http.get("/management/v1/apps/definition")
     assert response.status_code == (200 if available else 503)
-    assert response.json() == ({"resource_type": None} if available else {"detail": "Database unavailable."})
+    assert response.json() == (
+        {"resource_type": None, "auto_create_customers_without_app": True}
+        if available
+        else {"detail": "Database unavailable."}
+    )

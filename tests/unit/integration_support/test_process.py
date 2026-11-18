@@ -130,6 +130,12 @@ def test_pool_limit_for_prisma_leaves_prisma_its_connections_after_the_rust_shar
     assert pool_limit_for_prisma(prisma) == limit
 
 
+@pytest.mark.parametrize("prisma", (0, -1))
+def test_pool_limit_for_prisma_refuses_fewer_than_one_prisma_connection(prisma: int) -> None:
+    with pytest.raises(ValueError, match="at least one connection"):
+        pool_limit_for_prisma(prisma)
+
+
 @pytest.mark.parametrize("limit", (1, 5, 0, None, "", "bad"))
 def test_worker_configuration_preserves_explicit_pool_limits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, limit: int | str | None

@@ -42,3 +42,16 @@ export const appBudgetValue = (fields: AppBudgetFields, original?: Budget | null
   }
   return { ok: true, value: { ...original, ...parsed, budget_limits: windows.length ? windows : null } } as const;
 };
+
+const MAX_SURCHARGE_PERCENT = 1000;
+
+export const appSurchargeField = (margin?: number | null): string =>
+  margin === null || margin === undefined ? "" : String(Number((margin * 100).toFixed(6)));
+
+export const appSurchargeValue = (text: string): { ok: true; value: number | null } | { ok: false } => {
+  const trimmed = text.trim();
+  if (trimmed === "") return { ok: true, value: null };
+  const percent = Number(trimmed);
+  if (!Number.isFinite(percent) || percent < 0 || percent > MAX_SURCHARGE_PERCENT) return { ok: false };
+  return { ok: true, value: Number((percent / 100).toFixed(8)) };
+};

@@ -170,7 +170,11 @@ class AppStore:
 
     async def definition(self) -> AppDefinition:
         row: Final = await self.config.find_unique(where={"param_name": _DEFINITION_PARAM})
-        return AppDefinition(resource_type=self.definition_state(row).resource_type)
+        state: Final = self.definition_state(row)
+        return AppDefinition(
+            resource_type=state.resource_type,
+            auto_create_customers_without_app=state.auto_create_customers_without_app,
+        )
 
     async def lock_definition(self) -> _DefinitionState:
         from prisma import Json
@@ -191,18 +195,26 @@ class AppStore:
         from prisma import Json
 
         current: Final = await self.lock_definition()
-        if data.resource_type == current.resource_type:
-            return data
-        if current.locked or await self.apps.count(where={"resource_type": {"not": None}}):
+        without_app: Final = (
+            data.auto_create_customers_without_app
+            if "auto_create_customers_without_app" in data.model_fields_set
+            else current.auto_create_customers_without_app
+        )
+        stored: Final = AppDefinition(resource_type=data.resource_type, auto_create_customers_without_app=without_app)
+        if data.resource_type != current.resource_type and (
+            current.locked or await self.apps.count(where={"resource_type": {"not": None}})
+        ):
             return AppFailure(
                 409,
                 "The app resource definition cannot change after a resource has been configured.",
             )
+        if stored == AppDefinition.model_validate(current.model_dump(exclude={"locked"})):
+            return stored
         await self.config.update(
             where={"param_name": _DEFINITION_PARAM},
-            data={"param_value": Json({"resource_type": (data.resource_type.value if data.resource_type else None)})},
+            data={"param_value": Json({**stored.model_dump(mode="json"), "locked": current.locked})},
         )
-        return data
+        return stored
 
     def resource_table(self, resource_type: AppResourceType) -> tuple[TableActions[PrismaRecord], str]:
         match resource_type:
@@ -386,7 +398,15 @@ class AppStore:
         )
         await self.config.update(
             where={"param_name": _DEFINITION_PARAM},
-            data={"param_value": Json({"resource_type": definition.resource_type.value, "locked": True})},
+            data={
+                "param_value": Json(
+                    {
+                        "resource_type": definition.resource_type.value,
+                        "locked": True,
+                        "auto_create_customers_without_app": definition.auto_create_customers_without_app,
+                    }
+                )
+            },
         )
         return await self.response(row)
 
@@ -417,6 +437,8 @@ class AppStore:
                 if "default_customer_member_budget" in data.model_fields_set
                 else {}
             ),
+            **({"auto_create_customers": data.auto_create_customers} if data.auto_create_customers is not None else {}),
+            **({"customer_margin": data.customer_margin} if "customer_margin" in data.model_fields_set else {}),
             "updated_by": actor,
         }
 

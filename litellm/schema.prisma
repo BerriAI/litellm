@@ -70,6 +70,8 @@ model LiteLLM_AppTable {
   default_tier_budget LiteLLM_BudgetTable? @relation("AppDefaultTier", fields: [default_tier_budget_id], references: [budget_id])
   default_customer_member_budget_id String?
   default_customer_member_budget LiteLLM_BudgetTable? @relation("AppDefaultMember", fields: [default_customer_member_budget_id], references: [budget_id])
+  auto_create_customers Boolean @default(true)
+  customer_margin Float?
   customer_organizations LiteLLM_AppCustomerOrgTable[]
   customer_members LiteLLM_AppCustomerMemberTable[]
   @@unique([resource_type, resource_id])

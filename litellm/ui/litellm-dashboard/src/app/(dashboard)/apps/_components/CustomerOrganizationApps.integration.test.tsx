@@ -143,8 +143,9 @@ describe("customer app budgets", () => {
     const user = userEvent.setup();
     render(<CustomerOrganizationApps organizationId="org-1" organizationAlias="Customer Y" />);
     await user.click(await screen.findByRole("button", { name: "Add app budget" }));
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
-    expect(screen.getByRole("textbox", { name: "Customer organization" })).toHaveValue("Customer Y");
+    const dialog = within(await screen.findByRole("dialog", { name: "Add app budget" }));
+    await chooseAppOption(user, dialog.getByRole("combobox", { name: "Select an app" }), "chat");
+    expect(dialog.getByRole("textbox", { name: "Customer organization" })).toHaveValue("Customer Y");
     await chooseAppOption(user, screen.getByRole("combobox", { name: "Budget source" }), "Budget group");
     await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), "Standard");
     const member = within(screen.getByRole("group", { name: "Per-member default for this customer" }));
@@ -166,6 +167,25 @@ describe("customer app budgets", () => {
       customer_member_budget: { rpm_limit: 60 },
     });
     expect(await screen.findByRole("button", { name: "Edit budget for chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("should edit in a modal and start a fresh selection after canceling", async () => {
+    bound = true;
+    assigned = true;
+    const user = userEvent.setup();
+    render(<CustomerOrganizationApps organizationId="org-1" organizationAlias="Customer Y" />);
+    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Budget for chat" }));
+    expect(dialog.getByRole("textbox", { name: "Customer organization" })).toHaveValue("Customer Y");
+    expect(dialog.getByRole("textbox", { name: "App", exact: true })).toHaveValue("chat");
+    expect(dialog.getByRole("combobox", { name: "Budget source" })).toHaveValue("Budget group");
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Add app budget" }));
+    const fresh = within(await screen.findByRole("dialog", { name: "Add app budget" }));
+    expect(fresh.getByRole("combobox", { name: "Select an app" })).toHaveValue("");
+    expect(fresh.queryByRole("textbox", { name: "Customer organization" })).not.toBeInTheDocument();
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
   });
 
   it("should save a custom budget without creating a tier or changing the global customer budget", async () => {
