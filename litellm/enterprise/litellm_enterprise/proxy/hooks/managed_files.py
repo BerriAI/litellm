@@ -33,7 +33,7 @@ from litellm_enterprise.proxy.common_utils.managed_object_attribution import cre
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, Unpack
+from typing_extensions import ReadOnly, TypeIs, Unpack
 
 import litellm
 from litellm import Router, verbose_logger
@@ -51,7 +51,7 @@ from litellm.constants import (
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -229,14 +229,17 @@ def _gemini_tool_result_file_ids_from_responses_input(input_data: object) -> Ite
         tool_output_to_chat_content,
     )
 
-    if not isinstance(input_data, list):
+    items: Final = as_object_list(input_data)
+    if items is None:
         return
-    for item in input_data:
-        fields: Final = as_str_mapping(item)
-        if fields is None:
+    for item in items:
+        if (fields := as_str_mapping(item)) is None:
             continue
-        item_type: Final = fields.get("type")
-        if not isinstance(item_type, str) or item_type not in TOOL_CALL_OUTPUT_ITEM_TYPES or not fields.get("call_id"):
+        if (
+            not isinstance((item_type := fields.get("type")), str)
+            or item_type not in TOOL_CALL_OUTPUT_ITEM_TYPES
+            or not fields.get("call_id")
+        ):
             continue
         try:
             output = tool_output_to_chat_content(fields.get("output"))
@@ -248,6 +251,10 @@ def _gemini_tool_result_file_ids_from_responses_input(input_data: object) -> Ite
                 file_id = _chat_message_file_id(part, "tool")
                 if file_id is not None:
                     yield file_id
+
+
+def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
+    return isinstance(value, Iterable)
 
 
 def _is_transient_file_retrieve_error(error: Exception) -> bool:
@@ -1833,29 +1840,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
             # Handle managed files in responses API input and tools
-            file_ids = []
+            responses_file_ids: Final[list[str]] = []
 
             # Extract file IDs from input parameter
             input_data = data.get("input")
             if input_data:
                 await self.check_file_ids_access(
-                    list(_gemini_tool_result_file_ids_from_responses_input(input_data)),
+                    list(_gemini_tool_result_file_ids_from_responses_input(_keyed_get(data, "input"))),
                     user_api_key_dict,
                     include_gemini_files_api_uris=True,
                 )
-                file_ids.extend(self.get_file_ids_from_responses_input(input_data))
+                responses_file_ids.extend(self.get_file_ids_from_responses_input(input_data))
 
             # Extract file IDs from tools parameter (e.g., code_interpreter container)
             tools = data.get("tools")
             if tools:
-                file_ids.extend(self.get_file_ids_from_responses_tools(tools))
+                responses_file_ids.extend(self.get_file_ids_from_responses_tools(tools))
 
-            if file_ids:
+            if responses_file_ids:
                 # Check user has access to all managed files
-                await self.check_file_ids_access(file_ids, user_api_key_dict, include_gemini_files_api_uris=True)
+                await self.check_file_ids_access(
+                    responses_file_ids, user_api_key_dict, include_gemini_files_api_uris=True
+                )
 
                 model_file_id_mapping = await self.get_model_file_id_mapping(
-                    file_ids, user_api_key_dict.parent_otel_span
+                    responses_file_ids, user_api_key_dict.parent_otel_span
                 )
                 data["model_file_id_mapping"] = model_file_id_mapping
 
@@ -2012,15 +2021,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     @staticmethod
     def _iter_file_ids_from_messages(messages: Sequence[AllMessageValues]) -> Iterator[str]:
         for message in messages:
-            role: Final = message.get("role")
-            if role not in ("user", "tool", "function"):
+            if (role := message.get("role")) not in ("user", "tool", "function"):
                 continue
-            content: Final = message.get("content")
-            if not isinstance(content, Iterable) or isinstance(content, (str, Mapping)):
+            if not _is_object_iterable(content := _keyed_get(message, "content")) or isinstance(
+                content, (str, Mapping)
+            ):
                 continue
             for part in content:
-                file_id: Final = _chat_message_file_id(part, role)
-                if file_id is not None:
+                if (file_id := _chat_message_file_id(part, role)) is not None:
                     yield file_id
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
