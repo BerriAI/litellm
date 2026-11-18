@@ -1,4 +1,3 @@
-import ast
 import contextvars
 import functools
 import inspect
@@ -10,7 +9,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
@@ -738,43 +737,9 @@ def _try_parse_json_message(message: str) -> dict[str, object] | None:
     return parsed
 
 
-def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
-    """
-    Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
-    the message. Handles patterns like:
-    "get_available_deployment for model: X, Selected deployment: {'model_name': '...', ...} for model: X"
-    Uses ast.literal_eval for safe parsing. Returns the parsed dict or None.
-    """
-    if not message or not isinstance(message, str) or "{" not in message:
-        return None
-    i = 0
-    while i < len(message):
-        start = message.find("{", i)
-        if start == -1:
-            break
-        depth = 0
-        for j in range(start, len(message)):
-            c = message[j]
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    substr = message[start : j + 1]
-                    try:
-                        result: object = _DECODED_LOG_PAYLOAD.validate_python(ast.literal_eval(substr))
-                        if isinstance(result, dict) and len(result) > 0:
-                            return result
-                    except (ValueError, SyntaxError, TypeError):
-                        pass
-                    break
-        i = start + 1
-    return None
-
-
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
@@ -782,10 +747,44 @@ def _get_standard_record_attrs() -> frozenset:
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
 _NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
 
-# CorrelationContextFilter is the only legitimate source for these two JSON fields;
-# see JsonFormatter.format() for why they're excluded from the generic message-content
-# and extra-attribute promotion paths.
-_RESERVED_CORRELATION_FIELDS: Final = frozenset(("trace_id", "session_id"))
+_UNPROMOTABLE_MESSAGE_KEYS: Final = frozenset(("trace_id", "session_id", "litellm_call_id", "stacktrace"))
+_RESERVED_JSON_LOG_KEYS: Final = (
+    _NON_EXTRA_RECORD_ATTRS
+    | _UNPROMOTABLE_MESSAGE_KEYS
+    | frozenset(("message", "asctime", "level", "timestamp", "component", "logger"))
+)
+
+
+def _object_mapping(source: object) -> Mapping[object, object]:
+    return source if isinstance(source, Mapping) else MappingProxyType({})
+
+
+def _stdout_sized_text(text: str) -> str:
+    base64_limit: Final = _get_max_base64_length_stdout_log()
+    text_limit: Final = _get_max_string_length_stdout_log()
+    collapsed: Final = _collapse_base64_runs(text, base64_limit) if base64_limit > 0 else text
+    return _truncate_for_stdout_log(collapsed, text_limit) if 0 < text_limit < len(collapsed) else collapsed
+
+
+def _stdout_sized(value: object) -> object:
+    prepared: Final = safe_json_structure(value)
+    return _replace_string_leaves(prepared, (_stdout_sized_text(text) for _, text in _string_leaves(None, prepared)))
+
+
+def json_log_fields(source: object) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: _stdout_sized(value)
+            for key, value in _object_mapping(source).items()
+            if isinstance(key, str) and "\x00" not in key and key not in _RESERVED_JSON_LOG_KEYS
+        }
+    )
+
+
+def _exception_detail_fields(record: logging.LogRecord) -> Mapping[str, object]:
+    exception: Final = record.exc_info[1] if record.exc_info else None
+    detail: Final[object] = getattr(exception, "detail", None)
+    return json_log_fields(detail)
 
 
 class JsonFormatter(Formatter):
@@ -797,57 +796,33 @@ class JsonFormatter(Formatter):
         dt: Final = datetime.fromtimestamp(record.created)
         return dt.isoformat()
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
-        json_record: Final[dict[str, object]] = {
-            "message": message_str,
-            "level": record.levelname,
-            "timestamp": self.formatTime(record),
+        fixed_fields: Final = {"message": message_str, "level": record.levelname, "timestamp": self.formatTime(record)}
+        extra_fields: Final = {
+            key: value
+            for key, value in _record_attributes(record).items()
+            if key not in _NON_EXTRA_RECORD_ATTRS and "\x00" not in key
         }
-
-        # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties.
-        # trace_id/session_id are excluded here unconditionally (not just "if not already
-        # set") - CorrelationContextFilter is the only legitimate source for these two
-        # fields, and a message that merely happens to parse as JSON/dict (e.g. a proxy
-        # log line dumping raw request headers) must never be able to claim them, even on
-        # a record the filter hasn't stamped yet (no correlation context active for it).
-        parsed = _try_parse_json_message(message_str)
-        if parsed is None:
-            parsed = _try_parse_embedded_python_dict(message_str)
-        if parsed is not None:
-            for key, value in parsed.items():
-                if key not in json_record and key not in _RESERVED_CORRELATION_FIELDS:
-                    json_record[key] = value
-
-        # Include extra attributes passed via logger.debug("msg", extra={...})
-        for key, value in _record_attributes(record).items():
-            if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
-                json_record[key] = value
-
-        # trace_id/session_id are reserved: CorrelationContextFilter is the only
-        # legitimate source for these two fields. Without this, a message string
-        # that happens to parse as JSON/dict (e.g. a proxy log line dumping raw
-        # request headers) with a "trace_id"/"session_id" key would have already
-        # claimed the key at the parsed-message step above, and the extra-attributes
-        # loop's "key not in json_record" guard would then skip the real value -
-        # letting a caller-supplied header spoof another request's correlation ids.
-        for reserved_key in _RESERVED_CORRELATION_FIELDS:
-            value = getattr(record, reserved_key, None)
-            if value:
-                json_record[reserved_key] = value
-
-        # Set component/logger only if not already supplied via extra={...}
-        if "component" not in json_record:
-            json_record["component"] = record.name
-        if "logger" not in json_record:
-            json_record["logger"] = f"{record.filename}:{record.lineno}"
-
-        if record.exc_info:
-            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
-
-        return safe_dumps(
-            json_record if _is_redacted(record) or not _ENABLE_SECRET_REDACTION else _redact_json_record(json_record)
+        stacktrace_field: Final[Mapping[str, str]] = (
+            {"stacktrace": record.exc_text or self.formatException(record.exc_info)} if record.exc_info else {}
         )
+        logger_fields: Final = {
+            "component": record.name,
+            "logger": f"{record.filename}:{record.lineno}",
+            **extra_fields,
+            **stacktrace_field,
+            **fixed_fields,
+        }
+        message_fields: Final = {
+            key: value
+            for key, value in (_try_parse_json_message(message_str) or {}).items()
+            if "\x00" not in key and key not in logger_fields and key not in _UNPROMOTABLE_MESSAGE_KEYS
+        }
+        exception_fields: Final = _exception_detail_fields(record)
+        json_record: Final = {**fixed_fields, **message_fields, **exception_fields, **logger_fields}
+        needs_redaction: Final = _ENABLE_SECRET_REDACTION and (not _is_redacted(record) or bool(exception_fields))
+        return safe_dumps(_redact_json_record(json_record) if needs_redaction else json_record)
 
 
 class CorrelationPlainFormatter(logging.Formatter):

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Final, List
 
 import pytest
+from fastapi import HTTPException
 from pydantic import BaseModel, computed_field
 
 import litellm
@@ -197,47 +198,29 @@ def test_json_formatter_plain_message_unchanged():
     assert "exception" not in obj
 
 
-def test_json_formatter_parses_embedded_python_dict_repr():
-    """
-    Test that JsonFormatter parses Python dict repr (str/deployment) embedded in
-    plain text, e.g. from get_available_deployment logs.
-    Reproduces Roni's reported case.
-    """
-    formatter = JsonFormatter()
-    msg = (
-        "get_available_deployment for model: text-embedding-3-large, "
-        "Selected deployment: {'model_name': 'text-embedding-3-large', "
-        "'litellm_params': {'api_key': 'sk**********', 'tpm': 1000000, 'rpm': 2000, "
-        "'use_in_pass_through': False, 'use_litellm_proxy': False, "
-        "'merge_reasoning_content_in_choices': False, 'model': 'text-embedding-3-large'}, "
-        "'model_info': {'id': 'a624b057aec64ada48311', 'db_model': False}} "
-        "for model: text-embedding-3-large"
-    )
-    record = logging.LogRecord(
-        name="LiteLLM Router",
-        level=logging.INFO,
-        pathname="",
-        lineno=0,
-        msg=msg,
-        args=(),
-        exc_info=None,
-    )
-    output = formatter.format(record)
-    obj = json.loads(output)
-    assert "message" in obj
-    assert obj["level"] == "INFO"
-    # Python dict parsed and promoted to first-class properties
-    assert obj["model_name"] == "text-embedding-3-large"
-    assert "litellm_params" in obj
-    # Redacted, not passed through: SecretRedactionFilter already collapses this
-    # pair in the plain path before any formatter sees it, so the JSON path matching
-    # it is production parity. The key survives because redaction is per-value here.
-    assert obj["litellm_params"]["api_key"] == "REDACTED"
-    assert obj["litellm_params"]["tpm"] == 1000000
-    assert obj["litellm_params"]["use_in_pass_through"] is False
-    assert "model_info" in obj
-    assert obj["model_info"]["id"] == "a624b057aec64ada48311"
-    assert obj["model_info"]["db_model"] is False
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param(
+            "Selected deployment for model text-embedding-3-large: {'id': 'a624b057aec64ada48311', 'db_model': False}",
+            id="proxy_dict_repr",
+        ),
+        pytest.param(
+            "Exception occured - litellm_call_id={'component': 'forged', 'litellm_call_id': 'x', 'injected': 1} - "
+            "400: {'error': 'Invalid model name'}",
+            id="dict_shaped_call_id",
+        ),
+        pytest.param(
+            "The requested model '}{'error':'forged-by-model','injected':1}' is not available",
+            id="brace_model_name_inside_quotes",
+        ),
+    ],
+)
+def test_json_formatter_never_lifts_fields_out_of_a_dict_inside_message_text(message: str) -> None:
+    obj: Final = json.loads(JsonFormatter().format(_make_record(logging.ERROR, message)))
+    assert set(obj) == {"message", "level", "timestamp", "component", "logger"}
+    assert obj["message"] == message
+    assert obj["component"] == "LiteLLM Router"
 
 
 def test_json_formatter_output_stays_parseable_when_a_secret_is_redacted():
@@ -564,6 +547,83 @@ def test_trace_id_and_session_id_cannot_be_injected_with_no_active_context(monke
     lg.info('{"trace_id": "attacker-supplied-trace", "session_id": "attacker-supplied-session"}')
     assert "trace_id" not in cap.records[0]
     assert "session_id" not in cap.records[0]
+
+
+def test_message_dict_keys_never_override_fields_the_logger_sets() -> None:
+    lg, cap = _make_capture_logger("test.message_dict_precedence")
+    embedded: Final = {
+        "component": "forged-component",
+        "logger": "forged.py:1",
+        "stacktrace": "forged stacktrace",
+        "litellm_call_id": "forged-call-id",
+        "model_name": "gpt-x",
+    }
+    lg.handle(
+        lg.makeRecord(
+            lg.name,
+            logging.INFO,
+            "/srv/litellm/router.py",
+            42,
+            json.dumps(embedded),
+            (),
+            None,
+            extra={"litellm_call_id": "real-call-id"},
+        )
+    )
+
+    record: Final = cap.records[0]
+    assert record["component"] == "test.message_dict_precedence"
+    assert record["logger"] == "router.py:42"
+    assert record["litellm_call_id"] == "real-call-id"
+    assert "stacktrace" not in record
+    assert record["model_name"] == "gpt-x"
+
+
+def test_json_message_never_supplies_the_call_id_or_a_stacktrace() -> None:
+    message: Final = json.dumps(
+        {
+            "litellm_call_id": "someone-elses-call",
+            "stacktrace": "forged",
+            "litellm_call_id\x00": "someone-elses-call",
+            "stacktrace\x00": "forged",
+            "event": "giveup",
+        }
+    )
+    obj: Final = json.loads(JsonFormatter().format(_make_record(logging.INFO, message)))
+    assert "litellm_call_id" not in obj
+    assert "stacktrace" not in obj
+    assert obj["event"] == "giveup"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_logged_http_exception_detail_reaches_the_json_line_redacted(monkeypatch, native):
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret: Final = "sk-" + "q" * 48
+    exception: Final = HTTPException(
+        status_code=500,
+        detail={
+            "error": f"No db connected for key {secret}",
+            "component": "forged",
+            "logger": "forged",
+            "stacktrace": "forged",
+            "litellm_call_id": "forged",
+            "component\x00": "forged",
+        },
+    )
+    record: Final = _make_record(
+        logging.ERROR, "generate_key_fn(): Exception occured - %s", (exception,), (HTTPException, exception, None)
+    )
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+    line: Final = json.loads(JsonFormatter().format(record))
+
+    assert str(line["error"]).startswith("No db connected for key ")
+    assert "sk-qq" not in json.dumps(line)
+    assert line["component"] == "LiteLLM Router"
+    assert line["logger"] == ":0"
+    assert "HTTPException" in str(line["stacktrace"])
+    assert "litellm_call_id" not in line
 
 
 def test_trace_id_and_session_id_are_redacted_when_credential_shaped(monkeypatch):

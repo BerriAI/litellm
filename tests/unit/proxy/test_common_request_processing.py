@@ -8,7 +8,7 @@ import gzip
 import json
 import time
 import weakref
-from base64 import urlsafe_b64encode
+from base64 import b64encode, urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
@@ -25,11 +25,13 @@ from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    LITELLM_CLIENT_DISCONNECT_DETAIL,
     MAX_LITELLM_CALL_ID_LENGTH,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
@@ -80,6 +82,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
     include_guardrail_response_requested,
     is_azure_model_router_request,
+    log_llm_api_exception,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
     should_return_raw_model_name,
@@ -108,6 +111,8 @@ from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, Spec
 from litellm.utils import ModelResponseListIterator
 from tests._support.clock_loops import AutojumpClockLoop
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+_DICT_SHAPED_CALL_ID: Final = "{'component': 'forged', 'logger': 'x', 'litellm_call_id': 'y', 'injected': 1}"
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -15291,6 +15296,74 @@ class TestErrorLogCarriesCallId:
         record: Final = caplog.records[-1]
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            pytest.param(HTTPException(status_code=400, detail={"error": "Invalid model name"}), id="error_line"),
+            pytest.param(
+                HTTPException(status_code=499, detail=LITELLM_CLIENT_DISCONNECT_DETAIL), id="client_disconnect_line"
+            ),
+        ],
+    )
+    def test_dict_shaped_call_id_cannot_forge_json_log_fields(
+        self, exc: HTTPException, proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        log_llm_api_exception(exc, _DICT_SHAPED_CALL_ID)
+
+        (line,) = proxy_json_log_lines()
+        assert line["component"] == verbose_proxy_logger.name
+        assert str(line["logger"]).startswith("common_request_processing.py:")
+        assert line["litellm_call_id"] == _DICT_SHAPED_CALL_ID
+        assert "injected" not in line
+
+    def test_error_detail_fields_reach_the_json_error_line_without_replacing_proxy_fields(
+        self, proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        call_id: Final = str(uuid.uuid4())
+        detail: Final = {
+            "error": "Invalid model name",
+            "message": "forged",
+            "component": "forged",
+            "litellm_call_id": "forged",
+            "component\x00": "forged",
+            "logger\x00": "forged",
+            "stacktrace\x00": "forged",
+        }
+
+        log_llm_api_exception(HTTPException(status_code=400, detail=detail), call_id)
+
+        (line,) = proxy_json_log_lines()
+        assert line["error"] == "Invalid model name"
+        assert line["component"] == verbose_proxy_logger.name
+        assert str(line["logger"]).startswith("common_request_processing.py:")
+        assert "stacktrace" not in line
+        assert line["litellm_call_id"] == call_id
+        assert "_handle_llm_api_exception(): Exception occured" in str(line["message"])
+
+    @pytest.mark.parametrize(
+        "model_name, kept_text",
+        [
+            pytest.param("nope-model " * 24_000, "nope-model", id="long_text"),
+            pytest.param(b64encode(bytes(range(256)) * 600).decode(), "base64_data truncated", id="base64_run"),
+        ],
+    )
+    def test_error_detail_fields_stay_within_the_stdout_cap(
+        self,
+        model_name: str,
+        kept_text: str,
+        monkeypatch: pytest.MonkeyPatch,
+        proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    ) -> None:
+        monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "4096")
+        monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "4096")
+        detail: Final = {"error": f"Invalid model name passed in model={model_name}"}
+
+        log_llm_api_exception(HTTPException(status_code=400, detail=detail), str(uuid.uuid4()))
+
+        (line,) = proxy_json_log_lines()
+        assert len(str(line["error"])) <= 4096
+        assert kept_text in str(line["error"])
 
 
 class TestAnthropicMessagesStreamErrorFrame:
