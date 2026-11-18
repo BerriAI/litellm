@@ -6,10 +6,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
+from typing import Final, Literal, Protocol, TypedDict, cast
 
 from pydantic import TypeAdapter
-from typing_extensions import Buffer, ReadOnly
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,7 +21,6 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     CostPerToken,
     CustomPricingLiteLLMParams,
-    DataResidency,
     ImageResponse,
     ModelInfo,
     PassthroughCallTypes,
@@ -43,7 +42,6 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
     }
 )
 
-_VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -534,97 +532,6 @@ def get_modality_token_cost_key(
     if threshold_key is None:
         return cost_key
     return f"{threshold_key.removesuffix(suffix)}{suffix}"
-
-
-def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
-    """
-    Resolve the per-model regional-processing uplift multiplier for a given
-    data-residency region.
-
-    OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
-    requests served from a regionalized hostname (eu./us.api.openai.com). The
-    multiplier is stored on the model entry as
-    ``regional_processing_uplift_multiplier_<region>`` (e.g. 1.10).
-
-    Returns 1.0 (no uplift) when ``data_residency`` is ``None`` or when the
-    model has no multiplier configured for the given region.
-    """
-    if data_residency is None:
-        return 1.0
-    residency: Final = data_residency.lower()
-    if residency not in _VALID_DATA_RESIDENCIES:
-        return 1.0
-    multiplier: Final[object] = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
-    if multiplier is None:
-        return 1.0
-    if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
-        verbose_logger.error(
-            "Invalid regional_processing_uplift_multiplier_%s for model (got %s); defaulting to 1.0",
-            residency,
-            type(multiplier).__name__,
-        )
-        return 1.0
-    try:
-        return float(multiplier)
-    except (TypeError, ValueError):
-        verbose_logger.exception(
-            "Invalid regional_processing_uplift_multiplier_%s for model; defaulting to 1.0",
-            residency,
-        )
-        return 1.0
-
-
-_get_regional_uplift_multiplier = get_regional_uplift_multiplier
-
-
-def get_fedramp_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
-    """
-    Resolve the per-model uplift multiplier for the OpenAI FedRAMP endpoint.
-
-    OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
-    requests served from gov.api.openai.com. The multiplier is stored on the
-    model entry as ``fedramp_uplift_multiplier`` (e.g. 1.10).
-
-    Returns 1.0 (no uplift) unless ``data_residency`` is ``"fedramp"`` and the
-    model has a multiplier configured.
-    """
-    if data_residency is None or data_residency.lower() != DataResidency.FEDRAMP.value:
-        return 1.0
-    multiplier: Final = model_info.get("fedramp_uplift_multiplier")
-    if multiplier is None:
-        return 1.0
-    try:
-        return float(multiplier)
-    except (TypeError, ValueError):
-        verbose_logger.exception("Invalid fedramp_uplift_multiplier for model; defaulting to 1.0")
-        return 1.0
-
-
-def get_vertex_regional_endpoint_uplift(model_info: Mapping[str, object], vertex_location: str | None) -> float:
-    """
-    Resolve the per-model uplift multiplier for Vertex AI non-global (regional and
-    multi-region) endpoints.
-
-    Google prices every non-global endpoint at a flat premium over the global
-    endpoint (e.g. 1.10 = +10%) on all token types for the models that carry
-    regional pricing. The multiplier is stored on the model entry as
-    ``regional_endpoint_uplift_multiplier``.
-
-    Returns 1.0 (no uplift) when ``vertex_location`` is ``None`` or ``"global"``,
-    or when the model has no multiplier configured.
-    """
-    if vertex_location is None or vertex_location.lower() == "global":
-        return 1.0
-    multiplier: Final = model_info.get("regional_endpoint_uplift_multiplier")
-    if multiplier is None:
-        return 1.0
-    try:
-        return float(cast(float, multiplier))  # cast-ok: pricing multiplier is external model data
-    except (TypeError, ValueError):
-        verbose_logger.exception(
-            "Invalid regional_endpoint_uplift_multiplier for model; defaulting to 1.0",
-        )
-        return 1.0
 
 
 def _billed_prompt_tokens(usage: Usage) -> PromptTokensDetailsResult:

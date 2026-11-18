@@ -75,6 +75,8 @@ enum UnitsDocument {
         pixels: u64,
         #[serde(default)]
         input_images: u64,
+        #[serde(default)]
+        vertex_location: Option<Box<str>>,
     },
     Video {
         #[serde(flatten)]
@@ -240,6 +242,9 @@ impl UnitsDocument {
                 super::query::data_residency(data_residency.as_deref()),
                 vertex_location.clone(),
             ),
+            Self::Image {
+                vertex_location, ..
+            } => (None, vertex_location.clone()),
             _ => (None, None),
         };
         let header = Header {
