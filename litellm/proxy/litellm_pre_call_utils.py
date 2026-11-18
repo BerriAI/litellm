@@ -2282,6 +2282,11 @@ class LiteLLMProxyRequestSetup:
             user_api_key_customer_member_alias=customer.customer_member_alias if customer else None,
             user_api_key_customer_budget_scopes=customer_budget_scopes_metadata(customer),
             user_api_key_customer_hierarchy=customer.model_dump(mode="json") if customer else None,
+            **(
+                {"user_api_key_app_id": customer.app_id, "user_api_key_app_alias": customer.app_alias}
+                if customer is not None and customer.app_id is not None and customer.app_alias is not None
+                else {}
+            ),
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(
@@ -2345,6 +2350,13 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
+        if any(key in data[_metadata_variable_name] for key in ("user_api_key_app_id", "user_api_key_app_alias")):
+            incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
+            data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
+                key: value
+                for key, value in incoming_metadata.items()
+                if key not in ("user_api_key_app_id", "user_api_key_app_alias")
+            }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
 

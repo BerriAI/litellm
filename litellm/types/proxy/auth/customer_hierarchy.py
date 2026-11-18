@@ -4,13 +4,23 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    ValidationError,
+    model_serializer,
+)
 
 from litellm.models.budget import BudgetLimit
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 from litellm.types.proxy.management_endpoints.customer_hierarchy import CapPolicy
 
-CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
+CustomerScopeKey: TypeAlias = Literal[
+    "customer_org", "customer_team", "customer_member", "app", "app_customer_org", "app_customer_member"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +30,14 @@ class CustomerRequestIdentity:
     customer_member_id: str | None = None
     customer_org_alias: str | None = None
     customer_team_id: str | None = None
+
+
+class AppDurationLimit(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget_duration: str
+    max_budget: float = Field(ge=0, allow_inf_nan=False)
+    reset_at: datetime | None = None
 
 
 class CustomerScopeAuth(BaseModel):
@@ -33,7 +51,7 @@ class CustomerScopeAuth(BaseModel):
     spend: float = 0.0
     budget_reset_at: datetime | None = None
     max_budget: float | None = None
-    budget_limits: tuple[BudgetLimit, ...] = ()
+    budget_limits: tuple[BudgetLimit | AppDurationLimit, ...] = ()
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_models: tuple[str, ...] | None = None
@@ -47,17 +65,24 @@ class CustomerHierarchyAuth(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    customer_org_id: str
+    customer_org_id: str | None = None
     customer_org_alias: str | None = None
     customer_team_id: str | None = None
     customer_team_alias: str | None = None
     customer_member_id: str | None = None
     customer_member_alias: str | None = None
+    app_id: str | None = None
+    app_alias: str | None = None
     scopes: tuple[CustomerScopeAuth, ...]
     team_scopes: tuple[CustomerScopeAuth, ...] = Field(
         default=(),
         description="Every team the member belongs to, in parent_team_ids order; scopes holds the selected one",
     )
+
+    @model_serializer(mode="wrap")
+    def serialize_identity(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        values: Final = TypeAdapter(Mapping[str, object]).validate_python(handler(self))
+        return {key: value for key, value in values.items() if key not in ("app_id", "app_alias") or value is not None}
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,15 +90,17 @@ class CustomerHierarchyIds:
     """The rows a request's spend is charged to, as the request metadata recorded them. Team and member are absent
     when the request named only an organization."""
 
-    customer_org_id: str
+    customer_org_id: str | None = None
     customer_team_id: str | None = None
     customer_member_id: str | None = None
+    app_id: str | None = None
 
     def entities(self) -> Mapping[str, str | None]:
         return {
             "customer_member_id": self.customer_member_id,
             "customer_team_id": self.customer_team_id,
             "customer_org_id": self.customer_org_id,
+            **({"app_id": self.app_id} if self.app_id else {}),
         }
 
     def spend_entities(self) -> tuple[tuple[Litellm_EntityType, str], ...]:
@@ -81,6 +108,15 @@ class CustomerHierarchyIds:
             (Litellm_EntityType.CUSTOMER_ORG, self.customer_org_id),
             (Litellm_EntityType.CUSTOMER_TEAM, self.customer_team_id),
             (Litellm_EntityType.CUSTOMER_MEMBER, self.customer_member_id),
+            (Litellm_EntityType.APP, self.app_id),
+            (
+                Litellm_EntityType.APP_CUSTOMER_ORG,
+                f"{self.app_id}:{self.customer_org_id}" if self.app_id and self.customer_org_id else None,
+            ),
+            (
+                Litellm_EntityType.APP_CUSTOMER_MEMBER,
+                f"{self.app_id}:{self.customer_member_id}" if self.app_id and self.customer_member_id else None,
+            ),
         )
         return tuple((entity_type, entity_id) for entity_type, entity_id in levels if entity_id)
 
@@ -109,7 +145,10 @@ def _mapping(value: object) -> Mapping[str, object]:
 def _stamped_metadata(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     """The proxy stamps auth ids into ``litellm_metadata`` on routes whose body owns ``metadata``, else into ``metadata``."""
     buckets: Final = tuple(_mapping(litellm_params.get(name)) for name in ("litellm_metadata", "metadata"))
-    return next((bucket for bucket in buckets if "user_api_key_customer_org_id" in bucket), _NO_FIELDS)
+    return next(
+        (bucket for bucket in buckets if "user_api_key_customer_org_id" in bucket or "user_api_key_app_id" in bucket),
+        _NO_FIELDS,
+    )
 
 
 def _stamped_id(metadata: Mapping[str, object], level: str) -> str | None:
@@ -121,12 +160,15 @@ def customer_hierarchy_ids_from_request(kwargs: Mapping[str, object]) -> Custome
     """The ids auth stamped into the request's proxy metadata, or None when the request named no customer."""
     metadata: Final = _stamped_metadata(_mapping(kwargs.get("litellm_params")))
     org_id: Final = _stamped_id(metadata, "org")
-    if org_id is None:
+    app: Final = metadata.get("user_api_key_app_id")
+    app_id: Final = app if isinstance(app, str) and app else None
+    if org_id is None and app_id is None:
         return None
     return CustomerHierarchyIds(
         customer_org_id=org_id,
         customer_team_id=_stamped_id(metadata, "team"),
         customer_member_id=_stamped_id(metadata, "member"),
+        app_id=app_id,
     )
 
 
@@ -138,4 +180,6 @@ def customer_budget_scopes_from_request(
     if not isinstance(snapshot, str):
         return None
     scopes: Final = _BUDGET_SCOPES.validate_json(snapshot)
-    return tuple(scope for scope in scopes if metadata.get(f"user_api_key_{scope.key}_id") == scope.entity_id)
+    ids: Final = customer_hierarchy_ids_from_request(kwargs)
+    identities: Final = {kind.value: value for kind, value in ids.spend_entities()} if ids is not None else {}
+    return tuple(scope for scope in scopes if identities.get(scope.key) == scope.entity_id)

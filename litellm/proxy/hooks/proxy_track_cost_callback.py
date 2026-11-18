@@ -915,6 +915,9 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                     call_type=call_type,
                     agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
+                    app_id=_tracked_app_id(
+                        metadata,  # pyright: ignore[reportUnknownArgumentType]  # validated legacy callback metadata
+                    ),
                 ):
                     ## UPDATE DATABASE
                     charged_cost: Final = await _charge_request_cost(
@@ -1193,6 +1196,11 @@ def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:
     return completion_response.usage is None and is_pollable_background_interaction(completion_response)
 
 
+def _tracked_app_id(metadata: object) -> str | None:
+    value: Final = _str_keyed_fields(metadata).get("user_api_key_app_id")
+    return value if isinstance(value, str) and value else None
+
+
 def _should_track_cost_callback(
     user_api_key: str | None,
     user_id: str | None,
@@ -1200,6 +1208,7 @@ def _should_track_cost_callback(
     end_user_id: str | None,
     call_type: str | None = None,
     agent_id: str | None = None,
+    app_id: str | None = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
@@ -1218,6 +1227,7 @@ def _should_track_cost_callback(
 
     if (
         agent_id is not None
+        or app_id is not None
         or user_api_key is not None
         or user_id is not None
         or team_id is not None

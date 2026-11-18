@@ -608,7 +608,7 @@ async def _register_member(
 ) -> CustomerHierarchyAuth | None:
     """A member the request named for the first time joins the aliased organization's default team. Without an
     alias there is no organization to place it in, and the member stays unknown."""
-    if organization is None:
+    if organization is None or organization.customer_org_id is None:
         return None
     if not _registrable(customer_member_id):
         verbose_proxy_logger.warning(
@@ -759,6 +759,8 @@ async def check_customer_hierarchy_access(
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    if hierarchy.customer_org_id is None:
+        return
     _check_key_scope(hierarchy.customer_org_id, key_metadata)
 
 

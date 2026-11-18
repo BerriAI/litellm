@@ -42,7 +42,7 @@ def project_deliveries(deliveries: Iterable[DeliveryProjection]) -> tuple[Contri
 
 
 def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpdateTransactions":
-    return {
+    base: Final[DBSpendUpdateTransactions] = {
         "user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_UserTable")),
         "end_user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_EndUserTable")),
         "key_list_transactions": dict(_entity_totals(contributions, "LiteLLM_VerificationToken")),
@@ -60,6 +60,14 @@ def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpda
         "customer_team_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerTeamTable")),
         "customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerMemberTable")),
     }
+    if not any(item.table == "LiteLLM_AppTable" for item in contributions):
+        return base
+    return {
+        **base,
+        "app_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppTable")),
+        "app_customer_org_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppCustomerOrgTable")),
+        "app_customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppCustomerMemberTable")),
+    }
 
 
 def _entity_totals(contributions: tuple[Contribution, ...], table: str) -> tuple[tuple[str, float], ...]:
@@ -70,6 +78,9 @@ def _entity_totals(contributions: tuple[Contribution, ...], table: str) -> tuple
 
 def _entity_key(item: Contribution) -> str:
     fields: Final = dict(item.key)
+    if item.table in ("LiteLLM_AppCustomerOrgTable", "LiteLLM_AppCustomerMemberTable"):
+        column: Final = "customer_org_id" if item.table == "LiteLLM_AppCustomerOrgTable" else "customer_member_id"
+        return f"{fields['app_id']}:{fields[column]}"
     if item.table == "LiteLLM_TeamMembership":
         return f"team_id::{fields['team_id']}::user_id::{fields['user_id']}"
     if item.table == "LiteLLM_OrganizationMembership":

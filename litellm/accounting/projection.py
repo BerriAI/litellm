@@ -120,6 +120,28 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         *(_spend("LiteLLM_TagTable", (("tag_name", tag),), spend) for tag in _tags(row) if tag),
         *(_spend("LiteLLM_ModelAccessGroupBudgetTable", (("access_group_name", group),), spend) for group in groups),
         *_membership_contributions(entities, spend),
+        *_app_contributions(entities, customer, spend),
+    )
+
+
+def _app_contributions(
+    entities: Mapping[str, object],
+    customer: Mapping[str, str | None],
+    spend: float,
+) -> tuple[Contribution, ...]:
+    app_id: Final = entities.get("app_id")
+    if not isinstance(app_id, str) or not app_id:
+        return ()
+    return (
+        _spend("LiteLLM_AppTable", (("app_id", app_id),), spend),
+        *(
+            _spend(table, (("app_id", app_id), (column, identity)), spend)
+            for table, column, identity in (
+                ("LiteLLM_AppCustomerOrgTable", "customer_org_id", customer["customer_org_id"]),
+                ("LiteLLM_AppCustomerMemberTable", "customer_member_id", customer["customer_member_id"]),
+            )
+            if identity is not None
+        ),
     )
 
 
@@ -192,6 +214,7 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
         **row,
         "organization_id": entities.get("organization_id"),
         "customer_org_id": customer["customer_org_id"],
+        **({"app_id": entities["app_id"]} if isinstance(entities.get("app_id"), str) else {}),
         **{key: customer[key] or "" for key in ("customer_team_id", "customer_member_id")},
     }
     return tuple(_daily_rows(daily_row, shared_key, counters))
@@ -216,7 +239,11 @@ def _daily_rows(
                 table.name,
                 (
                     (table.entity_id_column, _text(identity)),
-                    *((column, _text(row.get(column))) for column in table.parent_id_columns),
+                    *(
+                        (column, _text(row.get(column)))
+                        for column in table.parent_id_columns
+                        if column != "app_id" or row.get(column)
+                    ),
                     *daily_key,
                     *((("model_group", _text(row.get("model_group"))),) if table.hashed_identity else ()),
                 ),

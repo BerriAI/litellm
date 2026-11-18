@@ -1215,6 +1215,41 @@ async def test_update_customer_hierarchy_db_enqueues_one_increment_per_level():
     assert aggregated["customer_org_list_transactions"] == {"org-1": 0.25}
 
 
+@pytest.mark.asyncio
+async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds
+
+    writer: Final = DBSpendUpdateWriter()
+    ids: Final = CustomerHierarchyIds(
+        customer_org_id="org", customer_team_id="team", customer_member_id="member:local", app_id="app",
+    )
+    await writer._update_customer_hierarchy_db(response_cost=0.25, customer_hierarchy=ids, prisma_client=MagicMock())
+    queued: Final = await writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    aggregated: Final = writer.spend_update_queue.get_aggregated_db_spend_update_transactions(queued)
+    batcher: Final = MagicMock()
+    transaction: Final = MagicMock()
+    transaction.batch_.return_value.__aenter__.return_value = batcher
+    await writer._commit_customer_hierarchy_spend(
+        aggregated, prisma_client=MagicMock(), n_retry_times=0, proxy_logging_obj=MagicMock(),
+        outer_transaction=transaction, on_table_committed=None,
+    )
+    batcher.litellm_customerorganizationtable.update_many.assert_called_once_with(
+        where={"customer_org_id": "org"}, data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_customermembertable.update_many.assert_called_once_with(
+        where={"customer_member_id": "member:local"}, data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_apptable.update_many.assert_called_once_with(
+        where={"app_id": "app"}, data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_appcustomerorgtable.update_many.assert_called_once_with(
+        where={"app_id": "app", "customer_org_id": "org"}, data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_appcustomermembertable.update_many.assert_called_once_with(
+        where={"app_id": "app", "customer_member_id": "member:local"}, data={"spend": {"increment": 0.25}},
+    )
+
+
 def _team_member_flush_fixtures() -> tuple[AsyncMock, MagicMock]:
     """A transaction and prisma client that record the raw statement the member spend flush runs."""
     mock_transaction = AsyncMock()

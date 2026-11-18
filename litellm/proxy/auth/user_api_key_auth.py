@@ -46,6 +46,7 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_he
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
+from litellm.proxy.auth.app_auth import resolve_app_hierarchy
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     TeamNotFoundError,
     _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -3226,6 +3227,27 @@ async def _authorize_authenticated_request_checks(
                     user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                     raise
                 user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
+
+        app_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
+            getattr(user_api_key_auth_obj, "metadata", None) or {}
+        )
+        if not RustAuth.is_public_route(route, core.proxy_settings()) and (
+            "x-litellm-app" in request.headers or app_metadata.get("app_alias") is not None
+        ):
+            user_api_key_auth_obj.customer_hierarchy = (  # rebind-ok: trusted request auth state
+                await resolve_app_hierarchy(
+                    user_api_key_auth_obj.customer_hierarchy,
+                    request.headers,
+                    app_metadata,
+                    prisma_client,
+                    user_api_key_cache,
+                    llm_router,
+                    get_model_from_request_context(
+                        request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+                    ),
+                    route,
+                )
+            )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)
