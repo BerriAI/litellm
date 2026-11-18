@@ -42,6 +42,13 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
+_FAILED_TURN_STATUS: Final = "failure"
+
+
+def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
+    return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -61,9 +68,13 @@ class ResponsesSessionHandler:
         )
 
         verbose_proxy_logger.debug("inside get_chat_completion_message_history_for_previous_response_id")
-        all_spend_logs: list[
-            SpendLogsPayload
-        ] = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(previous_response_id)
+        all_spend_logs: Final = [
+            spend_log
+            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                previous_response_id
+            )
+            if not _is_a_failed_turn(spend_log)
+        ]
         verbose_proxy_logger.debug("found %s spend logs for this response id", len(all_spend_logs))
 
         litellm_session_id: str | None = None

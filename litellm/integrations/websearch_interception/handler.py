@@ -39,9 +39,8 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    allowed_tools_tool_choice_in_auto_mode,
+    allowed_tools_tool_choice_kept_on_follow_up,
     allowed_tools_tool_choice_with_builtin_as_function,
-    is_allowed_tools_tool_choice,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
@@ -267,10 +266,7 @@ def _tool_choice_naming_litellm_web_search(
 
 
 def _kept_allowed_tools_tool_choice(optional_params: Mapping[str, object]) -> Mapping[str, object]:
-    tool_choice: Final = optional_params.get("tool_choice")
-    if not is_allowed_tools_tool_choice(tool_choice):
-        return MappingProxyType({})
-    return {"tool_choice": allowed_tools_tool_choice_in_auto_mode(tool_choice)}
+    return allowed_tools_tool_choice_kept_on_follow_up(optional_params.get("tool_choice"))
 
 
 class WebSearchInterceptionLogger(CustomLogger):

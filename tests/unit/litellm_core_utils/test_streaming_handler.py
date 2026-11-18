@@ -2,10 +2,12 @@ import asyncio
 import json
 import threading
 import time
-from typing import Final, NoReturn, Optional
+from itertools import chain
+from typing import Callable, Final, Literal, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
 
 import litellm
 from litellm import verbose_logger
@@ -18,6 +20,8 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import (
+    ChatCompletionTokenLogprob,
+    ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
     Delta,
     ModelResponse,
@@ -243,6 +247,37 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
         completion_obj=MagicMock(),
         model_response=ModelResponseStream(**chunk),
         response_obj=MagicMock(),
+    )
+
+
+def test_is_chunk_non_empty_keeps_thinking_blocks_without_other_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Encrypted reasoning arrives as thinking_blocks and nothing else, so that delta has to be yielded."""
+    chunk: Final = ModelResponseStream(
+        id="chunk-thinking",
+        object="chat.completion.chunk",
+        created=1,
+        model="chatgpt/gpt-6.1-sol",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason=None,
+                delta=Delta(
+                    thinking_blocks=[
+                        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"}
+                    ]
+                ),
+            )
+        ],
+    )
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},
+            model_response=chunk,
+            response_obj={},
+        )
+        is True
     )
 
 
@@ -1804,6 +1839,349 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     assert len(usage_chunks) > 0
     assert hasattr(usage_chunks[-1].usage, "cost")
     assert usage_chunks[-1].usage.cost == 0.00025
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("iteration", "stream_options"),
+    [
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("sync", None),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("async", None),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("async_over_sync_stream", None),
+    ],
+)
+async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
+    logging_obj: Logging,
+    iteration: Literal["sync", "async", "async_over_sync_stream"],
+    stream_options: ChatCompletionStreamOptionsParam | None,
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(chunks)
+            if iteration == "async_over_sync_stream"
+            else ModelResponseListIterator(model_responses=list(chunks))
+        ),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=stream_options,
+    )
+
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    finish_index: Final = next(
+        i for i, chunk in enumerate(collected_chunks) if chunk.choices and chunk.choices[0].finish_reason == "stop"
+    )
+    post_finish_chunks: Final = collected_chunks[finish_index + 1 :]
+    assert all(getattr(chunk, "usage", None) is not None for chunk in post_finish_chunks), post_finish_chunks
+    assert len(post_finish_chunks) == (1 if stream_options and stream_options.get("include_usage") else 0)
+    assert [chunk.usage.cost for chunk in post_finish_chunks[-1:]] == (
+        [0.0000088] if stream_options and stream_options.get("include_usage") else []
+    )
+    assert not any(chunk.choices for chunk in post_finish_chunks[:-1]), post_finish_chunks
+    post_finish_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in post_finish_chunks))
+    assert not any(choice.delta.role for choice in post_finish_choices), post_finish_choices
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (14, 2, 0.0000088)
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("iteration", "stream_options", "rebuilds_the_estimate"),
+    [
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=False), True),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=False), True),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=False), True),
+        ("sync", None, False),
+        ("async", None, False),
+        ("async_over_sync_stream", None, True),
+    ],
+)
+async def test_stream_without_provider_usage_keeps_the_lts_token_counts(
+    iteration: Literal["sync", "async", "async_over_sync_stream"],
+    stream_options: ChatCompletionStreamOptionsParam | None,
+    rebuilds_the_estimate: bool,
+):
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-no-usage",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-no-usage",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(chunks)
+            if iteration == "async_over_sync_stream"
+            else ModelResponseListIterator(model_responses=list(chunks))
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="no-usage-call",
+            function_id="no-usage-fn",
+        ),
+        stream_options=stream_options,
+    )
+
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks, messages=messages).usage
+    estimate: Final = (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens) == (estimate if rebuilds_the_estimate else (0, 0))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("iteration", ["sync", "async"])
+async def test_stream_that_ends_without_a_finish_reason_keeps_provider_usage_when_usage_is_off(
+    iteration: Literal["sync", "async"],
+    logging_obj: Logging,
+):
+    model: Final = "gpt-4.1-mini"
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-no-finish",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="OK"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=12, total_tokens=42, cost=0.0123),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=list(chunks)),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=ChatCompletionStreamOptionsParam(include_usage=False),
+    )
+
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (30, 12, 0.0123)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream_options",
+    [
+        ChatCompletionStreamOptionsParam(include_usage=True),
+        ChatCompletionStreamOptionsParam(include_usage=False),
+        None,
+    ],
+)
+async def test_async_for_over_a_sync_stream_returns_inline_usage_once(
+    logging_obj: Logging,
+    stream_options: ChatCompletionStreamOptionsParam | None,
+):
+    model: Final = "gpt-4.1-mini"
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-inline-usage",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-inline-usage",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
+            usage=Usage(prompt_tokens=14, completion_tokens=2, total_tokens=16),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=stream_options,
+    )
+
+    collected_chunks: Final = [chunk async for chunk in response]
+
+    returned_usage: Final = [chunk.usage for chunk in collected_chunks if getattr(chunk, "usage", None) is not None]
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in returned_usage] == [(14, 2)]
+
+
+@pytest.mark.asyncio
+async def test_async_for_over_a_sync_stream_keeps_openai_sdk_logprobs_on_the_post_finish_trailer(
+    logging_obj: Logging,
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    sdk_logprobs: Final = (
+        ChatCompletionChunk.model_validate(
+            {
+                "id": "chatcmpl-or",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": ""},
+                        "finish_reason": "stop",
+                        "logprobs": {"content": [{"token": "!", "logprob": -0.5, "bytes": None, "top_logprobs": []}]},
+                    }
+                ],
+            }
+        )
+        .choices[0]
+        .logprobs
+    )
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop", index=0, delta=Delta(content="", role="assistant"), logprobs=sdk_logprobs
+                )
+            ],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=None,
+    )
+
+    streamed_choices: Final = tuple(chain.from_iterable([chunk.choices async for chunk in response]))
+
+    streamed_logprobs: Final = [getattr(choice, "logprobs", None) for choice in streamed_choices]
+    assert [logprobs.content[0].token for logprobs in streamed_logprobs if logprobs is not None] == ["!"]
+
+
+_POST_FINISH_TRAILER_PAYLOADS: Final[tuple[tuple[StreamingChoices, Callable[[StreamingChoices], object]], ...]] = (
+    (
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(content="", role="assistant"),
+            logprobs=ChoiceLogprobs(content=[ChatCompletionTokenLogprob(token="!", logprob=-0.5, top_logprobs=[])]),
+        ),
+        lambda choice: choice.model_dump(include={"logprobs"}, exclude_none=True),
+    ),
+    (
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(
+                content="",
+                role="assistant",
+                images=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}, "index": 0}],
+            ),
+        ),
+        lambda choice: getattr(choice.delta, "images", None),
+    ),
+    (
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(
+                content="",
+                role="assistant",
+                thinking_blocks=[{"type": "thinking", "thinking": "done", "signature": "sig"}],
+            ),
+        ),
+        lambda choice: getattr(choice.delta, "thinking_blocks", None),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("trailer_choice", "read_payload"),
+    _POST_FINISH_TRAILER_PAYLOADS,
+    ids=["logprobs", "images", "thinking_blocks"],
+)
+def test_openrouter_post_finish_usage_trailer_keeps_a_choice_with_a_payload(
+    logging_obj: Logging,
+    trailer_choice: StreamingChoices,
+    read_payload: Callable[[StreamingChoices], object],
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    expected_payload: Final = read_payload(trailer_choice)
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[trailer_choice],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=list(chunks)),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
+    )
+
+    streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in response))
+
+    assert [read_payload(choice) for choice in streamed_choices if read_payload(choice)] == [expected_payload]
 
 
 @pytest.mark.asyncio

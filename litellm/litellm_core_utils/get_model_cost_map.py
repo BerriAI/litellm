@@ -95,11 +95,17 @@ class GetModelCostMap:
 
     _loaded_catalog: Mapping[str, Mapping[str, object]] = MappingProxyType({})
     _loaded_catalog_fields: frozenset[str] = frozenset()
+    _loaded_catalog_keys_by_casefold: Mapping[str, str] = MappingProxyType({})
 
     @classmethod
     def loaded_model_cost_map(cls) -> Mapping[str, Mapping[str, object]]:
         """The catalog as last loaded (bundled or remote), untouched by ``register_model`` or router registrations."""
         return cls._loaded_catalog
+
+    @classmethod
+    def loaded_model_cost_map_key(cls, key: str) -> str | None:
+        """``key`` as the loaded catalog spells it, matched exactly first and then ignoring case."""
+        return key if key in cls._loaded_catalog else cls._loaded_catalog_keys_by_casefold.get(key.casefold())
 
     @classmethod
     def loaded_model_cost_map_fields(cls) -> frozenset[str]:
@@ -111,6 +117,7 @@ class GetModelCostMap:
         raw: Final = _CATALOG_ADAPTER.validate_python(model_cost)
         cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
         cls._loaded_catalog_fields = frozenset(chain.from_iterable(entry.keys() for entry in raw.values()))
+        cls._loaded_catalog_keys_by_casefold = MappingProxyType({key.casefold(): key for key in raw})
 
     @classmethod
     def get_backup_model_count(cls) -> int:

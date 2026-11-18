@@ -9,7 +9,7 @@ lint.extend-select = [
     "PLW0133", "PYI030", "PYI041", "PYI064", "RET501", "RUF010", "RUF022", "RUF023", "RUF051", "S113",
     "SIM114", "SIM118", "SIM201", "SIM211", "SIM222", "TC005", "UP006", "UP007", "UP008",
     "UP012", "UP018", "UP024", "UP032", "UP034", "UP035", "UP036", "UP037", "UP045",
-    "C404", "C419",
+    "C404", "C419", "TID253",
 ]
 # RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
 # `# noqa` directives that protect rules enforced elsewhere. List those codes as external
@@ -34,6 +34,9 @@ format.exclude = ["**/enterprise/**"]
 # (Black did) while `ruff check` keeps skipping them.
 lint.exclude = ["litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
 
+
+[lint.flake8-tidy-imports]
+banned-module-level-imports = ["prisma"]
 
 [lint.per-file-ignores]
 "litellm/main.py" = ["F401"]

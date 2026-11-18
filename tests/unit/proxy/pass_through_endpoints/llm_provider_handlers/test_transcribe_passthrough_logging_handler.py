@@ -1,9 +1,11 @@
 import asyncio
 import io
 import json
+import struct
 import wave
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -452,6 +454,15 @@ class TestMediaFileSeconds:
             out.writeframes(bytes(2 * 12_000))
 
         assert media_file_seconds(media) == pytest.approx(1.5)
+
+    def test_flac_that_does_not_state_its_length_yields_no_duration(self, tmp_path: Path):
+        streaminfo: Final = (
+            struct.pack(">HH", 4096, 4096) + bytes(6) + ((16000 << 44) | (15 << 36)).to_bytes(8, "big") + bytes(16)
+        )
+        media: Final = tmp_path / "a.flac"
+        _ = media.write_bytes(b"fLaC" + b"\x80" + len(streaminfo).to_bytes(3, "big") + streaminfo)
+
+        assert media_file_seconds(media) is None
 
     def test_undecodable_media_yields_no_duration(self, tmp_path: Path):
         media = tmp_path / "a.wav"

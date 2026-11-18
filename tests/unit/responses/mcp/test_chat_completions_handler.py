@@ -1686,6 +1686,34 @@ async def test_an_mcp_tool_the_choice_excludes_never_runs_when_the_model_ignored
     call_tool.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_required_choice_asks_the_follow_up_in_auto_mode_for_the_same_tools_once_its_mcp_call_ran(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    rounds: Final = (_CHAT_ROUND_ONE, _CHAT_ROUND_TWO)
+    _serve_chat_rounds(respx_mock, monkeypatch, tuple(_streamed(body) if stream else _ok(body) for body in rounds))
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Call echo with PING"}],
+        tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+        tool_choice={"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "echo"}]},
+        api_key="sk-mcp-chat-rounds",
+        api_base="https://mcp-chat-rounds.example.com/v1",
+        stream=stream,
+    )
+    if stream:
+        await _read_all(response)
+
+    first, follow_up = (json.loads(call.request.content)["tool_choice"] for call in respx_mock.calls)
+    assert call_tool.await_count == 1
+    assert first["allowed_tools"]["mode"] == "required"
+    assert follow_up == {**first, "allowed_tools": {**first["allowed_tools"], "mode": "auto"}}
+
+
 def _anthropic_call_to_echo(name: str = "echo") -> Response:
     return Response(
         200,
