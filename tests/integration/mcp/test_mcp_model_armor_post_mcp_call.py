@@ -5,6 +5,7 @@ The scripted MCP server and the Model Armor and Google token endpoints are the o
 
 import json
 import os
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -31,12 +32,18 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 pytestmark: Final = pytest.mark.shares_worker_state
 
 TOKEN_PATH: Final = "/token"
+DENIED_TOKEN_PATH: Final = "/denied-token"
 STRICT: Final = "model-armor-mcp-strict"
 FAIL_OPEN: Final = "model-armor-mcp-fail-open"
+FAIL_OPEN_SLOW: Final = "model-armor-mcp-fail-open-slow"
+FAIL_OPEN_NO_TOKEN: Final = "model-armor-mcp-fail-open-no-token"
+SLOW_SECONDS: Final = 3
 BLOCK_MARK: Final = "SYNTHETIC-ARMOR-INSPECT-MATCH"
 SKIP_MARK: Final = "SYNTHETIC-ARMOR-FILTER-SKIPPED"
 NO_REWRITE_MARK: Final = "SYNTHETIC-ARMOR-DEIDENTIFY-WITHOUT-REWRITE"
 OUTAGE_MARK: Final = "SYNTHETIC-ARMOR-OUTAGE"
+SLOW_MARK: Final = "SYNTHETIC-ARMOR-SLOW"
+SLOW_RESCAN_MARK: Final = "SYNTHETIC-ARMOR-SLOW-RESCAN"
 SENSITIVE: Final = "synthetic-ssn-078-05-1120"
 REDACTED: Final = "[SYNTHETIC_REDACTED]"
 ENTRIES: Final[tuple[EntryPoint, ...]] = ("mcp", "rest")
@@ -53,6 +60,8 @@ def _sdp(result: dict[str, object], skipped: bool = False) -> Reply:
 
 
 def _model_armor(request: Request) -> Reply:
+    if request.target.startswith(DENIED_TOKEN_PATH):
+        return Reply(status=400, body=json.dumps({"error": "invalid_grant"}).encode())
     if request.target.startswith(TOKEN_PATH):
         return Reply(
             body=json.dumps(
@@ -65,6 +74,13 @@ def _model_armor(request: Request) -> Reply:
     skipped: Final = SKIP_MARK in text
     if OUTAGE_MARK in text:
         return Reply(status=500, body=json.dumps({"error": "synthetic Model Armor outage"}).encode())
+    if SLOW_RESCAN_MARK in text and "\n" in text:
+        return _sdp(
+            {"deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": text.replace("\n", " ")}}},
+            skipped,
+        )
+    if SLOW_MARK in text:
+        time.sleep(SLOW_SECONDS)
     if BLOCK_MARK in text:
         return _sdp({"inspectResult": {"matchState": "MATCH_FOUND"}}, skipped)
     if NO_REWRITE_MARK in text:
@@ -77,7 +93,15 @@ def _model_armor(request: Request) -> Reply:
     return _sdp({"inspectResult": {"matchState": "NO_MATCH_FOUND"}}, skipped)
 
 
-def _guardrail(name: str, armor_url: str, private_key: str, *, fail_on_error: bool) -> dict[str, object]:
+def _guardrail(
+    name: str,
+    armor_url: str,
+    private_key: str,
+    *,
+    fail_on_error: bool,
+    timeout: float | None = None,
+    token_path: str = TOKEN_PATH,
+) -> dict[str, object]:
     return {
         "guardrail_name": name,
         "litellm_params": {
@@ -92,12 +116,13 @@ def _guardrail(name: str, armor_url: str, private_key: str, *, fail_on_error: bo
             "location": "us",
             "template_id": name,
             "api_endpoint": armor_url,
+            **({"timeout": timeout} if timeout is not None else {}),
             "credentials": json.dumps(
                 {
                     "type": "service_account",
                     "client_email": "synthetic@synthetic-project.iam.gserviceaccount.com",
                     "private_key": private_key,
-                    "token_uri": armor_url + TOKEN_PATH,
+                    "token_uri": armor_url + token_path,
                 }
             ),
         },
@@ -114,6 +139,8 @@ def _config(armor_url: str, root: Path) -> Path:
     config["guardrails"] = [
         _guardrail(STRICT, armor_url, private_key, fail_on_error=True),
         _guardrail(FAIL_OPEN, armor_url, private_key, fail_on_error=False),
+        _guardrail(FAIL_OPEN_SLOW, armor_url, private_key, fail_on_error=False, timeout=1),
+        _guardrail(FAIL_OPEN_NO_TOKEN, armor_url, private_key, fail_on_error=False, token_path=DENIED_TOKEN_PATH),
     ]
     path: Final = root / "model-armor-post-mcp-call.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -484,3 +511,40 @@ def test_a_deidentify_match_without_a_rewrite_passes_the_raw_text_when_failing_o
 
     assert outcome.error is None, outcome.raw
     assert [block["text"] for block in _tool_result(outcome)["content"]] == [text]
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_model_armor_timeout_passes_the_raw_tool_result_when_fail_on_error_is_false(
+    rig: Rig, entry: EntryPoint
+) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+    note: Final = f"{SLOW_MARK} {marker}"
+
+    outcome: Final = rig.call_note(entry, note, (FAIL_OPEN_SLOW,))
+
+    assert (outcome.error, outcome.text) == (None, note), outcome.raw
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_rescan_timeout_passes_the_raw_tool_result_when_fail_on_error_is_false(rig: Rig, entry: EntryPoint) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+    texts: Final = (f"{SLOW_RESCAN_MARK} {marker}", "second block")
+
+    outcome: Final = rig.call_blocks(entry, texts, (FAIL_OPEN_SLOW,))
+
+    assert outcome.error is None, outcome.raw
+    assert [block["text"] for block in _tool_result(outcome)["content"]] == list(texts)
+    assert len(rig.scans(marker)) == 2
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_a_google_token_failure_passes_the_raw_tool_result_when_fail_on_error_is_false(
+    rig: Rig, entry: EntryPoint
+) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+    note: Final = f"token refused {marker}"
+
+    outcome: Final = rig.call_note(entry, note, (FAIL_OPEN_NO_TOKEN,))
+
+    assert (outcome.error, outcome.text) == (None, note), outcome.raw
+    assert rig.scans(marker) == []

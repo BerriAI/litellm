@@ -1408,7 +1408,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         try:
             armor_response: Final = await scanned(content)
-        except (ModelArmorAPIError, httpx.HTTPError) as e:
+        except Exception as e:
             if not fails_open(e):
                 raise
             return inputs
@@ -1451,7 +1451,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         rescanned: Final = _texts_changed_by(unique_texts, redaction)
         try:
             rewrites: Final = {text: await sanitized(text) if text in rescanned else text for text in unique_texts}
-        except (ModelArmorAPIError, httpx.HTTPError) as e:
+        except Exception as e:
             if not fails_open(e):
                 raise
             return inputs
