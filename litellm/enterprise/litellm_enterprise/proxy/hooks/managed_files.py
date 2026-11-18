@@ -210,12 +210,13 @@ def _public_file_object(file_object: OpenAIFileObject, unified_file_id: str) -> 
 
 def _chat_message_file_id(part: object, role: str) -> str | None:
     fields: Final = as_str_mapping(part)
-    if fields is None or fields.get("type") not in ("file", "input_file"):
+    if fields is None:
         return None
-    file: Final = as_str_mapping(fields.get("file")) or {}
-    file_id: Final = file.get("file_id")
-    if role == "user" and fields.get("type") == "file" and isinstance(file_id, str) and file_id:
-        return file_id
+    if role == "user" and fields.get("type") == "file":
+        file: Final = as_str_mapping(fields.get("file")) or {}
+        file_id: Final = file.get("file_id")
+        if isinstance(file_id, str) and file_id:
+            return file_id
     source: Final = gemini_media_source(fields, prefer_file_id=role == "user")
     if source is None or not source.url.startswith(GEMINI_FILES_API_URI_PREFIXES):
         return None
@@ -1851,7 +1852,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
             if file_ids:
                 # Check user has access to all managed files
-                await self.check_file_ids_access(file_ids, user_api_key_dict)
+                await self.check_file_ids_access(file_ids, user_api_key_dict, include_gemini_files_api_uris=True)
 
                 model_file_id_mapping = await self.get_model_file_id_mapping(
                     file_ids, user_api_key_dict.parent_otel_span

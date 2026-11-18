@@ -6607,29 +6607,29 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("version", ["v1", "v1beta"])
 @pytest.mark.parametrize("role", ["user", "tool", "responses-tool"])
+@pytest.mark.parametrize("media", ["file", "image"])
 @pytest.mark.parametrize("has_access", [True, False], ids=["owner", "different-key"])
-async def test_chat_file_references_use_managed_file_access(version, role, has_access):
+async def test_chat_file_references_use_managed_file_access(version, role, media, has_access):
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
     caller: Final = (
         UserAPIKeyAuth(user_id="owner", team_id="team-owner")
         if has_access
         else UserAPIKeyAuth(user_id="other", team_id="team-other")
     )
-    file: Final = {
-        "file_id": f"https://generativelanguage.googleapis.com/{version}/files/batch-out1",
-        "format": "application/pdf",
-    }
+    uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/batch-out1"
+    file: Final = {"file_id": uri, "format": "application/pdf"}
+    image_url: Final = {"url": uri, "format": "image/png"}
     model: Final = "gemini/gemini-4-argon"
     if role == "responses-tool":
+        part = {"type": "input_file", **file} if media == "file" else {"type": "input_image", "image_url": image_url}
         request = {
             "model": model,
-            "input": [
-                {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_file", **file}]}
-            ],
+            "input": [{"type": "function_call_output", "call_id": "call_1", "output": [part]}],
         }
         call_type = "aresponses"
     else:
-        request = {"model": model, "messages": [{"role": role, "content": [{"type": "file", "file": file}]}]}
+        part = {"type": "file", "file": file} if media == "file" else {"type": "image_url", "image_url": image_url}
+        request = {"model": model, "messages": [{"role": role, "content": [part]}]}
         call_type = "acompletion"
     if has_access:
         result: Final = await managed_files.async_pre_call_hook(caller, DualCache(), request, call_type)
@@ -6638,6 +6638,21 @@ async def test_chat_file_references_use_managed_file_access(version, role, has_a
         with pytest.raises(HTTPException) as denied:
             await managed_files.async_pre_call_hook(caller, DualCache(), request, call_type)
         assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
+async def test_responses_input_checks_managed_file_access(nested: bool):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    caller: Final = UserAPIKeyAuth(user_id="other", team_id="team-other")
+    file: Final = {"type": "input_file", "file_id": "https://generativelanguage.googleapis.com/v1/files/batch-out1"}
+    item: Final = {"role": "user", "content": [file]} if nested else file
+    request: Final = {"model": "gemini/gemini-4-argon", "input": [item]}
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.async_pre_call_hook(caller, DualCache(), request, "aresponses")
+
+    assert denied.value.status_code == 403
 
 
 @pytest.mark.asyncio
