@@ -2327,7 +2327,6 @@ def completion_cost(
                             return float(provider_reported_cost)
 
                         if duration_seconds is not None:
-                            input_images: Final = _billable_input_images(_video_usage_obj)
                             return priced_video(
                                 model=model,
                                 custom_llm_provider=custom_llm_provider,
@@ -2340,12 +2339,12 @@ def completion_cost(
                                     model=model, custom_llm_provider=custom_llm_provider or "openai"
                                 ),
                                 videos=_video_count(_video_usage_obj),
-                                input_images=input_images,
+                                input_images=_billable_input_images(_video_usage_obj),
                                 requested_row=(
                                     litellm.get_model_info(
                                         model=requested_model or model, custom_llm_provider=custom_llm_provider
                                     )
-                                    if input_images > 0
+                                    if _billable_input_images(_video_usage_obj) > 0
                                     and (
                                         _video_model_info is None
                                         or _video_model_info.get("input_cost_per_image") is None
@@ -2385,8 +2384,6 @@ def completion_cost(
                         search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
                         completion_tokens = search_units
                 elif call_type in _SEARCH_CALL_TYPES:
-                    from litellm.search.cost_calculator import search_cost
-
                     # Extract number_of_queries from optional_params or default to 1
                     number_of_queries = 1
                     if optional_params is not None:
@@ -2402,50 +2399,21 @@ def completion_cost(
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
 
-                    search_region: Final = region_name if isinstance(region_name, str) else None
-                    searched: Final = search_cost(
-                        model=search_model,
+                    return _priced_search(
+                        search_model=search_model,
+                        model=model,
                         custom_llm_provider=custom_llm_provider,
                         number_of_queries=number_of_queries,
                         optional_params=optional_params,
-                        adjust=AdjustFacts(provider=custom_llm_provider, model=model, region=search_region),
+                        region=region_name if isinstance(region_name, str) else None,
                         configured_cost_per_query=configured_cost_per_query,
                         search_response=completion_response
                         if isinstance(completion_response, SearchResponse)
                         else None,
-                    )
-                    search_adjusted: Final = (
-                        AdjustedCost(
-                            cost=searched.total,
-                            discount_percent=searched.discount_percent,
-                            discount_amount=searched.discount_amount,
-                            margin_percent=searched.margin_percent,
-                            margin_fixed_amount=searched.margin_fixed_amount,
-                            margin_total_amount=searched.margin_total_amount,
-                        )
-                        if isinstance(searched, NativeReceipt)
-                        else adjusted_cost(searched, custom_llm_provider, model, search_region)
-                    )
-                    search_prompt_cost: Final = (
-                        searched.prompt_cost if isinstance(searched, NativeReceipt) else searched
-                    )
-                    _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
-                        prompt_tokens_cost_usd_dollar=search_prompt_cost,
-                        completion_tokens_cost_usd_dollar=0.0,
-                        cost_for_built_in_tools_cost_usd_dollar=0.0,
-                        total_cost_usd_dollar=search_adjusted.cost,
-                        original_cost=search_prompt_cost,
-                        discount_percent=search_adjusted.discount_percent,
-                        discount_amount=search_adjusted.discount_amount,
-                        margin_percent=search_adjusted.margin_percent,
-                        margin_fixed_amount=search_adjusted.margin_fixed_amount,
-                        margin_total_amount=search_adjusted.margin_total_amount,
                         service_tier=service_tier,
                         data_residency=data_residency,
                     )
-
-                    return search_adjusted.cost
                 elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
@@ -2815,6 +2783,61 @@ def _video_count(usage: object) -> int:
     return count if type(count) is int and count > 1 else 1
 
 
+def _priced_search(
+    search_model: str,
+    model: str,
+    custom_llm_provider: str | None,
+    number_of_queries: int,
+    optional_params: Mapping[str, object] | None,
+    region: str | None,
+    configured_cost_per_query: float | None,
+    search_response: SearchResponse | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> float:
+    from litellm.search.cost_calculator import search_cost
+
+    searched: Final = search_cost(
+        model=search_model,
+        custom_llm_provider=custom_llm_provider,
+        number_of_queries=number_of_queries,
+        optional_params=optional_params,
+        adjust=AdjustFacts(provider=custom_llm_provider, model=model, region=region),
+        configured_cost_per_query=configured_cost_per_query,
+        search_response=search_response,
+    )
+    adjusted: Final = (
+        AdjustedCost(
+            cost=searched.total,
+            discount_percent=searched.discount_percent,
+            discount_amount=searched.discount_amount,
+            margin_percent=searched.margin_percent,
+            margin_fixed_amount=searched.margin_fixed_amount,
+            margin_total_amount=searched.margin_total_amount,
+        )
+        if isinstance(searched, NativeReceipt)
+        else adjusted_cost(searched, custom_llm_provider, model, region)
+    )
+    prompt_cost: Final = searched.prompt_cost if isinstance(searched, NativeReceipt) else searched
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=prompt_cost,
+        completion_tokens_cost_usd_dollar=0.0,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=adjusted.cost,
+        original_cost=prompt_cost,
+        discount_percent=adjusted.discount_percent,
+        discount_amount=adjusted.discount_amount,
+        margin_percent=adjusted.margin_percent,
+        margin_fixed_amount=adjusted.margin_fixed_amount,
+        margin_total_amount=adjusted.margin_total_amount,
+        service_tier=service_tier,
+        data_residency=data_residency,
+    )
+    return adjusted.cost
+
+
 def _billable_input_images(usage: object) -> int:
     match usage:
         case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
@@ -3045,7 +3068,16 @@ def ocr_batch_cost(
     deferred: Final = price_units(document, tables)
     outcome: Final = (
         price_units(
-            OcrDocument(**{**document, "catalog_deferred": False}),
+            OcrDocument(
+                kind="ocr",
+                model=model,
+                provider=custom_llm_provider,
+                pages=document["pages"],
+                annotation_pages=document["annotation_pages"],
+                credits=None,
+                batch=True,
+                catalog_deferred=False,
+            ),
             tables,
             _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider),
         )
