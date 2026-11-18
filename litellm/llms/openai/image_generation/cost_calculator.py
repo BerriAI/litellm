@@ -7,9 +7,9 @@ These models use token-based pricing instead of pixel-based pricing like DALL-E.
 from typing import Final
 
 from litellm import verbose_logger
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import per_image_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
-    flat_image_cost,
     generic_cost_per_token,
     resolve_image_model_info,
 )
@@ -33,7 +33,7 @@ def cost_calculator(
     usage: Final = getattr(image_response, "usage", None)
     if usage is None:
         verbose_logger.debug("No usage data available for %s, cannot calculate token-based cost", model)
-        return flat_image_cost(price_table, image_response)
+        return per_image_cost(model, provider, len(image_response.data or ()), price_table)
 
     # A chat Usage with an explicit output breakdown: cost via generic_cost_per_token.
     if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
@@ -61,4 +61,4 @@ def cost_calculator(
         )
         return prompt_cost + completion_cost
 
-    return flat_image_cost(price_table, image_response)
+    return per_image_cost(model, provider, len(image_response.data or ()), price_table)
