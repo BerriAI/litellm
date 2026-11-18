@@ -21,6 +21,7 @@ pub use crate::mcp::McpQuery;
 pub use crate::ocr::OcrQuery;
 pub use crate::rerank::RerankQuery;
 pub use crate::search::SearchQuery;
+pub use crate::session::{ClipUsage, Metered, SessionQuery, TranscriptionClip, Translation};
 pub use crate::speech::SpeechQuery;
 pub use crate::transcription::TranscriptionQuery;
 pub use crate::vector_store::VectorStoreSearchQuery;
@@ -43,8 +44,8 @@ pub enum PriceQuery {
     Search(Box<SearchQuery>),
     VectorStoreSearch(Box<VectorStoreSearchQuery>),
     Video(Box<VideoQuery>),
-    /// Realtime, Live and Responses websocket sessions
-    Session(Header),
+    /// What a realtime or Live session bills beside its tokens
+    Session(Box<SessionQuery>),
     BatchLine(Box<BatchLineQuery>),
     Guardrail(Box<GuardrailQuery>),
     A2a(Box<A2aQuery>),

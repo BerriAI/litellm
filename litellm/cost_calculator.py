@@ -4,9 +4,10 @@ import logging
 import math
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
-from itertools import accumulate
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
 
@@ -41,16 +42,26 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     AdjustFacts,
     BatchLineDocument,
     CallFacts,
+    ClipUsage,
+    ClipUse,
+    DurationClip,
     ImageDocument,
+    MeteredUse,
     OcrDocument,
+    OtherClip,
     RerankDocument,
+    SessionDocument,
     SpeechDocument,
+    TokenClip,
     TranscriptionDocument,
+    TranslationUse,
     VectorStoreSearchDocument,
     adjusted_cost,
     batch_usage,
     billed_token_rates,
+    part_costs,
     price,
+    price_session,
     price_units,
     priced_usage,
     prompt_and_completion,
@@ -3716,34 +3727,82 @@ def _live_session_wall_clock_seconds(litellm_logging_obj: LitellmLoggingObject |
     return 0.0
 
 
-def _live_model_rate(
-    model_name: str,
-    custom_llm_provider: str,
-    rate_field: Literal["input_cost_per_second", "input_cost_per_text_message"],
-) -> float | None:
-    model_info: Final = _lookup_model_info_or_none(model_name, custom_llm_provider)
-    if model_info is None:
-        return None
-    rate: Final = model_info.get(rate_field)
-    if isinstance(rate, (int, float)) and not isinstance(rate, bool) and math.isfinite(rate):
-        return float(rate)
-    return None
+_SESSION_RATE_KEYS: Final = (
+    "input_cost_per_second",
+    "output_cost_per_second",
+    "input_cost_per_audio_token",
+    "output_cost_per_audio_token",
+    "input_cost_per_token",
+    "output_cost_per_token",
+)
+
+_SessionRows: TypeAlias = tuple[Mapping[str, object], ...]
 
 
-def _first_live_model_rate(
-    potential_model_names: Sequence[str | None],
-    custom_llm_provider: str,
-    rate_field: Literal["input_cost_per_second", "input_cost_per_text_message"],
-) -> float:
-    return next(
-        (
-            rate
-            for model_name in potential_model_names
-            if model_name is not None
-            and (rate := _live_model_rate(model_name, custom_llm_provider, rate_field)) is not None
-        ),
-        0.0,
+def _live_rows(model_names: Sequence[str | None], custom_llm_provider: str) -> _SessionRows:
+    """The row ``get_model_info`` finds for each of ``model_names`` that has one, in order."""
+    return tuple(
+        row
+        for model_name in model_names
+        if model_name is not None
+        and (row := as_str_mapping(_lookup_model_info_or_none(model_name, custom_llm_provider))) is not None
     )
+
+
+def _declared_rates(info: ModelInfo | None) -> Mapping[str, object]:
+    """The rates of ``info`` its own cost map entry declares, since ``get_model_info`` synthesizes zero token rates
+    for an entry that omits them."""
+    fields: Final = as_str_mapping(info) or {}
+    key: Final = fields.get("key")
+    declared: Final = as_str_mapping(litellm.model_cost.get(key)) if isinstance(key, str) else None
+    if declared is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            rate_key: value
+            for rate_key in _SESSION_RATE_KEYS
+            if declared.get(rate_key) is not None and (value := fields.get(rate_key)) is not None
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionUse:
+    """What a session used beside its tokens, each part beside the rows main tries for it."""
+
+    clips: tuple[tuple[ClipUsage, _SessionRows], ...] = ()
+    translation: tuple[float, float, _SessionRows] | None = None
+    live_voice: tuple[float, _SessionRows] | None = None
+    audio_duration: tuple[float, _SessionRows] | None = None
+    text_messages: tuple[float, _SessionRows] | None = None
+
+
+def _metered(used: tuple[float, _SessionRows] | None, rows: Sequence[int]) -> MeteredUse | None:
+    return None if used is None else MeteredUse(quantity=used[0], rows=rows)
+
+
+def _session_costs(used: _SessionUse) -> Mapping[str, float]:
+    """Each part's cost, priced in one crossing, a part no row prices left out."""
+    parts: Final = (used.translation, used.live_voice, used.audio_duration, used.text_messages)
+    groups: Final = (*(rows for _, rows in used.clips), *(() if part is None else part[-1] for part in parts))
+    starts: Final = tuple(accumulate((len(group) for group in groups), initial=0))
+    indexes: Final = tuple(tuple(range(start, start + len(group))) for start, group in zip(starts, groups))
+    clip_indexes: Final = indexes[: len(used.clips)]
+    translation_rows, live_rows, audio_rows, message_rows = indexes[len(used.clips) :]
+    document: Final = SessionDocument(
+        transcription=tuple(
+            ClipUse(rows=rows, usage=usage) for (usage, _), rows in zip(used.clips, clip_indexes, strict=True)
+        ),
+        translation=None
+        if used.translation is None
+        else TranslationUse(
+            input_seconds=used.translation[0], output_seconds=used.translation[1], rows=translation_rows
+        ),
+        live_voice=_metered(used.live_voice, live_rows),
+        audio_duration=_metered(used.audio_duration, audio_rows),
+        text_messages=_metered(used.text_messages, message_rows),
+    )
+    return part_costs(price_session(document, tuple(chain.from_iterable(groups))))
 
 
 def _xai_metered_usage(litellm_logging_obj: LitellmLoggingObject | None) -> RealtimeMeteredUsage | None:
@@ -3883,23 +3942,6 @@ def handle_realtime_stream_cost_calculation(
         custom_llm_provider=custom_llm_provider,
         data_residency=data_residency,
     )
-    transcription_cost: Final = (
-        handle_realtime_transcription_cost_calculation(
-            results=results,
-            custom_llm_provider=custom_llm_provider,
-            litellm_model_name=litellm_model_name,
-            custom_pricing_model=custom_pricing_model,
-        )
-        if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
-        else 0.0
-    )
-    translation_cost: Final = handle_realtime_translation_cost_calculation(
-        results=results,
-        custom_llm_provider=custom_llm_provider,
-        litellm_model_name=litellm_model_name,
-        deployment_pricing_models=(custom_pricing_model, base_pricing_model, *deployment_models),
-        session_model=received_model,
-    )
     live_lifecycle_event_types: Final = frozenset({"session.started", "session.usage.updated", "session.closed"})
     live_session_started: Final = any(result["type"] == "session.started" for result in results)
     live_session_closed: Final = any(result["type"] == "session.closed" for result in results)
@@ -3920,11 +3962,6 @@ def handle_realtime_stream_cost_calculation(
     live_model_names: Final = (
         (custom_pricing_model, base_pricing_model, received_model, litellm_model_name) if live_event_seen else ()
     )
-    live_voice_cost: Final = voice_seconds * _first_live_model_rate(
-        live_model_names,
-        custom_llm_provider,
-        "input_cost_per_second",
-    )
     xai_metered: Final = (
         _xai_metered_usage(litellm_logging_obj) if custom_llm_provider == LlmProviders.XAI.value else None
     )
@@ -3935,14 +3972,25 @@ def handle_realtime_stream_cost_calculation(
         if custom_llm_provider == LlmProviders.XAI.value
         else 0.0
     )
-    audio_duration_cost: Final = xai_audio_seconds * _first_live_model_rate(
-        potential_model_names,
-        custom_llm_provider,
-        "input_cost_per_second",
+    session_rows: Final = _live_rows(potential_model_names, custom_llm_provider)
+    costs: Final = _session_costs(
+        _SessionUse(
+            clips=_transcription_clips(results, custom_llm_provider, litellm_model_name, custom_pricing_model),
+            translation=_translation_use(
+                results,
+                custom_llm_provider,
+                (custom_pricing_model, base_pricing_model, *deployment_models, litellm_model_name, received_model),
+            ),
+            live_voice=(voice_seconds, _live_rows(live_model_names, custom_llm_provider)),
+            audio_duration=(xai_audio_seconds, session_rows),
+            text_messages=(float(xai_metered.text_messages if xai_metered is not None else 0), session_rows),
+        )
     )
-    text_message_cost: Final = (xai_metered.text_messages if xai_metered is not None else 0) * _first_live_model_rate(
-        potential_model_names, custom_llm_provider, "input_cost_per_text_message"
-    )
+    transcription_cost: Final = costs.get("transcription_cost", 0.0)
+    translation_cost: Final = costs.get("translation_cost", 0.0)
+    live_voice_cost: Final = costs.get("live_voice_cost", 0.0)
+    audio_duration_cost: Final = costs.get("audio_duration_cost", 0.0)
+    text_message_cost: Final = costs.get("text_message_cost", 0.0)
     live_response_costs: Final = tuple(
         _live_response_token_costs(
             response=response,
@@ -4010,16 +4058,20 @@ def _translation_session_seconds(results: OpenAIRealtimeStreamList) -> tuple[flo
     return float(input_seconds), float(output_seconds)
 
 
-def _translation_per_second_rates(
-    models: Sequence[str | None], custom_llm_provider: str
-) -> tuple[float | None, float | None]:
-    model_infos: Final = tuple(
-        _lookup_model_info_or_none(model, custom_llm_provider) for model in models if model is not None
+def _translation_use(
+    results: OpenAIRealtimeStreamList, custom_llm_provider: str, model_names: Sequence[str | None]
+) -> tuple[float, float, _SessionRows]:
+    input_seconds, output_seconds = _translation_session_seconds(results)
+    rows: Final = (
+        tuple(
+            _declared_rates(_lookup_model_info_or_none(model, custom_llm_provider))
+            for model in model_names
+            if model is not None
+        )
+        if input_seconds > 0 or output_seconds > 0
+        else ()
     )
-    return (
-        _first_declared_transcription_rate(("input_cost_per_second",), model_infos),
-        _first_declared_transcription_rate(("output_cost_per_second",), model_infos),
-    )
+    return input_seconds, output_seconds, rows
 
 
 def handle_realtime_translation_cost_calculation(
@@ -4029,13 +4081,59 @@ def handle_realtime_translation_cost_calculation(
     deployment_pricing_models: Sequence[str | None] = (),
     session_model: str | None = None,
 ) -> float:
-    input_seconds, output_seconds = _translation_session_seconds(results)
-    if input_seconds <= 0 and output_seconds <= 0:
-        return 0.0
-    input_rate, output_rate = _translation_per_second_rates(
-        (*deployment_pricing_models, litellm_model_name, session_model), custom_llm_provider
+    translation: Final = _translation_use(
+        results, custom_llm_provider, (*deployment_pricing_models, litellm_model_name, session_model)
     )
-    return input_seconds * (input_rate or 0.0) + output_seconds * (output_rate or 0.0)
+    return _session_costs(_SessionUse(translation=translation)).get("translation_cost", 0.0)
+
+
+def _clip_usage(usage: Mapping[str, object]) -> ClipUsage:
+    usage_type: Final = usage.get("type")
+    if usage_type == "duration":
+        return DurationClip(
+            type="duration", seconds=float(normalized_audio_duration_seconds(usage.get("seconds")) or 0.0)
+        )
+    if usage_type != "tokens":
+        return OtherClip(type="other")
+    details: Final = as_str_mapping(usage.get("input_token_details")) or {}
+    return TokenClip(
+        type="tokens",
+        audio=float(normalized_audio_duration_seconds(details.get("audio_tokens")) or 0.0),
+        text=float(normalized_audio_duration_seconds(details.get("text_tokens")) or 0.0),
+        output=float(normalized_audio_duration_seconds(usage.get("output_tokens")) or 0.0),
+    )
+
+
+def _transcription_clips(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+    custom_pricing_model: str | None,
+) -> tuple[tuple[ClipUsage, _SessionRows], ...]:
+    """Each completed transcription clip and its rows: the session's pricing override first, then the ASR model the
+    session configured for it."""
+    configured_models: Final = tuple(accumulate(map(_session_transcription_model, results), _newer_model))
+    clips: Final = tuple(
+        (as_str_mapping(result.get("usage")) or {}, configured)
+        for result, configured in zip(results, configured_models, strict=True)
+        if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
+    )
+    if not clips:
+        return ()
+    fallback_model: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
+    clip_models: Final = tuple((usage, configured or fallback_model) for usage, configured in clips)
+    model_rows: Final = MappingProxyType(
+        {
+            model: _declared_rates(_cost_map_model_info(model, custom_llm_provider))
+            for model in frozenset(m for _, m in clip_models)
+        }
+    )
+    override_rows: Final = (
+        _declared_rates(_cost_map_model_info(custom_pricing_model, custom_llm_provider))
+        if custom_pricing_model is not None
+        else MappingProxyType({})
+    )
+    return tuple((_clip_usage(usage), (override_rows, model_rows[model])) for usage, model in clip_models)
 
 
 def handle_realtime_transcription_cost_calculation(
@@ -4050,30 +4148,11 @@ def handle_realtime_transcription_cost_calculation(
     Transcription sessions emit no `response.done` events; instead each
     `conversation.item.input_audio_transcription.completed` event carries a
     `usage` object billed by the ASR model. The usage is one of:
-      - {"type": "duration", "seconds": <float>}  → priced via input_cost_per_second
-      - {"type": "tokens", "input_tokens": ...}    → priced via input/audio token cost
+      - {"type": "duration", "seconds": <float>}  -> priced via input_cost_per_second
+      - {"type": "tokens", "input_token_details": ...}  -> priced via input/audio token cost
     """
-    configured_models: Final = tuple(accumulate(map(_session_transcription_model, results), _newer_model))
-    clips: Final = tuple(
-        (as_str_mapping(result.get("usage")) or {}, configured)
-        for result, configured in zip(results, configured_models, strict=True)
-        if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
-    )
-    if not clips:
-        return 0.0
-
-    fallback_model: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
-    clip_models: Final = tuple((usage, configured or fallback_model) for usage, configured in clips)
-    model_infos: Final = MappingProxyType(
-        {model: _cost_map_model_info(model, custom_llm_provider) for model in frozenset(m for _, m in clip_models)}
-    )
-    override_info: Final = (
-        _cost_map_model_info(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
-    )
-    return sum(
-        (_transcription_usage_cost(dict(usage), model_infos[model], override_info) for usage, model in clip_models),
-        0.0,
-    )
+    clips: Final = _transcription_clips(results, custom_llm_provider, litellm_model_name, custom_pricing_model)
+    return _session_costs(_SessionUse(clips=clips)).get("transcription_cost", 0.0)
 
 
 _TRANSCRIPTION_SESSION_EVENT_TYPES: Final = frozenset(
@@ -4112,80 +4191,3 @@ def _get_transcription_model_name_from_results(
         (model for result in results if (model := _str_field(_session_of(result), "model"))),
         None,
     )
-
-
-def _model_info_rate(info: ModelInfoBase, key: _TranscriptionRateKey) -> float | None:
-    match key:
-        case "input_cost_per_second":
-            return info.get("input_cost_per_second")
-        case "output_cost_per_second":
-            return info.get("output_cost_per_second")
-        case "input_cost_per_audio_token":
-            return info.get("input_cost_per_audio_token")
-        case "output_cost_per_audio_token":
-            return info.get("output_cost_per_audio_token")
-        case "input_cost_per_token":
-            return info.get("input_cost_per_token")
-        case "output_cost_per_token":
-            return info.get("output_cost_per_token")
-        case _:
-            assert_never(key)
-
-
-def _declared_transcription_rate(info: ModelInfoBase | None, keys: tuple[_TranscriptionRateKey, ...]) -> float | None:
-    """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
-    because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
-    if info is None:
-        return None
-    declared: Final = litellm.model_cost.get(info.get("key"))
-    if declared is None:
-        return None
-    return next(
-        (
-            float(value)
-            for key in keys
-            if declared.get(key) is not None and (value := _model_info_rate(info, key)) is not None
-        ),
-        None,
-    )
-
-
-def _first_declared_transcription_rate(
-    keys: tuple[_TranscriptionRateKey, ...], infos: Sequence[ModelInfoBase | None]
-) -> float | None:
-    rates: Final = (_declared_transcription_rate(info, keys) for info in infos)
-    return next((rate for rate in rates if rate is not None), None)
-
-
-def _transcription_rate(keys: tuple[_TranscriptionRateKey, ...], *infos: ModelInfoBase | None) -> float:
-    return _first_declared_transcription_rate(keys, infos) or 0.0
-
-
-def _transcription_usage_cost(
-    usage: Mapping[str, object],
-    model_info: ModelInfo | None,
-    override_info: ModelInfo | None = None,
-) -> float:
-    if model_info is None and override_info is None:
-        return 0.0
-
-    usage_type: Final = usage.get("type")
-    if usage_type == "duration":
-        seconds: Final = normalized_audio_duration_seconds(usage.get("seconds")) or 0.0
-        return float(seconds) * _transcription_rate(("input_cost_per_second",), override_info, model_info)
-    if usage_type == "tokens":
-        input_token_details: Final = as_str_mapping(usage.get("input_token_details")) or {}
-        audio_tokens: Final = normalized_audio_duration_seconds(input_token_details.get("audio_tokens")) or 0.0
-        text_tokens: Final = normalized_audio_duration_seconds(input_token_details.get("text_tokens")) or 0.0
-        output_tokens: Final = normalized_audio_duration_seconds(usage.get("output_tokens")) or 0.0
-        audio_cost: Final = float(audio_tokens) * _transcription_rate(
-            ("input_cost_per_audio_token", "input_cost_per_token"), override_info, model_info
-        )
-        text_cost: Final = float(text_tokens) * _transcription_rate(
-            ("input_cost_per_token",), override_info, model_info
-        )
-        output_cost: Final = float(output_tokens) * _transcription_rate(
-            ("output_cost_per_token",), override_info, model_info
-        )
-        return audio_cost + text_cost + output_cost
-    return 0.0
