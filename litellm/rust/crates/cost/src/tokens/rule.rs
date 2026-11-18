@@ -331,8 +331,10 @@ impl Rule {
                 if !priced {
                     return Err(Kind::Tokens);
                 }
-                Ok(rate(SearchContextSize::Medium)
-                    .map_or(Usd::ZERO, |rate| rate * Quantity::Count(used.requests)))
+                Ok(crate::tools::anthropic_fee(
+                    rate(SearchContextSize::Medium),
+                    Some(used.requests),
+                ))
             }
             Self::Generic(_) | Self::Formula(_) => Err(Kind::Tokens),
         }

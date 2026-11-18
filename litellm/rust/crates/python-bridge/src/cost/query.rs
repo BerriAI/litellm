@@ -19,6 +19,7 @@ use litellm_cost::query::{
 };
 use litellm_cost::rates::{Pricing, RatesQuery};
 use litellm_cost::receipt::{PriceOutcome, Receipt};
+use litellm_cost::tools::{ToolUse, Tools, ToolsQuery};
 use litellm_host_python::{from_py_argument, json_from_py};
 use litellm_inference_messages::PricedCall;
 use litellm_model_catalog::wire::Fields;
@@ -108,8 +109,9 @@ struct PriceDocument {
     decisions: bool,
     #[serde(default)]
     breakdown: BreakdownFacts,
+    /// The built-in tools the call used, each row named by its index among the tool rows passed beside it
     #[serde(default)]
-    tool_fees: f64,
+    tools: Option<ToolUse<usize>>,
     #[serde(default)]
     router_fee: Option<RouterFeeFacts>,
 }
@@ -136,6 +138,7 @@ pub(crate) struct CallRows {
     pub(crate) row: Option<Fields>,
     pub(crate) breakdown: Option<Fields>,
     pub(crate) fee: Option<Fields>,
+    pub(crate) tools: Vec<Fields>,
 }
 
 /// `custom_cost_per_token` or `custom_cost_per_second`, which price the call without a row
@@ -250,6 +253,7 @@ pub(crate) fn price(
     row: Option<&Bound<'_, PyMapping>>,
     breakdown_row: Option<&Bound<'_, PyMapping>>,
     fee_row: Option<&Bound<'_, PyMapping>>,
+    tool_rows: &[Bound<'_, PyMapping>],
 ) -> PyResult<Option<NativeReceipt>> {
     let document: PriceDocument = from_py_argument(document)?;
     for length in [
@@ -262,6 +266,7 @@ pub(crate) fn price(
         row: row.map(row_fields).transpose()?,
         breakdown: breakdown_row.map(row_fields).transpose()?,
         fee: fee_row.map(row_fields).transpose()?,
+        tools: tool_rows.iter().map(row_fields).collect::<PyResult<_>>()?,
     };
     priced(snapshot, document, rows)
         .map(|receipt| NativeReceipt::new(py, &receipt))
@@ -316,13 +321,14 @@ impl litellm_inference_messages::Pricing for RoutePricing {
                 custom: None,
                 decisions: false,
                 breakdown: BreakdownFacts::Priced,
-                tool_fees: 0.0,
+                tools: None,
                 router_fee: None,
             },
             CallRows {
                 row: None,
                 breakdown: None,
                 fee: None,
+                tools: Vec::new(),
             },
         )
     }
@@ -334,6 +340,7 @@ fn priced(snapshot: &CostSnapshot, document: PriceDocument, given: CallRows) -> 
         row,
         breakdown: breakdown_row,
         fee: fee_row,
+        tools: tool_rows,
     } = given;
     let (candidates, named) = match (&document.custom, &document.named) {
         (
@@ -398,6 +405,7 @@ fn priced(snapshot: &CostSnapshot, document: PriceDocument, given: CallRows) -> 
         }
         (_, _) => (rows, None),
     };
+    let (rows, tools) = with_tool_rows(rows, tool_rows);
     let query = PriceQuery::Tokens(Box::new(TokensQuery {
         header: Header {
             candidates,
@@ -426,13 +434,66 @@ fn priced(snapshot: &CostSnapshot, document: PriceDocument, given: CallRows) -> 
         raw: document.raw.unwrap_or_default(),
         decisions: document.decisions,
         breakdown,
-        tool_fees: document.tool_fees,
+        tools: document
+            .tools
+            .unwrap_or_default()
+            .rows(&|index: usize| tools.get(index).cloned()),
         router_fee,
     }));
     match litellm_cost::price(&rows, &query) {
         PriceOutcome::Priced(receipt) => Some(*receipt),
         PriceOutcome::Unpriced(_) => None,
     }
+}
+
+/// `rows` added for this call alone, each lowered under the provider it names, and where each landed
+fn with_tool_rows(
+    rows: PricingRows,
+    tool_rows: Vec<Fields>,
+) -> (PricingRows, Vec<litellm_cost::row::RowRef>) {
+    tool_rows
+        .into_iter()
+        .enumerate()
+        .fold((rows, Vec::new()), |(rows, refs), (index, fields)| {
+            let provider = fields
+                .get("litellm_provider")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let (rows, at) = rows.with_per_call(&format!("tool-{index}"), fields, &provider);
+            (rows, refs.into_iter().chain([at]).collect())
+        })
+}
+
+/// Prices built-in tool fees alone: every fee a call's tools bill, or one tool's calculator. `None` where main's
+/// calculator returned `None`. `rows` are the rows the document names by index
+pub(crate) fn price_tools(
+    snapshot: &CostSnapshot,
+    document: &Bound<'_, PyAny>,
+    rows: &[Bound<'_, PyMapping>],
+) -> PyResult<Option<f64>> {
+    let tools: Tools<usize> = from_py_argument(document)?;
+    let fields = rows.iter().map(row_fields).collect::<PyResult<_>>()?;
+    let (source, refs) = with_tool_rows(snapshot.pricing_rows([], []), fields);
+    let query = PriceQuery::Tools(Box::new(ToolsQuery {
+        header: Header {
+            candidates: Vec::new(),
+            source: PriceSource::Rows { rows: Vec::new() },
+            basis: Basis {
+                service_tier: Default::default(),
+                data_residency: None,
+                vertex_location: None,
+                at: jiff::Timestamp::now(),
+            },
+            adjustments: AdjustmentPolicy::None,
+            reported: None,
+        },
+        tools: tools.rows(&|index: usize| refs.get(index).cloned()),
+    }));
+    Ok(match litellm_cost::price(&source, &query) {
+        PriceOutcome::Priced(receipt) => Some(receipt.tools.get()),
+        PriceOutcome::Unpriced(_) => None,
+    })
 }
 
 /// The candidates in main's order, and each one the catalog resolved beside its row
