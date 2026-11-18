@@ -2847,10 +2847,10 @@ class ImageSVGUsage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: str
-    input_tokens: int
-    output_tokens: int
-    reasoning_tokens: int = 0
-    total_tokens: int = 0
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
 
 
 def _parse_image_svg_usage(value: object) -> ImageSVGUsage | None:
