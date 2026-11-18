@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    has_json_input,
     image_media_type,
     image_param,
     input_images,
@@ -29,6 +30,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
+    without_json_input,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
@@ -309,6 +311,7 @@ def _unsupported_params(
     refuses_videos: Final = bool(ir_request.videos) and not provider_config.supports_video_input(
         model, custom_llm_provider
     )
+    refuses_json_input: Final = has_json_input(ir_request.input) and not provider_config.supports_json_input
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -316,6 +319,7 @@ def _unsupported_params(
         *(("box questions",) if refuses_box_questions else ()),
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
+        *(("input_json",) if refuses_json_input else ()),
     )
 
 
@@ -333,13 +337,14 @@ def _without_unsupported_params(
     headers: Mapping[str, str],
     supports_box_questions: bool,
 ) -> DecisionsIRRequest:
+    supported_images: Final = (
+        ir_request.input
+        if provider_config.supports_images_in(ir_request.input, headers)
+        else with_images_where(ir_request.input, _no_image)
+    )
     return replace(
         ir_request,
-        input=(
-            ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
-            else with_images_where(ir_request.input, _no_image)
-        ),
+        input=supported_images if provider_config.supports_json_input else without_json_input(supported_images),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(

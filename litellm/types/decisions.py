@@ -292,8 +292,15 @@ class OpenAIDecisionInputImage(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class OpenAIDecisionInputJSON(LiteLLMPydanticObjectBase):
+    type: Literal["input_json"]
+    data: Mapping[str, object] | Sequence[Mapping[str, object]]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 OpenAIDecisionContentPart: TypeAlias = Annotated[
-    OpenAIDecisionInputText | OpenAIDecisionInputImage,
+    OpenAIDecisionInputText | OpenAIDecisionInputImage | OpenAIDecisionInputJSON,
     Field(discriminator="type"),
 ]
 
@@ -388,7 +395,9 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
     input: Annotated[
         OpenAIDecisionInput,
         Field(
-            description="The text being judged, or user messages whose content mixes input_text and input_image parts"
+            description=(
+                "The text being judged, or user messages whose content mixes input_text, input_image and input_json parts"
+            )
         ),
     ]
     questions: Annotated[
