@@ -1458,8 +1458,11 @@ async def get_response_input_items(
 
     data: Final[dict[str, object]] = await read_request_body(request=request)
     data["response_id"] = response_id
-    input_items_extra_query: Final = _extra_query_with_query_params(
-        data.get("extra_query"), request, _INPUT_ITEMS_QUERY_PARAMS
+    body_extra_query: Final = data.get("extra_query")
+    input_items_extra_query: Final = (
+        None
+        if isinstance(body_extra_query, str | list | int | float)
+        else _extra_query_with_query_params(body_extra_query, request, _INPUT_ITEMS_QUERY_PARAMS)
     )
     if input_items_extra_query is not None:
         data["extra_query"] = input_items_extra_query

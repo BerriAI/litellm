@@ -2527,13 +2527,6 @@ def list_input_items(
         if responses_api_provider_config is None:
             raise ValueError(f"list_input_items is not supported for {custom_llm_provider}")
 
-        query: Final = _requested_input_items_query(
-            arguments={"after": after, "before": before, "include": include, "limit": limit, "order": order},
-            extra_query=extra_query,
-            custom_llm_provider=custom_llm_provider,
-            drop_malformed=drops_unsupported_params(litellm_params.drop_params),
-        )
-
         local_vars.update(kwargs)
 
         litellm_logging_obj.update_from_kwargs(
@@ -2542,6 +2535,13 @@ def list_input_items(
             optional_params={"response_id": response_id},
             litellm_params={"litellm_call_id": litellm_call_id},
             custom_llm_provider=custom_llm_provider,
+        )
+
+        query: Final = _requested_input_items_query(
+            arguments={"after": after, "before": before, "include": include, "limit": limit, "order": order},
+            extra_query=extra_query,
+            custom_llm_provider=custom_llm_provider,
+            drop_malformed=drops_unsupported_params(litellm_params.drop_params),
         )
 
         response: Final = base_llm_http_handler.list_responses_input_items(

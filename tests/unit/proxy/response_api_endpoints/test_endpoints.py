@@ -1893,8 +1893,12 @@ async def test_listing_input_items_through_the_proxy_forwards_the_client_list_pa
         ),
     ],
 )
+@pytest.mark.parametrize("deployment_extra_query", [{"limit": 1, "order": "asc"}, "limit=1"])
 async def test_a_deployments_own_params_named_like_list_params_never_reach_the_input_items_listing(
-    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], forwarded: list[tuple[str, str]]
+    monkeypatch: pytest.MonkeyPatch,
+    query: tuple[tuple[str, str], ...],
+    forwarded: list[tuple[str, str]],
+    deployment_extra_query: object,
 ):
     result, upstream_requests = await _list_items_through_proxy(
         monkeypatch,
@@ -1905,6 +1909,7 @@ async def test_a_deployments_own_params_named_like_list_params_never_reach_the_i
             "limit": 50,
             "after": "item_from_deployment",
             "before": "item_from_deployment",
+            "extra_query": deployment_extra_query,
         },
     )
 
@@ -1964,6 +1969,19 @@ async def test_a_body_extra_query_that_is_not_an_object_is_a_400_or_dropped_unde
     assert result.status_code == status_code, result.text
     assert ("Invalid 'extra_query'" in result.text) is (status_code == 400)
     assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == forwarded
+
+
+@pytest.mark.asyncio
+async def test_a_body_extra_query_that_is_not_an_object_is_a_400_even_next_to_query_params(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (("limit", "2"),), body={"extra_query": "limit=1"}
+    )
+
+    assert result.status_code == 400, result.text
+    assert "Invalid 'extra_query'" in result.text
+    assert upstream_requests == ()
 
 
 @pytest.mark.asyncio

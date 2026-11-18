@@ -1009,7 +1009,7 @@ def _deployment_call_params(
     params: Final = without_retrieve_stream_defaults(data, kwargs)
     if endpoint != "alist_input_items":
         return params
-    return without(params, *INPUT_ITEMS_QUERY_KEYS)
+    return without(params, *INPUT_ITEMS_QUERY_KEYS, "extra_query")
 
 
 def _generic_attempt(

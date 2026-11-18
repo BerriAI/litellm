@@ -1,3 +1,4 @@
+import queue
 from collections.abc import Mapping
 from typing import Final, Literal
 
@@ -6,6 +7,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from tests.unit.proxy.conftest import httpx_transport
 
 pytestmark: Final = pytest.mark.usefixtures(httpx_transport.__name__)
@@ -130,3 +132,32 @@ async def test_async_sdk_positional_arguments_keep_their_pre_extra_query_meaning
         ("limit", "7"),
         ("order", "asc"),
     ]
+
+
+class _FailureLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: queue.Queue[Mapping[str, object]] = queue.Queue()
+
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.put(kwargs)
+
+
+def test_sdk_a_malformed_query_logs_its_failure_with_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    with pytest.raises(litellm.BadRequestError):
+        litellm.list_input_items(
+            response_id="resp_sdk",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base=_API_BASE,
+            extra_query={"limit": "abc"},
+        )
+
+    logged: Final = failure_log.logged.get(timeout=10)["standard_logging_object"]
+
+    assert isinstance(logged, Mapping)
+    assert logged["custom_llm_provider"] == "openai"
