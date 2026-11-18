@@ -1,11 +1,12 @@
+import contextlib
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Generator, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ConfigDict, RootModel, with_config
+from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -66,6 +67,12 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "model_armor"
+_RESPONSE_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _AwaitableJSON(Protocol):
+    def __await__(self) -> Generator[object, None, object]: ...
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -296,7 +303,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _log_request_debug(
         self,
         url: str,
-        body: dict,
+        body: Mapping[str, object],
         file_bytes: "bytes | None",
         file_type: "str | None",
     ) -> None:
@@ -411,8 +418,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             raise ModelArmorAPIError(detail)
 
-        json_response: Final = response.json()
-        if hasattr(json_response, "__await__"):
+        json_response: Final = _RESPONSE_JSON.validate_python(response.json())
+        if isinstance(json_response, _AwaitableJSON):
             return _ModelArmorResponseRoot.model_validate(await json_response).root
         return _ModelArmorResponseRoot.model_validate(json_response).root
 
@@ -1156,11 +1163,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
+        response: AsyncIterable[object],
+        request_data: dict[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks."""
+        async with contextlib.aclosing(self._moderated_stream(response, request_data)) as moderated:
+            async for moderated_item in moderated:
+                yield moderated_item
 
+    async def _moderated_stream(
+        self, response: AsyncIterable[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -1257,7 +1270,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
                 # Return sanitized stream
                 if surface is _StreamSurface.ANTHROPIC_MESSAGES:
-                    for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
+                    for sse_chunk in anthropic_sse_chunks_from_response(assembled_response, all_chunks):
                         yield sse_chunk
                     return
                 mock_response: Final = MockResponseIterator(model_response=assembled_response)

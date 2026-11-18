@@ -13,7 +13,7 @@ tests/rust-python-harness/
 │   │   ├── __init__.py
 │   │   ├── reporting.py
 │   │   ├── sdk/
-│   │   │   └── ocr/
+│   │   │   └── responses/
 │   │
 │   ├── trace_parity/
 │   │   ├── __init__.py
@@ -53,6 +53,7 @@ tests/rust-python-harness/
 - Examples: `run e2e_parity --surface sdk --function ocr`, `run unit_tests_parity --function ocr --pytest-arg=-x`, or `run all --function ocr`
 - `cli/catalog.py` discovers strategies, validates their Python definitions, and orders them. `cli/__init__.py` builds the Click command tree. `cli/commands.py` runs selected cases
 - `e2e_parity/` compares SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses
+- `e2e_parity/sdk/<route>/` holds the pytest parity files that send one public SDK call through the Python implementation and through the native route against the same recorded provider response, then compare dispatch, the provider request, the response and the success log. Every known gap is a strict xfail naming the gap. Run them with `uv run pytest -o consider_namespace_packages=true tests/rust-python-harness/strategies/e2e_parity/sdk/responses -q`. They reuse the recording server and isolation helpers from `tests/test_litellm_rust/support`, and they never belong in `tests/test_litellm_rust`, which is native only
 - `trace_parity/` profiles the Python call stack and prints every collected Python call under `litellm/`. It never collects Rust spans and never rebuilds the native extension
 - E2E and trace strategies load their registered module cases and run surface-specific execution from their folders
 - `shared/unit_runners/contracts.py` owns the typed per-function unit contracts consumed by `unit_tests_parity` and `unit_tests_rust`

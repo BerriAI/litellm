@@ -7,13 +7,13 @@ different managed resource types (files, vector stores, etc.).
 
 import base64
 import re
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS: Final = ("azure", "azure_ai")
 
 
 def resolve_passthrough_managed_id_provider(
-    custom_llm_provider: Any,
+    custom_llm_provider: object,
 ) -> str | None:
     """Map a pass-through ``custom_llm_provider`` to the provider scope that
     namespaces passthrough managed object IDs, or ``None`` when the route is not
@@ -29,7 +29,8 @@ def resolve_passthrough_managed_id_provider(
     Splitting them would make a managed ID minted on ``azure`` fail to resolve
     when replayed on ``azure_ai`` and vice versa.
     """
-    provider: Final = str(getattr(custom_llm_provider, "value", custom_llm_provider) or "").lower()
+    provider_value: Final[object] = getattr(custom_llm_provider, "value", custom_llm_provider)
+    provider: Final = str(provider_value or "").lower()
     if not provider:
         return None
     if provider in PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS or provider.endswith((".azure", ".azure_ai")):

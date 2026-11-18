@@ -31,6 +31,8 @@ from pydantic import JsonValue
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _OWNED_PROXY_SALT_KEY: Final = "sk-integration-salt"
 _OWNERSHIP_POOL_LIMIT: Final = 4
 _CONNECTION_BUDGET: Final = re.compile(

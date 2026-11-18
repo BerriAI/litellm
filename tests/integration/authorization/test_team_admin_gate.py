@@ -600,7 +600,7 @@ def _admin_only_route(route: str) -> tuple[int, JsonValue]:
             "message": "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
             f"keys/users/teams. Route={route}. Your role=internal_user. Your user_id=<caller>",
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }
@@ -746,7 +746,7 @@ def test_internal_user_model_creation_prohibition_refuses_team_admin_but_not_pro
                     "error": {
                         "message": "Model creation is disabled for internal users by disable_model_add_for_internal_users.",
                         "type": "auth_error",
-                        "param": "None",
+                        "param": None,
                         "code": "403",
                     }
                 },
@@ -811,6 +811,7 @@ def test_only_proxy_admin_reads_or_changes_credentials(
         assert credential_for_model.status_code == 200, credential_for_model.text
         assert credential_for_model.json() == {
             "credential_name": f"{model_name}-credential-{model_id}",
+            "display_name": None,
             "credential_values": {"api_base": f"{s.gateway.upstream_url}/v1"},
             "credential_info": {},
         }, credential_for_model.text

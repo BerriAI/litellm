@@ -19,6 +19,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 SINGLE_CONNECTION_CONFIG: Final = """
 model_list: []
 general_settings:

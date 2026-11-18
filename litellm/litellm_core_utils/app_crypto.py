@@ -4,6 +4,9 @@ import os
 from typing import Final
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pydantic import TypeAdapter
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AppCrypto:
@@ -12,7 +15,7 @@ class AppCrypto:
             raise ValueError("Master key must be 32 bytes for AES-256-GCM")
         self.key = master_key
 
-    def encrypt_json(self, data: dict, aad: bytes | None = None) -> dict:
+    def encrypt_json(self, data: object, aad: bytes | None = None) -> dict:
         aes: Final = AESGCM(self.key)
         nonce: Final = os.urandom(12)
         plaintext: Final = json.dumps(data).encode("utf-8")
@@ -24,10 +27,10 @@ class AppCrypto:
             "tag": base64.b64encode(tag).decode(),
         }
 
-    def decrypt_json(self, enc: dict, aad: bytes | None = None) -> dict:
+    def decrypt_json(self, enc: dict, aad: bytes | None = None) -> object:
         aes: Final = AESGCM(self.key)
         nonce: Final = base64.b64decode(enc["nonce"])
         ct: Final = base64.b64decode(enc["ciphertext"])
         tag: Final = base64.b64decode(enc["tag"])
         data: Final = aes.decrypt(nonce, ct + tag, aad)
-        return json.loads(data.decode())
+        return _DECODED_JSON.validate_python(json.loads(data.decode()))

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 import datetime
@@ -16,8 +17,10 @@ import litellm
 from litellm import AmazonInvokeConfig
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
+    AmazonAnthropicClaudeStreamDecoder,
     AmazonOpenAICompatibleStreamDecoder,
     AWSEventStreamDecoder,
     _stream_decoder,
@@ -27,6 +30,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.utils import ModelResponseStream
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -41,13 +45,43 @@ def bedrock_transformer() -> AmazonInvokeConfig:
     return AmazonInvokeConfig()
 
 
-def test_transform_thinking_blocks_with_redacted_content():
-    thinking_block = {"redactedContent": "This is a redacted content"}
-    decoder = AWSEventStreamDecoder(model="test")
-    transformed_thinking_blocks = decoder.translate_thinking_blocks(thinking_block)
-    assert len(transformed_thinking_blocks) == 1
-    assert transformed_thinking_blocks[0]["type"] == "redacted_thinking"
-    assert transformed_thinking_blocks[0]["data"] == "This is a redacted content"
+def test_transform_thinking_blocks_unwraps_converse_redacted_content_to_claude_native_data():
+    """Converse streams Claude's redacted data base64-wrapped. Handing it out as is made the Anthropic API and
+    Bedrock Invoke 400 with "Invalid `data` in `redacted_thinking` block" when the history was replayed there."""
+    native_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    decoder: Final = AWSEventStreamDecoder(model="test")
+
+    thinking_blocks: Final = decoder.translate_thinking_blocks(
+        {"redactedContent": base64.b64encode(native_data.encode()).decode()}
+    )
+
+    assert thinking_blocks == [{"type": "redacted_thinking", "data": native_data, "index": 0}]
+
+
+def test_converse_reasoning_deltas_index_thinking_blocks_by_reasoning_block_for_the_openai_sdk():
+    """The OpenAI SDK's `.stream()` accumulator needs a list-position `index` on every streamed `thinking_blocks`
+    entry, stable across one reasoning block's fragments and sequential across blocks even when a text block sits
+    between them (Converse `contentBlockIndex` 0 and 2 become thinking indexes 0 and 1)"""
+    decoder: Final = AWSEventStreamDecoder(model="test")
+    chunks: Final = (
+        {"delta": {"reasoningContent": {"text": "Step 1. "}}, "contentBlockIndex": 0},
+        {"delta": {"reasoningContent": {"text": "Step 2."}}, "contentBlockIndex": 0},
+        {"delta": {"reasoningContent": {"signature": "sig-a"}}, "contentBlockIndex": 0},
+        {"delta": {"text": "Paris"}, "contentBlockIndex": 1},
+        {"delta": {"reasoningContent": {"text": "Step 3."}}, "contentBlockIndex": 2},
+        {"delta": {"reasoningContent": {"signature": "sig-b"}}, "contentBlockIndex": 2},
+    )
+
+    deltas: Final = tuple(decoder.chunk_parser(chunk).choices[0].delta for chunk in chunks)
+    streamed: Final = tuple(block for delta in deltas for block in (getattr(delta, "thinking_blocks", None) or []))
+
+    assert streamed == (
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
+        {"type": "thinking", "thinking": "", "signature": "sig-a", "index": 0},
+        {"type": "thinking", "thinking": "Step 3.", "index": 1},
+        {"type": "thinking", "thinking": "", "signature": "sig-b", "index": 1},
+    )
 
 
 def test_transform_tool_calls_index():
@@ -834,14 +868,16 @@ async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers(
 
 
 def _event_stream_frame(event_type: str, payload: bytes) -> bytes:
+    return _typed_event_stream_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"}, payload
+    )
+
+
+def _typed_event_stream_frame(frame_headers: Mapping[str, str], payload: bytes) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
-    headers: Final = (
-        header(":event-type", event_type)
-        + header(":content-type", "application/json")
-        + header(":message-type", "event")
-    )
+    headers: Final = b"".join(header(name, value) for name, value in frame_headers.items())
     prelude: Final = struct.pack(">II", 12 + len(headers) + len(payload) + 4, len(headers))
     body: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + headers + payload
     return body + struct.pack(">I", binascii.crc32(body))
@@ -918,6 +954,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
 
     response: Final = MagicMock(status_code=200, headers={})
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -930,6 +967,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     )
 
     _assert_moonshot_stream_content([chunk async for chunk in stream])
+    response.aclose.assert_awaited_once()
 
 
 def _truncated_frame() -> bytes:
@@ -1039,6 +1077,7 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -1087,6 +1126,7 @@ async def test_converse_streaming_completion_yields_text_and_finish_reason(
             ),
         )
     )
+
     def handle_request(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/converse-stream")
         return httpx.Response(200, content=event_stream_body, headers=_event_stream_headers())
@@ -1112,6 +1152,108 @@ async def test_converse_streaming_completion_yields_text_and_finish_reason(
         )
         sync_chunks: Final = tuple(sync_stream)
         _assert_converse_stream_text_and_finish_reason(sync_chunks)
+
+
+_CONVERSE_PROSE: Final = "Let me work this out. "
+
+
+async def _stream_chunks(
+    request: Mapping[str, object], transport: httpx.MockTransport, async_mode: bool
+) -> tuple[ModelResponseStream, ...]:
+    if not async_mode:
+        return tuple(litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))))
+    async_stream: Final = await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+    return tuple([chunk async for chunk in async_stream])
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize(
+    ("tool_block", "stop_reason", "expected_content", "expected_tools", "expected_finish_reason"),
+    [
+        pytest.param(
+            {"toolUse": {"toolUseId": "tooluse_1", "name": "json_tool_call", "input": {"answer": 120}}},
+            "tool_use",
+            '{"answer": 120}',
+            (),
+            "stop",
+            id="prose_then_json_tool",
+        ),
+        pytest.param(
+            {"toolUse": {"toolUseId": "tooluse_1", "name": "get_weather", "input": {"city": "Paris"}}},
+            "tool_use",
+            _CONVERSE_PROSE,
+            (("get_weather", '{"city": "Paris"}'),),
+            "tool_calls",
+            id="prose_then_caller_tool",
+        ),
+        pytest.param(None, "end_turn", _CONVERSE_PROSE, (), "stop", id="json_tool_skipped"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_converse_json_schema_stream_sends_claude_prose_only_when_claude_skips_the_json_tool(
+    _aws_test_credentials: None,
+    async_mode: bool,
+    tool_block: Mapping[str, object] | None,
+    stop_reason: str,
+    expected_content: str,
+    expected_tools: tuple[tuple[str, str], ...],
+    expected_finish_reason: str,
+) -> None:
+    converse_reply: Final = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": _CONVERSE_PROSE}, *((tool_block,) if tool_block is not None else ())],
+            }
+        },
+        "stopReason": stop_reason,
+        "usage": {"inputTokens": 30, "outputTokens": 20, "totalTokens": 50},
+        "metrics": {"latencyMs": 1},
+    }
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert "toolChoice" not in body["toolConfig"]
+        assert "json_tool_call" in [tool["toolSpec"]["name"] for tool in body["toolConfig"]["tools"]]
+        return httpx.Response(200, json=converse_reply)
+
+    transport: Final = httpx.MockTransport(handle_request)
+    request: Final = {
+        "model": "bedrock/anthropic.claude-opus-5",
+        "messages": [{"role": "user", "content": "What is the LCM of 24 and 120? Reply in JSON."}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]},
+            },
+        },
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        "stream": True,
+    }
+    chunks: Final = await _stream_chunks(request, transport, async_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == expected_content
+    tool_calls: Final = tuple(
+        itertools.chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks)
+    )
+    named_calls: Final = tuple(
+        (call.function.name, "".join(c.function.arguments or "" for c in tool_calls))
+        for call in tool_calls
+        if call.function.name
+    )
+    assert named_calls == expected_tools
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
+        expected_finish_reason
+    ]
 
 
 def test_mistral_invoke_stream_yields_text_and_finish_reason(
@@ -1146,9 +1288,7 @@ def test_mistral_invoke_stream_yields_text_and_finish_reason(
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
         "A court case moves through the courts."
     )
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
-        "stop"
-    ]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
 
 
 def test_converse_streaming_tool_call_arguments_are_valid_json(
@@ -1337,6 +1477,94 @@ def test_iter_bytes_keeps_a_stream_whose_unknown_event_sits_beside_known_frames(
     assert "stop" in finish_reasons
 
 
+_STREAM_FAILURE_BODIES: Final = (
+    pytest.param(
+        _converse_event_frame("internalServerException", {"message": _UPSTREAM_REJECTION}), 500, id="exception-event"
+    ),
+    pytest.param(
+        _typed_event_stream_frame(
+            {
+                ":exception-type": "throttlingException",
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            json.dumps({"message": _UPSTREAM_REJECTION}).encode(),
+        ),
+        429,
+        id="exception-message",
+    ),
+    pytest.param(_unknown_event_frame(), 502, id="no-known-event"),
+    pytest.param(b"", 502, id="no-events"),
+    pytest.param(_CONVERSE_CONTENT_FRAMES[0] + _truncated_frame(), 502, id="undecoded-tail"),
+)
+
+
+def _stream_headers(request_id: str | None) -> httpx.Headers:
+    request_id_header: Final = {} if request_id is None else {"x-amzn-RequestId": request_id}
+    return httpx.Headers(
+        {"content-type": "application/vnd.amazon.eventstream", "retry-after": "7", **request_id_header}
+    )
+
+
+def _assert_carries_only_the_request_id(error: BedrockError, status: int, request_id: str | None) -> None:
+    assert error.status_code == status
+    assert _get_provider_request_id(error) == request_id
+    if request_id is None:
+        assert error.headers is None
+        return
+    assert dict(error.headers or {}) == {"x-amzn-requestid": request_id}
+    assert dict(error.response.headers) == {"x-amzn-requestid": request_id}
+
+
+@pytest.mark.parametrize("request_id", ("req-stream-1", None))
+@pytest.mark.parametrize(("body", "status"), _STREAM_FAILURE_BODIES)
+def test_iter_bytes_stream_error_carries_only_the_provider_request_id_header(
+    body: bytes, status: int, request_id: str | None
+) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=_stream_headers(request_id)))
+
+    _assert_carries_only_the_request_id(exc_info.value, status, request_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "status"), _STREAM_FAILURE_BODIES)
+async def test_aiter_bytes_stream_error_carries_only_the_provider_request_id_header(body: bytes, status: int) -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=_stream_headers("req-stream-2"))]
+
+    _assert_carries_only_the_request_id(exc_info.value, status, "req-stream-2")
+
+
+@pytest.mark.parametrize("request_id", ("req-\u00fc-1", "req-\udcfc-1"), ids=("latin-1", "surrogate-escaped"))
+def test_iter_bytes_streams_the_served_tier_and_fails_normally_with_a_non_ascii_provider_request_id(
+    request_id: str,
+) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    headers: Final = {
+        "content-type": "application/vnd.amazon.eventstream",
+        "x-amzn-RequestId": request_id,
+        "X-AMZN-BEDROCK-SERVICE-TIER": "flex",
+    }
+
+    chunks: Final = list(decoder.iter_bytes(iter(_CONVERSE_CONTENT_FRAMES), response_headers=headers))
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([_unknown_event_frame()]), response_headers=headers))
+
+    stream_chunks: Final = [chunk for chunk in chunks if isinstance(chunk, ModelResponseStream)]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in stream_chunks) == "hi"
+    assert {chunk.service_tier for chunk in stream_chunks} == {"flex"}
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.headers is None
+
+
 def _assert_exception_event_surfaced_with_its_modeled_status(error: BaseException, event_type: str) -> None:
     assert not isinstance(error, litellm.BadGatewayError)
     assert getattr(error, "status_code", None) == _modeled_status(event_type)
@@ -1378,6 +1606,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -1391,6 +1620,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
         _ = [chunk async for chunk in stream]
 
     _assert_exception_event_surfaced_with_its_modeled_status(exc_info.value, event_type)
+    response.aclose.assert_awaited_once()
 
 
 def test_converse_stream_made_only_of_unknown_events_raises_instead_of_an_empty_turn(
@@ -1607,6 +1837,7 @@ def test_filter_headers_for_aws_signature():
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
     failure = ModuleNotFoundError("missing dependency", name=missing)
@@ -1721,9 +1952,7 @@ async def test_converse_stream_thinking_merges_into_content_with_think_tags() ->
             "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "c2lnbmF0dXJl"}}}
         ),
         _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
-        _converse_event_frame(
-            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}
-        ),
+        _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}),
         _converse_event_frame(
             "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "I am a helpful assistant"}}
         ),
@@ -1766,3 +1995,232 @@ async def test_converse_stream_thinking_merges_into_content_with_think_tags() ->
         "Hi I am Anthropic, I am a helpful assistant"
     )
     assert [getattr(chunk.choices[0].delta, "reasoning_content", None) for chunk in chunks] == [None] * len(chunks)
+
+
+_PLACE_JSON_MODE_REQUEST: Final = json.dumps(
+    {
+        "tools": [
+            {
+                "name": "json_tool_call",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+                    "required": ["city", "country"],
+                    "additionalProperties": True,
+                },
+            }
+        ]
+    }
+)
+
+_CUT_JSON_TOOL_STREAM: Final = b"".join(
+    _bedrock_event_stream_frame(event)
+    for event in (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_cut_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 528, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_cut_1", "name": "json_tool_call", "input": {}},
+        },
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"city"'}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": ': "Paris", '},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '"country": "France"}'},
+        },
+    )
+)
+
+
+def _cut_json_tool_stream_decoder() -> AWSEventStreamDecoder:
+    return _stream_decoder(
+        "anthropic",
+        model="anthropic.claude-haiku-5-5",
+        json_mode=True,
+        sync_stream=True,
+        response_format_schema=response_format_schema_from_request(_PLACE_JSON_MODE_REQUEST, json_mode=True),
+    )
+
+
+def _streamed_content(chunks: Sequence[object]) -> str:
+    return "".join(
+        chunk.choices[0].delta.content or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream) and chunk.choices
+    )
+
+
+def test_anthropic_invoke_stream_cut_before_the_json_tool_block_ends_sends_the_held_close() -> None:
+    chunks: Final = list(_cut_json_tool_stream_decoder().iter_bytes(iter([_CUT_JSON_TOOL_STREAM])))
+
+    assert json.loads(_streamed_content(chunks)) == {"city": "Paris", "country": "France"}
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_invoke_stream_cut_before_the_json_tool_block_ends_sends_the_held_close() -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield _CUT_JSON_TOOL_STREAM
+
+    chunks: Final = [chunk async for chunk in _cut_json_tool_stream_decoder().aiter_bytes(_chunks())]
+
+    assert json.loads(_streamed_content(chunks)) == {"city": "Paris", "country": "France"}
+
+
+def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_chunk() -> None:
+    """Bedrock Invoke reports the native guardrail trace once, on the final ``message_stop`` chunk, under
+    ``amazon-bedrock-trace``. The chunk keeps it so the stream builder and the spend log can price it."""
+    decoder = AmazonAnthropicClaudeStreamDecoder(model="anthropic.claude-sonnet-5-v1:0", sync_stream=True)
+    trace = {"guardrail": {"input": {"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1}}}}}}
+    plain = decoder._chunk_parser({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3}})
+    traced = decoder._chunk_parser(
+        {
+            "type": "message_stop",
+            "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3},
+            "amazon-bedrock-trace": trace,
+        }
+    )
+    assert (plain.provider_specific_fields or {}).get("amazon-bedrock-trace") is None
+    assert traced.provider_specific_fields is not None
+    assert traced.provider_specific_fields["amazon-bedrock-trace"] == trace
+
+
+NOVA_INVOKE_STREAM_EVENTS: Final = (
+    {"messageStart": {"role": "assistant"}},
+    {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+    {"contentBlockStop": {"contentBlockIndex": 0}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {"metadata": {"usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000}, "metrics": {}}},
+)
+
+
+def _nova_invoke(served_tier: str | None) -> httpx.MockTransport:
+    tier_header: Final = {} if served_tier is None else {"X-Amzn-Bedrock-Service-Tier": served_tier}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/invoke-with-response-stream"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/vnd.amazon.eventstream", **tier_header},
+                content=b"".join(_bedrock_event_stream_frame(event) for event in NOVA_INVOKE_STREAM_EVENTS),
+            )
+        return httpx.Response(
+            200,
+            headers=tier_header,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000},
+            },
+        )
+
+    return httpx.MockTransport(reply)
+
+
+async def _nova_invoke_calls(
+    requested_tier: Mapping[str, object], served_tier: str | None
+) -> tuple[litellm.ModelResponse, Sequence[ModelResponseStream], Sequence[ModelResponseStream]]:
+    def completion(stream: bool) -> object:
+        return litellm.completion(
+            model="bedrock/invoke/us.amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=stream,
+            client=HTTPHandler(client=httpx.Client(transport=_nova_invoke(served_tier))),
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            **requested_tier,
+        )
+
+    async_stream: Final = await litellm.acompletion(
+        model="bedrock/invoke/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=AsyncHTTPHandler(transport=_nova_invoke(served_tier)),
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **requested_tier,
+    )
+    non_streaming: Final = completion(stream=False)
+    assert isinstance(non_streaming, litellm.ModelResponse)
+    return non_streaming, tuple(completion(stream=True)), tuple([chunk async for chunk in async_stream])
+
+
+@pytest.mark.parametrize(
+    ("requested_tier", "served_tier"),
+    [
+        pytest.param({"serviceTier": {"type": "priority"}}, "flex", id="native"),
+        pytest.param({"service_tier": "priority"}, "flex", id="openai"),
+        pytest.param({"service_tier": "flex"}, "priority", id="openai-served-priority"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_nova_invoke_stream_reports_and_bills_the_tier_bedrock_served_like_a_non_streaming_call(
+    requested_tier: Mapping[str, object], served_tier: str
+) -> None:
+    non_streaming, sync_chunks, async_chunks = await _nova_invoke_calls(requested_tier, served_tier)
+    sync_streamed: Final = litellm.stream_chunk_builder(list(sync_chunks))
+    async_streamed: Final = litellm.stream_chunk_builder(list(async_chunks))
+
+    assert {getattr(chunk, "service_tier", None) for chunk in (*sync_chunks, *async_chunks)} == {served_tier}
+    assert sync_streamed.service_tier == async_streamed.service_tier == non_streaming.service_tier == served_tier
+    assert (
+        litellm.completion_cost(sync_streamed)
+        == litellm.completion_cost(async_streamed)
+        == non_streaming._hidden_params["response_cost"]
+    )
+
+
+@pytest.mark.parametrize(
+    "requested_tier",
+    [
+        pytest.param({"serviceTier": {"type": "priority"}}, id="native"),
+        pytest.param({"service_tier": "priority"}, id="openai"),
+    ],
+)
+@pytest.mark.parametrize("served_tier", [pytest.param(None, id="no-header"), pytest.param("", id="empty-header")])
+@pytest.mark.asyncio
+async def test_a_nova_invoke_stream_without_a_served_tier_reports_no_tier(
+    requested_tier: Mapping[str, object], served_tier: str | None
+) -> None:
+    non_streaming, sync_chunks, async_chunks = await _nova_invoke_calls(requested_tier, served_tier)
+
+    assert {getattr(chunk, "service_tier", None) for chunk in (*sync_chunks, *async_chunks)} == {None}
+    assert getattr(litellm.stream_chunk_builder(list(sync_chunks)), "service_tier", None) is None
+    assert getattr(litellm.stream_chunk_builder(list(async_chunks)), "service_tier", None) is None
+    assert getattr(non_streaming, "service_tier", None) is None
+
+
+@pytest.mark.asyncio
+async def test_aws_event_stream_decoder_aiter_bytes_closes_its_source_on_aclose() -> None:
+    source_closed: Final = asyncio.Event()
+
+    async def _byte_source() -> AsyncIterator[bytes]:
+        try:
+            yield _bedrock_event_stream_frame({"type": "message_start", "message": {"id": "msg_1"}})
+            for _ in range(20):
+                yield _bedrock_event_stream_frame({"type": "ping"})
+        finally:
+            source_closed.set()
+
+    source: Final = _byte_source()
+    stream: Final = AWSEventStreamDecoder(model="us.anthropic.claude-sonnet-4-6").aiter_bytes(source)
+    await anext(stream)
+    await aclose_if_supported(stream)
+    assert source_closed.is_set()

@@ -2,9 +2,11 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
+from collections.abc import Mapping
 from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_response_usage,
     with_usage,
     COST_MAP,
     BinaryResponse,
@@ -18,11 +20,270 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     RecountRates,
     SseResponse,
+    UnsizedFlacUpload,
     WavUpload,
 )
 from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
+
+
+def _response_for_model(response: JsonResponse, model: str) -> JsonResponse:
+    return response.model_copy(update={"body": {**response.body, "model": model}})
+
+
+def _stream_for_model(response: SseResponse, model: str) -> SseResponse:
+    return response.model_copy(update={"frames": tuple(frame.replace("gpt-6-luna", model) for frame in response.frames)})
+
+
+def _responses_json_body(
+    model: str,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> dict[str, JsonValue]:
+    reasoning_item: Final[dict[str, JsonValue]] = {
+        "content": [],
+        "encrypted_content": "$ENCRYPTED_CONTENT",
+        "id": "rs_$REQUEST_ID",
+        "summary": [],
+        "type": "reasoning",
+    }
+    message_item: Final[dict[str, JsonValue]] = {
+        "content": [
+            {
+                "annotations": [],
+                "logprobs": [],
+                "text": "scripted response",
+                "type": "output_text",
+            }
+        ],
+        "id": "msg_$REQUEST_ID",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+    }
+    output: Final = [reasoning_item, message_item] if include_reasoning else [message_item]
+    body: Final[dict[str, JsonValue]] = {
+        "access_programs": [],
+        "background": False,
+        "completed_at": 1791855453,
+        "created_at": 1791855452,
+        "error": None,
+        "frequency_penalty": None,
+        "id": "resp_$REQUEST_ID",
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": None,
+        "max_tool_calls": None,
+        "metadata": {},
+        "moderation": None,
+        "model": model,
+        "object": "response",
+        "output": output,
+        "parallel_tool_calls": True,
+        "presence_penalty": None,
+        "previous_response_id": None,
+        "prompt_cache_key": None,
+        "prompt_cache_retention": None,
+        "reasoning": {"effort": "medium"},
+        "safety_identifier": None,
+        "service_tier": "default",
+        "status": "completed",
+        "store": True,
+        "temperature": 1.0,
+        "text": None,
+        "tool_choice": "auto",
+        "tool_usage": None,
+        "tools": [],
+        "top_logprobs": None,
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 1840,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 412,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 2252,
+        },
+        "user": None,
+    }
+    return {**body, "content_filters": content_filters} if include_content_filters else body
+
+
+def _responses_stream_response(
+    model: str,
+    delta_count: int,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> SseResponse:
+    response_body: Final = _responses_json_body(
+        model,
+        include_content_filters=include_content_filters,
+        content_filters=content_filters,
+        include_reasoning=include_reasoning,
+    )
+    in_progress_body: Final = {
+        **response_body,
+        "output": [],
+        "status": "in_progress",
+        "usage": None,
+    }
+    reasoning_item: Final = {
+        "content": [],
+        "encrypted_content": "$ENCRYPTED_CONTENT",
+        "id": "rs_$REQUEST_ID",
+        "summary": [],
+        "type": "reasoning",
+    }
+    message_item: Final = {
+        "content": [],
+        "id": "msg_$REQUEST_ID",
+        "role": "assistant",
+        "status": "in_progress",
+        "type": "message",
+    }
+    delta_events: Final = tuple(
+        {
+            "content_index": 0,
+            "delta": "scripted response" if index == 0 else "",
+            "item_id": "msg_$REQUEST_ID",
+            "logprobs": [],
+            "obfuscation": None,
+            "output_index": 1 if include_reasoning else 0,
+            "sequence_number": (6 if include_reasoning else 4) + index,
+            "type": "response.output_text.delta",
+        }
+        for index in range(delta_count)
+    )
+    delta_start: Final = 6 if include_reasoning else 4
+    message_output_index: Final = 1 if include_reasoning else 0
+    reasoning_events: Final = (
+        (
+            {
+                "item": reasoning_item,
+                "output_index": 0,
+                "sequence_number": 2,
+                "type": "response.output_item.added",
+            },
+            {
+                "item": reasoning_item,
+                "output_index": 0,
+                "sequence_number": 3,
+                "type": "response.output_item.done",
+            },
+        )
+        if include_reasoning
+        else ()
+    )
+    completed_message_item: Final = {
+        "content": [
+            {
+                "annotations": [],
+                "logprobs": [],
+                "text": "scripted response",
+                "type": "output_text",
+            }
+        ],
+        "id": "msg_$REQUEST_ID",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+    }
+    return SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "response": in_progress_body,
+                "sequence_number": 0,
+                "type": "response.created",
+            },
+            {
+                "response": in_progress_body,
+                "sequence_number": 1,
+                "type": "response.in_progress",
+            },
+            *reasoning_events,
+            {
+                "item": message_item,
+                "output_index": message_output_index,
+                "sequence_number": 4 if include_reasoning else 2,
+                "type": "response.output_item.added",
+            },
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "output_index": message_output_index,
+                "part": {"annotations": [], "logprobs": [], "text": "", "type": "output_text"},
+                "sequence_number": 5 if include_reasoning else 3,
+                "type": "response.content_part.added",
+            },
+            *delta_events,
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "logprobs": [],
+                "output_index": message_output_index,
+                "sequence_number": delta_start + delta_count,
+                "text": "scripted response",
+                "type": "response.output_text.done",
+            },
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "output_index": message_output_index,
+                "part": {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "scripted response",
+                    "type": "output_text",
+                },
+                "sequence_number": delta_start + delta_count + 1,
+                "type": "response.content_part.done",
+            },
+            {
+                "item": completed_message_item,
+                "output_index": message_output_index,
+                "sequence_number": delta_start + delta_count + 2,
+                "type": "response.output_item.done",
+            },
+            {
+                "response": response_body,
+                "sequence_number": delta_start + delta_count + 3,
+                "type": "response.completed",
+            },
+        ),
+    )
+
+
+def _responses_stream_case(
+    base: CostTrackingTestCase,
+    name: str,
+    response_model: str,
+    delta_count: int,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> CostTrackingTestCase:
+    return base.model_copy(
+        update={
+            "name": name,
+            "request": {**base.request, "stream": True},
+            "response": _responses_stream_response(
+                response_model,
+                delta_count,
+                include_content_filters=include_content_filters,
+                content_filters=content_filters,
+                include_reasoning=include_reasoning,
+            ),
+        }
+    )
 
 
 # gpt-5.3-codex
@@ -1929,6 +2190,82 @@ GPT_5_4_MINI_CACHE_READ: Final = CostTrackingTestCase(
                 "prompt_tokens_details": {"cached_tokens": 12288},
             },
         },
+    ),
+    expected=ExactExpected(
+        spend=0.00171808, input_cost=0.00065408, output_cost=0.001064, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE: Final = CostTrackingTestCase(
+    name="gpt-5.4-mini-stream_cache_read_choice_bearing_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-5.4-mini",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6c1f0b2a9d4e summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "scripted answer 6c1f0b2a9d4e"},
+                        "finish_reason": None,
+                    }
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}}],
+                "usage": {
+                    "prompt_tokens": 12928,
+                    "completion_tokens": 380,
+                    "total_tokens": 13308,
+                    "prompt_tokens_details": {"cached_tokens": 12288},
+                },
+            },
+            done=True,
+        ),
     ),
     expected=ExactExpected(
         spend=0.00171808, input_cost=0.00065408, output_cost=0.001064, prompt_tokens=12928, completion_tokens=380
@@ -6650,6 +6987,106 @@ GPT_5_6_RESPONSES_CACHE_READ: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-5.6-responses_cache_write_12h",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "summarize this text",
+        "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 12928,
+                "output_tokens": 380,
+                "total_tokens": 13308,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5000,
+                    "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 2000},
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0344865,
+        input_cost=0.0291865,
+        output_cost=0.00532,
+        prompt_tokens=12928,
+        completion_tokens=380,
+        cache_creation_cost=0.0153125,
+    ),
+)
+
+GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_cache_write_12h",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "summarize this text",
+        "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-6-luna",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 12928,
+                "output_tokens": 380,
+                "total_tokens": 13308,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5000,
+                    "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 2000},
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0018578,
+        input_cost=0.0016678,
+        output_cost=0.00019,
+        prompt_tokens=12928,
+        completion_tokens=380,
+        cache_creation_cost=0.000875,
+    ),
+)
+
 GPT_5_6_RESPONSES_REASONING: Final = CostTrackingTestCase(
     name="gpt-5.6-responses_reasoning",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -7351,8 +7788,8 @@ GPT_5_6_UPSTREAM_COST_HEADER_BILLS_HEADER_VALUE: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.000413,
-        input_cost=0.0,
-        output_cost=0.000413,
+        input_cost=0.000413 * (10 * 1.75e-06) / (10 * 1.75e-06 + 253 * 1.4e-05),
+        output_cost=0.000413 * (253 * 1.4e-05) / (10 * 1.75e-06 + 253 * 1.4e-05),
         prompt_tokens=10,
         completion_tokens=253,
         breakdown_persisted=False,
@@ -7516,6 +7953,7 @@ GPT_5_6_STREAM_USAGE_IN_EMPTY_CHOICES_CHUNK: Final = CostTrackingTestCase(
         frames=(
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"content":"scripted answer"},"finish_reason":null}],"usage":null}',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2252}}',
             "data: [DONE]",
         ),
@@ -7663,6 +8101,18 @@ WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND: Final = CostTrackingTestCase(
     request={"language": "en", "response_format": "json"},
     response=JsonResponse(content_type="application/json", body={"text": "hello"}),
     expected=ExactExpected(spend=0.00035, input_cost=0.00035, output_cost=0, prompt_tokens=0, completion_tokens=0),
+)
+
+
+WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE: Final = CostTrackingTestCase(
+    name="whisper-next-transcriptions-unsized-flac-no-usage",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="whisper-next",
+    endpoint="/v1/audio/transcriptions",
+    upload=UnsizedFlacUpload(kind="unsized_flac"),
+    request={"response_format": "json"},
+    response=JsonResponse(content_type="application/json", body={"text": "hello"}),
+    expected=ExactExpected(spend=0, input_cost=0, output_cost=0, prompt_tokens=0, completion_tokens=0),
 )
 
 
@@ -8020,6 +8470,19 @@ GPT_5_6_CHAT_REQUEST_TO_EMBEDDING_ENTRY: Final = CostTrackingTestCase(
 
 
 # gpt-6.1-sol
+_PROVIDER_CACHEABLE_PROMPT: Final = (
+    "The pricing harness keeps one stable instruction block so the provider can cache it. " * 220
+)
+_GPT_6_PROMPT_CACHE_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "messages": [
+        {"role": "system", "content": _PROVIDER_CACHEABLE_PROMPT},
+        {"role": "user", "content": "Reply with OK."},
+    ],
+    "reasoning_effort": "low",
+    "stream": False,
+}
+
 GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
     name="gpt-6.1-sol-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -8038,12 +8501,173 @@ GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
             "created": 1,
             "model": "gpt-6.1-sol",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello."}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252},
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
         },
     ),
     expected=ExactExpected(
         spend=0.0078, input_cost=0.00368, output_cost=0.00412, prompt_tokens=1840, completion_tokens=412
     ),
+)
+
+GPT_6_1_SOL_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-6.1-sol-cache_read",
+        "model": "gpt-6.1-sol",
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1792042876,
+                "model": "gpt-6.1-sol",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted answer b770f5df16a2",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0063088,
+            input_cost=0.0025088,
+            output_cost=0.0038,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
+GPT_6_LUNA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-6-luna-cache_read",
+        "model": "gpt-6-luna",
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1792042880,
+                "model": "gpt-6-luna",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted answer a880e9da100c",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.00037688,
+            input_cost=0.00018688,
+            output_cost=0.00019,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
+GPT_6_ASTRA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-6-astra-cache_read",
+        "model": "gpt-6-astra",
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1792042883,
+                "model": "gpt-6-astra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted answer d45eefac915d",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0452256,
+            input_cost=0.0224256,
+            output_cost=0.0228,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
 )
 
 
@@ -10841,7 +11465,1075 @@ GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
     ExactExpected(spend=2.41648, input_cost=2.4, output_cost=0.01648, prompt_tokens=300000, completion_tokens=412),
 )
 
+_GPT_6_CACHE_WRITE_USAGE: Final = {
+    "prompt_tokens": 12928,
+    "completion_tokens": 380,
+    "total_tokens": 13308,
+    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12288, "audio_tokens": 0},
+    "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0,
+    },
+}
+
+GPT_6_1_SOL_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_1_SOL_CACHE_READ,
+    "gpt-6.1-sol-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.0358, input_cost=0.032, output_cost=0.0038, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.00179, input_cost=0.0016, output_cost=0.00019, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_ASTRA_CACHE_READ,
+    "gpt-6-astra-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.2148, input_cost=0.192, output_cost=0.0228, prompt_tokens=12928, completion_tokens=380),
+)
+
+GPT_5_6_TERRA_INPUT_TEXT: Final = GPT_6_LUNA_INPUT_TEXT.model_copy(
+    update={
+        "name": "gpt-5.6-terra-input_text",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_INPUT_TEXT.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_STREAM: Final = GPT_6_LUNA_STREAM.model_copy(
+    update={
+        "name": "gpt-5.6-terra-stream",
+        "model": "gpt-5.6-terra",
+        "response": _stream_for_model(cast(SseResponse, GPT_6_LUNA_STREAM.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_SERVICE_TIER_FLEX: Final = GPT_6_LUNA_SERVICE_TIER_FLEX.model_copy(
+    update={
+        "name": "gpt-5.6-terra-service_tier_flex",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_SERVICE_TIER_FLEX.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0056056,
+            input_cost=0.002392,
+            output_cost=0.0032136,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_SERVICE_TIER_PRIORITY: Final = GPT_6_LUNA_SERVICE_TIER_PRIORITY.model_copy(
+    update={
+        "name": "gpt-5.6-terra-service_tier_priority",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_SERVICE_TIER_PRIORITY.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.0224224,
+            input_cost=0.009568,
+            output_cost=0.0128544,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_RESPONSES_NATIVE_JSON: Final = GPT_6_LUNA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-responses_native_json",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_RESPONSES_NATIVE_JSON.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-responses_deployment_json",
+        "model": "gpt-5.6-terra",
+        "deployment": Deployment(model="openai/responses/gpt-5.6-terra"),
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_CHAT_BRIDGED_JSON: Final = GPT_6_LUNA_CHAT_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-chat_bridged_json",
+        "model": "gpt-5.6-terra",
+        "deployment": Deployment(model="openai/responses/gpt-5.6-terra"),
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_CHAT_BRIDGED_JSON.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_CACHE_READ: Final = GPT_6_LUNA_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-5.6-terra-cache_read",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_CACHE_READ.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.01078688,
+            input_cost=0.00485888,
+            output_cost=0.005928,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+GPT_5_6_TERRA_CACHE_WRITE_5M: Final = GPT_6_LUNA_CACHE_WRITE_5M.model_copy(
+    update={
+        "name": "gpt-5.6-terra-cache_write_5m",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_CACHE_WRITE_5M.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.047528,
+            input_cost=0.0416,
+            output_cost=0.005928,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+GPT_5_6_TERRA_REASONING: Final = GPT_6_LUNA_REASONING.model_copy(
+    update={
+        "name": "gpt-5.6-terra-reasoning",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_REASONING.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.066248,
+            input_cost=0.003224,
+            output_cost=0.063024,
+            prompt_tokens=1240,
+            completion_tokens=4040,
+        ),
+    }
+)
+GPT_5_6_TERRA_TOOL_CALL: Final = GPT_6_LUNA_TOOL_CALL.model_copy(
+    update={
+        "name": "gpt-5.6-terra-tool_call",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_TOOL_CALL.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+
+GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=1.5696408, input_cost=1.56, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.6336408, input_cost=0.624, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+
+GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
+    update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
+GPT_5_6_SLASH_ALIAS_STREAM: Final = GPT_5_6_STREAM.model_copy(
+    update={"name": "gpt-5.6-slash_alias_stream", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
+GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS: Final = CostTrackingTestCase(
+    name="gpt-5.6-responses_image_generation_tool_tokens",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "draw a duck",
+        "tools": [{"type": "image_generation", "model": "gpt-image-next", "quality": "low", "size": "1024x1024"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "tools": [
+                {
+                    "type": "image_generation",
+                    "background": "auto",
+                    "model": "gpt-image-next",
+                    "moderation": "auto",
+                    "n": 1,
+                    "output_compression": 100,
+                    "output_format": "png",
+                    "quality": "low",
+                    "size": "1024x1024",
+                }
+            ],
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "id": "ig_$REQUEST_ID",
+                    "status": "completed",
+                    "action": "generate",
+                    "background": "opaque",
+                    "output_format": "png",
+                    "quality": "low",
+                    "revised_prompt": "a duck",
+                    "size": "1024x1024",
+                    "result": "AAAA",
+                },
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                },
+            ],
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "total_tokens": 2252,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 32,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 32},
+                    "output_tokens": 196,
+                    "output_tokens_details": {"image_tokens": 196, "text_tokens": 0},
+                    "total_tokens": 228,
+                },
+                "web_search": {"num_requests": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01004232,
+        input_cost=0.00322,
+        output_cost=0.005768,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.00105432,
+    ),
+)
+
+GPT_6_1_SOL_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
+    "gpt-6.1-sol-responses_native_stream",
+    "gpt-6.1-sol",
+    1,
+    include_reasoning=False,
+)
+GPT_6_LUNA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6-luna-responses_native_stream",
+    "gpt-6-luna",
+    45,
+)
+GPT_6_ASTRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
+    "gpt-6-astra-responses_native_stream",
+    "gpt-6-astra",
+    36,
+)
+GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
+    "gpt-5.6-terra-responses_native_stream",
+    "gpt-5.6-terra",
+    95,
+)
+GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON: Final = bridge_pairs(
+    (GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,), ("/v1/messages",)
+)[0].bridged.model_copy(update={"name": "gpt-5.6-terra-messages_bridged_json"})
+GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM: Final = GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-messages_bridged_stream",
+        "request": {**GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_1_SOL_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_LUNA_MESSAGES_BRIDGED_STREAM: Final = GPT_6_LUNA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-messages_bridged_stream",
+        "request": {**GPT_6_LUNA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_LUNA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM: Final = GPT_6_ASTRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-messages_bridged_stream",
+        "request": {**GPT_6_ASTRA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_ASTRA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-messages_bridged_stream",
+        "request": {**GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+
+
+# An OpenAI-compatible gateway that reports what it charged under usage.cost (#47533). The reported total is the bill,
+# split across input and output by the ratio of the cost map rates (100 * 1e-6 : 20 * 3e-6), on plain and streamed
+# replies alike. A deployment the operator priced keeps the operator's rates on both.
+_GATEWAY_REPORTED_USAGE: Final = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_REPORTED_EXPECTED: Final = ExactExpected(
+    spend=0.037, input_cost=0.023125, output_cost=0.013875, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_OPERATOR_PRICED: Final = Deployment(input_cost_per_token=2e-06, output_cost_per_token=6e-06)
+_GATEWAY_OPERATOR_PRICED_EXPECTED: Final = ExactExpected(
+    spend=0.00032, input_cost=0.0002, output_cost=0.00012, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_CHUNK: Final = {
+    "id": "chatcmpl-$REQUEST_ID",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "gateway-reported-cost-fixture",
+}
+
+GATEWAY_REPORTED_COST: Final = CostTrackingTestCase(
+    name="gateway-reported-cost",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={"model": "$MODEL", "messages": [{"role": "user", "content": "reported cost"}], "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gateway-reported-cost-fixture",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": _GATEWAY_REPORTED_USAGE,
+        },
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_STREAM: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "reported cost"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_REPORTED_USAGE},
+            done=True,
+        ),
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+_GATEWAY_RESPONSES_USAGE: Final[Mapping[str, JsonValue]] = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_RESPONSES_ITEM: Final[Mapping[str, JsonValue]] = {
+    "id": "msg_gateway",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+}
+_GATEWAY_RESPONSES_BODY: Final[Mapping[str, JsonValue]] = {
+    "id": "resp_$REQUEST_ID",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gateway-reported-cost-fixture",
+    "output": [_GATEWAY_RESPONSES_ITEM],
+    "usage": _GATEWAY_RESPONSES_USAGE,
+}
+
+GATEWAY_REPORTED_COST_RESPONSES: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "reported cost", "cache": {"no-cache": True}},
+    response=JsonResponse(content_type="application/json", body=_GATEWAY_RESPONSES_BODY),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-stream",
+        "request": {**GATEWAY_REPORTED_COST_RESPONSES.request, "stream": True},
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**_GATEWAY_RESPONSES_BODY, "status": "in_progress", "output": [], "usage": None},
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "msg_gateway",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "ok",
+                },
+                {"type": "response.completed", "sequence_number": 2, "response": _GATEWAY_RESPONSES_BODY},
+            ),
+        ),
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+
+_GATEWAY_ZERO_USAGE: Final = {**_GATEWAY_REPORTED_USAGE, "cost": 0}
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={**GATEWAY_REPORTED_COST.response.body, "usage": _GATEWAY_ZERO_USAGE},
+        ),
+    }
+)
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced-stream",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_ZERO_USAGE},
+                done=True,
+            ),
+        ),
+    }
+)
+
+_GATEWAY_OPENROUTER_OPERATOR_PRICED: Final = _GATEWAY_OPERATOR_PRICED.model_copy(
+    update={"model": "openrouter/vendor/gateway-reported-cost-fixture"}
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-cost-openrouter-operator_priced",
+        "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM: Final = (
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+        update={
+            "name": "gateway-reported-cost-openrouter-operator_priced-stream",
+            "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+        }
+    )
+)
+
+def _gpt_6_on_model(base: CostTrackingTestCase, model: str, shape: str, expected: ExactExpected) -> CostTrackingTestCase:
+    response: Final = (
+        _stream_for_model(base.response, model)
+        if isinstance(base.response, SseResponse)
+        else _response_for_model(cast(JsonResponse, base.response), model)
+    )
+    return base.model_copy(
+        update={"name": f"{model}-{shape}", "model": model, "response": response, "expected": expected}
+    )
+
+
+def _gpt_6_with_real_usage(
+    base: CostTrackingTestCase,
+    model: str,
+    shape: str,
+    request: Mapping[str, JsonValue],
+    usage: Mapping[str, JsonValue],
+    expected: ExactExpected,
+) -> CostTrackingTestCase:
+    body: Final = {**cast(JsonResponse, base.response).body, "model": model, "usage": dict(usage)}
+    return base.model_copy(
+        update={
+            "name": f"{model}-{shape}",
+            "model": model,
+            "request": dict(request),
+            "response": cast(JsonResponse, base.response).model_copy(update={"body": body}),
+            "expected": expected,
+        }
+    )
+
+
+def _gpt_6_tool_call_served_by_responses_api(model: str, expected: ExactExpected) -> CostTrackingTestCase:
+    body: Final = cast(JsonResponse, GPT_6_LUNA_RESPONSES_NATIVE_JSON.response).body
+    function_call: Final[dict[str, JsonValue]] = {
+        "type": "function_call",
+        "id": "fc_$REQUEST_ID",
+        "call_id": "call_$REQUEST_ID",
+        "name": "get_weather",
+        "arguments": '{"city": "Lisbon"}',
+        "status": "completed",
+    }
+    return GPT_6_LUNA_TOOL_CALL.model_copy(
+        update={
+            "name": f"{model}-tool_call",
+            "model": model,
+            "request": {**GPT_6_LUNA_TOOL_CALL.request, "reasoning_effort": "low"},
+            "response": JsonResponse(
+                content_type="application/json", body={**body, "model": model, "output": [function_call]}
+            ),
+            "expected": expected,
+        }
+    )
+
+
+_GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
+    "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    "reasoning": {"effort": "low"},
+}
+_GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
+    "reasoning": {"effort": "low"},
+}
+_GPT_6_RESPONSES_WEB_SEARCH_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": "What is the population of Lisbon? Search the web and answer in one line.",
+    "tools": [{"type": "web_search", "search_context_size": "medium"}],
+    "reasoning": {"effort": "low"},
+}
+
+GPT_6_1_TERRA_INPUT_TEXT: Final = _gpt_6_on_model(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6.1-terra",
+    "input_text",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_STREAM: Final = _gpt_6_on_model(
+    GPT_6_LUNA_STREAM,
+    "gpt-6.1-terra",
+    "stream",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_REASONING: Final = _gpt_6_on_model(
+    GPT_6_LUNA_REASONING,
+    "gpt-6.1-terra",
+    "reasoning",
+    ExactExpected(spend=0.0220832, input_cost=0.0012772, output_cost=0.020806, prompt_tokens=1240, completion_tokens=4040),
+)
+GPT_6_1_TERRA_TOOL_CALL: Final = _gpt_6_on_model(
+    GPT_6_LUNA_TOOL_CALL,
+    "gpt-6.1-terra",
+    "tool_call",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_SERVICE_TIER_FLEX: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    "gpt-6.1-terra",
+    "service_tier_flex",
+    ExactExpected(spend=0.0020085, input_cost=0.0009476, output_cost=0.0010609, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_SERVICE_TIER_PRIORITY: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "gpt-6.1-terra",
+    "service_tier_priority",
+    ExactExpected(spend=0.008034, input_cost=0.0037904, output_cost=0.0042436, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_RESPONSES_NATIVE_JSON: Final = _gpt_6_on_model(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6.1-terra",
+    "responses_native_json",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_ASTRA_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6-astra",
+    ExactExpected(spend=0.0468, input_cost=0.02208, output_cost=0.02472, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_SOL_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6.1-sol",
+    ExactExpected(spend=0.0078, input_cost=0.00368, output_cost=0.00412, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_LUNA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3334, "completion_tokens": 4, "total_tokens": 3338, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3331, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000418675, input_cost=0.000416675, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_creation_cost=0.000416375),
+)
+GPT_6_LUNA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3334, "completion_tokens": 4, "total_tokens": 3338, "prompt_tokens_details": {"cached_tokens": 3331, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=3.561e-05, input_cost=3.361e-05, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_read_cost=3.331e-05),
+)
+GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-luna",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3334, "input_tokens_details": {"cache_write_tokens": 3331, "cache_write_tokens_details": {"ttl_12h_tokens": 3331, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3339},
+    ExactExpected(spend=0.00083555, input_cost=0.00083305, output_cost=2.5e-06, prompt_tokens=3334, completion_tokens=5, cache_creation_cost=0.00083275),
+)
+GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-luna",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8636, "input_tokens_details": {"cache_write_tokens": 20, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 20}, "cached_tokens": 4435}, "output_tokens": 81, "output_tokens_details": {"reasoning_tokens": 43}, "total_tokens": 8717},
+    ExactExpected(spend=0.01050545, input_cost=0.00046495, output_cost=4.05e-05, prompt_tokens=8636, completion_tokens=81, tool_usage_cost=0.01, cache_read_cost=4.435e-05, cache_creation_cost=2.5e-06),
+)
+GPT_6_SOL_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-sol",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3336, "completion_tokens": 4, "total_tokens": 3340, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3333, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.00921635, input_cost=0.00917235, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_creation_cost=0.00916575),
+)
+GPT_6_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-sol",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3336, "completion_tokens": 4, "total_tokens": 3340, "prompt_tokens_details": {"cached_tokens": 3333, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.00078386, input_cost=0.00073986, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_read_cost=0.00073326),
+)
+GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-sol",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3332, "input_tokens_details": {"cache_write_tokens": 3329, "cache_write_tokens_details": {"ttl_12h_tokens": 3329, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3338},
+    ExactExpected(spend=0.0183821, input_cost=0.0183161, output_cost=6.6e-05, prompt_tokens=3332, completion_tokens=6, cache_creation_cost=0.0183095),
+)
+GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-sol",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8763, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 94, "output_tokens_details": {"reasoning_tokens": 52}, "total_tokens": 8857},
+    ExactExpected(spend=0.03276285, input_cost=0.02172885, output_cost=0.001034, prompt_tokens=8763, completion_tokens=94, tool_usage_cost=0.01, cache_creation_cost=0.01225125),
+)
+GPT_6_ASTRA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-astra",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.050226, input_cost=0.049986, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.04995),
+)
+GPT_6_ASTRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-astra",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.004272, input_cost=0.004032, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.003996),
+)
+GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-astra",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 3326, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.100116, input_cost=0.099816, output_cost=0.0003, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.09978),
+)
+GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-astra",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8580, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 81, "output_tokens_details": {"reasoning_tokens": 38}, "total_tokens": 8661},
+    ExactExpected(spend=0.131185, input_cost=0.116325, output_cost=0.00486, prompt_tokens=8580, completion_tokens=81, tool_usage_cost=0.01, cache_creation_cost=0.066825),
+)
+GPT_6_1_SOL_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-sol",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.008371, input_cost=0.008331, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.008325),
+)
+GPT_6_1_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-sol",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000379, input_cost=0.000339, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000333),
+)
+GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-sol",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3328, "input_tokens_details": {"cache_write_tokens": 3325, "cache_write_tokens_details": {"ttl_12h_tokens": 3325, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3333},
+    ExactExpected(spend=0.016681, input_cost=0.016631, output_cost=5e-05, prompt_tokens=3328, completion_tokens=5, cache_creation_cost=0.016625),
+)
+GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6.1-sol",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8617, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 83, "output_tokens_details": {"reasoning_tokens": 38}, "total_tokens": 8700},
+    ExactExpected(spend=0.0302915, input_cost=0.0194615, output_cost=0.00083, prompt_tokens=8617, completion_tokens=83, tool_usage_cost=0.01, cache_creation_cost=0.0111375),
+)
+GPT_6_1_TERRA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-terra",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.004311065, input_cost=0.004290465, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.004287375),
+)
+GPT_6_1_TERRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-terra",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000195185, input_cost=0.000174585, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000171495),
+)
+GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-terra",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3332, "input_tokens_details": {"cache_write_tokens": 3329, "cache_write_tokens_details": {"ttl_12h_tokens": 3329, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3337},
+    ExactExpected(spend=0.008601015, input_cost=0.008575265, output_cost=2.575e-05, prompt_tokens=3332, completion_tokens=5, cache_creation_cost=0.008572175),
+)
+GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6.1-terra",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8657, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 77, "output_tokens_details": {"reasoning_tokens": 36}, "total_tokens": 8734},
+    ExactExpected(spend=0.0204604225, input_cost=0.0100638725, output_cost=0.00039655, prompt_tokens=8657, completion_tokens=77, tool_usage_cost=0.01, cache_creation_cost=0.0057358125),
+)
+GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-luna",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00041855, input_cost=0.00041605, output_cost=2.5e-06, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.00041575),
+)
+GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3328, "input_tokens_details": {"cache_write_tokens": 3325, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3325}, "cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00921635, input_cost=0.00915035, output_cost=6.6e-05, prompt_tokens=3328, completion_tokens=6, cache_creation_cost=0.00914375),
+)
+GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-astra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3327, "input_tokens_details": {"cache_write_tokens": 3324, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3324}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3332},
+    ExactExpected(spend=0.050196, input_cost=0.049896, output_cost=0.0003, prompt_tokens=3327, completion_tokens=5, cache_creation_cost=0.04986),
+)
+GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.008371, input_cost=0.008321, output_cost=5e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.008315),
+)
+GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-terra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.004311065, input_cost=0.004285315, output_cost=2.575e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.004282225),
+)
+TEXT_EMBEDDING_3_LARGE_DIMENSIONS: Final = CostTrackingTestCase(
+    name="text-embedding-3-large-dimensions",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="text-embedding-3-large",
+    endpoint="/v1/embeddings",
+    request={"model": "$MODEL", "input": "price this embedding request", "dimensions": 256},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [-0.060546875, -0.0176849365234375], "index": 0}],
+            "model": "text-embedding-3-large",
+            "usage": {"prompt_tokens": 4, "total_tokens": 4},
+        },
+    ),
+    expected=ExactExpected(spend=5.2e-07, input_cost=5.2e-07, output_cost=0.0, prompt_tokens=4, completion_tokens=0),
+)
+
+def _gpt_image_2_6_sunburst_body(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "created": 1794891118,
+        "background": "opaque",
+        "data": [{"b64_json": "AA=="}],
+        "output_format": "png",
+        "quality": "low",
+        "size": "1024x1024",
+        "usage": dict(usage),
+    }
+
+
+GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW: Final = CostTrackingTestCase(
+    name="gpt-image-2.6-sunburst-images-low",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-image-2.6-sunburst",
+    endpoint="/v1/images/generations",
+    deployment=Deployment(model="openai/gpt-image-2.6-sunburst"),
+    request={"prompt": "a plain red square", "size": "1024x1024", "quality": "low", "n": 1},
+    response=JsonResponse(
+        content_type="application/json",
+        body=_gpt_image_2_6_sunburst_body(
+            {
+                "input_tokens": 10,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 10},
+                "output_tokens": 824,
+                "output_tokens_details": {"image_tokens": 824, "text_tokens": 0},
+                "total_tokens": 834,
+            }
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0247702,
+        input_cost=5.02e-05,
+        output_cost=0.02472,
+        prompt_tokens=10,
+        completion_tokens=824,
+        breakdown_persisted=False,
+    ),
+)
+GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT: Final = CostTrackingTestCase(
+    name="gpt-image-2.6-sunburst-images-edit",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-image-2.6-sunburst",
+    endpoint="/v1/images/edits",
+    deployment=Deployment(model="openai/gpt-image-2.6-sunburst"),
+    upload=PngUpload(kind="png"),
+    request={"prompt": "make the square blue", "size": "1024x1024", "quality": "low", "n": 1},
+    response=JsonResponse(
+        content_type="application/json",
+        body=_gpt_image_2_6_sunburst_body(
+            {
+                "input_tokens": 1044,
+                "input_tokens_details": {"image_tokens": 1024, "text_tokens": 20},
+                "output_tokens": 824,
+                "output_tokens_details": {"image_tokens": 824, "text_tokens": 0},
+                "total_tokens": 1868,
+            }
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0330124,
+        input_cost=0.0082924,
+        output_cost=0.02472,
+        prompt_tokens=1044,
+        completion_tokens=824,
+        breakdown_persisted=False,
+    ),
+)
+GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS: Final = CostTrackingTestCase(
+    name="gpt-4o-transcribe-transcriptions-tokens",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-4o-transcribe",
+    endpoint="/v1/audio/transcriptions",
+    upload=WavUpload(kind="wav", seconds=3.0),
+    request={"response_format": "json"},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "text": "The pricing harness says hello.",
+            "usage": {
+                "type": "tokens",
+                "total_tokens": 38,
+                "input_tokens": 30,
+                "input_token_details": {"text_tokens": 0, "audio_tokens": 30},
+                "output_tokens": 8,
+            },
+        },
+    ),
+    expected=ExactExpected(spend=0.00026, input_cost=0.00018, output_cost=8e-05, prompt_tokens=30, completion_tokens=8),
+)
+GPT_4O_MINI_TTS_SPEECH: Final = CostTrackingTestCase(
+    name="gpt-4o-mini-tts-speech",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-4o-mini-tts",
+    endpoint="/v1/audio/speech",
+    request={"input": "The pricing harness says hello.", "voice": "alloy", "response_format": "mp3"},
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'data: {"type":"speech.audio.delta","audio":"c2NyaXB0ZWQgYXVkaW8="}',
+            'data: {"type":"speech.audio.done","usage":{"input_tokens":6,"output_tokens":50,"total_tokens":56}}',
+            "data: [DONE]",
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.00060366, input_cost=3.66e-06, output_cost=0.0006, prompt_tokens=6, completion_tokens=50
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
+    GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
+    GPT_4O_MINI_TTS_SPEECH,
+    GPT_6_1_TERRA_INPUT_TEXT,
+    GPT_6_1_TERRA_STREAM,
+    GPT_6_1_TERRA_REASONING,
+    GPT_6_1_TERRA_TOOL_CALL,
+    GPT_6_1_TERRA_SERVICE_TIER_FLEX,
+    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_TOOL_CALL,
+    GPT_6_1_SOL_TOOL_CALL,
+    GPT_6_LUNA_PROMPT_CACHE_WRITE,
+    GPT_6_LUNA_PROMPT_CACHE_READ,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_SOL_PROMPT_CACHE_READ,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_ASTRA_PROMPT_CACHE_WRITE,
+    GPT_6_ASTRA_PROMPT_CACHE_READ,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_1_SOL_PROMPT_CACHE_READ,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_TERRA_PROMPT_CACHE_WRITE,
+    GPT_6_1_TERRA_PROMPT_CACHE_READ,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    TEXT_EMBEDDING_3_LARGE_DIMENSIONS,
+    GATEWAY_REPORTED_COST,
+    GATEWAY_REPORTED_COST_STREAM,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES,
+    GATEWAY_REPORTED_COST_RESPONSES_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
+    GPT_5_6_SLASH_ALIAS,
+    GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
     GPT_6_SOL_CHAT_BRIDGED_JSON,
     GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON,
@@ -10894,6 +12586,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_3_CODEX_STREAM_FULL_USAGE,
     GPT_5_4_MINI_INPUT_TEXT,
     GPT_5_4_MINI_CACHE_READ,
+    GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE,
     GPT_5_4_MINI_AUDIO_INPUT,
     GPT_5_4_MINI_AUDIO_OUTPUT,
     GPT_5_4_MINI_REASONING,
@@ -10956,6 +12649,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_UPSTREAM_500_ZERO_SPEND,
     GPT_5_6_UPSTREAM_429_ZERO_SPEND,
     WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND,
+    WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE,
     WHISPER_VERBOSE_NEXT_TRANSCRIPTIONS_DURATION,
     GPT_4O_TRANSCRIBE_NEXT_TRANSCRIPTIONS_TOKENS,
     TTS_NEXT_SPEECH_PER_CHARACTER,
@@ -10973,6 +12667,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_SINGLE,
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
+    GPT_5_6_RESPONSES_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,
@@ -10982,6 +12678,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_MIXED_ACTIONS,
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_OPEN_PAGE_ONLY,
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_MIXED_ACTIONS_STREAM,
+    GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS,
     GPT_5_3_CODEX_RESPONSES_FILE_SEARCH,
     GPT_5_6_RESPONSES_SERVICE_TIER_FLEX,
     GPT_5_6_RESPONSES_SERVICE_TIER_PRIORITY,
@@ -11043,9 +12740,124 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_1_SOL_STREAM_NO_USAGE,
     GPT_6_SOL_UPSTREAM_404_ZERO_SPEND,
     GPT_6_SOL_INPUT_TEXT_ROLLUPS,
+    GPT_6_1_SOL_CACHE_READ,
+    GPT_6_LUNA_CACHE_READ,
+    GPT_6_ASTRA_CACHE_READ,
+    GPT_6_1_SOL_CACHE_WRITE_5M,
+    GPT_6_LUNA_CACHE_WRITE_5M,
+    GPT_6_ASTRA_CACHE_WRITE_5M,
+    GPT_5_6_TERRA_INPUT_TEXT,
+    GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K,
+    GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_5_6_TERRA_STREAM,
+    GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_5_6_TERRA_CHAT_BRIDGED_JSON,
+    GPT_5_6_TERRA_CACHE_READ,
+    GPT_5_6_TERRA_CACHE_WRITE_5M,
+    GPT_5_6_TERRA_REASONING,
+    GPT_5_6_TERRA_SERVICE_TIER_FLEX,
+    GPT_5_6_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_5_6_TERRA_TOOL_CALL,
+    GPT_6_1_SOL_RESPONSES_NATIVE_STREAM,
+    GPT_6_LUNA_RESPONSES_NATIVE_STREAM,
+    GPT_6_ASTRA_RESPONSES_NATIVE_STREAM,
+    GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM,
+    GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_SOL_MESSAGES_BRIDGED_JSON,
+    GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
+    GPT_6_ASTRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM,
+    GPT_6_LUNA_MESSAGES_BRIDGED_STREAM,
+    GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM,
+    GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM,
+)
+
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
+    GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
+    GPT_4O_MINI_TTS_SPEECH,
+    GPT_6_1_TERRA_INPUT_TEXT,
+    GPT_6_1_TERRA_STREAM,
+    GPT_6_1_TERRA_REASONING,
+    GPT_6_1_TERRA_TOOL_CALL,
+    GPT_6_1_TERRA_SERVICE_TIER_FLEX,
+    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_TOOL_CALL,
+    GPT_6_1_SOL_TOOL_CALL,
+    GPT_6_LUNA_PROMPT_CACHE_WRITE,
+    GPT_6_LUNA_PROMPT_CACHE_READ,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_SOL_PROMPT_CACHE_READ,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_ASTRA_PROMPT_CACHE_WRITE,
+    GPT_6_ASTRA_PROMPT_CACHE_READ,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_1_SOL_PROMPT_CACHE_READ,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_TERRA_PROMPT_CACHE_WRITE,
+    GPT_6_1_TERRA_PROMPT_CACHE_READ,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    TEXT_EMBEDDING_3_LARGE_DIMENSIONS,
+    GPT_6_LUNA_INPUT_TEXT,
+    GPT_6_LUNA_STREAM,
+    GPT_6_LUNA_REASONING,
+    GPT_6_LUNA_TOOL_CALL,
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    GPT_6_SOL_INPUT_TEXT,
+    GPT_6_SOL_STREAM,
+    GPT_6_SOL_REASONING,
+    GPT_6_SOL_TOOL_CALL,
+    GPT_6_SOL_SERVICE_TIER_FLEX,
+    GPT_6_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_SOL_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_INPUT_TEXT,
+    GPT_6_ASTRA_STREAM,
+    GPT_6_ASTRA_REASONING,
+    GPT_6_ASTRA_SERVICE_TIER_FLEX,
+    GPT_6_ASTRA_SERVICE_TIER_PRIORITY,
+    GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
+    GPT_6_1_SOL_INPUT_TEXT,
+    GPT_6_1_SOL_STREAM,
+    GPT_6_1_SOL_REASONING,
+    GPT_6_1_SOL_SERVICE_TIER_FLEX,
+    GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
+    ),
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST_RESPONSES, streamed=GATEWAY_REPORTED_COST_RESPONSES_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
+    ),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_INCOMPLETE),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_UNVALIDATED),
@@ -11071,15 +12883,58 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_LUNA_INPUT_TEXT, streamed=GPT_6_LUNA_STREAM),
     StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
+    StreamParityTestCase(plain=GPT_5_6_TERRA_INPUT_TEXT, streamed=GPT_5_6_TERRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_TERRA_INPUT_TEXT, streamed=GPT_6_1_TERRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_LUNA_RESPONSES_NATIVE_JSON, streamed=GPT_6_LUNA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_5_6_TERRA_RESPONSES_NATIVE_JSON, streamed=GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(plain=GPT_6_LUNA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(plain=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(
+        plain=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/messages",),
+    ),
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="openai/responses/gpt-5.6"),
+    ),
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_SOL_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_5_6_TERRA_RESPONSES_NATIVE_JSON, bridged=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(
+        native=GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM, bridged=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_SOL_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_LUNA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_ASTRA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_SOL_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_5_6_TERRA_CHAT_BRIDGED_JSON
+    ),
 )

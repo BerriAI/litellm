@@ -1,6 +1,7 @@
 import json
 import uuid
 from typing import Final
+from unittest.mock import ANY
 
 import httpx
 import pytest
@@ -288,6 +289,7 @@ def test_chat_over_responses_deployment_merges_message_and_function_call(gateway
                             "index": 0,
                         }
                     ],
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -397,6 +399,7 @@ def test_chat_over_responses_deployment_keeps_reasoning_with_merged_tool_call(ga
                             "index": 0,
                         }
                     ],
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -480,6 +483,7 @@ def test_chat_over_responses_deployment_returns_tool_call_only_reply_as_one_choi
                             "index": 0,
                         }
                     ],
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -570,6 +574,7 @@ def test_chat_over_responses_deployment_merges_function_call_followed_by_message
                             "index": 0,
                         }
                     ],
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -671,6 +676,7 @@ def test_chat_over_responses_deployment_folds_two_messages_and_function_call_int
                             "index": 0,
                         }
                     ],
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -729,6 +735,7 @@ def test_chat_over_responses_deployment_folds_commentary_and_final_answer_into_o
                 "message": {
                     "role": "assistant",
                     "content": 'Let me answer that.{"city": "Paris", "summary": "Sunny, 21C"}',
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -843,6 +850,7 @@ def test_chat_over_responses_deployment_folds_reasoning_two_messages_and_functio
                     "reasoning_content": "Checking the forecast.",
                     "reasoning_items": [_REASONING_ITEM],
                     "tool_calls": _TWO_CALLS_CHAT_SHAPE[:1],
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -884,6 +892,7 @@ def test_chat_over_responses_deployment_folds_message_and_two_function_calls_int
                     "role": "assistant",
                     "content": "Checking both.",
                     "tool_calls": _TWO_CALLS_CHAT_SHAPE,
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ], response.text
@@ -1296,4 +1305,113 @@ def test_chat_stream_over_responses_deployment_folds_message_and_two_function_ca
         }
         assert arguments_by_index == {0: '{"city":"Paris"}', 1: '{"city":"Paris","tz":"CET"}'}, choices
         assert [choice["finish_reason"] for choice in choices if choice.get("finish_reason")] == ["tool_calls"], choices
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
+
+
+_TWO_FINAL_ANSWERS: Final = (
+    _message_item("msg_final_first", '{"city":"Paris"}', phase="final_answer"),
+    _message_item("msg_final_second", '{"city":"Paris"}', phase="final_answer"),
+)
+
+_CITY_RESPONSE_FORMAT: Final[dict[str, JsonValue]] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "answer",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def test_chat_over_responses_deployment_with_json_schema_returns_first_of_two_final_answers(
+    gateway: Gateway,
+) -> None:
+    """gpt-5.4-mini answered a strict json_schema request on /responses with two final_answer items,
+    each the whole document (captured 2026-10-14); a chat client must get one parseable document."""
+    identity: Final = "responses-bridge-json-schema-two-finals-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.method == "POST" and request.target == "/responses", request.target
+        assert json.loads(request.body)["text"]["format"]["type"] == "json_schema", request.body
+        return Reply(body=_responses_body("resp_two_finals", _TWO_FINAL_ANSWERS))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/responses/gpt-5.4-mini", api_base=wire.url, api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"What is the capital of France? {identity}"}],
+                "response_format": _CITY_RESPONSE_FORMAT,
+                "cache": {"no-cache": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        assert body["choices"] == [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": '{"city":"Paris"}',
+                    "provider_specific_fields": {"phase": "final_answer"},
+                },
+            }
+        ], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
+
+
+def test_chat_stream_over_responses_deployment_with_json_schema_streams_first_of_two_final_answers(
+    gateway: Gateway,
+) -> None:
+    identity: Final = "responses-bridge-json-schema-two-finals-stream-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.method == "POST" and request.target == "/responses", request.target
+        upstream_body: Final = json.loads(request.body)
+        assert upstream_body["stream"] is True, request.body
+        assert upstream_body["text"]["format"]["type"] == "json_schema", request.body
+        return _stream_reply(
+            "resp_two_finals_stream",
+            _TWO_FINAL_ANSWERS,
+            (
+                *_message_item_frames(0, _TWO_FINAL_ANSWERS[0]),
+                *_message_item_frames(1, _TWO_FINAL_ANSWERS[1]),
+            ),
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/responses/gpt-5.4-mini", api_base=wire.url, api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"What is the capital of France? {identity}"}],
+                "response_format": _CITY_RESPONSE_FORMAT,
+                "stream": True,
+                "cache": {"no-cache": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        choices: Final = _stream_choices(response)
+        assert [choice["index"] for choice in choices] == [0] * len(choices), choices
+        deltas: Final = [object_value(choice["delta"]) for choice in choices]
+        assert "".join(str(delta["content"]) for delta in deltas if delta.get("content")) == '{"city":"Paris"}', choices
+        assert [choice["finish_reason"] for choice in choices if choice.get("finish_reason")] == ["stop"], choices
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]

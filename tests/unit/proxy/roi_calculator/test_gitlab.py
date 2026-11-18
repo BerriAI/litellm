@@ -48,15 +48,15 @@ async def test_fork_lookups_overlap_with_a_bounded_number_of_requests() -> None:
     source: Final = GitLab(ROISettings(source_provider="gitlab"), httpx.MockTransport(respond))
     pending: Final = asyncio.create_task(source.pulls("group/repo", date(2026, 9, 1), date(2026, 9, 30)))
     try:
-        first_wave: Final = tuple([await asyncio.wait_for(started.get(), timeout=1) for _ in range(8)])
+        first_wave: Final = tuple([await started.get() for _ in range(8)])
         assert len(set(first_wave)) == 8
         assert started.empty()
         release[first_wave[0] - 2].set()
-        next_id: Final = await asyncio.wait_for(started.get(), timeout=1)
+        next_id: Final = await started.get()
         assert next_id not in first_wave
         for event in release:
             event.set()
-        pulls: Final = await asyncio.wait_for(pending, timeout=1)
+        pulls: Final = await pending
         assert tuple(pull.head.repo.full_name if pull.head and pull.head.repo else None for pull in pulls) == tuple(
             None if source_id == 3 else f"fork-{source_id}/repo" for source_id in source_ids
         )

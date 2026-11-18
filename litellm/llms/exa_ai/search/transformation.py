@@ -11,6 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -21,6 +22,7 @@ from litellm.secret_managers.main import get_secret_str
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
+_RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
 
 
 class _ExaAISearchRequestRequired(TypedDict):
@@ -92,13 +94,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE
-
-        # Append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        return ensure_api_route(api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE, "search")
 
     def transform_search_request(
         self,
@@ -175,6 +171,9 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
+        - results[].highlights / highlightScores / score → SearchResult.highlights / highlight_scores / score,
+          each set only when Exa returned it
+        - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -199,11 +198,15 @@ class ExaAISearchConfig(BaseSearchConfig):
                     or "",
                     "date": result.get("publishedDate"),  # ISO 8601 datetime string
                     "last_updated": None,  # Exa AI doesn't provide last_updated in response
+                    **{field: result[key] for key, field in _RESULT_EXTRAS if key in result},
                 }
             )
             results.append(search_result)
 
-        return SearchResponse(
-            results=results,
-            object="search",
+        return SearchResponse.model_validate(
+            {
+                "results": results,
+                "object": "search",
+                "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
+            }
         )

@@ -2,29 +2,20 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.auth.authorization import ReadScope, read_scope_bind_params
+from litellm.proxy.utils import query_raw_within_statement_timeout
 from litellm.types.llms.base import LiteLLMBaseModel
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 UNKNOWN_CALL_TYPE: Final = "Unknown"
 INFO_ROUTES_JSON: Final = json.dumps(LiteLLMRoutes.info_routes.value)
-
-
-class _SupportsQueryRaw(Protocol):
-    """The single database operation the cache-activity queries issue."""
-
-    async def query_raw(self, query: str, *args: object) -> Sequence[object]: ...
-
-
-class _SupportsRawQueryDb(Protocol):
-    """A prisma client handle, narrowed to the raw-query surface used here."""
-
-    @property
-    def db(self) -> _SupportsQueryRaw: ...
 
 
 class CacheActivityGroup(LiteLLMBaseModel):
@@ -174,7 +165,7 @@ def compute_totals(groups: Sequence[CacheActivityGroup]) -> CacheActivityTotals:
 
 
 async def get_cache_activity(
-    prisma_client: _SupportsRawQueryDb,
+    prisma_client: "PrismaClient",
     read_scope: ReadScope,
     start_date: datetime,
     end_date: datetime,
@@ -185,14 +176,46 @@ async def get_cache_activity(
     models_json: Final = json.dumps(list(models))
     scope_params: Final = read_scope_bind_params(read_scope)
     group_rows, error_rows, key_alias_rows, model_rows = await asyncio.gather(
-        prisma_client.db.query_raw(
-            GROUPS_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON, *scope_params
+        query_raw_within_statement_timeout(
+            prisma_client,
+            GROUPS_SQL,
+            start_date,
+            end_date,
+            key_aliases_json,
+            models_json,
+            INFO_ROUTES_JSON,
+            *scope_params,
+            what="Cache activity",
         ),
-        prisma_client.db.query_raw(
-            ERROR_BREAKDOWN_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON, *scope_params
+        query_raw_within_statement_timeout(
+            prisma_client,
+            ERROR_BREAKDOWN_SQL,
+            start_date,
+            end_date,
+            key_aliases_json,
+            models_json,
+            INFO_ROUTES_JSON,
+            *scope_params,
+            what="Cache activity",
         ),
-        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON, *scope_params),
-        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON, *scope_params),
+        query_raw_within_statement_timeout(
+            prisma_client,
+            KEY_ALIAS_OPTIONS_SQL,
+            start_date,
+            end_date,
+            INFO_ROUTES_JSON,
+            *scope_params,
+            what="Cache activity",
+        ),
+        query_raw_within_statement_timeout(
+            prisma_client,
+            MODEL_OPTIONS_SQL,
+            start_date,
+            end_date,
+            INFO_ROUTES_JSON,
+            *scope_params,
+            what="Cache activity",
+        ),
     )
     groups: Final = _groups_adapter.validate_python(group_rows or [])
     return CacheActivityResponse(

@@ -12,13 +12,15 @@ from typing import Final
 import uvicorn
 from starlette.types import ASGIApp
 
+from tests.integration._support.ports import allocate_port
+
 
 @contextmanager
 def asgi_server(
-    app: ASGIApp, *, before_stop: Callable[[], None] | None = None, port: int = 0, keepalive_seconds: int = 1
+    app: ASGIApp, *, before_stop: Callable[[], None] | None = None, port: int = 0, keepalive_seconds: int = 30
 ) -> Iterator[str]:
     with socket.socket() as listener:
-        listener.bind(("127.0.0.1", port))
+        listener.bind(("127.0.0.1", port or allocate_port()))
         bound_port: Final = listener.getsockname()[1]
         server: Final = uvicorn.Server(
             uvicorn.Config(

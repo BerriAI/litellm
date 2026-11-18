@@ -17,6 +17,7 @@ import pytest
 import litellm
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
 import litellm.proxy.common_request_processing as common_request_processing_mod
+from litellm.cost_calculator import select_model_name_for_cost_calc
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
@@ -205,6 +206,58 @@ class TestDictResultsSkipMetadataUpdate:
 
         logging_obj.set_response_timing_metrics.assert_not_called()
         assert result._hidden_params["litellm_overhead_time_ms"] == 100.0
+
+    def test_update_response_metadata_keeps_stream_wrapper_timing_on_logging_obj(self):
+        """A stream wrapper carries _hidden_params, but the response assembled from its chunks does
+        not inherit them, so the logging payload needs the stamped timing on the logging object."""
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.stream = True
+        logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
+        logging_obj.caching_details = None
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj.set_response_timing_metrics.assert_called_once_with(
+            {"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0}
+        )
+        assert result._hidden_params["litellm_overhead_time_ms"] == 100.0
+
+    def test_update_response_metadata_keeps_the_handoff_overhead_when_a_stream_is_read_to_completion(self):
+        """A Responses API stream stamps its overhead when the stream is handed back and calls again at
+        stream end with include_overhead=False; that second call must not wipe the stamp."""
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.stream = True
+        logging_obj.response_timing_metrics = {"_response_ms": 300.0, "litellm_overhead_time_ms": 100.0}
+        logging_obj.model_call_details = {"llm_api_duration_ms": 200.0}
+        logging_obj.caching_details = None
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 10),
+            include_overhead=False,
+        )
+
+        logging_obj.set_response_timing_metrics.assert_called_once_with(
+            {"_response_ms": 10000.0, "litellm_overhead_time_ms": 100.0}
+        )
+        assert "litellm_overhead_time_ms" not in result._hidden_params
 
     def test_update_response_metadata_omits_overhead_for_completed_stream(self):
         """LIT-5466: the Responses streaming iterator finishes the whole stream before updating
@@ -649,3 +702,38 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
 
     assert result._response_ms == pytest.approx(2000)
     assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)
+
+
+def test_update_response_metadata_keeps_the_provider_model_after_the_proxy_rewrites_response_model():
+    start_time: Final = datetime.datetime(2026, 9, 21, 12, 0, 0)
+    logging_obj: Final = Logging(
+        model="azure/ptu-deployment",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="provider-model-response-metadata",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="azure/ptu-deployment", litellm_params={}, optional_params={}, custom_llm_provider="azure"
+    )
+    result: Final = ModelResponse(
+        model="gpt-5.4-nano-2026-03-17",
+        usage=Usage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+
+    update_response_metadata(
+        result=result,
+        logging_obj=logging_obj,
+        model="azure/ptu-deployment",
+        kwargs={},
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=2),
+    )
+    result.model = "model-group-alias"
+
+    assert (
+        select_model_name_for_cost_calc(model=None, completion_response=result, custom_llm_provider="azure")
+        == "azure/gpt-5.4-nano-2026-03-17"
+    )

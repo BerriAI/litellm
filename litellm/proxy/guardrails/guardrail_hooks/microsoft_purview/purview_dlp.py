@@ -22,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import claude_hosted_web_tool_arguments
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
@@ -46,6 +47,13 @@ if TYPE_CHECKING:
         CallTypesLiteral,
         LLMResponseTypes,
     )
+
+
+def _header_value(headers: httpx.Headers, name: str) -> str | None:
+    try:
+        return headers[name]
+    except KeyError:
+        return None
 
 
 class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
@@ -150,7 +158,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 upstream_status: Final = exc.response.status_code
                 client_status: Final = 502 if upstream_status in (401, 403) else upstream_status
                 headers: dict[str, str] | None = None
-                retry_after: Final[str | None] = exc.response.headers.get("retry-after")
+                retry_after: Final = _header_value(exc.response.headers, "retry-after")
                 if retry_after:
                     headers = {"Retry-After": retry_after}
                 raise HTTPException(
@@ -220,6 +228,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         if not output:
             return args
         for item in output:
+            hosted_arguments = claude_hosted_web_tool_arguments(item)
+            if hosted_arguments:
+                args.append(hosted_arguments)
             if isinstance(item, dict):
                 item_type = item.get("type")
                 arguments = item.get("arguments")
@@ -314,6 +325,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data if input_data is not None else "",
                 responses_api_request=data,
+                replay_tool_search=True,
             )
             return self.get_prompt_text_for_dlp(cast(list["AllMessageValues"], messages))
         except Exception:

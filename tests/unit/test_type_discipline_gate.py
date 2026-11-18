@@ -1,4 +1,4 @@
-"""Tests for scripts/type_discipline_gate.py.
+"""Tests for litellm/scripts/type_discipline_gate.py.
 
 The gate compares each LIT rule's codebase count against the merge-base count, so
 what is pinned here is the identity that keys those base counts and the diff scan
