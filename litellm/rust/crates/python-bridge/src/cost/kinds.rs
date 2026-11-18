@@ -18,6 +18,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use serde::Deserialize;
 
+use litellm_model_catalog::PricingRows;
+
 use crate::model_cost::{CostSnapshot, row_fields};
 
 #[derive(Deserialize)]
@@ -362,6 +364,26 @@ struct ManyDocument {
     row: Option<usize>,
 }
 
+/// `rows` added to the snapshot's rows for this call alone, each under the provider it names, and where each landed
+pub(super) fn per_call_rows(
+    snapshot: &CostSnapshot,
+    rows: &[Bound<'_, PyMapping>],
+) -> PyResult<(PricingRows, Vec<RowRef>)> {
+    rows.iter().enumerate().try_fold(
+        (snapshot.pricing_rows([], []), Vec::new()),
+        |(source, refs), (index, row)| {
+            let fields = row_fields(row)?;
+            let provider = fields
+                .get("litellm_provider")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let (source, at) = source.with_per_call(&format!("row-{index}"), fields, &provider);
+            Ok((source, refs.into_iter().chain([at]).collect()))
+        },
+    )
+}
+
 /// Prices many per-unit calls in one crossing, such as the lines of a batch output file. Each row is lowered once
 /// however many calls name it, and each call is answered as `price_units` would answer it alone with its row as the
 /// row `get_model_info` found
@@ -372,22 +394,7 @@ pub(crate) fn price_many(
     rows: &[Bound<'_, PyMapping>],
 ) -> PyResult<Vec<Py<PyAny>>> {
     let documents: Vec<ManyDocument> = from_py_argument(documents)?;
-    let (source, refs) = rows.iter().enumerate().try_fold(
-        (snapshot.pricing_rows([], []), Vec::new()),
-        |(source, refs), (index, row)| -> PyResult<_> {
-            let fields = row_fields(row)?;
-            let provider = fields
-                .get("litellm_provider")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let (source, at) = source.with_per_call(&format!("row-{index}"), fields, &provider);
-            Ok((
-                source,
-                refs.into_iter().chain([at]).collect::<Vec<RowRef>>(),
-            ))
-        },
-    )?;
+    let (source, refs) = per_call_rows(snapshot, rows)?;
     let queries: Vec<PriceQuery> = documents
         .into_iter()
         .map(|many| {
