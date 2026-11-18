@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.types.utils import SearchFreeRequests
+from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
 from litellm.utils import ProviderConfigManager
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -179,6 +179,48 @@ def test_regional_catalog_rows_price_the_requested_service_tier(
     ) == pytest.approx(
         (row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"])
     )
+
+
+@pytest.mark.parametrize("tokens", (0, 1))
+@pytest.mark.parametrize("region", ("ap-northeast-1", "eu-north-1", "us-west-2"))
+@pytest.mark.parametrize("model", ("amazon.nova-2-5-sonic", "amazon.nova-2-sonic-v1:0"))
+def test_regional_sonic_catalog_rows_price_audio_tokens(
+    model: str, region: str, tokens: int, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"bedrock/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="bedrock",
+        region_name=region,
+        prompt_tokens=tokens,
+        completion_tokens=tokens,
+        usage_object=Usage(
+            prompt_tokens=tokens,
+            completion_tokens=tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+            completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+        ),
+    ) == pytest.approx((tokens * row["input_cost_per_audio_token"], tokens * row["output_cost_per_audio_token"]))
+
+
+@pytest.mark.parametrize("above_threshold", (False, True))
+@pytest.mark.parametrize(
+    ("model", "threshold"),
+    (
+        ("ca.anthropic.claude-haiku-5-5", 100_000),
+        ("in.openai.gpt-5.6-luna", 272_000),
+        ("in.openai.gpt-5.6-terra", 272_000),
+    ),
+)
+def test_geo_catalog_rows_price_the_declared_long_context_boundary(
+    model: str, threshold: int, above_threshold: bool, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[model]
+    prompt_tokens: Final = threshold + int(above_threshold)
+    suffix: Final = f"_above_{threshold // 1000}k_tokens" if above_threshold else ""
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider="bedrock", prompt_tokens=prompt_tokens, completion_tokens=1
+    ) == pytest.approx((prompt_tokens * row[f"input_cost_per_token{suffix}"], row[f"output_cost_per_token{suffix}"]))
 
 
 @pytest.mark.parametrize("model", ("openai.gpt-6.2-sol", "openai.gpt-6.2-astra"))
