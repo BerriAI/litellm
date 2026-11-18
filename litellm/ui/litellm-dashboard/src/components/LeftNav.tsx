@@ -31,6 +31,7 @@ import {
 } from "@/components/shared/sidebarStyles";
 import {
   Activity,
+  Aperture,
   BarChart3,
   Bell,
   Blocks,
@@ -72,7 +73,7 @@ import { usePluginMode } from "@/contexts/PluginModeContext";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { type MouseEvent, useMemo, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
@@ -88,6 +89,7 @@ import {
   rolesWithWriteAccess,
   proxyAdminTierRoles,
 } from "../utils/roles";
+import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
@@ -345,6 +347,16 @@ const menuGroups: MenuGroup[] = [
       },
       { key: "logs", page: "logs", label: "shell.nav.items.logs", icon: <Activity {...ICON} /> },
       {
+        key: "lens",
+        page: "lens",
+        label: (
+          <span className="flex items-center gap-2">
+            <Trans i18nKey="shell.nav.items.lens" /> <BetaBadge />
+          </span>
+        ),
+        icon: <Aperture {...ICON} />,
+      },
+      {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
         label: "shell.nav.items.guardrailsMonitor",
@@ -501,7 +513,6 @@ const menuGroups: MenuGroup[] = [
 ];
 
 const HOME_ROUTE = "home";
-const ROUTES_OUTSIDE_NAV: ReadonlySet<string> = new Set(["aria", "lens"]);
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
@@ -605,7 +616,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const currentRoute = routeForPathname(usePathname());
-  const selectedKey = ROUTES_OUTSIDE_NAV.has(currentRoute) ? null : findMenuItemKey(currentRoute);
+  const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
 

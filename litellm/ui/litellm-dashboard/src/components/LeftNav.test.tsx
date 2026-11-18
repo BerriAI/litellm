@@ -568,6 +568,7 @@ describe("Sidebar (leftnav)", () => {
 
       expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
       expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("href", "/ui/lens");
       expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
     });
 
@@ -751,12 +752,6 @@ describe("Sidebar (leftnav)", () => {
 
   it("does not highlight Home when the Aria workspace is active", () => {
     navState.pathname = "/ui/aria";
-    renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
-  });
-
-  it("does not highlight Home on the Lens page", () => {
-    navState.pathname = "/ui/lens";
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
