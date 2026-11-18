@@ -1,4 +1,6 @@
 import json
+from itertools import chain
+from typing import Final
 
 import pytest
 
@@ -115,3 +117,45 @@ def test_tool_config_injection_point_is_neither_placed_nor_credited(local_model_
     assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["f"]
     assert "cachePoint" not in json.dumps(request)
     assert GATEWAY_INJECTED_CACHE_METADATA_KEY not in metadata
+
+
+GUARDED_CONVERSATION: Final = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "be brief"},
+            {"type": "guarded_text", "text": "guarded system", "cache_control": EPHEMERAL},
+        ],
+    },
+    {"role": "user", "content": [{"type": "text", "text": "hello"}, {"type": "guarded_text", "text": "guarded user"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "hi"}, {"type": "guarded_text", "text": "guarded assistant"}]},
+    {"role": "user", "content": "again"},
+]
+
+
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+def test_guarded_parts_go_as_text_under_drop_params_because_invoke_model_rejects_guard_content(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, drop_params_source: str
+):
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+    request: Final = _transform_request(
+        messages=GUARDED_CONVERSATION,
+        optional_params={"max_tokens": 20},
+        litellm_params={"drop_params": True} if drop_params_source == "request" else {},
+    )
+    assert request["system"] == [{"text": "be brief"}, {"text": "guarded system", "cachePoint": DEFAULT_CACHE_POINT}]
+    assert [message["content"] for message in request["messages"]] == [
+        [{"text": "hello"}, {"text": "guarded user"}],
+        [{"text": "hi"}, {"text": "guarded assistant"}],
+        [{"text": "again"}],
+    ]
+
+
+def test_only_user_guarded_parts_reach_bedrock_without_drop_params(local_model_cost_map: None):
+    request: Final = _transform_request(messages=GUARDED_CONVERSATION, optional_params={"max_tokens": 20})
+    sent_blocks: Final = chain(request["system"], chain.from_iterable(message["content"] for message in request["messages"]))
+    sent_guard_texts: Final = [block["guardContent"]["text"]["text"] for block in sent_blocks if "guardContent" in block]
+    assert sent_guard_texts == ["guarded user"]
+    assert "guarded system" not in json.dumps(request)
+    assert "guarded assistant" not in json.dumps(request)

@@ -1080,7 +1080,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 model=model,
                 messages=messages,
                 optional_params=mapped_params,
-                litellm_params={},
+                litellm_params={"drop_params": drop_params},
                 headers={},
             )
 

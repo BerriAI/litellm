@@ -42,6 +42,7 @@ from litellm.llms.vertex_ai.context_caching.transformation import (
 )
 import tempfile
 
+
 GEMINI_3_IMAGE_SIZE_MAPPINGS: Final[tuple[tuple[str, str, str], ...]] = (
     ("512x512", "1:1", "512"),
     ("1024x1024", "1:1", "1K"),
@@ -6601,6 +6602,36 @@ def test_invalid_reasoning_effort_surfaces_as_400_through_completion(custom_llm_
 
     assert exc_info.value.status_code == 400
     assert not isinstance(exc_info.value, litellm.APIConnectionError)
+
+
+@pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini/gemini-4-hydrogen", "vertex_ai/gemini-4-hydrogen"])
+def test_xhigh_reasoning_effort_maps_to_the_xhigh_thinking_level_for_a_model_that_supports_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    result: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {"thinkingLevel": "xhigh", "includeThoughts": True}
+
+
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-3.8-flash", "gemini-3-pro-preview"])
+def test_xhigh_reasoning_effort_is_a_400_for_a_gemini_model_that_does_not_support_it(
+    model: str, local_model_cost_map: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "xhigh" in str(exc_info.value)
 
 
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-3-pro-preview"])
