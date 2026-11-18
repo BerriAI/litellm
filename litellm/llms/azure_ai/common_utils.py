@@ -17,13 +17,14 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
-AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
+FOUNDRY_HOST_SUFFIX: Final = ".services.ai.azure.com"
+AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (FOUNDRY_HOST_SUFFIX, ".openai.azure.com")
 
 
 def is_foundry_model_inference_base(api_base: str) -> bool:
     parsed: Final = urlparse(api_base)
     host: Final = parsed.hostname
-    if host is None or not host.endswith(".services.ai.azure.com"):
+    if host is None or not host.endswith(FOUNDRY_HOST_SUFFIX):
         return False
     return "/openai/deployments" not in parsed.path
 
@@ -271,7 +272,7 @@ def _is_foundry_v1_base(api_base: str) -> bool:
     base_url: Final = httpx.URL(api_base)
     if foundry_project_root(base_url):
         return True
-    return is_azure_openai_v1_host(api_base) and foundry_v1_root(base_url) is not None
+    return base_url.host.endswith(FOUNDRY_HOST_SUFFIX) and foundry_v1_root(base_url) is not None
 
 
 def is_foundry_v1_model_router(model: str | None, api_base: str | None) -> bool:
