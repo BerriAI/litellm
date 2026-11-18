@@ -8,8 +8,13 @@ use litellm_router_core::{
     FailureKind, FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted,
     Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
     RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
-    UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
-    host::UncountedRetries, select, select::PassThrough,
+    UsageWindow,
+    call::{StreamOrigin, Unanswered},
+    fallback::Fallbacks,
+    health::current_minute,
+    host::UncountedRetries,
+    select,
+    select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -254,6 +259,17 @@ impl Hosted {
             .retry_stream(&*self.host, op, request, origin, failure)
             .await
             .map_err(|ended| ended.error)
+    }
+
+    /// `None` for a stream no attempt may answer in place of, else how its take-over went.
+    async fn take_over(
+        &self,
+        request: RouterRequest,
+        origin: StreamOrigin,
+        failure: AttemptError,
+    ) -> Option<Result<RouterResponse<String>, Unanswered<Raised>>> {
+        let take_over = self.router.take_over_stream(&request, &origin, &failure)?;
+        Some(take_over.run(&*self.host, Op::from("acompletion")).await)
     }
 }
 
@@ -1515,6 +1531,37 @@ async fn a_stream_fallback_that_serves_nothing_hands_back_no_error_of_another_at
     );
 }
 
+#[rstest]
+#[tokio::test]
+async fn a_stream_fallback_looks_its_targets_up_by_the_group_a_hook_routed_the_stream_to(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let hosted = router(
+        config,
+        json!({"fallbacks": [{"tier": ["backup"]}]}),
+        host.clone(),
+    );
+    let origin = StreamOrigin {
+        routed: Some("tier".to_owned()),
+        ..stream_origin()
+    };
+
+    let served = hosted
+        .router
+        .fallback_stream(
+            &*host,
+            Op::from("acompletion"),
+            request(),
+            origin,
+            server_error(),
+        )
+        .await
+        .map(|response| response.output.response);
+
+    assert_eq!(served.ok(), Some("b1".to_owned()));
+}
+
 fn pinned_to_a1() -> Arc<ScriptedHost> {
     Arc::new(ScriptedHost {
         pinned: Some("a1"),
@@ -1644,6 +1691,360 @@ fn a_group_policy_that_does_not_read_governs_no_stream_retry(
         Some(FailureKind::InternalServer),
     );
     assert_eq!(policy.retry_budget, Some((budget, applies)));
+}
+
+/// `primary`, whose one deployment has `params`, and `backup`, with one deployment too.
+fn lone(params: Value) -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": params, "model_info": {"id": "p1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/b1"}, "model_info": {"id": "b1"}},
+        ]
+    }))
+    .unwrap()
+}
+
+fn plain() -> Value {
+    json!({"model": "openai/p1"})
+}
+
+fn falling_back(num_retries: u32) -> Value {
+    json!({"num_retries": num_retries, "fallbacks": [{"primary": ["backup"]}]})
+}
+
+fn origin_on(deployment: &str) -> StreamOrigin {
+    StreamOrigin {
+        deployment_id: Some(deployment.to_owned()),
+        ..stream_origin()
+    }
+}
+
+fn answer(
+    taken: Option<Result<RouterResponse<String>, Unanswered<Raised>>>,
+) -> RouterResponse<String> {
+    match taken {
+        Some(Ok(answer)) => answer,
+        other => panic!("no attempt answered: {other:?}"),
+    }
+}
+
+#[rstest]
+#[case::neither_a_retry_nor_a_fallback(json!({"num_retries": 0}), json!(null), request(), server_error())]
+#[case::a_failure_no_retry_clears(falling_back(1), json!(null), request(), failure(FailureKind::BadRequest, 400))]
+#[case::fallbacks_the_request_disabled(
+    falling_back(0),
+    json!(null),
+    RouterRequest { disable_fallbacks: true, ..request() },
+    server_error()
+)]
+#[case::a_retry_policy_the_request_opted_out_of(
+    json!({"num_retries": 0}),
+    json!({"RateLimitErrorRetries": 2}),
+    RouterRequest { num_retries: Some(0), ..request() },
+    failure(FailureKind::RateLimit, 429)
+)]
+#[tokio::test]
+async fn a_failed_stream_no_attempt_may_answer_for_is_declined_before_any_attempt(
+    #[case] dynamic: Value,
+    #[case] retry_policy: Value,
+    #[case] request: RouterRequest,
+    #[case] failed: AttemptError,
+) {
+    let mut config = lone(plain());
+    config.retry_policy = serde_json::from_value(retry_policy).unwrap();
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(config, dynamic, host.clone());
+
+    let taken = router.take_over(request, origin_on("p1"), failed).await;
+
+    assert!(taken.is_none(), "{taken:?}");
+    assert_eq!(host.selected(), Vec::<String>::new());
+}
+
+#[rstest]
+#[case::the_routers_num_retries(plain(), json!({"num_retries": 2}), json!(null), server_error(), 2)]
+#[case::a_retry_policy_when_num_retries_is_zero(
+    plain(),
+    json!({"num_retries": 0}),
+    json!({"RateLimitErrorRetries": 2}),
+    failure(FailureKind::RateLimit, 429),
+    2
+)]
+#[case::the_deployments_own_num_retries(
+    json!({"model": "openai/p1", "num_retries": 1}),
+    json!({"num_retries": 0}),
+    json!(null),
+    server_error(),
+    1
+)]
+#[tokio::test]
+async fn a_failed_stream_is_answered_by_a_retry_in_its_group_under_the_budget_that_governs_it(
+    #[case] params: Value,
+    #[case] dynamic: Value,
+    #[case] retry_policy: Value,
+    #[case] failed: AttemptError,
+    #[case] budget: u32,
+) {
+    let mut config = lone(params);
+    config.retry_policy = serde_json::from_value(retry_policy).unwrap();
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(config, dynamic, host.clone());
+
+    let retried = answer(router.take_over(request(), origin_on("p1"), failed).await);
+
+    assert_eq!(
+        (
+            retried.output.response.as_str(),
+            retried.attempted_retries,
+            retried.max_retries,
+            retried.origin,
+            host.retries(),
+        ),
+        (
+            "p1",
+            1,
+            Some(budget),
+            StreamOrigin {
+                attempted_retries: 1,
+                committed_budget: Some(budget),
+                ..origin_on("p1")
+            },
+            1,
+        )
+    );
+}
+
+/// Take over a stream of `primary`, then the stream of every answer `primary` gives in turn,
+/// each failing with a server error before content: the deployments that answered, and how the
+/// take-over `primary` did not answer went.
+async fn taken_over_while_primary_answers(
+    router: &Hosted,
+) -> (
+    Vec<String>,
+    Option<Result<RouterResponse<String>, Unanswered<Raised>>>,
+) {
+    let mut origin = origin_on("p1");
+    let mut answered = Vec::new();
+    loop {
+        match router.take_over(request(), origin, server_error()).await {
+            Some(Ok(answer)) if answer.origin.group == "primary" => {
+                answered.push(answer.output.response);
+                origin = answer.origin;
+            }
+            ended => return (answered, ended),
+        }
+    }
+}
+
+#[tokio::test]
+async fn stream_retries_whose_streams_fail_too_stop_at_the_budget() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(lone(plain()), json!({"num_retries": 2}), host.clone());
+
+    let (answered, ended) = taken_over_while_primary_answers(&router).await;
+
+    assert!(ended.is_none(), "{ended:?}");
+    assert_eq!(answered, ["p1", "p1"]);
+    assert_eq!(host.retries(), 2);
+}
+
+#[tokio::test]
+async fn spent_stream_retries_hand_the_stream_over_to_the_fallbacks() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(lone(plain()), falling_back(1), host.clone());
+
+    let (answered, ended) = taken_over_while_primary_answers(&router).await;
+
+    let fallback = answer(ended);
+    assert_eq!(answered, ["p1"]);
+    assert_eq!(
+        (
+            fallback.output.response.as_str(),
+            fallback.attempted_fallbacks,
+            fallback.origin,
+            host.retries(),
+        ),
+        (
+            "b1",
+            1,
+            StreamOrigin {
+                group: "backup".to_owned(),
+                depth: 1,
+                level: 1,
+                deployment_id: Some("b1".to_owned()),
+                ..StreamOrigin::default()
+            },
+            1,
+        )
+    );
+}
+
+/// Python's mid-stream retry stamps its budget on the request metadata the fallback hop copies
+/// (`record_retry_attempt`), so the fallback's answer reports it though no retry served it.
+#[rstest]
+#[case::after_a_retry_that_failed_before_its_stream(1, false, Some(1))]
+#[case::after_a_retry_whose_stream_failed_too(1, true, Some(1))]
+#[case::with_no_retry_run(0, false, None)]
+#[tokio::test]
+async fn a_fallback_that_takes_over_a_stream_reports_the_retry_budget_its_group_spent(
+    #[case] num_retries: u32,
+    #[case] retry_answers: bool,
+    #[case] max_retries: Option<u32>,
+) {
+    let failures = if retry_answers {
+        vec![]
+    } else {
+        vec![server_error()]
+    };
+    let host = Arc::new(ScriptedHost::failing("primary", failures));
+    let router = router(lone(plain()), falling_back(num_retries), host.clone());
+
+    let (_, ended) = taken_over_while_primary_answers(&router).await;
+
+    let fallback = answer(ended);
+    assert_eq!(
+        (
+            fallback.output.response.as_str(),
+            fallback.attempted_retries,
+            fallback.max_retries,
+            host.retries(),
+        ),
+        ("b1", 0, max_retries, usize::try_from(num_retries).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn a_stream_retry_that_fails_spends_a_retry_and_the_next_one_answers() {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let router = router(lone(plain()), json!({"num_retries": 2}), host.clone());
+
+    let retried = answer(
+        router
+            .take_over(request(), origin_on("p1"), server_error())
+            .await,
+    );
+
+    assert_eq!(
+        (retried.attempted_retries, retried.max_retries),
+        (2, Some(2))
+    );
+    assert_eq!(host.selected(), ["p1", "p1"]);
+}
+
+#[tokio::test]
+async fn a_stream_that_failed_its_agentic_followup_skips_the_retries_for_the_fallback() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(lone(plain()), falling_back(2), host.clone());
+
+    let fallback = answer(
+        router
+            .take_over(request(), origin_on("p1"), agentic_followup())
+            .await,
+    );
+
+    assert_eq!(
+        (fallback.output.response.as_str(), host.retries()),
+        ("b1", 0)
+    );
+    assert_eq!(host.selected(), ["b1"]);
+}
+
+/// A fallback that serves nothing ends the take-over on the failure it began with, so the
+/// stream's own error is what the caller hears, not the fallback's.
+#[rstest]
+#[case::a_fallback_that_fails_leaves_the_streams_own_failure(falling_back(0), "backup", "b1", None)]
+#[case::a_retry_that_fails_with_no_fallback_hands_back_its_error(
+    json!({"num_retries": 1}),
+    "primary",
+    "p1",
+    Some("p1")
+)]
+#[tokio::test]
+async fn a_take_over_that_serves_nothing_says_which_error_it_ends_on(
+    #[case] dynamic: Value,
+    #[case] failing: &str,
+    #[case] attempted_on: &str,
+    #[case] raised_on: Option<&str>,
+) {
+    let host = Arc::new(ScriptedHost::failing(failing, vec![server_error()]));
+    let router = router(lone(plain()), dynamic, host.clone());
+
+    let taken = router
+        .take_over(request(), origin_on("p1"), server_error())
+        .await;
+
+    let raised = match taken {
+        Some(Err(Unanswered { raised })) => raised.map(|Raised(deployment)| deployment),
+        other => panic!("the take-over did not serve nothing: {other:?}"),
+    };
+    assert_eq!(raised.as_deref(), raised_on);
+    assert_eq!(host.selected(), [attempted_on]);
+}
+
+/// The response of a call `primary` failed and `backup` answered, each group retrying
+/// `num_retries` times.
+async fn answered_by_the_fallback(num_retries: u32) -> (Hosted, RouterResponse<String>) {
+    let failures = (0..=num_retries).map(|_| server_error()).collect();
+    let host = Arc::new(ScriptedHost::failing("primary", failures));
+    let router = router(lone(plain()), falling_back(num_retries), host);
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    (router, response)
+}
+
+#[tokio::test]
+async fn a_response_says_where_its_stream_came_from() {
+    let (_, response) = answered_by_the_fallback(1).await;
+
+    assert_eq!(
+        response.origin,
+        StreamOrigin {
+            group: "backup".to_owned(),
+            depth: 1,
+            level: 1,
+            deployment_id: Some("b1".to_owned()),
+            ..StreamOrigin::default()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_retried_response_says_how_many_retries_its_stream_came_after() {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let router = router(lone(plain()), json!({"num_retries": 1}), host);
+
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.origin,
+        StreamOrigin {
+            attempted_retries: 1,
+            ..origin_on("p1")
+        }
+    );
+}
+
+#[rstest]
+#[case::retried_in_its_own_group_under_that_groups_budget(1, Some("b1"))]
+#[case::declined_with_no_retry_left(0, None)]
+#[tokio::test]
+async fn a_fallbacks_stream_that_fails_too_falls_back_no_further(
+    #[case] num_retries: u32,
+    #[case] answered_by: Option<&str>,
+) {
+    let (router, fallback) = answered_by_the_fallback(num_retries).await;
+
+    let taken = router
+        .take_over(request(), fallback.origin, server_error())
+        .await;
+
+    let answered = taken.map(|taken| taken.map(|answer| answer.output.response));
+    assert_eq!(answered, answered_by.map(|id| Ok(id.to_owned())));
 }
 
 #[rstest]

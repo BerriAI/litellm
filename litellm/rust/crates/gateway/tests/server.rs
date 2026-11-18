@@ -466,7 +466,41 @@ async fn a_deployments_own_num_retries_retries_its_failed_call() {
     );
 }
 
+/// A retry policy names litellm's error classes, so a provider's status has to land in the class
+/// the Python proxy puts it in: an overloaded Anthropic answer is an `InternalServerError`.
 #[rstest]
+#[case::it_is_an_internal_server_error("InternalServerErrorRetries", 200)]
+#[case::it_is_not_an_unavailable_service("ServiceUnavailableErrorRetries", 529)]
+#[tokio::test]
+async fn a_retry_policy_retries_an_overloaded_provider_by_its_error_class(
+    #[case] retried_class: &str,
+    #[case] answered: u16,
+) {
+    let (failing, healthy) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(529).set_body_json(
+            json!({"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}),
+        ))
+        .mount(&failing)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&healthy)
+        .await;
+
+    let response = routed(
+        &format!(
+            "model_list:\n{}{}router_settings:\n  num_retries: 0\n  allowed_fails: 0\n  cooldown_time: 30\n  retry_policy:\n    {retried_class}: 1\ngeneral_settings:\n  master_key: gateway-key\n",
+            weighted("primary", "first", &failing, 1),
+            weighted("primary", "second", &healthy, 0),
+        ),
+        "primary",
+    )
+    .await;
+
+    assert_eq!(response.status().as_u16(), answered);
+}
+
 #[tokio::test]
 async fn a_call_through_an_alias_reports_the_alias_as_its_model_group() {
     let upstream = MockServer::start().await;
@@ -668,14 +702,20 @@ async fn stream_read_to_its_end(app: &axum::Router, model: &str) -> (u16, String
     (status, String::from_utf8(body.to_vec()).unwrap())
 }
 
+/// An error event counts against its deployment as the same error does before a stream opens.
+/// The Python proxy records such a stream as served when no attempt can answer in its place.
+#[rstest]
+#[case::an_overloaded_provider_is_cooled_down(OVERLOADED, [200, 200, 429], 2)]
+#[case::a_refused_request_is_not(REFUSED, [200, 200, 200], 3)]
 #[tokio::test]
-async fn a_stream_carrying_the_providers_error_cools_its_deployment_down() {
+async fn a_stream_that_goes_out_with_the_providers_error_counts_against_its_deployment_by_that_error(
+    #[case] error: &str,
+    #[case] answered: [u16; 3],
+    #[case] asked: usize,
+) {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
-        .respond_with(streamed(concat!(
-            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-unlisted-9\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
-            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n",
-        )))
+        .respond_with(streamed(&[MESSAGE_START, error].concat()))
         .mount(&upstream)
         .await;
     let config = Config::from_yaml(&format!(
@@ -689,23 +729,50 @@ async fn a_stream_carrying_the_providers_error_cools_its_deployment_down() {
         &config,
     ));
 
-    let first = stream_read_to_its_end(&app, "primary").await;
-    let second = stream_read_to_its_end(&app, "primary").await;
+    let statuses = [
+        stream_read_to_its_end(&app, "primary").await.0,
+        stream_read_to_its_end(&app, "primary").await.0,
+        stream_read_to_its_end(&app, "primary").await.0,
+    ];
+
+    assert_eq!(
+        (statuses, upstream.received_requests().await.unwrap().len()),
+        (answered, asked)
+    );
+}
+
+#[tokio::test]
+async fn a_failed_stream_cools_its_deployment_down_for_the_deployments_own_cooldown_time() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(streamed(&[MESSAGE_START, OVERLOADED].concat()))
+        .mount(&upstream)
+        .await;
+    let cooling_for_7s = |id: &str| {
+        format!(
+            "  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n      cooldown_time: 7\n    model_info:\n      id: {id}\n",
+            upstream.uri()
+        )
+    };
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}router_settings:\n  allowed_fails: 0\n  cooldown_time: 30\n  num_retries: 0\ngeneral_settings:\n  master_key: gateway-key\n",
+        cooling_for_7s("primary-1"),
+        cooling_for_7s("primary-2"),
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+
+    stream_read_to_its_end(&app, "primary").await;
+    stream_read_to_its_end(&app, "primary").await;
     let (status, refused) = stream_read_to_its_end(&app, "primary").await;
 
-    assert_eq!((first.0, second.0), (200, 200));
-    assert!(first.1.contains("overloaded_error"), "{}", first.1);
-    assert_eq!(
-        (status, serde_json::from_str::<Value>(&refused).unwrap()),
-        (
-            429,
-            json!({"type": "error", "error": {
-                "type": "rate_limit_error",
-                "message": "No deployments available for selected model, Try again in 30 seconds. All deployments for selected model are in cooldown. Passed model=primary. pre-call-checks=False, cooldown_list=['primary-1', 'primary-2']",
-            }})
-        )
+    assert!(
+        status == 429 && refused.contains("Try again in 7 seconds"),
+        "{status} {refused}"
     );
-    assert_eq!(upstream.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -737,6 +804,282 @@ async fn a_stream_that_ends_cleanly_keeps_its_deployment_serving() {
     ];
 
     assert_eq!(statuses, [200, 200, 200]);
+}
+
+const MESSAGE_START: &str = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-unlisted-9\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n";
+const TEXT: &str = concat!(
+    "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+    "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+);
+const MESSAGE_END: &str = concat!(
+    "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}\n\n",
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+);
+const OVERLOADED: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n";
+
+fn weighted(name: &str, id: &str, upstream: &MockServer, weight: u8) -> String {
+    format!(
+        "  - model_name: {name}\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n      weight: {weight}\n    model_info:\n      id: {id}\n",
+        upstream.uri()
+    )
+}
+
+/// A router whose `primary` group is first served by a deployment that answers a stream with
+/// `failing`, and whose `second` deployment, of `second_group`, answers one that says "hi".
+async fn streamed_app(
+    failing: &str,
+    second_group: &str,
+    settings: &str,
+) -> (axum::Router, MockServer, MockServer) {
+    let answering = [MESSAGE_START, TEXT, MESSAGE_END].concat();
+    streamed_pair(failing, &answering, second_group, settings).await
+}
+
+/// A router whose `primary` group is first served by a deployment that answers a stream with
+/// `first_sends`, and whose `second` deployment, of `second_group`, answers one with
+/// `second_sends`.
+async fn streamed_pair(
+    first_sends: &str,
+    second_sends: &str,
+    second_group: &str,
+    settings: &str,
+) -> (axum::Router, MockServer, MockServer) {
+    let (first, second) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(streamed(first_sends))
+        .mount(&first)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(streamed(second_sends))
+        .mount(&second)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}router_settings:\n{settings}general_settings:\n  master_key: gateway-key\n",
+        weighted("primary", "first", &first, 1),
+        weighted(second_group, "second", &second, 0),
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+    (app, first, second)
+}
+
+fn stream_of(model: &str) -> Request<Body> {
+    Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": model, "max_tokens": 8, "stream": true, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap()
+}
+
+#[rstest]
+#[case::retried_in_its_group(
+    "primary",
+    "  num_retries: 1\n  allowed_fails: 0\n  cooldown_time: 30\n",
+    vec![
+        ("x-litellm-model-id", "second"),
+        ("x-litellm-model-group", "primary"),
+        ("x-litellm-attempted-retries", "1"),
+        ("x-litellm-attempted-fallbacks", "0"),
+        ("x-litellm-max-retries", "1"),
+    ]
+)]
+#[case::served_by_a_fallback(
+    "backup",
+    "  num_retries: 0\n  fallbacks:\n    - primary: [backup]\n",
+    vec![
+        ("x-litellm-model-id", "second"),
+        ("x-litellm-model-group", "backup"),
+        ("x-litellm-attempted-retries", "0"),
+        ("x-litellm-attempted-fallbacks", "1"),
+    ]
+)]
+#[tokio::test]
+async fn a_stream_the_provider_fails_before_any_content_is_served_by_another_attempt(
+    #[case] second_group: &str,
+    #[case] settings: &str,
+    #[case] routed: Vec<(&str, &str)>,
+) {
+    let (app, first, second) = streamed_app(
+        &[MESSAGE_START, OVERLOADED].concat(),
+        second_group,
+        settings,
+    )
+    .await;
+
+    let response = app.oneshot(stream_of("primary")).await.unwrap();
+
+    let status = response.status().as_u16();
+    assert_eq!(routing_headers(&response), routed);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert_eq!(
+        (
+            status,
+            body.matches("event: message_start").count(),
+            body.contains("\"text\":\"hi\""),
+            body.contains("overloaded_error"),
+            first.received_requests().await.unwrap().len(),
+            second.received_requests().await.unwrap().len(),
+        ),
+        (200, 1, true, false, 1, 1),
+        "{body}"
+    );
+}
+
+/// The stream that answers in a failed stream's place is held like the first one. A fallback
+/// whose own stream fails before content has no fallback of its own left, so with no retry
+/// either its stream goes out with the error its provider sent.
+#[tokio::test]
+async fn a_fallbacks_stream_that_fails_too_goes_out_with_its_providers_error() {
+    let failing = [MESSAGE_START, OVERLOADED].concat();
+    let (app, first, second) = streamed_pair(
+        &failing,
+        &failing,
+        "backup",
+        "  num_retries: 0\n  fallbacks:\n    - primary: [backup]\n",
+    )
+    .await;
+
+    let response = app.oneshot(stream_of("primary")).await.unwrap();
+
+    let status = response.status().as_u16();
+    assert_eq!(
+        routing_headers(&response),
+        [
+            ("x-litellm-model-id", "second"),
+            ("x-litellm-model-group", "backup"),
+            ("x-litellm-attempted-retries", "0"),
+            ("x-litellm-attempted-fallbacks", "1"),
+        ]
+    );
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert_eq!(
+        (
+            status,
+            body.matches("event: ").count(),
+            body.matches("overloaded_error").count(),
+            first.received_requests().await.unwrap().len(),
+            second.received_requests().await.unwrap().len(),
+        ),
+        (200, failing.matches("event: ").count(), 1, 1, 1),
+        "{body}"
+    );
+}
+
+const TIMED_OUT: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"timeout_error\",\"message\":\"Slow\"}}\n\n";
+
+#[rstest]
+#[case::overloaded(OVERLOADED, 529, "overloaded_error", "Overloaded")]
+#[case::timed_out(TIMED_OUT, 504, "timeout_error", "Slow")]
+#[tokio::test]
+async fn a_stream_whose_take_over_serves_nothing_answers_the_providers_error(
+    #[case] failure: &str,
+    #[case] status: u16,
+    #[case] error_type: &str,
+    #[case] message: &str,
+) {
+    let (first, second) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(streamed(&[MESSAGE_START, failure].concat()))
+        .mount(&first)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(json!({"error": {"message": "down"}})),
+        )
+        .mount(&second)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}router_settings:\n  num_retries: 0\n  fallbacks:\n    - primary: [backup]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "first", &first),
+        deployment("backup", "second", &second),
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+
+    let response = app.oneshot(stream_of("primary")).await.unwrap();
+
+    let answered = response.status().as_u16();
+    assert_eq!(
+        routing_headers(&response),
+        [
+            ("x-litellm-model-id", "first"),
+            ("x-litellm-model-group", "primary"),
+            ("x-litellm-attempted-retries", "0"),
+            ("x-litellm-attempted-fallbacks", "0"),
+        ]
+    );
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    assert_eq!(
+        (answered, serde_json::from_slice::<Value>(&body).unwrap()),
+        (
+            status,
+            json!({"type": "error", "error": {"type": error_type, "message": message}})
+        )
+    );
+}
+
+const REFUSED: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Refused\"}}\n\n";
+
+const RETRIED_AND_FALLEN_BACK: &str = "  num_retries: 1\n  fallbacks:\n    - primary: [backup]\n";
+
+#[rstest]
+#[case::once_content_was_sent(
+    &[MESSAGE_START, TEXT, OVERLOADED],
+    RETRIED_AND_FALLEN_BACK,
+    "overloaded_error"
+)]
+#[case::on_an_error_no_retry_clears(
+    &[MESSAGE_START, REFUSED],
+    RETRIED_AND_FALLEN_BACK,
+    "invalid_request_error"
+)]
+#[case::when_the_retry_policy_gives_its_error_class_no_retry(
+    &[MESSAGE_START, OVERLOADED],
+    "  num_retries: 0\n  retry_policy:\n    RateLimitErrorRetries: 1\n",
+    "overloaded_error"
+)]
+#[tokio::test]
+async fn a_stream_no_other_attempt_may_answer_goes_out_as_the_provider_sent_it(
+    #[case] failing: &[&str],
+    #[case] settings: &str,
+    #[case] error: &str,
+) {
+    let sent = failing.concat();
+    let (app, _, second) = streamed_app(&sent, "backup", settings).await;
+
+    let response = app.oneshot(stream_of("primary")).await.unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert_eq!(
+        (
+            body.matches("event: ").count(),
+            body.contains(error),
+            second.received_requests().await.unwrap().len(),
+        ),
+        (sent.matches("event: ").count(), true, 0),
+        "{body}"
+    );
 }
 
 const SERVED_STREAM: &str = concat!(

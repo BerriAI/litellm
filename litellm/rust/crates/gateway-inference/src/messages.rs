@@ -27,7 +27,8 @@ use crate::{
     headers::Routing,
     model_restamp::{ReportedModel, Stamp},
     request,
-    routing::{self, Host, RouteAttempt},
+    routing::{self, Host, RouteAttempt, RouteChunks},
+    stream_event::{self, Read},
     stream_outcome::{self, Streamed},
 };
 
@@ -163,7 +164,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
                     self.gateway,
                     deployment,
                     chunks,
-                    stream_outcome::messages_event,
+                    stream_event::messages_event,
                 );
                 Served {
                     deferred: true,
@@ -171,6 +172,13 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
                 }
             }
         })
+    }
+
+    fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
+        match &mut outcome.0 {
+            CallOutput::Stream { chunks, .. } => Some((chunks, stream_event::messages_event)),
+            CallOutput::Complete(_) => None,
+        }
     }
 }
 

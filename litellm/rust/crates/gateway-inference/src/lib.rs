@@ -15,6 +15,8 @@ mod ocr;
 mod request;
 mod responses;
 pub mod routing;
+mod stream_event;
+mod stream_hold;
 mod stream_outcome;
 
 use std::{collections::HashMap, sync::Arc};
