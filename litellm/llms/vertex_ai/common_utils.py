@@ -56,6 +56,11 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+GEMINI_FILES_API_V1_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1/files/"
+GEMINI_FILES_API_URI_PREFIXES: Final = (
+    GEMINI_FILES_API_URI_PREFIX,
+    GEMINI_FILES_API_V1_URI_PREFIX,
+)
 
 
 # https://cloud.google.com/vertex-ai/generative-ai/docs/image/configure-aspect-ratio

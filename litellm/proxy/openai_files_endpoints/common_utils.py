@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.managed_file_repository import ManagedFileRepository
@@ -477,6 +478,7 @@ def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
         yield bare_id
         yield f"files/{bare_id}"
         yield f"{_GEMINI_FILES_URL}{bare_id}"
+        yield f"{GEMINI_FILES_API_V1_URI_PREFIX}{bare_id}"
 
 
 def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:

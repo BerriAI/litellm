@@ -62,7 +62,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import LlmProviders
 
 from ..common_utils import (
-    GEMINI_FILES_API_URI_PREFIX,
+    GEMINI_FILES_API_URI_PREFIXES,
     check_text_in_content,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
@@ -566,7 +566,7 @@ def process_gemini_media(
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
+        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIXES):
             # Gemini Files API URIs — the file is already uploaded to Google's
             # servers; pass the URI through as file_data without fetching it.
             # These URLs return 403 when accessed directly, so we must not try
@@ -601,7 +601,7 @@ def encode_gemini_media_source(
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
 ) -> PartType:
-    return process_gemini_media(
+    part: Final = process_gemini_media(
         image_url=source.url,
         format=source.format,
         model=model,
@@ -610,6 +610,15 @@ def encode_gemini_media_source(
         media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
         video_metadata=source.video_metadata,
     )
+    metadata: Final = {
+        name: {snake_to_camel(key): value for key, value in fields.items()}
+        for name, fields in (
+            ("document_metadata", source.document_metadata),
+            ("spreadsheet_metadata", source.spreadsheet_metadata),
+        )
+        if fields is not None
+    }
+    return cast(PartType, {**part, **metadata})  # cast-ok: metadata extends PartType
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -1416,11 +1425,11 @@ def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
 
 
 def _ai_studio_inlines(media: RemoteMedia) -> bool:
-    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIXES)
 
 
 def _vertex_inlines(media: RemoteMedia) -> bool:
-    if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
+    if media.url.startswith(GEMINI_FILES_API_URI_PREFIXES):
         return False
     return media.url.startswith("http://") or (
         _explicit_mime_type(media.fields) is None and get_image_mime_type_from_url(media.url) is None

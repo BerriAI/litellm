@@ -1546,15 +1546,17 @@ class GeminiMediaSource:
     detail: str | None = None
     video_metadata: Mapping[str, object] | None = None
     inline_in_tool_result: bool = False
+    document_metadata: Mapping[str, object] | None = None
+    spreadsheet_metadata: Mapping[str, object] | None = None
 
 
 def gemini_tool_media_needs_download(source: GeminiMediaSource) -> bool:
-    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX
+    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
 
     return (
         source.inline_in_tool_result
         and source.url.startswith(("http://", "https://"))
-        and not source.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+        and not source.url.startswith(GEMINI_FILES_API_URI_PREFIXES)
     )
 
 
@@ -1616,13 +1618,15 @@ def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool =
     if source is None:
         return None
     file_format: Final = _gemini_media_format(file)
-    file_detail: Final = file.get("detail")
+    file_detail: Final = file.get("resolution") or file.get("detail")
     return GeminiMediaSource(
         url=_gemini_inline_url(source, file_format) if source == file_data else source,
         format=file_format,
         detail=file_detail if isinstance(file_detail, str) else None,
         video_metadata=as_str_mapping(file.get("video_metadata")),
         inline_in_tool_result=source == file_data,
+        document_metadata=as_str_mapping(file.get("document_metadata")),
+        spreadsheet_metadata=as_str_mapping(file.get("spreadsheet_metadata")),
     )
 
 
@@ -1635,14 +1639,18 @@ def _gemini_tool_media_part(
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
 ) -> VertexPartType | None:
-    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX
+    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
     from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_media_source
 
     source: Final = gemini_media_source(content)
     if source is None:
         return None
-    inline_only: Final = nested and custom_llm_provider not in ("vertex_ai", "vertex_ai_beta")
-    if inline_only and source.url.startswith(("gs://", GEMINI_FILES_API_URI_PREFIX)):
+    inline_only: Final = (
+        nested
+        and custom_llm_provider not in ("vertex_ai", "vertex_ai_beta")
+        and not source.url.startswith(GEMINI_FILES_API_URI_PREFIXES)
+    )
+    if inline_only and source.url.startswith("gs://"):
         raise litellm.BadRequestError(
             message="Gemini tool results require inline media data. Use a data URL or input_audio for this file reference.",
             model=model or "",
@@ -1661,7 +1669,10 @@ def _gemini_tool_media_part(
                 else source
             )
             part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
-            if nested and "file_data" in part and not part["file_data"].get("mime_type"):
+            vertex_file_part: Final = (
+                part.get("file_data") if nested and custom_llm_provider in ("vertex_ai", "vertex_ai_beta") else None
+            )
+            if vertex_file_part is not None and not vertex_file_part.get("mime_type"):
                 raise litellm.BadRequestError(
                     message="Vertex tool result file references require an explicit MIME type in format.",
                     model=model or "",
