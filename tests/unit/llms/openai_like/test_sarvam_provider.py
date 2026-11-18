@@ -241,11 +241,19 @@ def test_sarvam_sends_only_a_declared_reasoning_effort_at_least_as_strong(model:
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize(("drop_params", "expected"), [(True, None), (False, "none")])
-def test_sarvam_105b_drops_reasoning_off_only_under_drop_params(drop_params: bool, expected: str | None) -> None:
-    assert (
-        _sent_body("sarvam-105b", reasoning_effort="none", drop_params=drop_params).get("reasoning_effort") == expected
-    )
+@pytest.mark.parametrize(
+    ("per_call", "global_drop_params", "expected"),
+    [
+        pytest.param({"drop_params": True}, False, None, id="per_call"),
+        pytest.param({}, True, None, id="global"),
+        pytest.param({"drop_params": False}, False, "none", id="off"),
+    ],
+)
+def test_sarvam_105b_drops_reasoning_off_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, per_call: dict[str, bool], global_drop_params: bool, expected: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    assert _sent_body("sarvam-105b", reasoning_effort="none", **per_call).get("reasoning_effort") == expected
 
 
 def test_sarvam_responses_request_is_bridged_to_chat_completions() -> None:
