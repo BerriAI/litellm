@@ -33,7 +33,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import Message
+from litellm.types.utils import Message, StandardLoggingPayload
 
 
 @pytest.mark.asyncio
@@ -1687,4 +1687,77 @@ async def test_a_stored_turn_with_no_answer_replays_no_empty_user_turn() -> None
         ("assistant", "Four."),
         ("user", "And 3+3?"),
         ("assistant", "Six."),
+    ]
+
+
+def _stored_as_the_proxy_writes_it(
+    monkeypatch: pytest.MonkeyPatch, store_prompts: bool, redact: bool, prompt: str, answer: str
+) -> dict[str, object]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_response_for_spend_logs_payload
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": store_prompts})
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    litellm_params: Final = {
+        "proxy_server_request": {"body": {"model": "claude-bridge", "input": [{"role": "user", "content": prompt}]}}
+    }
+    kwargs: Final = {"litellm_params": litellm_params}
+    return {
+        **_spend_log("chatcmpl-stored", "session-stored", prompt, answer),
+        "proxy_server_request": json.loads(
+            _get_proxy_server_request_for_spend_logs_payload(metadata={}, litellm_params=litellm_params, kwargs=kwargs)
+        ),
+        "response": json.loads(
+            _get_response_for_spend_logs_payload(
+                cast(StandardLoggingPayload, {"response": _chat_completion_response("chatcmpl-stored", answer)}),
+                kwargs=kwargs,
+            )
+        ),
+    }
+
+
+async def _continue_stored_turn(stored_turn: dict[str, object]) -> dict[str, object]:
+    return await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="chatcmpl-stored",
+        litellm_completion_request={
+            "model": "vertex_ai/claude-sonnet-5-5",
+            "custom_llm_provider": "vertex_ai",
+            "messages": [{"role": "user", "content": "What is my name?"}],
+        },
+        instructions=None,
+        stored_turns=_stored_turns(stored_turn),
+    )
+
+
+@pytest.mark.parametrize(
+    ("store_prompts", "redact"),
+    ((False, False), (True, True), (False, True)),
+    ids=("prompts_not_stored", "message_logging_turned_off", "both"),
+)
+@pytest.mark.asyncio
+async def test_continuing_a_turn_the_proxy_stored_without_its_content_answers_400_instead_of_dropping_history(
+    monkeypatch: pytest.MonkeyPatch, store_prompts: bool, redact: bool
+) -> None:
+    stored_turn: Final = _stored_as_the_proxy_writes_it(
+        monkeypatch, store_prompts, redact, "My name is Ozan.", "Hi Ozan."
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await _continue_stored_turn(stored_turn)
+
+    assert raised.value.status_code == 400
+    assert "Send the whole conversation in `input`" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_continuing_a_turn_the_proxy_stored_in_full_replays_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    stored_turn: Final = _stored_as_the_proxy_writes_it(monkeypatch, True, False, "My name is Ozan.", "Hi Ozan.")
+
+    request: Final = await _continue_stored_turn(stored_turn)
+
+    assert _replayed_turns(ChatCompletionSession(messages=request["messages"], litellm_session_id=None)) == [
+        ("user", "My name is Ozan."),
+        ("assistant", "Hi Ozan."),
+        ("user", "What is my name?"),
     ]

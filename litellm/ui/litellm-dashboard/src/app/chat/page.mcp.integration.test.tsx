@@ -92,13 +92,20 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("chat conversation replay", () => {
-  it("should keep native response chaining for ordinary follow-up messages", async () => {
+  it("should send the whole saved conversation on every follow-up message", async () => {
     renderChat();
     expect(await screen.findByRole("button", { name: "research-chat" })).toBeVisible();
     await send("Remember papaya");
     await send("What did I ask you to remember?");
-    expect(requests[1].previous_response_id).toBe("response-1");
-    expect(requests[1].input).toEqual([{ type: "message", role: "user", content: "What did I ask you to remember?" }]);
+    await send("And spell it backwards");
+    expect(requests.map((request) => "previous_response_id" in request)).toEqual([false, false, false]);
+    expect(requests[2].input).toEqual([
+      { type: "message", role: "user", content: "Remember papaya" },
+      { type: "message", role: "assistant", content: "Answer 1" },
+      { type: "message", role: "user", content: "What did I ask you to remember?" },
+      { type: "message", role: "assistant", content: "Answer 2" },
+      { type: "message", role: "user", content: "And spell it backwards" },
+    ]);
   });
 
   it("should preserve saved tool-only turns and image attachments when continuing and editing a conversation", async () => {

@@ -266,7 +266,7 @@ describe("chat image workflows", () => {
     expect(requests).toHaveLength(1);
   });
 
-  it("should continue an image conversation using the completed response context", async () => {
+  it("should resend the earlier image with the conversation when asking a follow-up", async () => {
     const user = userEvent.setup();
     renderChat();
     await screen.findByRole("button", { name: "research-chat" });
@@ -276,9 +276,13 @@ describe("chat image workflows", () => {
     await user.type(screen.getByRole("textbox", { name: "Message", exact: true }), "What is the main color?");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1].body).not.toHaveProperty("previous_response_id");
     expect(requests[1].body).toMatchObject({
-      previous_response_id: "response-1",
-      input: [{ role: "user", content: "What is the main color?" }],
+      input: [
+        { role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${pixel}` }] },
+        { role: "assistant", content: "I can see the uploaded image." },
+        { role: "user", content: "What is the main color?" },
+      ],
     });
     expect(screen.getByRole("img", { name: "diagram.png" })).toBeInTheDocument();
   });

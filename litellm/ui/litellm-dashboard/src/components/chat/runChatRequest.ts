@@ -19,11 +19,9 @@ interface ChatRequestOptions {
     ChatMessage,
     "role" | "content" | "attachments" | "generatedImages" | "imageGeneration" | "mcpEvents"
   >[];
-  previousResponseId?: string | null;
   background?: boolean;
   research?: boolean;
   mcpServers?: string[];
-  onResponseId: (id: string | null) => void;
   onUpdate: (update: AssistantMessageUpdate) => void;
 }
 
@@ -51,11 +49,9 @@ export async function runChatRequest(
     accessToken,
     signal,
     messages,
-    previousResponseId,
     background = false,
     research = false,
     mcpServers,
-    onResponseId,
     onUpdate,
   }: ChatRequestOptions,
   t: TFunction = i18n.t.bind(i18n),
@@ -98,10 +94,8 @@ export async function runChatRequest(
       undefined,
       undefined,
       mcpServers?.length ? mcpServers : undefined,
-      previousResponseId,
-      (id) => {
-        if (!signal.aborted) onResponseId(id);
-      },
+      undefined,
+      undefined,
       (event) => mcpEvents.push(event),
       undefined,
       undefined,
@@ -113,17 +107,11 @@ export async function runChatRequest(
       (totalLatency) => onUpdate({ totalLatency }),
       undefined,
       undefined,
-      background
-        ? (response) => {
-            onResponseId(null);
-            onUpdate(backgroundResponseUpdate(response, t));
-          }
-        : undefined,
+      background ? (response) => onUpdate(backgroundResponseUpdate(response, t)) : undefined,
       research ? { instructions: RESEARCH_INSTRUCTIONS } : undefined,
     );
     signal.throwIfAborted();
   } catch (error: unknown) {
-    onResponseId(null);
     const stopped = signal.aborted || (error instanceof Error && error.name === "AbortError");
     const errorMessage = requestErrorMessage(error, messages, mode);
     onUpdate({ content: stopped ? content + " [stopped]" : content || errorMessage });
