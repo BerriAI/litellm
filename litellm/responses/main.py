@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_tools_with_model_file_ids,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.llms.azure_ai.common_utils import is_foundry_v1_model_router
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -476,6 +477,16 @@ def answered_by_the_chat_bridge(response_id: object) -> bool:
     )
 
 
+def follows_a_bridged_model_router_turn(
+    model: str, custom_llm_provider: str | None, api_base: str | None, previous_response_id: object
+) -> bool:
+    return (
+        custom_llm_provider == "azure_ai"
+        and is_foundry_v1_model_router(model, api_base)
+        and answered_by_the_chat_bridge(previous_response_id)
+    )
+
+
 def _bridge_kwargs(
     kwargs: Mapping[str, object],
     responses_api_provider_config: BaseResponsesAPIConfig | None,
@@ -609,13 +620,13 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     A bridged turn is replayed from its spend log, so the bridge needs that row in the DB, and a bridged
     first MCP round runs as an internal call that writes no spend log at all.
     """
-    if answered_by_the_chat_bridge(kwargs.get("previous_response_id")):
-        return False
     api_base: Final = _api_base_kwarg(kwargs)
+    provider: Final = custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1]
     return not _will_bridge_to_chat_completions(
         model,
-        custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1],
-        bool(kwargs.get("use_chat_completions_api")),
+        provider,
+        bool(kwargs.get("use_chat_completions_api"))
+        or follows_a_bridged_model_router_turn(model, provider, api_base, kwargs.get("previous_response_id")),
         kwargs.get("model_info"),
         api_base,
     )
@@ -790,14 +801,18 @@ async def aresponses(
             litellm_logging_obj, LiteLLMLoggingObj
         ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
             client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
+            hook_api_base: Final = _api_base_kwarg(kwargs)
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
                 bridged=_will_bridge_to_chat_completions(
                     model,
                     custom_llm_provider,
-                    bool(kwargs.get("use_chat_completions_api")) or answered_by_the_chat_bridge(previous_response_id),
+                    bool(kwargs.get("use_chat_completions_api"))
+                    or follows_a_bridged_model_router_turn(
+                        model, custom_llm_provider, hook_api_base, previous_response_id
+                    ),
                     kwargs.get("model_info"),
-                    _api_base_kwarg(kwargs),
+                    hook_api_base,
                 ),
             ):
                 _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -1353,11 +1368,6 @@ def responses(
         _stripped_model, _from_chat_completions_prefix = _normalize_openai_chat_completions_responses_model(model)
         model = _stripped_model
         local_vars["model"] = model
-        use_chat_completions_api = (
-            use_chat_completions_api
-            or _from_chat_completions_prefix
-            or answered_by_the_chat_bridge(previous_response_id)
-        )
 
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1368,6 +1378,17 @@ def responses(
                 ),
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
+
+        use_chat_completions_api = (
+            use_chat_completions_api
+            or _from_chat_completions_prefix
+            or follows_a_bridged_model_router_turn(
+                model,
+                custom_llm_provider,
+                _api_base_kwarg(cast("Mapping[str, object]", kwargs)),  # cast-ok: kwargs is the untyped request dict
+                previous_response_id,
+            )
+        )
 
         input, model, custom_llm_provider, deployment_model_info = _apply_prompt_management_to_responses_call(
             input=input,
