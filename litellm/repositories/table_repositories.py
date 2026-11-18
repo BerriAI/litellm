@@ -23,6 +23,7 @@ from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
+from litellm.tracing.ledger_envelope import committed_lens_export
 from litellm.tracing.types import LensExport
 
 if TYPE_CHECKING:
@@ -157,7 +158,6 @@ _ACCOUNTING_ONLY_FIELDS: Final = frozenset(
 )
 
 
-_LENS_EXPORT: Final = TypeAdapter(LensExport)
 _LENS_EVENT_ID: Final = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
@@ -183,10 +183,23 @@ def _lens_payload_rows(event_id: str, export: LensExport) -> Iterator[Mapping[st
 
 
 async def _insert_lens_exports(transaction: LedgerTransaction, rows: Sequence[Mapping[str, object]]) -> None:
-    exports: Final = tuple(
-        (_lens_event_id(_delivery_id(row)), str(row["request_id"]), _LENS_EXPORT.validate_python(row["lens_export"]))
+    parsed: Final = tuple(
+        (
+            _lens_event_id(_delivery_id(row)),
+            str(row["request_id"]),
+            committed_lens_export(
+                row["lens_export"],
+                request_id=str(row["request_id"]),
+                accounting=_accounting_payload(row["accounting_payload"]),
+            ),
+        )
         for row in rows
     )
+    exports: Final = tuple(
+        (event_id, request_id, export) for event_id, request_id, export in parsed if export is not None
+    )
+    if not exports:
+        return
     await transaction.execute_raw(
         'INSERT INTO "LiteLLM_LensLedgerExport" (event_id, request_id, event) '
         "SELECT event_id, request_id, event FROM jsonb_to_recordset($1::jsonb) "

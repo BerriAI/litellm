@@ -1,4 +1,10 @@
 import asyncio
+import contextlib
+import hashlib
+import json
+from collections.abc import AsyncIterator
+from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import Mock
 from litellm.proxy.utils import get_redoc_url, get_docs_url
 
@@ -66,9 +72,7 @@ def create_mock_proxy_logging():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
     proxy_logging_obj.db_spend_update_writer = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
     print("returning proxy logging obj")
     return proxy_logging_obj
 
@@ -90,9 +94,7 @@ async def test_update_spend_logs_connection_errors(error_type):
 
     # Create AsyncMock for db_spend_update_writer
     proxy_logging_obj.db_spend_update_writer = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
 
     # Add test spend logs
     prisma_client.spend_log_transactions = [
@@ -116,9 +118,7 @@ async def test_update_spend_logs_connection_errors(error_type):
 
     # Verify
     assert create_many_mock.call_count == 4  # Should have tried 3 times
-    assert (
-        len(prisma_client.spend_log_transactions) == 0
-    )  # Should have cleared after success
+    assert len(prisma_client.spend_log_transactions) == 0  # Should have cleared after success
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_update_spend_logs_non_connection_error():
     prisma_client.db.litellm_spendlogs.create_many = create_many_mock
 
     # Execute and verify it raises immediately without retrying
-    with pytest.raises(ValueError, match='Unexpected database error') as exc_info:
+    with pytest.raises(ValueError, match="Unexpected database error") as exc_info:
         await update_spend(prisma_client, None, proxy_logging_obj)
 
     # Verify error message
@@ -226,12 +226,8 @@ async def test_update_spend_logs_exponential_backoff():
 
     # Verify exponential backoff
     assert len(sleep_times) == 2  # Should have slept twice
-    assert (
-        sleep_times[0] >= 1 and sleep_times[0] <= 2
-    )  # First retry after 2^0~2^1 seconds
-    assert (
-        sleep_times[1] >= 2 and sleep_times[1] <= 4
-    )  # Second retry after 2^1~2^2 seconds
+    assert sleep_times[0] >= 1 and sleep_times[0] <= 2  # First retry after 2^0~2^1 seconds
+    assert sleep_times[1] >= 2 and sleep_times[1] <= 4  # Second retry after 2^1~2^2 seconds
 
 
 @pytest.mark.asyncio
@@ -246,9 +242,7 @@ async def test_update_spend_logs_multiple_batches_success():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Create 1500 test spend logs (1.5x BATCH_SIZE)
-    prisma_client.spend_log_transactions = [
-        {"id": str(i), "spend": 10} for i in range(1500)
-    ]
+    prisma_client.spend_log_transactions = [{"id": str(i), "spend": 10} for i in range(1500)]
 
     create_many_mock = AsyncMock(return_value=None)
     prisma_client.db.litellm_spendlogs.create_many = create_many_mock
@@ -283,9 +277,7 @@ async def test_update_spend_logs_multiple_batches_with_failure():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Create 4000 test spend logs (4x BATCH_SIZE)
-    prisma_client.spend_log_transactions = [
-        {"id": str(i), "spend": 10} for i in range(4000)
-    ]
+    prisma_client.spend_log_transactions = [{"id": str(i), "spend": 10} for i in range(4000)]
 
     # Mock to fail on second batch first attempt, then succeed
     call_count = 0
@@ -473,3 +465,183 @@ async def test_a_row_the_insert_statement_rejects_is_dropped_alone_and_keeps_its
     assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) < 10
     assert repo.written == ["good"]
     assert repo.charges_kept == ["unparseable"]
+
+
+class _RecordingLedgerTransaction:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple[object, ...]]] = []  # mutable-ok: records statements
+        self.queried: list[tuple[str, tuple[object, ...]]] = []  # mutable-ok: records statements
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
+        self.queried.append((query, args))
+        if 'INSERT INTO "LiteLLM_SpendLogDelivery"' in query:
+            return [{"delivery_id": row["delivery_id"]} for row in json.loads(str(args[0]))]
+        return []
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        self.executed.append((query, args))
+        return 1
+
+    def inserted(self, table: str) -> list[dict[str, object]]:
+        batches = [json.loads(str(args[0])) for query, args in self.executed if f'INSERT INTO "{table}"' in query]
+        return [row for batch in batches for row in batch]  # comprehension-ok: flattens recorded batches
+
+    def local_spend_rows(self) -> list[dict[str, object]]:
+        batches = [
+            json.loads(str(args[0])) for query, args in self.queried if 'INSERT INTO "LiteLLM_SpendLogs"' in query
+        ]
+        return [row for batch in batches for row in batch]  # comprehension-ok: flattens recorded batches
+
+
+class _LedgerWriter:
+    def __init__(self, transaction: _RecordingLedgerTransaction) -> None:
+        self.transaction = transaction
+
+    @contextlib.asynccontextmanager
+    async def tx(self, *, timeout: object) -> AsyncIterator[_RecordingLedgerTransaction]:
+        yield self.transaction
+
+
+class _FlushClient:
+    """The parts of PrismaClient the spend log flush uses, with its real row normalization."""
+
+    def __init__(self, transaction: _RecordingLedgerTransaction) -> None:
+        self.writer_db = _LedgerWriter(transaction)
+        self.spend_log_transactions: list[dict[str, object]] = []  # mutable-ok: the flush queue
+        self._spend_log_transactions_lock = asyncio.Lock()
+
+    def jsonify_object(self, data: dict[str, object]) -> dict[str, object]:
+        from litellm.proxy.utils import PrismaClient
+
+        return PrismaClient.jsonify_object(self, data)  # pyright: ignore[reportArgumentType]  # the method uses no client state
+
+
+_START: Final = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+_BODY: Final = json.dumps([{"role": "user", "content": "雪 " * 2000}], ensure_ascii=False)
+
+
+def _queued_row(delivery_id: str, *, envelope: object, hidden: bool = False) -> dict[str, object]:
+    from litellm.proxy.utils import accounting_only_spend_log
+
+    accounting: Final = {
+        "request_id": f"request-{delivery_id}",
+        "call_type": "acompletion",
+        "api_key": "hashed-key",
+        "spend": 0.25,
+        "startTime": _START.isoformat(),
+        "team_id": "team",
+        "user": "user",
+        "model": "gpt-5-mini",
+    }
+    row: Final = {
+        "request_id": f"request-{delivery_id}",
+        "call_type": "acompletion",
+        "api_key": "hashed-key",
+        "spend": 0.25,
+        "startTime": _START.isoformat(),
+        "endTime": _START.isoformat(),
+        "messages": "{}",
+        "metadata": "{}",
+        "accounting_delivery_id": delivery_id,
+        "accounting_payload": accounting,
+        "lens_export": envelope,
+    }
+    return dict(accounting_only_spend_log(row)) if hidden else {**row, "accounting_log_disabled": False}
+
+
+def _envelope(request_id: str) -> dict[str, object]:
+    return {
+        "record": {
+            "request_id": request_id,
+            "spend": 0.25,
+            "team_id": "team",
+            "api_key": "hashed-key",
+            "start_time": int(_START.timestamp() * 1000),
+            "end_time": int(_START.timestamp() * 1000),
+            "messages": "preview",
+        },
+        "payloads": [
+            {
+                "field": "messages",
+                "team_id": "team",
+                "api_key": "hashed-key",
+                "event_time_ms": int(_START.timestamp() * 1000),
+                "content": _BODY,
+                "bytes": len(_BODY.encode()),
+                "sha256": hashlib.sha256(_BODY.encode()).hexdigest(),
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_local_spend_flush_commits_lens_events_and_bodies_with_the_charge() -> None:
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    transaction: Final = _RecordingLedgerTransaction()
+    rows: Final = [
+        _queued_row("visible", envelope=_envelope("request-visible")),
+        _queued_row("visible", envelope=_envelope("request-visible")),
+        _queued_row("hidden", envelope=_envelope("request-hidden"), hidden=True),
+        _queued_row("malformed", envelope="{not json"),
+    ]
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=_FlushClient(transaction),  # pyright: ignore[reportArgumentType]  # flush-facing client
+        db_writer_client=None,
+        proxy_logging_obj=MagicMock(),
+        logs_to_process=rows,
+    )
+
+    events: Final = {row["event_id"]: row for row in transaction.inserted("LiteLLM_LensLedgerExport")}
+    assert sorted(events) == ["hidden", "malformed", "visible"]
+    assert events["visible"]["event"]["request_id"] == "request-visible"
+    assert events["hidden"]["event"]["request_id"] == "request-hidden"
+    assert events["visible"]["event"]["spend"] == 0.25
+    assert events["visible"]["event"]["start_time"] == int(_START.timestamp() * 1000)
+    assert events["malformed"]["event"] == {
+        "call_type": "acompletion",
+        "api_key": "hashed-key",
+        "team_id": "team",
+        "user": "user",
+        "model": "gpt-5-mini",
+        "messages": "",
+        "response": "",
+        "metadata": "",
+        "error_str": "",
+        "request_id": "request-malformed",
+        "spend": 0.25,
+        "start_time": int(_START.timestamp() * 1000),
+        "end_time": int(_START.timestamp() * 1000),
+    }
+    bodies: Final = transaction.inserted("LiteLLM_LensLedgerPayload")
+    assert [(body["event_id"], body["content"]) for body in bodies] == [("hidden", _BODY), ("visible", _BODY)]
+    local: Final = transaction.local_spend_rows()
+    assert sorted(row["request_id"] for row in local) == ["request-malformed", "request-visible"]
+    assert "雪" not in json.dumps(local, ensure_ascii=False)
+    assert "lens_export" not in json.dumps(local)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_url_flush_commits_the_native_lens_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    transaction: Final = _RecordingLedgerTransaction()
+    writer_client: Final = MagicMock()
+    writer_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+    monkeypatch.setenv("SPEND_LOGS_URL", "http://spend-logs.test")
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=_FlushClient(transaction),  # pyright: ignore[reportArgumentType]  # flush-facing client
+        db_writer_client=writer_client,
+        proxy_logging_obj=MagicMock(),
+        logs_to_process=[_queued_row("visible", envelope=_envelope("request-visible"))],
+    )
+
+    [event] = transaction.inserted("LiteLLM_LensLedgerExport")
+    assert event["event_id"] == "visible"
+    assert event["event"]["spend"] == 0.25
+    posted: Final = json.loads(writer_client.post.await_args.kwargs["data"])
+    assert "lens_export" not in posted[0]
