@@ -7734,6 +7734,7 @@ def get_model_info_helper(
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
                 input_cost_per_image_token_batches=_model_info.get("input_cost_per_image_token_batches", None),
                 input_cost_per_image=_model_info.get("input_cost_per_image", None),
+                input_cost_per_pixel=_model_info.get("input_cost_per_pixel", None),
                 input_cost_per_audio_per_second=_model_info.get("input_cost_per_audio_per_second", None),
                 input_cost_per_video_per_second=_model_info.get("input_cost_per_video_per_second", None),
                 input_cost_per_token_batches=_model_info.get("input_cost_per_token_batches"),

@@ -1631,6 +1631,19 @@ def generic_cost_per_token(
     if usage.prompt_tokens_details:
         prompt_tokens_details = parse_prompt_tokens_details(usage)
 
+    reported_details: Final = usage.prompt_tokens_details
+    reports_pixel_counts: Final = reported_details is not None and (
+        reported_details.image_pixels is not None or reported_details.video_pixels is not None
+    )
+    input_pixels: Final = (
+        (reported_details.image_pixels or 0) + (reported_details.video_pixels or 0) if reported_details else 0
+    )
+    pixel_rate: Final = (
+        get_cost_per_unit(resolved_model_info, "input_cost_per_pixel", None)
+        if reports_pixel_counts and reported_details is not None and reported_details.text_tokens is not None
+        else None
+    )
+
     ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
     ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
     ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
@@ -1658,7 +1671,9 @@ def generic_cost_per_token(
         prompt_tokens_details["image_tokens"] = billable_image
         prompt_tokens_details["video_tokens"] = billable_video
         prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
-    elif text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
+    elif (
+        pixel_rate is None and (text_tokens == 0 or reports_pixel_counts) and prompt_tokens_details["image_count"] == 0
+    ):
         # Clamp to zero: inconsistent streaming usage
         prompt_tokens_details["text_tokens"] = max(
             usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
@@ -1694,6 +1709,8 @@ def generic_cost_per_token(
         prompt_tokens=usage.prompt_tokens,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
+    if pixel_rate is not None:
+        prompt_cost += input_pixels * pixel_rate
 
     ## CALCULATE OUTPUT COST
     text_tokens = 0

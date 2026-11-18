@@ -56694,11 +56694,13 @@
         "output_cost_per_token": 0.0
     },
     "voyage/voyage-multimodal-3": {
+        "input_cost_per_pixel": 6e-10,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "voyage",
         "max_input_tokens": 32000,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
+        "source": "https://docs.voyageai.com/docs/pricing",
         "supports_embedding_image_input": true
     },
     "wandb/openai/gpt-oss-120b": {
@@ -67389,6 +67391,7 @@
         "source": "https://docs.voyageai.com/docs/pricing"
     },
     "voyage/voyage-multimodal-3.5": {
+        "input_cost_per_pixel": 6e-10,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "voyage",
         "max_input_tokens": 32000,

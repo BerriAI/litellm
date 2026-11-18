@@ -1930,6 +1930,12 @@ class PromptTokensDetailsWrapper(
     video_tokens: int | None = None
     """Video tokens sent to the model."""
 
+    image_pixels: int | None = Field(default=None, ge=0)
+    """Billable input image pixels reported by the provider."""
+
+    video_pixels: int | None = Field(default=None, ge=0)
+    """Billable input video pixels reported by the provider."""
+
     web_search_requests: int | None = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 

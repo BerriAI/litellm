@@ -7,10 +7,10 @@ containing content blocks, unlike standard Voyage embeddings which use
 """
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Annotated, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -18,10 +18,23 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
-from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
+_OPTIONAL_COUNT: Final = TypeAdapter(Annotated[int, Field(ge=0)] | None, config=ConfigDict(hide_input_in_errors=True))
+
+
+def _prompt_token_details(usage: Mapping[str, object]) -> PromptTokensDetailsWrapper | None:
+    try:
+        text_tokens: Final = _OPTIONAL_COUNT.validate_python(usage.get("text_tokens"))
+        image_pixels: Final = _OPTIONAL_COUNT.validate_python(usage.get("image_pixels"))
+        video_pixels: Final = _OPTIONAL_COUNT.validate_python(usage.get("video_pixels"))
+    except ValidationError:
+        return None
+    if image_pixels is None and video_pixels is None:
+        return None
+    return PromptTokensDetailsWrapper(text_tokens=text_tokens, image_pixels=image_pixels, video_pixels=video_pixels)
 
 
 class VoyageMultimodalEmbeddingError(BaseLLMException):
@@ -162,6 +175,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model_response.usage = Usage(
             prompt_tokens=total_tokens,
             total_tokens=total_tokens,
+            prompt_tokens_details=_prompt_token_details(usage_payload),
         )
         return model_response
 
