@@ -1139,6 +1139,12 @@ def _count_on_claude(
         ({"store": False, "extra_body": {"store": True}}, True),
         ({"store": True, "extra_body": {"store": False}}, False),
         ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"store": False, "truncation": "auto"}, True),
+        ({"store": False, "previous_response_id": "resp_prior"}, True),
+        ({"store": False, "conversation": "conv_prior"}, True),
+        ({"store": False, "extra_body": {"truncation": "auto"}}, True),
+        ({"store": False, "extra_body": {"previous_response_id": "resp_prior"}}, True),
+        ({"store": False, "extra_body": {"conversation": "conv_prior"}}, True),
     ],
 )
 def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
@@ -1174,6 +1180,7 @@ def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
         )
     assert response.status_code == 200, response.text
     body: Final = json.loads(count.calls[0].request.content)
+    assert not {"truncation", "previous_response_id", "conversation"} & body.keys()
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
     assert {key: body[key] for key in ("input", "instructions") if key in body} == (
         {"instructions": "Stable prefix", "input": [user_input]}
