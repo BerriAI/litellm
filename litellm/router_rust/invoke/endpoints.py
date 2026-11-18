@@ -951,9 +951,6 @@ def _resolve_deployment_cache_policy(
     ):
         kwargs["cache"] = merged_cache
 
-    if kwargs.get("cache") is False:
-        kwargs["caching"] = False
-
     raw_response_cache: object = model_info.get("response_cache")
     if raw_response_cache is None:
         raw_response_cache = litellm_params.get("response_cache")
@@ -989,25 +986,16 @@ def _resolve_deployment_cache_policy(
         response_cache = False
 
     caching: bool = global_caching
-    if response_cache is False:
+    if response_cache is False or kwargs.get("caching") is False:
         caching = False
+        kwargs["caching"] = False
         cache_dict: Final = as_dict(kwargs.get("cache"))
         cache_dict["no-cache"] = True
         cache_dict["no-store"] = True
         kwargs["cache"] = cache_dict
-        kwargs["caching"] = False
     elif response_cache is True:
-        if kwargs.get("caching") is False:
-            caching = False
-        else:
-            caching = True
-            kwargs["caching"] = True
-    elif kwargs.get("caching") is False:
-        caching = False
-        cache_dict_opt = as_dict(kwargs.get("cache"))
-        cache_dict_opt["no-cache"] = True
-        cache_dict_opt["no-store"] = True
-        kwargs["cache"] = cache_dict_opt
+        caching = True
+        kwargs["caching"] = True
 
     # Enforce deployment-level fine-grained restrictions regardless of whether
     # response_cache was explicitly supplied.  cache_cfg is only populated when
@@ -1020,20 +1008,17 @@ def _resolve_deployment_cache_policy(
     deployment_fine_grained.update(deployment_cache_params)
     deployment_fine_grained.update(deployment_cache_info)
 
+    fine_grained_cache: Final = as_dict(kwargs.get("cache"))
     if deployment_fine_grained.get("no-cache") is True or cache_cfg.get("no-cache") is True:
-        cache_dict_nc = as_dict(kwargs.get("cache"))
-        cache_dict_nc["no-cache"] = True
-        kwargs["cache"] = cache_dict_nc
+        fine_grained_cache["no-cache"] = True
     if deployment_fine_grained.get("no-store") is True or cache_cfg.get("no-store") is True:
-        cache_dict_ns = as_dict(kwargs.get("cache"))
-        cache_dict_ns["no-store"] = True
-        kwargs["cache"] = cache_dict_ns
-
+        fine_grained_cache["no-store"] = True
     if cache_ttl is not None and cache_ttl > 0:
-        cache_dict_ttl = as_dict(kwargs.get("cache"))
-        if "ttl" not in cache_dict_ttl:
-            cache_dict_ttl["ttl"] = cache_ttl
-        kwargs["cache"] = cache_dict_ttl
+        if "ttl" not in fine_grained_cache:
+            fine_grained_cache["ttl"] = cache_ttl
+
+    if fine_grained_cache or isinstance(kwargs.get("cache"), dict):
+        kwargs["cache"] = fine_grained_cache
 
     if isinstance(kwargs.get("cache"), bool):
         kwargs["cache"] = {}

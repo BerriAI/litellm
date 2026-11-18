@@ -1,9 +1,10 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm import Router
 from litellm.router_rust.invoke.endpoints import _resolve_deployment_cache_policy
+from litellm.router_rust.invoke.prompt_management import prompt_management_acompletion
 
 
 def test_model_cache_policy_disabled_overrides_global():
@@ -436,10 +437,6 @@ async def test_router_preserves_default_litellm_params_cache_controls():
 @pytest.mark.asyncio
 async def test_prompt_management_direct_call_enforces_cache_opt_out():
     """Prompt management deployments with response_cache=False enforce caching=False on direct calls."""
-    from unittest.mock import MagicMock
-
-    from litellm.router_rust.invoke.prompt_management import prompt_management_acompletion
-
     core = MagicMock()
     core.group_deployments.return_value = None
     core.shaping.cache_responses = True
@@ -561,10 +558,6 @@ def test_litellm_params_no_store_enforced_when_response_cache_true():
 @pytest.mark.asyncio
 async def test_prompt_management_group_route_enforces_cache_policy():
     """When rendered model names a router group, core.drive receives the prompt deployment's cache policy."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from litellm.router_rust.invoke.prompt_management import prompt_management_acompletion
-
     core = MagicMock()
     core.group_deployments.return_value = [{"model_name": "target-group"}]
     core.shaping.cache_responses = True
@@ -637,10 +630,6 @@ def test_client_boolean_cache_replaced_with_mapping():
 @pytest.mark.asyncio
 async def test_prompt_route_without_explicit_policy_does_not_block_target_cache_enable():
     """Prompt deployment without explicit cache policy does not inject caching=False into group route."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from litellm.router_rust.invoke.prompt_management import prompt_management_acompletion
-
     core = MagicMock()
     core.group_deployments.return_value = [{"model_name": "target-group"}]
     core.shaping.cache_responses = False  # Global cache is OFF
