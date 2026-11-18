@@ -13,9 +13,11 @@ from concurrent.futures import Future
 import time
 import traceback
 import tracemalloc
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
+from io import BytesIO
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import ClassVar, Final, Literal, TypeAlias, cast
@@ -24,10 +26,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import pytest_asyncio
+import respx
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError as OpenAIBadRequestError
 from openai._legacy_response import HttpxBinaryResponseContent
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import _logging as litellm_logger_settings
@@ -78,6 +81,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import update_response_metadata
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.messages.native.handler import anthropic_messages as python_anthropic_messages
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3_native import ParallelRequestLimiterNativeLogger
@@ -88,6 +92,7 @@ from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandle
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.mcp import MCPPostCallResponseObject
+from litellm.vector_stores.main import asearch as vector_store_search
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
@@ -17270,3 +17275,295 @@ async def test_a_sync_failure_on_the_loop_alone_still_delivers_v2_attempt_ended_
 
     assert journal == [("sync", "failure", None), ("async", "failure", None)]
     assert submitted == ["RequestScope._deliver_off_path"]
+
+
+_LITELLM_PARAMS_RECORD: Final = TypeAdapter(dict[str, object])
+
+
+class _ProviderLogs(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.put_nowait(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.put_nowait(kwargs)
+
+    async def next_providers(self) -> tuple[object, object]:
+        logged: Final = await asyncio.wait_for(self.logged.get(), timeout=10)
+        return _providers_in(logged)
+
+
+def _providers_in(logged: Mapping[str, object]) -> tuple[object, object]:
+    params: Final = _LITELLM_PARAMS_RECORD.validate_python(logged["litellm_params"])
+    return logged.get("custom_llm_provider"), params.get("custom_llm_provider")
+
+
+@dataclass(frozen=True, slots=True)
+class _EndpointCall:
+    name: str
+    provider: str
+    reply: httpx.Response
+    call: Callable[[], Awaitable[object]]
+
+
+_PROVIDER_TEST_KEY: Final = "test-key"
+_PROVIDER_TEST_USAGE: Final = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+_PROVIDER_TEST_IMAGE: Final = {"created": 1, "data": [{"url": "https://example.com/image.png"}]}
+_ENDPOINT_CALLS: Final = (
+    _EndpointCall(
+        "embeddings",
+        "openai",
+        httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "text-embedding-3-small",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "usage": _PROVIDER_TEST_USAGE,
+            },
+        ),
+        lambda: litellm.aembedding(model="text-embedding-3-small", input="hi", api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "image_generation",
+        "openai",
+        httpx.Response(200, json=_PROVIDER_TEST_IMAGE),
+        lambda: litellm.aimage_generation(model="gpt-image-1", prompt="draw", api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "image_edit",
+        "openai",
+        httpx.Response(200, json=_PROVIDER_TEST_IMAGE),
+        lambda: litellm.aimage_edit(
+            model="gpt-image-1", image=BytesIO(b"image"), prompt="edit", api_key=_PROVIDER_TEST_KEY
+        ),
+    ),
+    _EndpointCall(
+        "speech",
+        "openai",
+        httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"}),
+        lambda: litellm.aspeech(model="tts-1", input="hi", voice="alloy", api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "transcription",
+        "openai",
+        httpx.Response(200, json={"text": "hi"}),
+        lambda: litellm.atranscription(model="whisper-1", file=("audio.wav", b"audio"), api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "moderation",
+        "openai",
+        httpx.Response(
+            200,
+            json={
+                "id": "modr",
+                "model": "omni-moderation-latest",
+                "results": [{"flagged": False, "categories": {}, "category_scores": {}}],
+            },
+        ),
+        lambda: litellm.amoderation(input="hi", model="omni-moderation-latest", api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "rerank",
+        "cohere",
+        httpx.Response(
+            200,
+            json={
+                "id": "rerank",
+                "results": [{"index": 0, "relevance_score": 0.5}],
+                "meta": {"billed_units": {"search_units": 1}},
+            },
+        ),
+        lambda: litellm.arerank(
+            model="cohere/rerank-english-v3.0", query="q", documents=["d"], api_key=_PROVIDER_TEST_KEY
+        ),
+    ),
+    _EndpointCall(
+        "search",
+        "tavily",
+        httpx.Response(
+            200,
+            json={"query": "q", "results": [{"title": "t", "url": "https://example.com", "content": "c", "score": 1}]},
+        ),
+        lambda: litellm.asearch(query="q", search_provider="tavily", api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "responses",
+        "openai",
+        httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-4o-mini",
+                "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+        ),
+        lambda: litellm.aresponses(model="gpt-4o-mini", input="hi", api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "anthropic_messages",
+        "anthropic",
+        httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        ),
+        lambda: python_anthropic_messages(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+            api_key=_PROVIDER_TEST_KEY,
+        ),
+    ),
+    _EndpointCall(
+        "generate_content",
+        "gemini",
+        httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        ),
+        lambda: litellm.google_genai.agenerate_content(
+            model="gemini/gemini-2.5-flash", contents="hi", api_key=_PROVIDER_TEST_KEY
+        ),
+    ),
+    _EndpointCall(
+        "vector_store_search",
+        "openai",
+        httpx.Response(
+            200,
+            json={
+                "object": "vector_store.search_results.page",
+                "search_query": ["q"],
+                "data": [],
+                "has_more": False,
+                "next_page": None,
+            },
+        ),
+        lambda: vector_store_search(vector_store_id="vs_1", query="q", api_key=_PROVIDER_TEST_KEY),
+    ),
+    _EndpointCall(
+        "video_generation",
+        "openai",
+        httpx.Response(
+            200, json={"id": "video_1", "object": "video", "status": "queued", "created_at": 1, "model": "sora-2"}
+        ),
+        lambda: litellm.avideo_generation(model="sora-2", prompt="p", api_key=_PROVIDER_TEST_KEY),
+    ),
+)
+
+
+@pytest.fixture
+def provider_logs(monkeypatch: pytest.MonkeyPatch) -> _ProviderLogs:
+    logs: Final = _ProviderLogs()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [logs])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logs])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [logs])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return logs
+
+
+@pytest.mark.parametrize("endpoint", _ENDPOINT_CALLS, ids=[endpoint.name for endpoint in _ENDPOINT_CALLS])
+async def test_a_successful_call_logs_its_provider_in_both_fields(
+    endpoint: _EndpointCall, provider_logs: _ProviderLogs, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.route().mock(return_value=endpoint.reply)
+
+    await endpoint.call()
+
+    assert await provider_logs.next_providers() == (endpoint.provider, endpoint.provider)
+
+
+@pytest.mark.parametrize("endpoint", _ENDPOINT_CALLS, ids=[endpoint.name for endpoint in _ENDPOINT_CALLS])
+async def test_a_refused_call_logs_its_provider_in_both_fields(
+    endpoint: _EndpointCall, provider_logs: _ProviderLogs, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.route().mock(
+        return_value=httpx.Response(400, json={"error": {"message": "refused", "type": "invalid_request_error"}})
+    )
+
+    with pytest.raises(OpenAIBadRequestError):
+        await endpoint.call()
+
+    assert await provider_logs.next_providers() == (endpoint.provider, endpoint.provider)
+
+
+def _logged_providers(logging_obj: LitellmLogging) -> tuple[object, object]:
+    logged: Final[Mapping[str, object]] = logging_obj.model_call_details
+    return _providers_in(logged)
+
+
+def test_an_empty_provider_never_replaces_a_resolved_one(logging_obj: LitellmLogging) -> None:
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="openai")
+
+    logging_obj.update_environment_variables(
+        litellm_params={"custom_llm_provider": None}, optional_params={}, custom_llm_provider=None
+    )
+
+    assert _logged_providers(logging_obj) == ("openai", "openai")
+    assert logging_obj.custom_llm_provider == "openai"
+
+
+def test_an_empty_request_value_keeps_the_provider_the_caller_passed(logging_obj: LitellmLogging) -> None:
+    logging_obj.update_environment_variables(litellm_params={"custom_llm_provider": "azure"}, optional_params={})
+
+    logging_obj.update_environment_variables(litellm_params={"custom_llm_provider": None}, optional_params={})
+
+    assert _logged_providers(logging_obj)[1] == "azure"
+
+
+def test_the_resolved_provider_wins_over_the_requested_one(logging_obj: LitellmLogging) -> None:
+    logging_obj.update_environment_variables(
+        litellm_params={"custom_llm_provider": "azure/responses"}, optional_params={}, custom_llm_provider="azure"
+    )
+
+    assert _logged_providers(logging_obj) == ("azure", "azure")
+
+
+def test_a_requested_provider_does_not_become_the_billed_provider(logging_obj: LitellmLogging) -> None:
+    logging_obj.update_environment_variables(litellm_params={"custom_llm_provider": "openai"}, optional_params={})
+
+    assert _logged_providers(logging_obj) == (None, "openai")
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+async def test_a_provider_set_after_setup_reaches_callbacks_in_both_fields(
+    outcome: str, logging_obj: LitellmLogging, provider_logs: _ProviderLogs
+) -> None:
+    request_params: Final[dict[str, object]] = {"metadata": {}}
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    logging_obj.model_call_details["litellm_params"] = request_params
+    logging_obj.model_call_details["custom_llm_provider"] = "cohere"
+
+    if outcome == "success":
+        await logging_obj.async_success_handler(ModelResponse())
+    else:
+        await logging_obj.async_failure_handler(ValueError("upstream failed"), "trace")
+
+    assert await provider_logs.next_providers() == ("cohere", "cohere")
+    assert request_params == {"metadata": {}}
