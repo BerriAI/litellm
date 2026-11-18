@@ -2697,7 +2697,7 @@ def test_request_skips_budget_checks_for_mcp_tool_calls_that_cost_nothing(
 
 
 def test_request_skips_budget_checks_prices_the_server_a_colliding_tool_name_routes_to(monkeypatch):
-    """A paid server can list a tool under a free server's prefixed name; routing sends the call to the paid server."""
+    """A paid server can list a tool under a free server's prefixed name; routing and managed re-prefixing both stay priced."""
     from litellm.proxy.auth.auth_checks import request_skips_budget_checks
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
@@ -2713,15 +2713,31 @@ def test_request_skips_budget_checks_prices_the_server_a_colliding_tool_name_rou
         {"search": "docs", "docs-search": _PAID_SERVER[1]},
     )
 
-    def skips(name: str) -> bool:
+    def skips_jsonrpc(name: str) -> bool:
         body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name}}
         return request_skips_budget_checks(route="/mcp", model=None, llm_router=None, request_body=body)
 
-    # The check must price the server execution picks, whichever server that is.
+    def skips_rest(name: str, server_id: str) -> bool:
+        body = {"name": name, "server_id": server_id}
+        return request_skips_budget_checks(
+            route="/mcp-rest/tools/call", model=None, llm_router=None, request_body=body
+        )
+
+    # Direct prefixed collision on /mcp routes to the paid server.
     routed = global_mcp_server_manager.get_mcp_server_from_tool_name("docs-search")
-    assert routed is not None
-    assert skips("docs-search") is (routed.server_id == free_server[0])
-    assert skips("docs-other") is True  # no mapping: still the free server's own tool
+    assert routed is not None and routed.server_id == _PAID_SERVER[0]
+    assert skips_jsonrpc("docs-search") is False
+
+    # Bare "search" on /mcp and REST (server_id="docs-id") both reach _resolve_mcp_server_for_tool_call("docs", "search"),
+    # which re-prefixes to "docs-search" and selects the paid server, so neither may skip budget enforcement.
+    managed_target = global_mcp_server_manager._resolve_mcp_server_for_tool_call("docs", "search")
+    assert managed_target.server_id == _PAID_SERVER[0]
+    assert skips_jsonrpc("search") is False
+    assert skips_rest("search", "docs-id") is False
+
+    # Non-colliding tools on the free server remain zero-cost exempt on both surfaces.
+    assert skips_jsonrpc("docs-other") is True
+    assert skips_rest("other", "docs-id") is True
 
 
 @pytest.mark.asyncio
