@@ -48,7 +48,7 @@ def test_clean_tracked_files_pass(tmp_path: Path) -> None:
     "source_path",
     [
         "litellm/proxy/proxy_server.py",
-        "ui/litellm-dashboard/src/app/page.tsx",
+        "litellm/ui/litellm-dashboard/src/app/page.tsx",
         "litellm/proxy/_experimental/x.py",
         BUNDLE_CHUNK,
     ],

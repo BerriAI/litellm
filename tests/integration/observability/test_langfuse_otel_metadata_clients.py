@@ -162,8 +162,13 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_responses_sse_stream(gatewa
                 for line in stream.iter_lines()
                 if line.startswith("data: ") and line != "data: [DONE]"
             )
-        response_id: Final = next(
-            event["response_id"] for event in events if event.get("type") == "response.output_text.delta"
+        advertised: Final = frozenset(
+            event["response"]["id"]
+            for event in events
+            if event.get("type") in ("response.created", "response.completed")
         )
+        assert len(advertised) == 1, events
+        response_id: Final = next(iter(advertised))
         attrs: Final = exported_llm_span(rig.collector, response_id)
+        assert attrs["gen_ai.response.id"] == response_id, attrs
         assert_identity(attrs, chat_identity_fields(identity))

@@ -3,7 +3,7 @@
 Run against a proxy started with the gateway config. Coverage rationale:
 SPEND_TRACKING_COVERAGE_MATRIX.md.
 
-Model names are literals from that config: chat tests hit "gemini-2.5-flash",
+Model names are literals from that config: chat tests hit "gemini-3.8-flash",
 embedding tests hit "openai-text-embedding-3-small".
 
 Every test: fresh scoped key (isolation) -> real provider call -> unwrap (hard
@@ -37,7 +37,7 @@ from spend_reconciliation import BACKEND as TRAFFIC_BACKEND
 
 pytestmark = pytest.mark.e2e
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 CLAUDE_MODEL = "claude-haiku-4-5"
 CODEX_MODEL = "openai-responses-codex"
 EMBEDDING_MODEL = "openai-text-embedding-3-small"
@@ -287,8 +287,12 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     # populated. The marker keeps each run isolated - a fixed prompt would persist
     # in the shared response cache across runs and make both calls hit (flaky).
     prompt = f"What is the capital of France? Answer in one word. {unique_marker()}"
-    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=16, cache=None))
-    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=16, cache=None))
+    first = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=512, cache=None))
+    answered = first.choices and first.choices[0].message and first.choices[0].message.content
+    assert answered, (
+        f"{GEMINI_MODEL} returned no text, and a reply with no output is never cached: {first}"
+    )
+    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=512, cache=None))
 
     rows = client.poll_logs_for_key(
         scoped_key,
@@ -780,7 +784,7 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
         GEMINI_MODEL, "estimate the cost of this request"
     )
     assert cost > 0, (
-        "/spend/calculate returned 0 for gemini-2.5-flash; "
+        "/spend/calculate returned 0 for gemini-3.8-flash; "
         "cost map may be missing this model"
     )
 

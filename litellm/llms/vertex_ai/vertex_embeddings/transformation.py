@@ -1,10 +1,11 @@
 import types
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, cast  # noqa: TID251  # extra_body carries raw fields the TypedDict lacks
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.llms.base_llm.embedding.transformation import split_extra_body
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
@@ -164,7 +165,12 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                EmbeddingParameters, {**extra_body, **body_params}
+            )
+        )
         if labels:
             vertex_request["labels"] = labels
 
@@ -205,7 +211,12 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = TextEmbeddingFineTunedParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                TextEmbeddingFineTunedParameters, {**extra_body, **body_params}
+            )
+        )
         # Remove 'shared_session' from parameters if present
         if vertex_request["parameters"] is not None and "shared_session" in vertex_request["parameters"]:
             del vertex_request["parameters"]["shared_session"]
