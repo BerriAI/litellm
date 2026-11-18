@@ -63,7 +63,6 @@ from litellm.repositories.table_repositories import (
     SpendLogToolIndexRepository,
     SSOConfigRepository,
     TagRepository,
-    TeamMembershipRepository,
     ToolRepository,
     UISettingsRepository,
     UserNotificationsRepository,
@@ -71,6 +70,7 @@ from litellm.repositories.table_repositories import (
     WorkflowMessageRepository,
     WorkflowRunRepository,
 )
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
     BudgetCascadeUnitOfWork,

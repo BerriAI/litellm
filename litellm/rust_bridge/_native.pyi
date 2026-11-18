@@ -1916,6 +1916,25 @@ class RustUserRepository:
     def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> Future[str | None]: ...
 
 @final
+class RustTeamRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamRepository: ...
+    def find_with_model_aliases(self, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
+class RustTeamMembershipRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamMembershipRepository: ...
+    def find_with_budget(self, user_id: str, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustOrganizationRepository:
+    def __new__(cls, database: NativeDatabase) -> RustOrganizationRepository: ...
+    def find_with_optional_budget(
+        self, organization_id: str, *, include_budget_table: bool = False
+    ) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -2216,8 +2235,11 @@ __all__ = [
     "RustKeyRepository",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",
+    "RustOrganizationRepository",
     "RustPlan",
     "RustTeamGrant",
+    "RustTeamMembershipRepository",
+    "RustTeamRepository",
     "RustUpstreamError",
     "RustUserRepository",
     "SpendRead",

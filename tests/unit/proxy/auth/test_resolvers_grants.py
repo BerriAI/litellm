@@ -24,7 +24,7 @@ from litellm.proxy.auth.resolvers.grants import (
     user_models,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from tests.unit.proxy.rust_auth_stores import RustAuthStores
+from tests.unit.proxy.rust_auth_stores import FakeTeamMembershipStore, RustAuthStores, install_rust_auth_stores
 
 USER_ID = "user-1"
 TEAM_ID = "team-1"
@@ -203,18 +203,20 @@ async def test_resolve_identity_lets_loader_errors_surface():
         await loaders.resolver().resolve_identity(UserLookup(user_id=USER_ID), team_id=None)
 
 
-class _UnreachableMembershipPrisma:
-    class db:
-        class litellm_teammembership:
-            @staticmethod
-            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
-                raise httpx.ConnectError("All connection attempts failed")
-
-
-async def test_resolve_marks_a_membership_read_that_hits_a_db_outage_as_degraded():
+async def test_resolve_marks_a_membership_read_that_hits_a_db_outage_as_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team_membership=FakeTeamMembershipStore(
+                rows={(USER_ID, TEAM_ID): httpx.ConnectError("All connection attempts failed")}
+            )
+        ),
+    )
     loaders = _Loaders(user=_user(), team=_team())
     resolver = GrantResolver(
-        _UnreachableMembershipPrisma(),
+        cast("PrismaClient", object()),
         UserApiKeyCache(),
         load_user=loaders.load_user,
         load_team=loaders.load_team,

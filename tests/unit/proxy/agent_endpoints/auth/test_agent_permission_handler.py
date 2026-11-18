@@ -22,7 +22,7 @@ from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     accessible_agents,
 )
 from litellm.types.agents import AgentCaller
-from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 
 def _key_row(auth: UserAPIKeyAuth) -> dict[str, object]:
@@ -851,7 +851,8 @@ async def test_managed_agent_invocation_grants_intersect_verified_user_grants(
 async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches(
     monkeypatch: pytest.MonkeyPatch, revoked: str
 ) -> None:
-    users: Final = install_rust_auth_stores(monkeypatch).user
+    stores: Final = install_rust_auth_stores(monkeypatch)
+    users: Final = stores.user
     from unittest.mock import MagicMock
 
     from litellm.proxy import proxy_server
@@ -885,7 +886,7 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     cache.set_cache("access_group_id:group", group)
     client: Final = MagicMock()
     users.writer = {"human": human.model_dump(mode="json")}
-    client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    stores.team.writer = {"team": team}
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
     client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
@@ -894,7 +895,8 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     users.writer["human"] = (human.model_copy(update={"teams": []}) if revoked == "user" else human).model_dump(
         mode="json"
     )
-    client.writer_db.litellm_teamtable.find_unique.return_value = (
+    assert stores.team.writer is not None
+    stores.team.writer["team"] = (
         team.model_copy(update={"members_with_roles": []})
         if revoked == "team-member"
         else team.model_copy(update={"object_permission_id": None})
@@ -909,7 +911,7 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     )
     assert await verified_human_agent_grants("human", "team") == frozenset()
     assert all(writer for _, writer in users.sign_ins)
-    client.db.litellm_teamtable.find_unique.assert_not_called()
+    assert all(use_writer for _, use_writer in stores.team.lookups)
     client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
     client.db.litellm_accessgrouptable.find_unique.assert_not_called()
 
@@ -959,7 +961,9 @@ async def test_strict_invocation_policy_outage_denies_instead_of_allowing_all(
     from litellm.proxy import proxy_server
 
     database: Final = MagicMock()
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(side_effect=ConnectionError("writer unavailable"))
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(writer={"team": ConnectionError("writer unavailable")}))
+    )
     database.writer_db.litellm_agentstable.find_many = AsyncMock(side_effect=ConnectionError("writer unavailable"))
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     auth: Final = UserAPIKeyAuth(
@@ -1186,13 +1190,14 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
         ),
     )
     database: Final = MagicMock()
-    keys: Final = install_rust_auth_stores(monkeypatch).key
+    keys: Final = install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(writer={"caller-team": team}))
+    ).key
     keys.rows["a" * 64] = _key_row(persisted)
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
     database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
         side_effect=lambda where: permission if where["object_permission_id"] == "key-grant" else team.object_permission
     )
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
     cache: Final = UserApiKeyCache()
     cache.set_cache("access_group_id:actor-group", group.model_copy(update={"access_agent_ids": ["target"]}))
@@ -1462,6 +1467,7 @@ async def test_personal_key_accessible_agents_keep_declared_grants(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-open")], indirect=True)
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_personal_key_strict_agent_access_keeps_declared_grants(
     personal_key_owner_teams: UserAPIKeyAuth,
 ) -> None:
@@ -1889,6 +1895,7 @@ async def test_personal_key_non_strict_agent_check_denies_ungranted_agent(
     ids=["eligible-grant", "eligible-unrestricted"],
 )
 @pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_unreadable_withheld_team_only_adds_conservative_agent_restriction(
     monkeypatch: pytest.MonkeyPatch,
     personal_key_owner_teams: UserAPIKeyAuth,
@@ -1922,6 +1929,7 @@ async def test_unreadable_withheld_team_only_adds_conservative_agent_restriction
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_unreadable_eligible_owner_team_still_raises_in_strict_agent_access(
     monkeypatch: pytest.MonkeyPatch,
     personal_key_owner_teams: UserAPIKeyAuth,

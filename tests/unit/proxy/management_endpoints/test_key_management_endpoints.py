@@ -123,7 +123,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
-from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, JwtMapping, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -21776,11 +21776,16 @@ async def test_project_detachment_uses_effective_project_for_validation_on_unown
         assert expected in str(exc.value.detail)
 
 
+@pytest.fixture
+def project_assignment_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(team=FakeTeamStore(rows={"team-lit-5823": {"team_id": "team-lit-5823", "members": []}})),
+    )
+
+
 def _project_assignment_prisma(stored_row: Mapping[str, object] | None = None) -> MagicMock:
     database = MagicMock()
-    team_row: Final = LiteLLM_TeamTable(team_id="team-lit-5823", members=[])
-    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     if stored_row is None:
         return database
 
@@ -21815,6 +21820,7 @@ def _project_assignment_prisma(stored_row: Mapping[str, object] | None = None) -
     return database
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_to_unassigned_key_on_same_team():
     existing: Final = LiteLLM_VerificationToken(
@@ -21833,6 +21839,7 @@ async def test_project_assignment_to_unassigned_key_on_same_team():
     assert update["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_rejects_project_on_another_team():
     existing: Final = LiteLLM_VerificationToken(
@@ -21850,6 +21857,7 @@ async def test_project_assignment_rejects_project_on_another_team():
     assert "team" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_rejects_key_with_no_team():
     existing: Final = LiteLLM_VerificationToken(
@@ -21867,6 +21875,7 @@ async def test_project_assignment_rejects_key_with_no_team():
     assert "team" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_rejects_nonexistent_project():
     existing: Final = LiteLLM_VerificationToken(
@@ -21885,6 +21894,7 @@ async def test_project_assignment_rejects_nonexistent_project():
     assert "Project not found" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_validates_existing_models_against_project():
     existing: Final = LiteLLM_VerificationToken(
@@ -21902,6 +21912,7 @@ async def test_project_assignment_validates_existing_models_against_project():
     assert "not in project's allowed models" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_with_explicit_null_max_budget_ignores_stored_budget():
     existing: Final = LiteLLM_VerificationToken(
@@ -21921,6 +21932,7 @@ async def test_project_assignment_with_explicit_null_max_budget_ignores_stored_b
     assert result["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_without_max_budget_uses_stored_budget():
     existing: Final = LiteLLM_VerificationToken(
@@ -22028,6 +22040,7 @@ async def test_project_assignment_write_upserts_object_permission_in_same_tx():
     assert result["data"] == {"project_id": "project-orbit"}
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_matches_null_models_column():
     stored: Final = {
@@ -22053,6 +22066,7 @@ async def test_project_assignment_write_matches_null_models_column():
     assert result["data"]["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_strips_explicit_null_object_permission():
     stored: Final = {
@@ -22083,6 +22097,7 @@ async def test_project_assignment_write_strips_explicit_null_object_permission()
     assert result["data"]["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_rejects_when_max_budget_changed():
     stored: Final = {
@@ -22111,6 +22126,7 @@ async def test_project_assignment_write_rejects_when_max_budget_changed():
     assert "concurrently" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_rejects_when_object_permission_changed():
     stored: Final = {
@@ -22138,6 +22154,7 @@ async def test_project_assignment_write_rejects_when_object_permission_changed()
     assert "concurrently" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_rejects_when_team_changed():
     stored: Final = {
@@ -22185,6 +22202,7 @@ def _setup_assignment_update_mocks(monkeypatch: pytest.MonkeyPatch, database: Ma
     monkeypatch.setattr("litellm.store_audit_logs", False)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_update_key_fn_assigns_project_through_guarded_write(monkeypatch: pytest.MonkeyPatch):
     stored: Final = {
@@ -22220,6 +22238,7 @@ async def test_update_key_fn_assigns_project_through_guarded_write(monkeypatch: 
     assert result["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_update_key_fn_soft_budget_runs_guarded_assignment(monkeypatch: pytest.MonkeyPatch):
     stored: Final = {
@@ -22274,6 +22293,7 @@ async def test_key_creator_cannot_detach_project_without_admin_access():
     assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_unauthorized_caller_gets_403_not_project_lookup_result():
     existing: Final = LiteLLM_VerificationToken(
@@ -22291,6 +22311,7 @@ async def test_unauthorized_caller_gets_403_not_project_lookup_result():
     assert "Project not found" not in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_unauthorized_caller_gets_403_not_project_team_leak():
     existing: Final = LiteLLM_VerificationToken(
