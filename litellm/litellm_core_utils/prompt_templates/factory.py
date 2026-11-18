@@ -2593,7 +2593,7 @@ _S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
     {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
 )
 _CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
-_EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
+EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
 def _dict_block(block: object) -> Mapping[str, object] | None:
@@ -2612,11 +2612,150 @@ def _is_empty_text_block(block: object) -> bool:
             return False
 
 
+def carries_empty_text(message: object) -> bool:
+    if message_field(message, "role") not in ("user", "assistant"):
+        return False
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return not content.strip()
+    blocks: Final = parts_of(content)
+    return isinstance(content, list) and any(map(_is_empty_text_block, blocks))
+
+
+_CONVERSE_ASSISTANT_NON_TEXT_FIELDS: Final = ("tool_calls", "thinking_blocks")
+
+
+def _is_typed_block(block: object) -> bool:
+    match _dict_block(block):
+        case {"type": "text", "text": str()}:
+            return True
+        case {"type": "text"}:
+            return False
+        case {"type": _}:
+            return True
+        case _:
+            return False
+
+
+def _converse_reads_content(message: Mapping[str, object]) -> bool:
+    return bool(message.get("content")) or any(message.get(field) for field in _CONVERSE_ASSISTANT_NON_TEXT_FIELDS)
+
+
+def _assistant_turn_as_converse_sends_it(message: Mapping[str, object]) -> Mapping[str, object] | None:
+    if message.get("role") != "assistant" or (message.get("content") and not carries_empty_text(message)):
+        return message
+    if litellm.modify_params is not False and all(map(_is_typed_block, parts_of(message.get("content")))):
+        continued: Final = get_assistant_message_block_or_continue_message(
+            cast(ChatCompletionAssistantMessage, message)  # cast-ok: role checked above, the helper reads only content
+        )
+        return continued if _converse_reads_content(continued) else None
+    kept: Final = tuple(block for block in parts_of(message.get("content")) if not _is_empty_text_block(block))
+    trimmed: Final = {**message, "content": list(kept) or None}
+    return trimmed if _converse_reads_content(trimmed) else None
+
+
+_CONVERSE_USER_BLOCK_ROLES: Final = frozenset({"user", "tool"})
+
+
+def _role_runs_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+) -> tuple[tuple[object, tuple[Mapping[str, object], ...]], ...]:
+    runs: Final = itertools.groupby(messages, key=lambda message: message.get("role"))
+    sent_runs: Final = (
+        (role, tuple(turn for turn in map(_assistant_turn_as_converse_sends_it, run) if turn is not None))
+        for role, run in runs
+    )
+    return tuple((role, turns) for role, turns in sent_runs if turns)
+
+
+def _continue_turn_between(previous_role: object, role: object) -> tuple[Mapping[str, object], ...]:
+    if litellm.modify_params is True and {previous_role, role} <= _CONVERSE_USER_BLOCK_ROLES:
+        return (DEFAULT_ASSISTANT_CONTINUE_MESSAGE,)
+    return ()
+
+
+def _needs_user_continue_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "assistant" and not message.get("prefix")
+
+
+def _with_user_continue_turns(
+    messages: Sequence[Mapping[str, object]], user_continue_message: ChatCompletionUserMessage | None
+) -> tuple[Mapping[str, object], ...]:
+    first: Final = next((index for index, message in enumerate(messages) if not _is_system_message(message)), None)
+    if not continues_empty_user_turns(user_continue_message) or first is None:
+        return tuple(messages)
+    continue_message: Final = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
+    leading: Final = (continue_message,) if _needs_user_continue_turn(messages[first]) else ()
+    trailing: Final = (continue_message,) if _needs_user_continue_turn(messages[-1]) else ()
+    return (*messages[:first], *leading, *messages[first:], *trailing)
+
+
+def assistant_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]], user_continue_message: ChatCompletionUserMessage | None
+) -> tuple[Mapping[str, object], ...]:
+    runs: Final = _role_runs_as_converse_sends_them(_with_user_continue_turns(messages, user_continue_message))
+    return tuple(
+        itertools.chain.from_iterable(
+            (*_continue_turn_between(previous_role, role), *turns)
+            for (previous_role, _), (role, turns) in itertools.pairwise(((None, ()), *runs))
+        )
+    )
+
+
+def _is_user_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "user"
+
+
+def _user_turn_as_converse_sends_it(
+    message: Mapping[str, object], user_continue_message: ChatCompletionUserMessage | None
+) -> Mapping[str, object] | None:
+    if not _is_user_turn(message) or not (is_empty_user_message(message) or carries_empty_text(message)):
+        return message
+    sent: Final = get_user_message_block_or_continue_message(
+        cast(ChatCompletionUserMessage, copy.deepcopy(dict(message))),  # cast-ok: a user turn, checked above
+        user_continue_message,
+    )
+    return sent if sent.get("content") else None
+
+
+def user_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+    user_continue_message: ChatCompletionUserMessage | None,
+    rejects_assistant_prefill: bool,
+) -> tuple[Mapping[str, object], ...]:
+    tail_start: Final = len(messages) - sum(1 for _ in itertools.takewhile(_is_user_turn, reversed(messages)))
+    sends_placeholder_turn: Final = (
+        rejects_assistant_prefill
+        and not continues_empty_user_turns(user_continue_message)
+        and 0 < tail_start < len(messages)
+        and messages[tail_start - 1].get("role") == "assistant"
+        and all(map(is_empty_user_message, messages[tail_start:]))
+    )
+    leading_turns: Final = messages[:tail_start] if sends_placeholder_turn else messages
+    sent_turns: Final = (_user_turn_as_converse_sends_it(message, user_continue_message) for message in leading_turns)
+    kept_turns: Final = tuple(turn for turn in sent_turns if turn is not None)
+    if not sends_placeholder_turn:
+        return kept_turns
+    return (*kept_turns, _placeholder_user_turn(messages[tail_start:]))
+
+
+def _placeholder_user_turn(trailing_messages: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    marked: Final = _first_cache_marked(trailing_messages)
+    if marked is None:
+        return {"role": "user", "content": EMPTY_TEXT_PLACEHOLDER}
+    placeholder_block: Final = {
+        "type": "text",
+        "text": EMPTY_TEXT_PLACEHOLDER,
+        "cache_control": message_field(marked, "cache_control"),
+    }
+    return {"role": "user", "content": [placeholder_block]}
+
+
 def _with_placeholder_text(block: object) -> object:
     fields: Final = _dict_block(block)
     if fields is None or not _is_empty_text_block(fields):
         return block
-    return {**fields, "text": _EMPTY_TEXT_PLACEHOLDER}
+    return {**fields, "text": EMPTY_TEXT_PLACEHOLDER}
 
 
 def _survives_assistant_conversion(block: object) -> bool:
@@ -2691,23 +2830,18 @@ def _sanitize_empty_text_content(
     Returns:
         The message with sanitized content if needed, otherwise the original message
     """
-    if message.get("role") not in ["user", "assistant"]:
+    if not carries_empty_text(message):
         return message
 
     content: Final = message_field(message, "content")
     drop_empty_text: Final = message_field(message, "role") == "assistant" and _carries_non_text_content(message)
 
     if isinstance(content, str):
-        if content.strip():
-            return message
         if drop_empty_text:
             return _with_content(message, None, "Dropped empty text content")
-        return _with_content(message, _EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
+        return _with_content(message, EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
 
     blocks: Final = parts_of(content)
-    if not isinstance(content, list) or not any(_is_empty_text_block(block) for block in blocks):
-        return message
-
     if drop_empty_text:
         kept: Final = [block for block in blocks if not _is_empty_text_block(block)]
         return _with_content(message, kept, "Dropped empty text block(s)")
@@ -3168,7 +3302,7 @@ def _tool_result_later_in_turn(
 
 
 def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
-    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=EMPTY_TEXT_PLACEHOLDER)
     add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
     return placeholder
 
@@ -5083,6 +5217,79 @@ def _sort_bedrock_assistant_content_blocks(
     return sorted(blocks, key=_sort_key)
 
 
+def _is_blank_text_block(block: object) -> bool:
+    text: Final = message_field(block, "text")
+    return message_field(block, "type") in ("text", "guarded_text") and not (isinstance(text, str) and text.strip())
+
+
+def _has_no_content(message: object) -> bool:
+    content: Final = message_field(message, "content")
+    blocks: Final = as_object_list(content)
+    if blocks is not None:
+        return all(map(_is_blank_text_block, blocks))
+    return not content or (isinstance(content, str) and not content.strip())
+
+
+def is_empty_user_message(message: object) -> bool:
+    return message_field(message, "role") == "user" and _has_no_content(message)
+
+
+def continues_empty_user_turns(user_continue_message: object) -> bool:
+    return user_continue_message is not None or bool(litellm.modify_params)
+
+
+def _ends_on_empty_user_turn(
+    messages: Sequence[object],
+    start: int,
+    contents: Sequence[BedrockMessageBlock],
+    user_continue_message: ChatCompletionUserMessage | None,
+) -> bool:
+    if continues_empty_user_turns(user_continue_message):
+        return False
+    if not contents or contents[-1]["role"] != "assistant":
+        return False
+    return all(is_empty_user_message(messages[index]) for index in range(start, len(messages)))
+
+
+def _has_cache_mark(holder: object) -> bool:
+    return message_field(holder, "cache_control") is not None
+
+
+def _cache_mark_holders(message: object) -> Sequence[object]:
+    return (message, *(as_object_list(message_field(message, "content")) or ()))
+
+
+def _first_cache_marked(trailing_messages: Sequence[object]) -> object | None:
+    holders: Final = itertools.chain.from_iterable(map(_cache_mark_holders, trailing_messages))
+    return next(filter(_has_cache_mark, holders), None)
+
+
+def _bedrock_placeholder_turn(
+    trailing_messages: Sequence[object],
+    model: str,
+    deployment_model: str | None,
+    model_info: Mapping[str, object] | None,
+) -> BedrockMessageBlock:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    marked: Final = _first_cache_marked(trailing_messages)
+    cache_point: Final = (
+        None
+        if marked is None
+        else AmazonConverseConfig().get_cache_point_block(
+            cast(ChatCompletionUserMessage, marked),  # cast-ok: get_cache_point_block only reads cache_control
+            block_type="content_block",
+            model=model,
+            deployment_model=deployment_model,
+            model_info=model_info,
+        )
+    )
+    return BedrockMessageBlock(
+        role="user",
+        content=[BedrockContentBlock(text=EMPTY_TEXT_PLACEHOLDER), *([] if cache_point is None else [cache_point])],
+    )
+
+
 def _insert_assistant_continue_message(
     messages: list[BedrockMessageBlock],
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
@@ -5419,6 +5626,7 @@ class BedrockConverseMessagesProcessor:
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
+            bedrock_converse_rejects_assistant_prefill,
             bedrock_converse_rejects_signed_thinking,
         )
 
@@ -5430,12 +5638,18 @@ class BedrockConverseMessagesProcessor:
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
         )
+        message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
         split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
             messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
         )
         message_count: Final = len(messages)
 
         while msg_i < message_count:
+            if _ends_on_empty_user_turn(
+                message_objects, msg_i, contents, user_continue_message
+            ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+                contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+                break
             user_content: list[BedrockContentBlock] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
@@ -5898,6 +6112,7 @@ def _bedrock_converse_messages_pt(
     """
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_accepts_redacted_thinking,
+        bedrock_converse_rejects_assistant_prefill,
         bedrock_converse_rejects_signed_thinking,
     )
 
@@ -5909,12 +6124,18 @@ def _bedrock_converse_messages_pt(
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
     )
+    message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
     split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
         messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
     )
     message_count: Final = len(messages)
 
     while msg_i < message_count:
+        if _ends_on_empty_user_turn(
+            message_objects, msg_i, contents, user_continue_message
+        ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+            contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+            break
         user_content: list[BedrockContentBlock] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##

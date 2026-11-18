@@ -629,32 +629,15 @@ describe("Sidebar (leftnav)", () => {
       error: null,
     });
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByRole("link", { name: /Projects/ })).toBeInTheDocument();
-  });
-
-  it("hides Projects when the feature flag is disabled for a team admin", () => {
-    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
-    mockUseTeams.mockReturnValue({
-      data: [
-        {
-          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
-        },
-      ],
-      isLoading: false,
-      error: null,
-    });
-
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
-
-    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
   it("hides Projects from an internal user who is not a team admin", () => {
     mockUseAuthorized.mockReturnValue(teamMemberAuthorization);
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
@@ -682,7 +665,7 @@ describe("Sidebar (leftnav)", () => {
       error: null,
     });
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={allowlist} />);
+    renderWithProviders(<Sidebar {...defaultProps} enabledPagesInternalUsers={allowlist} />);
 
     expect(screen.queryByRole("link", { name: /Projects/ }) !== null).toBe(visible);
   });
@@ -690,7 +673,7 @@ describe("Sidebar (leftnav)", () => {
   it("shows Projects to a user whose global role is org admin", () => {
     mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
   });
@@ -794,7 +777,7 @@ describe("Sidebar (leftnav)", () => {
   });
 
   it("never links a leaf to the legacy ?page= switch", () => {
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
     for (const group of ["Agentic", "Tools", "Experimental", "Settings"]) {
       act(() => {
         fireEvent.click(screen.getByText(group));
@@ -824,27 +807,40 @@ describe("Sidebar (leftnav)", () => {
     expect(link.querySelector("svg")).not.toBeNull();
   });
 
-  it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
-    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
+  it("shows Projects without a Beta badge", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/ui/projects");
+  });
+
+  it("shows Cost Optimization without a Beta badge", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
     expect(costOptimization!).toHaveTextContent("Cost Optimization");
     expect(costOptimization!).not.toHaveTextContent("Beta");
+  });
 
-    expect(container.querySelector('a[href*="projects"]')).toBeNull();
+  it("shows Projects to an org admin without a Beta badge", () => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const projects = screen.getByRole("link", { name: "Projects" });
+    expect(projects).toHaveAttribute("href", "/ui/projects");
+    expect(projects).not.toHaveTextContent("Beta");
   });
 
   it.each([
     ["Cost Optimization", "/ui/cost-optimization"],
     ["Projects", "/ui/projects"],
   ])("titles the collapsed-rail link for %s without its badge text", (name, href) => {
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+    renderWithProviders(<Sidebar {...defaultProps} collapsed />);
     expect(screen.getByTitle(name)).toHaveAttribute("href", href);
   });
 
   it("leaves expanded-rail links untitled", () => {
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.queryByTitle("Cost Optimization")).not.toBeInTheDocument();
   });
 });

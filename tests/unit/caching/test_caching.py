@@ -4,14 +4,20 @@ import json
 import logging
 import re
 import traceback
+import tracemalloc
 import uuid
+from collections import OrderedDict
 from datetime import timedelta
+from enum import Enum
+from functools import reduce
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm import acompletion, aembedding, completion, embedding
@@ -1657,3 +1663,110 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+class _LoudDict(dict[str, str]):
+    def __repr__(self) -> str:
+        return "<loud dict>"
+
+
+class _Role(str, Enum):
+    USER = "user"
+
+
+class _ContentPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    text: str
+
+
+_LARGE_DATA_URL: Final = "data:image/png;base64," + "QUJD" * 524_288
+
+
+def _self_referencing_list() -> list[object]:  # mutable-ok: a cycle can only be closed by appending to the list
+    looped: Final[list[object]] = [{"role": "user", "content": _LARGE_DATA_URL}]  # mutable-ok: closed below
+    looped.append({"role": "user", "content": looped})
+    return looped
+
+
+def _self_referencing_dict() -> dict[str, object]:  # mutable-ok: a cycle can only be closed by assigning a key
+    looped: Final[dict[str, object]] = {"role": "user", "content": _LARGE_DATA_URL}  # mutable-ok: closed below
+    looped["self"] = (looped, [looped])
+    return looped
+
+
+_KEY_PREIMAGE_CASES: Final = MappingProxyType(
+    {
+        "one_tuple": ({"role": "user", "content": "hi"},),
+        "empty_containers": [{"role": "user", "content": [], "a": {}, "b": (), "c": set(), "d": "", "e": frozenset()}],
+        "mixed_quotes": [{"role": "user", "content": "it's \"quoted\" and 'single'"}],
+        "emoji_newlines_backslashes": [{"role": "user", "content": "\U0001f600 line\nnext\ttab \\ back\r\x00"}],
+        "dict_subclass_custom_repr": [_LoudDict(role="user", content="hi")],
+        "ordered_dict": [OrderedDict([("content", "hi"), ("role", "user")])],
+        "str_enum_top_level": _Role.USER,
+        "str_enum_nested": [{"role": _Role.USER, "content": "hi"}],
+        "special_floats": [{"role": "user", "content": [float("nan"), -0.0, 1e300, float("inf")]}],
+        "bytes": [{"role": "user", "content": b"\x00\xffraw'\"bytes"}],
+        "nested_lone_surrogate": [{"role": "user", "content": "a\ud800b"}],
+        "deep_nesting": reduce(lambda inner, _: [inner], range(300), {"role": "user", "content": "leaf"}),
+        "pydantic_model": [{"role": "user", "content": [_ContentPart(type="text", text="hi")]}],
+        "large_data_url_in_one_tuple": [({"content": _LARGE_DATA_URL},)],
+        "large_data_url": [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": _LARGE_DATA_URL}}],
+            }
+        ],
+        "self_referencing_list": _self_referencing_list(),
+        "self_referencing_dict": [_self_referencing_dict()],
+        "large_data_url_nested_past_any_walk_depth": reduce(
+            lambda inner, _: [inner, ("x",)], range(600), {"role": "user", "content": _LARGE_DATA_URL}
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("case", _KEY_PREIMAGE_CASES.values(), ids=_KEY_PREIMAGE_CASES.keys())
+def test_cache_key_stays_the_sha256_of_the_formatted_request(case: object) -> None:
+    expected: Final = hashlib.sha256(f"model: mmessages: {case}stream: True".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages=case, stream=True) == expected
+
+
+def test_cache_key_for_a_top_level_lone_surrogate_still_raises() -> None:
+    with pytest.raises(UnicodeEncodeError):
+        Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="\ud800", stream=True)
+
+
+def test_cache_key_for_large_image_payloads_does_not_copy_the_whole_request() -> None:
+    image_bytes: Final = 1 << 20
+    image_messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"screenshot {index}"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + chr(65 + index) * image_bytes}},
+            ],
+        }
+        for index in range(16)
+    ]
+    payload_bytes: Final = 16 * image_bytes
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
+    try:
+        traced_before, _ = tracemalloc.get_traced_memory()
+        cache.get_cache_key(model="m", messages=image_messages, stream=True)
+        _, traced_peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    added_peak: Final = traced_peak - traced_before
+    assert added_peak < payload_bytes / 4, (
+        f"peak {added_peak / 2**20:.1f} MiB for a {payload_bytes / 2**20:.0f} MiB payload"
+    )
