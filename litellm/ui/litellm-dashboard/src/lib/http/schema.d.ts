@@ -1576,6 +1576,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/shadow_eval/rubric/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Shadow Eval Rubric
+         * @description Start a shadow eval whose judge, besides picking the better response, grades each
+         *     response from 1 (fails the rubric's criteria) to 5 (fully meets them). Everything
+         *     else matches /auto_router/shadow_eval/start, and the job's preference results stay
+         *     on the regular job endpoints. Read grades from
+         *     /auto_router/shadow_eval/{job_id}/rubric_results.
+         *
+         *     Disabled unless LITELLM_SHADOW_EVAL_RUBRIC_ENABLED=true. Each worker process reads
+         *     its own environment, so a change applies only once every worker is redeployed or
+         *     restarted with it. A worker without rubric support ignores the setting and samples a
+         *     rubric job as a preference-only job, so enable it only after every API and sampling
+         *     worker sharing the database runs a version with this route. Workers with the setting
+         *     off neither start nor sample rubric jobs.
+         *
+         *     Rolling back to a version without rubric support is not zero-downtime for rubric
+         *     jobs. Before any older worker starts: apply the setting off to every upgraded worker,
+         *     stop every running rubric job with /auto_router/shadow_eval/{job_id}/stop, and wait
+         *     until every upgraded worker's in-flight evaluations have finished, for example by
+         *     draining or stopping those workers. The roughly 10 second job cache expiry alone does
+         *     not guarantee that drain.
+         */
+        post: operations["start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval/start": {
         parameters: {
             query?: never;
@@ -1633,6 +1671,28 @@ export interface paths {
          * @description One job with derived counts, judge spend, latest error, and stratified results.
          */
         get: operations["get_shadow_eval_job_auto_router_shadow_eval__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}/rubric_results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shadow Eval Rubric Results
+         * @description A rubric job's grades: graded and ungraded turn counts and the joint distribution
+         *     of (real_grade, shadow_grade), overall and per router arm. A job started without a
+         *     rubric is a 404 here.
+         */
+        get: operations["get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -48610,6 +48670,24 @@ export interface components {
             message: string;
         };
         /**
+         * ShadowEvalGradePair
+         * @description How many judged turns gave the real and shadow responses this pair of grades.
+         */
+        ShadowEvalGradePair: {
+            /**
+             * Real Grade
+             * @description Grade of the response the caller actually received, 1 to 5
+             */
+            real_grade: number;
+            /**
+             * Shadow Grade
+             * @description Grade of the duplicated response nobody was served, 1 to 5
+             */
+            shadow_grade: number;
+            /** Turn Count */
+            turn_count: number;
+        };
+        /**
          * ShadowEvalJobResponse
          * @description A shadow-eval job over one or more targets, each with its own budget and stop state;
          *     status is derived from stopped_by, the targets' stop and budget state, and ends_at,
@@ -48820,6 +48898,158 @@ export interface components {
              * @description Sampled requests the pipeline declined to spend on: no database to record into, an over-budget key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job crosses max_budget lands here rather than vanishing from coverage)
              */
             withheld_count?: number | null;
+        };
+        /**
+         * ShadowEvalRubricJobResponse
+         * @description A rubric shadow eval job: the regular job view plus the rubric it grades against.
+         */
+        ShadowEvalRubricJobResponse: {
+            /** Baseline Model */
+            baseline_model?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /**
+             * Error Count
+             * @description Sampled attempts that errored; detail endpoint only
+             */
+            error_count?: number | null;
+            /** Job Id */
+            job_id: string;
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Judge Spend
+             * @description Judge cost so far; detail endpoint only
+             */
+            judge_spend?: number | null;
+            /**
+             * Judged Count
+             * @description Verdicts recorded; detail endpoint only
+             */
+            judged_count?: number | null;
+            /**
+             * Last Error
+             * @description Most recent attempt error; detail endpoint only
+             */
+            last_error?: string | null;
+            /**
+             * Models
+             * @description Model groups the sampled traffic is narrowed to; empty means every model the targets use
+             * @default []
+             */
+            models: string[];
+            /** @description Stratified verdicts; detail endpoint only */
+            results?: components["schemas"]["ShadowEvalResult"] | null;
+            /**
+             * Router Name
+             * @description The first router, kept for callers that predate router_names; derived so the
+             *     two fields can never disagree.
+             */
+            readonly router_name: string;
+            /**
+             * Router Names
+             * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria both responses are graded against, as stored at start
+             */
+            rubric: string;
+            /**
+             * Rubric Version
+             * @description The grading contract (prompt, anchors, 1-5 scale) the job runs under
+             */
+            rubric_version: number;
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
+            /** Shadow Percentage */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Status
+             * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
+             *     backfills it for every job that displayed stopped when the column arrived, so the
+             *     pre-column population is closed), completion is the window passing or every target
+             *     spending its budget, and anything else is running. The all-targets-stamped fallback
+             *     covers only stops written by pre-column pods during a rolling deploy.
+             * @enum {string}
+             */
+            readonly status: "running" | "completed" | "stopped";
+            /**
+             * Stopped By
+             * @description The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled by migration for jobs that displayed stopped when the column arrived; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
+             */
+            stopped_by?: string | null;
+            /**
+             * Targets
+             * @description The targets whose traffic this job evaluates, and only theirs, each with its own budget
+             */
+            targets: components["schemas"]["ShadowEvalJobTargetResponse"][];
+        };
+        /**
+         * ShadowEvalRubricResultResponse
+         * @description A rubric job's grades so far. Error attempts are excluded, like the job's preference results.
+         */
+        ShadowEvalRubricResultResponse: {
+            /**
+             * By Router
+             * @description One slice per router arm, ordered by router name, each graded against the same real responses
+             */
+            by_router: components["schemas"]["ShadowEvalRubricSlice"][];
+            /** Job Id */
+            job_id: string;
+            /** @description Every arm together. A judged turn is one (request, router arm) pair, so a multi-router job counts each real response once per arm; compare routers with by_router */
+            overall: components["schemas"]["ShadowEvalRubricSlice"];
+            /** Rubric */
+            rubric: string;
+            /** Rubric Version */
+            rubric_version: number;
+        };
+        /**
+         * ShadowEvalRubricSlice
+         * @description Rubric grades for one router arm, or for every arm together.
+         */
+        ShadowEvalRubricSlice: {
+            /**
+             * Grade Distribution
+             * @description Joint counts of (real_grade, shadow_grade) over graded turns, ordered by real then shadow grade, so turns where both responses were good or both were bad stay distinguishable
+             */
+            grade_distribution: components["schemas"]["ShadowEvalGradePair"][];
+            /**
+             * Graded Count
+             * @description Judged turns that carry both grades
+             */
+            graded_count: number;
+            /** Group */
+            group: string;
+            /**
+             * Ungraded Count
+             * @description Judged turns with a preference but no grades, such as turns a worker without rubric support judged. They are excluded from grade_distribution, never counted as low grades
+             */
+            ungraded_count: number;
         };
         /**
          * ShadowEvalSlice
@@ -49951,6 +50181,93 @@ export interface components {
              * @default []
              */
             router_names: string[];
+            /**
+             * Shadow Percentage
+             * @description Percentage of each target's requests to duplicate through the router
+             */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Team Ids
+             * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
+             * @default []
+             */
+            team_ids: string[];
+            /**
+             * User Ids
+             * @description Users whose traffic will be shadowed, matched on the user every authenticated request resolves to across all their teams: JWT requests carrying their subject claim and virtual keys they own
+             * @default []
+             */
+            user_ids: string[];
+        };
+        /**
+         * StartShadowEvalRubricRequest
+         * @description A shadow eval whose judge also grades each response from 1 to 5 against an operator rubric.
+         */
+        StartShadowEvalRubricRequest: {
+            /**
+             * Api Key Ids
+             * @description Hashed virtual keys whose traffic will be shadowed. Combined with team_ids and user_ids the job needs at least one target and at most 100, which also bounds every read the job's endpoints make. Each target carries its own max_budget spend budget, so one exhausting its budget leaves the others sampling.
+             * @default []
+             */
+            api_key_ids: string[];
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Duration Days
+             * @description How many days the job samples traffic before completing on its own
+             * @default 7
+             */
+            duration_days: number;
+            /**
+             * Judge Model
+             * @description Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes.
+             * @default anthropic/claude-sonnet-5
+             */
+            judge_model: string;
+            /**
+             * Max Budget
+             * @description Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window. Every router arm draws from the same per-target budget, so a multi-router job reaches it proportionally sooner
+             * @default 10
+             */
+            max_budget: number;
+            /**
+             * Models
+             * @description Model groups to narrow the sampled traffic to, matched on the group the caller requested and resolved through model_group_alias, so an alias and its target are one name. Empty samples every model the targets use. This ANDs with the targets: a job over a user and one model samples that user's requests on that model across every key they own, and none of their other traffic. Forward jobs only: a reverse job samples exactly the traffic its own router served, which no other model group can name
+             * @default []
+             */
+            models: string[];
+            /**
+             * Router Name
+             * @description The auto-router under evaluation, in either direction: the single-router spelling of router_names. Provide exactly one of the two fields
+             */
+            router_name?: string | null;
+            /**
+             * Router Names
+             * @description The auto-routers under evaluation, at most 4. Every sampled request runs through every router listed and each arm is judged independently against the same real response, so routers compare head-to-head on identical traffic. More than one router requires direction 'forward'. After validation this field always carries the full deduplicated set, whichever spelling the caller used
+             * @default []
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria the judge grades both responses against, in plain language, at most 4000 characters. Each response gets an integer grade on a fixed scale where 1 fails the criteria and 5 fully meets them. Stored unchanged with the job and never edited
+             */
+            rubric: string;
             /**
              * Shadow Percentage
              * @description Percentage of each target's requests to duplicate through the router
@@ -57838,6 +58155,39 @@ export interface operations {
             };
         };
     };
+    start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartShadowEvalRubricRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_shadow_eval_auto_router_shadow_eval_start_post: {
         parameters: {
             query?: never;
@@ -57889,6 +58239,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricResultResponse"];
                 };
             };
             /** @description Validation Error */

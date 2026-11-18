@@ -428,17 +428,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::never_configured(false, KeyDenial::NoDbConfigured)]
+    #[case::configured_but_not_connected(true, KeyDenial::NoDb)]
     #[tokio::test]
-    async fn without_db_only_the_master_key_works(settings: KeySettings) {
+    async fn without_db_only_the_master_key_works(
+        settings: KeySettings,
+        #[case] db_configured: bool,
+        #[case] denial: KeyDenial,
+    ) {
         let settings = KeySettings {
             has_db: false,
+            db_configured,
             ..settings
         };
         let host = ScriptedHost::default();
         assert_eq!(
             run(&host, "sk-1", "/chat/completions", &settings).await,
-            Err(KeyDenial::NoDb.into())
+            Err(denial.into())
         );
+        assert!(matches!(
+            run(&host, MASTER, "/chat/completions", &settings).await,
+            Ok(KeyIdentity::MasterKey { .. })
+        ));
     }
 
     #[rstest]

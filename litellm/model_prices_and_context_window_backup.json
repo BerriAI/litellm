@@ -9213,17 +9213,25 @@
     "azure/gpt-6-luna": {
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-07,
+        "cache_creation_input_token_cost_flex": 6.25e-08,
         "cache_read_input_token_cost": 1e-08,
         "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-08,
+        "cache_read_input_token_cost_flex": 5e-09,
         "deprecation_date": "2028-03-11",
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_above_272k_tokens": 2e-07,
+        "input_cost_per_token_above_272k_tokens_flex": 1e-07,
+        "input_cost_per_token_flex": 5e-08,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-07,
+        "output_cost_per_token_flex": 2.5e-07,
         "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
@@ -19058,13 +19066,16 @@
         "supports_vision": true
     },
     "dashscope/qwen4-max": {
+        "cache_creation_input_token_cost": 1.875e-06,
+        "cache_creation_input_token_cost_above_1hr": 3e-06,
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "dashscope",
         "max_input_tokens": 991808,
         "max_output_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.5e-06,
-        "source": "https://www.alibabacloud.com/help/en/model-studio/qwen4-max",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -36650,7 +36661,7 @@
         "source": "https://developers.openai.com/api/docs/models/gpt-4o-search-preview"
     },
     "gpt-4o-transcribe": {
-        "input_cost_per_audio_token": 2.5e-06,
+        "input_cost_per_audio_token": 6e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16000,
@@ -49636,17 +49647,21 @@
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "mode": "chat",
-        "input_cost_per_token": 2.4e-07,
-        "output_cost_per_token": 2.4e-07,
+        "input_cost_per_token": 2.2e-07,
+        "output_cost_per_token": 2.2e-07,
         "supports_system_messages": true
     },
     "snowflake/llama3.2-1b": {
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1e-07,
         "litellm_provider": "snowflake",
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "mode": "chat"
     },
     "snowflake/llama3.2-3b": {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.5e-07,
         "litellm_provider": "snowflake",
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
@@ -49663,6 +49678,8 @@
         "supports_system_messages": true
     },
     "snowflake/mistral-7b": {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 2e-07,
         "litellm_provider": "snowflake",
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
@@ -63610,6 +63627,7 @@
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
         "litellm_provider": "snowflake",
         "mode": "chat",
         "supports_function_calling": true,
@@ -63627,6 +63645,7 @@
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
         "litellm_provider": "snowflake",
         "mode": "chat",
         "supports_function_calling": true,
@@ -63642,6 +63661,7 @@
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
         "litellm_provider": "snowflake",
         "mode": "chat",
         "supports_function_calling": true,
@@ -63673,6 +63693,7 @@
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 5e-06,
         "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 1.25e-06,
         "litellm_provider": "snowflake",
         "mode": "chat",
         "supports_function_calling": true,
@@ -63729,8 +63750,9 @@
     "snowflake/openai-gpt-5-mini": {
         "max_input_tokens": 1000000,
         "max_output_tokens": 16384,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 2e-06,
+        "cache_read_input_token_cost": 3e-08,
         "litellm_provider": "snowflake",
         "mode": "chat",
         "supports_function_calling": true,
@@ -63740,8 +63762,9 @@
     "snowflake/openai-gpt-5-nano": {
         "max_input_tokens": 5000000,
         "max_output_tokens": 16384,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 6e-07,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 4.4e-07,
+        "cache_read_input_token_cost": 1e-08,
         "litellm_provider": "snowflake",
         "mode": "chat",
         "supports_function_calling": true,
@@ -83000,6 +83023,80 @@
     },
     "bedrock_mantle/gpt-terra-latest": {
         "alias_of": "bedrock_mantle/openai.gpt-6.1-terra"
+    },
+    "bedrock_mantle/openai.gpt-6.2-sol": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-07,
+        "input_cost_per_token": 2.2e-06,
+        "input_cost_per_token_above_272k_tokens": 4.4e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1.1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.65e-05,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "use_openai_responses_path": true
+    },
+    "bedrock_mantle/openai.gpt-6.2-astra": {
+        "cache_creation_input_token_cost": 1.1e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.2e-05,
+        "cache_read_input_token_cost": 4.4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 8.8e-07,
+        "input_cost_per_token": 8.8e-06,
+        "input_cost_per_token_above_272k_tokens": 1.76e-05,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 4.4e-05,
+        "output_cost_per_token_above_272k_tokens": 6.6e-05,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "use_openai_responses_path": true
     },
     "clf_ai_gateway/glm-5.3": {
         "metadata": {
@@ -104431,6 +104528,92 @@
         "thinking_always_on": true,
         "token_count_model": {"model":"anthropic.claude-opus-5-5","litellm_provider":"bedrock_mantle","region":"us-east-1"}
     },
+    "bedrock/mantle/anthropic.claude-sonnet-5-5": {
+        "bedrock_converse_supports_strict_tools": false,
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.4e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 2.2e-06,
+        "litellm_provider": "bedrock",
+        "supports_tool_search": true,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_native_structured_output": false,
+        "supports_max_reasoning_effort": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh",
+        "supports_parallel_tool_use_config": true,
+        "supports_forced_tool_use": false,
+        "thinking_always_on": true,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    "bedrock/mantle/anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5.5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.75e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
+        "bedrock_converse_supports_strict_tools": false,
+        "cache_creation_input_token_cost": 1.375e-07,
+        "cache_creation_input_token_cost_above_1hr": 2.2e-07,
+        "cache_read_input_token_cost": 1.1e-08,
+        "input_cost_per_token": 1.1e-07,
+        "litellm_provider": "bedrock",
+        "supports_tool_search": true,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_native_structured_output": false,
+        "supports_max_reasoning_effort": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh",
+        "supports_parallel_tool_use_config": true,
+        "supports_forced_tool_use": true,
+        "thinking_always_on": false,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
+    },
     "databricks/system.ai.gemini-4-hydrogen": {
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_read_input_token_cost": 1.5e-06,
@@ -105136,5 +105319,492 @@
         "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://prices.azure.com/api/retail/prices?$filter=contains(productName,'Decision')"
+    },
+    "fal_ai/kling/v4/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image is 1.0 unit at the default 2K resolution, 1.4921 units at 4K and 2.4921 units at 8K ($0.157), measured 2026-11-17. The per-image prices are used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.063,
+        "output_cost_per_image": 0.063,
+        "output_cost_per_image_2K": 0.063,
+        "output_cost_per_image_4K": 0.094,
+        "source": "https://fal.ai/models/kling/v4/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/kling/v4/image-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image with one input image is 1.0476 units at the default 2K resolution, 1.5397 units at 4K and 2.5397 units at 8K ($0.16), and each further input image adds 0.0476 units ($0.003), measured 2026-11-17. The per-image prices assume one input image and are used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.063,
+        "output_cost_per_image": 0.066,
+        "output_cost_per_image_2K": 0.066,
+        "output_cost_per_image_4K": 0.097,
+        "source": "https://fal.ai/models/kling/v4/image-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/kling/v4/long-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One long image is 2.3362 units at the default 1K resolution and 2.5362 units at 2K, whatever its height, measured 2026-11-17. The per-image prices are used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.235,
+        "output_cost_per_image": 0.549,
+        "output_cost_per_image_1K": 0.549,
+        "output_cost_per_image_2K": 0.596,
+        "source": "https://fal.ai/models/kling/v4/long-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "global.openai.gpt-6.2-astra": {
+        "cache_creation_input_token_cost": 1e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 6e-05,
+        "cache_creation_input_token_cost_ultrafast": 3e-05,
+        "cache_read_input_token_cost": 4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast": 2.4e-06,
+        "cache_read_input_token_cost_ultrafast": 1.2e-06,
+        "input_cost_per_token": 8e-06,
+        "input_cost_per_token_above_272k_tokens": 1.6e-05,
+        "input_cost_per_token_above_272k_tokens_ultrafast": 4.8e-05,
+        "input_cost_per_token_ultrafast": 2.4e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "output_cost_per_token_above_272k_tokens": 6e-05,
+        "output_cost_per_token_above_272k_tokens_ultrafast": 0.00018,
+        "output_cost_per_token_ultrafast": 0.00012,
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "global.openai.gpt-6.2-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "us.openai.gpt-6.2-astra": {
+        "cache_creation_input_token_cost": 1.1e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.2e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 6.6e-05,
+        "cache_creation_input_token_cost_ultrafast": 3.3e-05,
+        "cache_read_input_token_cost": 4.4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 8.8e-07,
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast": 2.64e-06,
+        "cache_read_input_token_cost_ultrafast": 1.32e-06,
+        "input_cost_per_token": 8.8e-06,
+        "input_cost_per_token_above_272k_tokens": 1.76e-05,
+        "input_cost_per_token_above_272k_tokens_ultrafast": 5.28e-05,
+        "input_cost_per_token_ultrafast": 2.64e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-05,
+        "output_cost_per_token_above_272k_tokens": 6.6e-05,
+        "output_cost_per_token_above_272k_tokens_ultrafast": 0.000198,
+        "output_cost_per_token_ultrafast": 0.000132,
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "us.openai.gpt-6.2-sol": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-07,
+        "input_cost_per_token": 2.2e-06,
+        "input_cost_per_token_above_272k_tokens": 4.4e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.65e-05,
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "openai.gpt-6.2-astra": {
+        "cache_creation_input_token_cost": 1e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 6e-05,
+        "cache_creation_input_token_cost_ultrafast": 3e-05,
+        "cache_read_input_token_cost": 4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast": 2.4e-06,
+        "cache_read_input_token_cost_ultrafast": 1.2e-06,
+        "input_cost_per_token": 8e-06,
+        "input_cost_per_token_above_272k_tokens": 1.6e-05,
+        "input_cost_per_token_above_272k_tokens_ultrafast": 4.8e-05,
+        "input_cost_per_token_ultrafast": 2.4e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "output_cost_per_token_above_272k_tokens": 6e-05,
+        "output_cost_per_token_above_272k_tokens_ultrafast": 0.00018,
+        "output_cost_per_token_ultrafast": 0.00012,
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "openai.gpt-6.2-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "fal_ai/heygen/avatar-6/identity-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_2k": 0.145,
+        "source": "https://fal.ai/models/heygen/avatar-6/identity-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_2k": 0.145,
+        "source": "https://fal.ai/models/heygen/avatar-6/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/ref-video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_2k": 0.145,
+        "source": "https://fal.ai/models/heygen/avatar-6/ref-video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/turbo/identity-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.05,
+        "output_cost_per_second_2k": 0.0875,
+        "source": "https://fal.ai/models/heygen/avatar-6/turbo/identity-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/turbo/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.05,
+        "output_cost_per_second_2k": 0.0875,
+        "source": "https://fal.ai/models/heygen/avatar-6/turbo/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/heygen/avatar-6/turbo/ref-video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.05,
+        "output_cost_per_second_2k": 0.0875,
+        "source": "https://fal.ai/models/heygen/avatar-6/turbo/ref-video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/microsoft/mai-image-2.7/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($5 per million text input tokens, $8 per million image input tokens, $34 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0349,
+        "output_cost_per_image_1K": 0.0349,
+        "output_cost_per_image_2K": 0.1394,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/microsoft/mai-image-2.7/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($5 per million text input tokens, $8 per million image input tokens, $34 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt and one input image, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0437,
+        "output_cost_per_image_1K": 0.0437,
+        "output_cost_per_image_2K": 0.1482,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/microsoft/mai-image-2.7/flash/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($1.75 per million text input tokens, $2.50 per million image input tokens, $10 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0103,
+        "output_cost_per_image_1K": 0.0103,
+        "output_cost_per_image_2K": 0.041,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/flash/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/microsoft/mai-image-2.7/flash/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal bills this endpoint by tokens ($1.75 per million text input tokens, $2.50 per million image input tokens, $10 per million image output tokens) and reports the charge in dollars in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are the charges measured 2026-11-17 for one square image at the request's resolution field (1K default, 2K) with a short prompt and one input image, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.0131,
+        "output_cost_per_image_1K": 0.0131,
+        "output_cost_per_image_2K": 0.0438,
+        "source": "https://fal.ai/models/microsoft/mai-image-2.7/flash/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "github_copilot/mai-code-2": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/mai-code-2-flash": {
+        "cache_read_input_token_cost": 5e-09,
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
     }
 }

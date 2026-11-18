@@ -29,12 +29,17 @@ export function CustomerSpendIdentity({
       <div className="min-w-0">
         <button
           type="button"
-          className="block text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+          title={member.label}
+          className="block max-w-52 truncate text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
           onClick={onClick}
         >
           {member.label}
         </button>
-        <span className="block font-mono text-[11px] text-muted-foreground">{member.id}</span>
+        {member.label !== member.id && (
+          <span className="block max-w-52 truncate font-mono text-[11px] text-muted-foreground" title={member.id}>
+            {member.id}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -44,11 +49,13 @@ export function CustomerSpendHeaders() {
   const { t } = useTranslation();
   return (
     <>
-      <TableHead className="min-w-72">{t("customerPortal.analytics.monthlySpend")}</TableHead>
+      <TableHead className="min-w-56">{t("customerPortal.analytics.monthlySpend")}</TableHead>
       <TableHead className="text-right">{t("customerPortal.analytics.yearlySpend")}</TableHead>
-      <TableHead className="text-right">{t("customerPortal.analytics.customerSpendShare")}</TableHead>
+      <TableHead className="min-w-36 whitespace-normal text-right">
+        {t("customerPortal.analytics.customerSpendShare")}
+      </TableHead>
       <TableHead className="text-right">{t("customerPortal.analytics.tokens")}</TableHead>
-      <TableHead className="pr-0 text-right">{t("customerPortal.analytics.status")}</TableHead>
+      <TableHead className="text-right">{t("customerPortal.analytics.status")}</TableHead>
     </>
   );
 }
@@ -84,7 +91,7 @@ export function CustomerSpendCells({
 
   return (
     <>
-      <TableCell className="pr-6">
+      <TableCell className="pr-4">
         <div className="space-y-3">
           {monthlyBudgets.map((budget) => (
             <CustomerBudgetWindow key={budget.source} budget={budget} showReset={monthlyBudgets.length > 1} />
@@ -134,7 +141,7 @@ export function CustomerSpendCells({
         </div>
       </TableCell>
       <TableCell className="text-right tabular-nums">{formatCompact(tokens)}</TableCell>
-      <TableCell className="pr-0 text-right">
+      <TableCell className="text-right">
         <span
           className={cn(
             "inline-flex rounded-full bg-muted px-2 py-0.5 text-xs",

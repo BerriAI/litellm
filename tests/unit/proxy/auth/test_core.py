@@ -10,6 +10,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LitellmUserRoles,
+    ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
@@ -204,3 +205,26 @@ async def test_a_master_key_loaded_while_serving_admits_the_next_request(monkeyp
     monkeypatch.setattr(proxy_server, "master_key", "sk-after-reload")
 
     assert (await _authenticate("Bearer sk-after-reload")).user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    ("database_url_configured", "code", "error_type"),
+    [
+        pytest.param(False, "401", ProxyErrorTypes.auth_error, id="no_database_configured"),
+        pytest.param(True, "400", ProxyErrorTypes.no_db_connection, id="configured_database_not_connected"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_wrong_key_without_a_database_is_an_outage_only_when_one_is_configured(
+    monkeypatch: pytest.MonkeyPatch, database_url_configured: bool, code: str, error_type: ProxyErrorTypes
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "database_url_configured", database_url_configured)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-the-master-key")
+
+    assert (await _authenticate("Bearer sk-the-master-key")).user_role == LitellmUserRoles.PROXY_ADMIN
+    with pytest.raises(ProxyException) as denied:
+        _ = await _authenticate("Bearer sk-not-the-master-key")
+    assert (denied.value.code, denied.value.type) == (code, error_type), denied.value.message

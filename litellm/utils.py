@@ -1364,9 +1364,8 @@ def function_setup(
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
-        all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
-
         with litellm.logging_callback_manager.callback_lists_lock:
+            all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
             if len(all_callbacks) > 0:
                 for callback in all_callbacks:
                     # check if callback is a string - e.g. "lago", "openmeter"
@@ -2424,14 +2423,10 @@ def client(original_function):
             print_verbose(
                 f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
             )
-            # if caching is false or cache["no-cache"]==True, don't run this
             if (
                 (
-                    (
-                        (kwargs.get("caching", None) is None and litellm.cache is not None)
-                        or kwargs.get("caching", False) is True
-                    )
-                    and kwargs.get("cache", {}).get("no-cache", False) is not True
+                    (kwargs.get("caching", None) is None and litellm.cache is not None)
+                    or kwargs.get("caching", False) is True
                 )
                 and kwargs.get("aembedding", False) is not True
                 and kwargs.get("atext_completion", False) is not True

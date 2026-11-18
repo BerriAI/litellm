@@ -142,7 +142,11 @@ pub(super) fn gate<K>(
         return Gate::MasterKey;
     }
     if !settings.has_db {
-        return Gate::Denied(KeyDenial::NoDb);
+        return Gate::Denied(if settings.db_configured {
+            KeyDenial::NoDb
+        } else {
+            KeyDenial::NoDbConfigured
+        });
     }
     match (key, presented) {
         (Some(key), _) => Gate::Held(key),
