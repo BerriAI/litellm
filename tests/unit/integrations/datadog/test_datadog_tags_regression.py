@@ -1,5 +1,6 @@
 import datetime
 import os
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -98,29 +99,37 @@ class TestDatadogTagsRegression:
     @pytest.mark.parametrize(
         ("dd_tags", "expected_dd_tags"),
         [
-            (" team:platform , cost_center:engineering ,, ", ["team:platform", "cost_center:engineering"]),
+            (" team:platform , cost_center:engineering ,, ", ("team:platform", "cost_center:engineering")),
             (
                 "team:platform  cost_center:engineering\tregion:eu",
-                ["team:platform", "cost_center:engineering", "region:eu"],
+                ("team:platform", "cost_center:engineering", "region:eu"),
             ),
             (
                 "env:other,service:other,version:other,HOSTNAME:other,POD_NAME:other,cost_center:engineering",
-                ["cost_center:engineering"],
+                ("cost_center:engineering",),
             ),
-            ("", []),
+            ("", ()),
         ],
     )
-    def test_dd_tags_follow_litellm_tags_without_repeating_their_keys(self, mock_env_vars, dd_tags, expected_dd_tags):
+    def test_dd_tags_follow_litellm_tags_without_repeating_their_keys(
+        self, mock_env_vars: None, dd_tags: str, expected_dd_tags: tuple[str, ...]
+    ) -> None:
         with patch.dict(os.environ, {"DD_TAGS": dd_tags}):
-            tags = get_datadog_tags()
+            tags: Final = get_datadog_tags()
 
-        base_tags = ["env:test-env", "service:test-service", "version:1.0.0", "HOSTNAME:test-host", "POD_NAME:test-pod"]
-        assert tags == base_tags + expected_dd_tags
+        base_tags: Final = (
+            "env:test-env",
+            "service:test-service",
+            "version:1.0.0",
+            "HOSTNAME:test-host",
+            "POD_NAME:test-pod",
+        )
+        assert tags == [*base_tags, *expected_dd_tags]
 
-    def test_request_team_replaces_the_dd_tags_team(self, mock_env_vars):
-        payload = StandardLoggingPayload(metadata=StandardLoggingMetadata(user_api_key_team_alias="payments"))
+    def test_request_team_replaces_the_dd_tags_team(self, mock_env_vars: None) -> None:
+        payload: Final = StandardLoggingPayload(metadata=StandardLoggingMetadata(user_api_key_team_alias="payments"))
         with patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}):
-            tags = get_datadog_tags(payload)
+            tags: Final = get_datadog_tags(payload)
 
         assert tags[-2:] == ["team:payments", "cost_center:engineering"]
 

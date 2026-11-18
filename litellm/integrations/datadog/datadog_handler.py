@@ -85,14 +85,16 @@ def get_datadog_tags(
         if team_tag:
             tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
 
-    tags.extend(extra_tags)
-    if include_dd_tags:
-        dd_tags: Final = os.getenv("DD_TAGS", "")
-        tagged_keys: Final = frozenset(tag.partition(":")[0] for tag in tags)
-        tags.extend(
+    litellm_tags: Final = [*tags, *extra_tags]
+    if not include_dd_tags:
+        return litellm_tags
+    dd_tags: Final = os.getenv("DD_TAGS", "")
+    tagged_keys: Final = frozenset(tag.partition(":")[0] for tag in litellm_tags)
+    return [
+        *litellm_tags,
+        *(
             tag
             for raw_tag in (dd_tags.split(",") if "," in dd_tags else dd_tags.split())
             if (tag := raw_tag.strip()) and tag.partition(":")[0] not in tagged_keys
-        )
-
-    return tags
+        ),
+    ]
