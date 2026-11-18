@@ -1,10 +1,10 @@
 import json
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Annotated, Final, TypeVar
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -38,6 +38,7 @@ from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
     Delta,
@@ -83,6 +84,62 @@ NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
     "metadata",
 )
 NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
+
+
+class _MistralInvokeChatMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: str | None = None
+
+
+class _MistralInvokeChatChoice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    message: _MistralInvokeChatMessage
+    finish_reason: str | None = None
+    stop_reason: str | None = None
+
+
+class _MistralInvokeChatUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class _MistralInvokeChatEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    choices: tuple[_MistralInvokeChatChoice, ...]
+    usage: _MistralInvokeChatUsage | None = None
+
+
+_MISTRAL_INVOKE_CHAT_EVENT_OR_OTHER: Final[TypeAdapter[_MistralInvokeChatEvent | Mapping[str, object]]] = TypeAdapter(
+    Annotated[_MistralInvokeChatEvent | Mapping[str, object], Field(union_mode="left_to_right")]
+)
+_NO_MISTRAL_INVOKE_CHAT_CHOICE: Final = _MistralInvokeChatChoice(message=_MistralInvokeChatMessage())
+
+
+def _mistral_invoke_chat_chunk(event: _MistralInvokeChatEvent) -> GChunk:
+    choice: Final = event.choices[0] if event.choices else _NO_MISTRAL_INVOKE_CHAT_CHOICE
+    finish_reason: Final = choice.finish_reason or choice.stop_reason
+    return GChunk(
+        text=choice.message.content or "",
+        is_finished=finish_reason is not None,
+        finish_reason=finish_reason or "",
+        usage=(
+            ChatCompletionUsageBlock(
+                prompt_tokens=event.usage.prompt_tokens,
+                completion_tokens=event.usage.completion_tokens,
+                total_tokens=event.usage.total_tokens,
+            )
+            if event.usage is not None
+            else None
+        ),
+        index=0,
+        tool_use=None,
+    )
 
 
 class AmazonCohereChatConfig:
@@ -824,6 +881,11 @@ class AWSEventStreamDecoder:
             if stop_reason is not None:
                 is_finished = True
                 finish_reason = stop_reason
+        elif "choices" in chunk_data and isinstance(
+            mistral_chat_event := _MISTRAL_INVOKE_CHAT_EVENT_OR_OTHER.validate_python(chunk_data),
+            _MistralInvokeChatEvent,
+        ):
+            return _mistral_invoke_chat_chunk(mistral_chat_event)
         ######## bedrock.cohere mappings ###############
         # meta mapping
         elif "generation" in chunk_data:
