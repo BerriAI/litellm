@@ -3148,6 +3148,11 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             id="mapping-content-key",
         ),
         pytest.param(
+            {1: "x", "content": "hello"},
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected [1, 'content']",
+            id="mixed-type-keys",
+        ),
+        pytest.param(
             {"choices": [{"delta": {"content": "hello"}}], "usage": None},
             "missing ['finish_reason', 'is_finished', 'text'], unexpected ['choices']",
             id="openai-shaped",
@@ -3189,6 +3194,10 @@ def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
         pytest.param(
             [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, "id": "chunk-1"}],
             id="complete",
+        ),
+        pytest.param(
+            [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, 1: "x", "id": "chunk-1"}],
+            id="complete-with-mixed-type-keys",
         ),
         pytest.param(
             [
