@@ -78,13 +78,19 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
         "truncation": "disabled",
         "usage": {
             "input_tokens": 19,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+            },
             "output_tokens": 6,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 25,
         },
         "user": None,
         "metadata": {},
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
     expected_litellm_response={
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDo1ZDQ1NmY1ODlhMDIwNzI4N2M0YzU2NmRhN2NkN2ViNjJlMzZmNGUwMTYxOTE4M2VhMzhiMzdlZGZhNDdlM2EwO3Jlc3BvbnNlX2lkOnJlc3BfMDg3OTgwMGMxNDU1YmEzZDAwNmFjM2YwNDI3YzRjODdkMGE2MzJiMTMwYzhjNDY0ZWE=",

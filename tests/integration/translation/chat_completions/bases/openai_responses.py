@@ -84,13 +84,19 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
         "truncation": "disabled",
         "usage": {
             "input_tokens": 19,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+            },
             "output_tokens": 6,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 25,
         },
         "user": None,
         "metadata": {},
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
     expected_litellm_response={
         "id": "resp_0c11adb5b3fcca34006ac3f043a44087d0ba76b3b869764314",
@@ -113,7 +119,12 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 19,
             "total_tokens": 25,
             "completion_tokens_details": {"reasoning_tokens": 0},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "access_programs": {"cyber": "daybreak_blue"},
         "billing": {"payer": "developer"},
@@ -130,6 +141,8 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 

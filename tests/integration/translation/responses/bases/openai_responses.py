@@ -78,13 +78,19 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
         "truncation": "disabled",
         "usage": {
             "input_tokens": 19,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+            },
             "output_tokens": 6,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 25,
         },
         "user": None,
         "metadata": {},
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
     expected_litellm_response={
         "id": ANY,
@@ -126,6 +132,7 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
                 "text_tokens": None,
                 "video_tokens": None,
                 "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
             },
             "output_tokens": 6,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 0, "text_tokens": None},
@@ -157,6 +164,8 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
             "web_search": {"num_requests": 0},
         },
         "top_logprobs": 0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
