@@ -189,6 +189,7 @@ pub(crate) fn receipt<S: RowSource>(
         breakdown: Breakdown::default(),
         parts: Vec::new(),
         cache_savings: None,
+        reported: None,
         basis: header.basis.clone(),
         total: 0.0,
     }

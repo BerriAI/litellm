@@ -5,8 +5,8 @@ use crate::query::PriceQuery;
 use crate::receipt::PriceOutcome;
 use crate::row::RowSource;
 use crate::{
-    a2a, batch, guardrail, image, mcp, ocr, rerank, search, session, speech, tokens, tools,
-    transcription, vector_store, video,
+    a2a, batch, guardrail, image, mcp, ocr, reported, rerank, search, session, speech, tokens,
+    tools, transcription, vector_store, video,
 };
 
 pub fn price(source: &impl RowSource, query: &PriceQuery) -> PriceOutcome {
@@ -26,6 +26,7 @@ pub fn price(source: &impl RowSource, query: &PriceQuery) -> PriceOutcome {
         PriceQuery::BatchLine(line) => batch::price(source, line),
         PriceQuery::Session(session) => session::price(source, session),
         PriceQuery::Tools(tools) => tools::price(source, tools),
+        PriceQuery::Reported(reported) => reported::price(source, reported),
     }
 }
 

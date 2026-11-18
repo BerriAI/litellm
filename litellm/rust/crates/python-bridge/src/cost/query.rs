@@ -19,6 +19,7 @@ use litellm_cost::query::{
 };
 use litellm_cost::rates::{Pricing, RatesQuery};
 use litellm_cost::receipt::{PriceOutcome, Receipt};
+use litellm_cost::reported::{PricedSides, ReportedQuery};
 use litellm_cost::tools::{ToolUse, Tools, ToolsQuery};
 use litellm_host_python::{from_py_argument, json_from_py};
 use litellm_inference_messages::PricedCall;
@@ -494,6 +495,51 @@ pub(crate) fn price_tools(
         PriceOutcome::Priced(receipt) => Some(receipt.tools.get()),
         PriceOutcome::Unpriced(_) => None,
     })
+}
+
+/// A reported cost and what the catalog would charge the same usage on each side
+#[derive(Deserialize)]
+struct ReportedDocument {
+    reported: ReportedCost,
+    #[serde(default)]
+    split_by: Option<PricedSides>,
+    #[serde(default)]
+    adjust: Option<AdjustFacts>,
+}
+
+/// Bills a cost a provider or the gateway in front of it reported, by the policy of the source that stated it
+pub(crate) fn price_reported(
+    py: Python<'_>,
+    snapshot: &CostSnapshot,
+    document: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let document: ReportedDocument = from_py_argument(document)?;
+    let query = PriceQuery::Reported(Box::new(ReportedQuery {
+        header: Header {
+            candidates: Vec::new(),
+            source: PriceSource::Rows { rows: Vec::new() },
+            basis: Basis {
+                service_tier: Default::default(),
+                data_residency: None,
+                vertex_location: None,
+                at: jiff::Timestamp::now(),
+            },
+            adjustments: document.adjust.map_or(AdjustmentPolicy::None, |key| {
+                AdjustmentPolicy::Apply {
+                    provider: key.provider,
+                    model: key.model,
+                    region: key.region,
+                }
+            }),
+            reported: None,
+        },
+        reported: document.reported,
+        split_by: document.split_by,
+    }));
+    super::kinds::outcome(
+        py,
+        litellm_cost::price(&snapshot.pricing_rows([], []), &query),
+    )
 }
 
 /// The candidates in main's order, and each one the catalog resolved beside its row
