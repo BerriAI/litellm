@@ -2,14 +2,16 @@
 //! the per-image calculators of AI/ML, CometAPI, Recraft and RunwayML, and the DashScope one, which adds billable
 //! input images. Which calculator a call takes is the route's choice, as `route_image_generation_cost_calculator`
 //! makes it, so the query names it. The header's `Rows` are the deployment's own prices, read ahead of the catalog
-//! row. Calls main bills from token usage, and the Bedrock, fal, xAI, Azure AI, Gemini and Vertex AI calculators, are
-//! not ported, and their routes keep main's calculators. Discount and margin never apply
+//! row. The per-image fallback of the Vertex AI calculator is the per-image calculator, and a call served at a Vertex
+//! AI regional endpoint bills the priced row's regional endpoint uplift on its images. Calls main bills from token
+//! usage, and the Bedrock, fal, xAI, Azure AI and Gemini calculators, are not ported, and their routes keep main's
+//! calculators. Discount and margin never apply
 
 use crate::price::{Channel, InputUnit, Meter, OutputUnit};
 use crate::priced::{Line, Quantity, Side};
 use crate::query::Header;
 use crate::receipt::{PriceOutcome, Receipt, Unpriced};
-use crate::row::{RowRef, RowSource};
+use crate::row::{LoweredRow, RowRef, RowSource};
 use crate::units::{self, Billed};
 
 const INPUT_IMAGE: Meter = Meter::Input(InputUnit::Image);
@@ -71,13 +73,16 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &ImageQuery) -> PriceOutcom
             vec![(OUTPUT_IMAGE, images, Side::Completion)]
         }
     };
+    let uplift = |row: &S::Row| {
+        row.adjustments()
+            .regional_endpoint(query.header.basis.vertex_location.as_deref())
+    };
     let first_priced = layers.iter().find_map(|(at, row)| {
         charges.iter().find_map(|(meter, quantity, side)| {
             units::listed(*row, meter, Channel::Online).map(|rate| {
-                (
-                    at.clone(),
-                    units::line(meter.clone(), *quantity, rate, *side),
-                )
+                let line = units::line(meter.clone(), *quantity, rate, *side);
+                let amount = uplift(row).map_or(line.amount, |uplift| line.amount * uplift);
+                (at.clone(), Line { amount, ..line })
             })
         })
     });
@@ -170,8 +175,9 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::price::ServiceTier;
-    use crate::query::PriceSource;
+    use crate::money::Multiplier;
+    use crate::price::{Adjustments, ServiceTier, Uplift};
+    use crate::query::{Basis, PriceSource};
     use crate::testing::{
         BASE, TestRow, TestSource, header, priced as receipt_of, prices, row_ref,
     };
@@ -249,6 +255,38 @@ mod tests {
             total(&source, &query(ImageCalculator::PerImage, deployment)),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::regional(Some("us-east5"), 0.04 * 2.0 * 1.25)]
+    #[case::multi_region(Some("eu"), 0.04 * 2.0 * 1.25)]
+    #[case::global(Some("global"), 0.04 * 2.0)]
+    #[case::global_any_case(Some("GLOBAL"), 0.04 * 2.0)]
+    #[case::no_location(None, 0.04 * 2.0)]
+    fn a_regional_endpoint_bills_the_row_uplift_on_its_images(
+        #[case] location: Option<&str>,
+        #[case] expected: f64,
+    ) {
+        let uplifted = TestRow {
+            adjustments: Adjustments::new([(
+                Uplift::NonGlobalEndpoint,
+                Multiplier::new(1.25).unwrap(),
+            )]),
+            ..row(&[(OUTPUT_IMAGE, 0.04)])
+        };
+        let source = TestSource::with_row("dall-e-3", uplifted);
+        let base = query(ImageCalculator::PerImage, false);
+        let located = ImageQuery {
+            header: Header {
+                basis: Basis {
+                    vertex_location: location.map(Into::into),
+                    ..base.header.basis.clone()
+                },
+                ..base.header.clone()
+            },
+            ..base
+        };
+        assert_eq!(total(&source, &located), expected);
     }
 
     #[rstest]

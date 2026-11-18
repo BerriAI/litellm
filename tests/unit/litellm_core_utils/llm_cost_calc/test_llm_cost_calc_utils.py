@@ -13,7 +13,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
     generic_cost_per_token,
     get_billed_token_rates,
-    get_regional_uplift_multiplier,
     get_token_type_cost_breakdown,
 )
 from litellm.llms.gemini.image_generation.cost_calculator import (
@@ -2788,72 +2787,6 @@ def test_vertex_global_or_absent_location_no_uplift(vertex_location, _local_mode
     )
 
     assert base == located
-
-
-def test_vertex_uplift_invalid_multiplier_defaults_to_one():
-    """A malformed multiplier in the cost map degrades to base pricing, never raises."""
-    from litellm.litellm_core_utils.llm_cost_calc.utils import (
-        get_vertex_regional_endpoint_uplift,
-    )
-
-    assert (
-        get_vertex_regional_endpoint_uplift({"regional_endpoint_uplift_multiplier": "not-a-number"}, "us-east5") == 1.0
-    )
-
-
-@pytest.mark.parametrize(
-    "model_info, data_residency",
-    [
-        ({"fedramp_uplift_multiplier": "not-a-number"}, "fedramp"),
-        ({}, "fedramp"),
-        ({"fedramp_uplift_multiplier": 1.1}, "us"),
-        ({"fedramp_uplift_multiplier": 1.1}, None),
-    ],
-)
-def test_fedramp_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
-    """A malformed or missing FedRAMP multiplier, or a non-FedRAMP host, bills base pricing and never raises."""
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_fedramp_uplift_multiplier
-
-    assert get_fedramp_uplift_multiplier(model_info, data_residency) == 1.0
-
-
-@pytest.mark.parametrize(
-    "model_info, data_residency",
-    [({f"regional_processing_uplift_multiplier_{r.value}": "1.25"}, r.value.upper()) for r in DataResidency],
-)
-def test_regional_uplift_reads_the_multiplier_named_by_each_residency(model_info: ModelInfo, data_residency: str):
-    assert get_regional_uplift_multiplier(model_info, data_residency) == 1.25
-
-
-@pytest.mark.parametrize(
-    "model_info",
-    [{"regional_processing_uplift_multiplier_us": value} for value in (1.25, "1.25", b"1.25", bytearray(b"1.25"))],
-)
-def test_regional_uplift_accepts_every_value_float_converts(model_info: ModelInfo):
-    assert get_regional_uplift_multiplier(model_info, "us") == 1.25
-
-
-class _IndexOnly:
-    def __index__(self) -> int:
-        return 2
-
-
-@pytest.mark.parametrize("model_info", [{"regional_processing_uplift_multiplier_us": _IndexOnly()}])
-def test_regional_uplift_accepts_an_index_only_value(model_info: ModelInfo):
-    assert get_regional_uplift_multiplier(model_info, "us") == 2.0
-
-
-@pytest.mark.parametrize(
-    "model_info, data_residency",
-    [
-        ({"regional_processing_uplift_multiplier_eu": "not-a-number"}, "eu"),
-        ({"regional_processing_uplift_multiplier_eu": [1.25]}, "eu"),
-        ({"regional_processing_uplift_multiplier_apac": 1.25}, "apac"),
-        ({"regional_processing_uplift_multiplier_eu": 1.25}, None),
-    ],
-)
-def test_regional_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
-    assert get_regional_uplift_multiplier(model_info, data_residency) == 1.0
 
 
 def test_service_tier_suffixes_constant_in_sync_with_enum():

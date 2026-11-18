@@ -52,9 +52,9 @@ mod _native {
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
-    use crate::cost::billable_service_tier;
-    #[pymodule_export]
     use crate::cost::{NativeRateCard, NativeUnpriced};
+    #[pymodule_export]
+    use crate::cost::{billable_service_tier, regional_endpoint_uplift};
     #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
@@ -279,6 +279,7 @@ mod tests {
                 "unsupported_tls_settings",
                 "NativeBudgets",
                 "billable_service_tier",
+                "regional_endpoint_uplift",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",

@@ -972,3 +972,104 @@ mod tokens_parity {
         assert_eq!(sides(case), expected);
     }
 }
+
+#[cfg(test)]
+mod units_parity {
+    //! Parity with main's per-image fallback of the Vertex AI image calculator, regional endpoint uplift included, over
+    //! rows Model Catalog lowered. `units_parity.json` was captured once from main's Python: each case holds the row
+    //! fields main read, the call's units and main's answer
+
+    use litellm_cost::query::{
+        AdjustmentPolicy, Basis, Candidate, Header, ImageCalculator, ImageQuery, PriceQuery,
+        PriceSource,
+    };
+    use litellm_cost::receipt::PriceOutcome;
+    use rstest::rstest;
+    use serde_json::Value;
+
+    use super::*;
+    use crate::snapshot::SnapshotInputs;
+    use crate::store::Store;
+    use crate::test_support::{GENERATION, TestRows, bundled_rows, bundled_rules, names};
+
+    const FIXTURE: &str = include_str!("units_parity.json");
+
+    fn case(kind: &str, name: &str) -> Value {
+        let fixture: Value = serde_json::from_str(FIXTURE).expect("the fixture is JSON");
+        fixture[kind]
+            .as_array()
+            .expect("each kind lists cases")
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap_or_else(|| panic!("no fixture case {name}"))
+            .clone()
+    }
+
+    fn priced(case: &Value, row: Value, query: impl FnOnce(Header) -> PriceQuery) -> PriceOutcome {
+        let snapshot: Snapshot<Store<TestRows>> = Snapshot::new(
+            GENERATION,
+            CostConfig::default(),
+            SnapshotInputs {
+                table: Store::new(bundled_rows()),
+                rules: Arc::new(bundled_rules()),
+                names: Arc::new(names(&[])),
+            },
+        );
+        let provider = case["provider"].as_str().expect("a provider");
+        let Value::Object(fields) = row else {
+            panic!("a row is an object")
+        };
+        let (rows, at) = snapshot
+            .pricing_rows([], [])
+            .with_per_call("catalog", fields, provider);
+        let header = Header {
+            candidates: vec![Candidate {
+                model: case["model"].as_str().expect("a model").into(),
+                provider: provider.parse().expect("every provider parses"),
+            }],
+            source: PriceSource::Rows { rows: vec![at] },
+            basis: Basis {
+                service_tier: Default::default(),
+                data_residency: None,
+                vertex_location: case["vertex_location"].as_str().map(Into::into),
+                at: jiff::Timestamp::UNIX_EPOCH,
+            },
+            adjustments: AdjustmentPolicy::None,
+            reported: None,
+        };
+        litellm_cost::price(&rows, &query(header))
+    }
+
+    /// Main billed a row with no per-image rate 0.0, which the adapter maps an unpriced call to
+    fn total(outcome: PriceOutcome) -> f64 {
+        match outcome {
+            PriceOutcome::Priced(receipt) => receipt.total,
+            PriceOutcome::Unpriced(_) => 0.0,
+        }
+    }
+
+    #[rstest]
+    #[case::vertex_catalog_regional("vertex_catalog_regional")]
+    #[case::vertex_catalog_global("vertex_catalog_global")]
+    #[case::vertex_catalog_global_upper("vertex_catalog_global_upper")]
+    #[case::vertex_catalog_no_location("vertex_catalog_no_location")]
+    #[case::vertex_deployment_uplift("vertex_deployment_uplift")]
+    #[case::vertex_deployment_text_uplift("vertex_deployment_text_uplift")]
+    #[case::vertex_deployment_bad_uplift("vertex_deployment_bad_uplift")]
+    #[case::vertex_deployment_no_rate("vertex_deployment_no_rate")]
+    #[case::vertex_catalog_pro_image("vertex_catalog_pro_image")]
+    fn a_per_image_fallback_costs_what_main_charged(#[case] name: &str) {
+        let case = case("images", name);
+        let images = case["images"].as_u64().expect("an image count");
+        let outcome = priced(&case, case["row"].clone(), |header| {
+            PriceQuery::Image(Box::new(ImageQuery {
+                header,
+                calculator: ImageCalculator::PerImage,
+                images,
+                pixels: 0,
+                input_images: 0,
+            }))
+        });
+        assert_eq!(Some(total(outcome)), case["expected"].as_f64());
+    }
+}
