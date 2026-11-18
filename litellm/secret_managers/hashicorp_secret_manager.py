@@ -308,24 +308,20 @@ class HashicorpSecretManager(BaseSecretManager):
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
         raise_if_unsafe_secret_name(secret_name)
-        resolved_namespace = self._sanitize_path_component(
+        resolved_namespace: Final = self._sanitize_path_component(
             namespace if namespace is not None else self.vault_secret_namespace
         )
-        resolved_mount = self._sanitize_path_component(mount_name if mount_name is not None else self.vault_mount_name)
-        if resolved_mount is None:
-            resolved_mount = "secret"
+        sanitized_mount: Final = self._sanitize_path_component(
+            mount_name if mount_name is not None else self.vault_mount_name
+        )
+        resolved_mount: Final = sanitized_mount if sanitized_mount is not None else "secret"
         resolved_path_prefix: Final = self._sanitize_path_component(
             path_prefix if path_prefix is not None else self.vault_path_prefix
         )
 
-        _url = f"{self.vault_addr}/v1/"
-        if resolved_namespace:
-            _url += f"{resolved_namespace}/"
-        _url += f"{resolved_mount}/data/"
-        if resolved_path_prefix:
-            _url += f"{resolved_path_prefix}/"
-        _url += secret_name
-        return _url
+        namespace_part: Final = f"{resolved_namespace}/" if resolved_namespace else ""
+        path_prefix_part: Final = f"{resolved_path_prefix}/" if resolved_path_prefix else ""
+        return f"{self.vault_addr}/v1/{namespace_part}{resolved_mount}/data/{path_prefix_part}{secret_name}"
 
     def _sanitize_plain_value(self, value: object) -> str | None:
         if value is None:
@@ -336,11 +332,14 @@ class HashicorpSecretManager(BaseSecretManager):
         return value_str
 
     def _sanitize_path_component(self, value: object) -> str | None:
-        sanitized_value = self._sanitize_plain_value(value)
+        sanitized_value: Final = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
-        sanitized_value = sanitized_value.strip("/")
-        return sanitized_value or None
+        stripped_value: Final = sanitized_value.strip("/")
+        if not stripped_value:
+            return None
+        raise_if_unsafe_secret_name(stripped_value)
+        return stripped_value
 
     def _extract_secret_manager_settings(self, optional_params: Mapping[str, object] | None) -> dict[str, object]:
         if not isinstance(optional_params, dict):
@@ -550,11 +549,13 @@ class HashicorpSecretManager(BaseSecretManager):
                         "message": f"Current secret {current_secret_name} not found",
                     }
                 verbose_logger.exception(
-                    "Error checking current secret existence: %s", e.response.text if hasattr(e, "response") else str(e)
+                    "Error checking current secret existence: status %s",
+                    e.response.status_code if hasattr(e, "response") else "unknown",
                 )
+                check_status_code: Final = e.response.status_code if hasattr(e, "response") else "unknown"
                 return {
                     "status": "error",
-                    "message": f"HTTP error occurred while checking current secret: {e.response.text if hasattr(e, 'response') else str(e)}",
+                    "message": f"HTTP error {check_status_code} occurred while checking current secret",
                 }
             except Exception as e:
                 verbose_logger.exception("Error checking current secret existence: %s", e)
@@ -591,13 +592,12 @@ class HashicorpSecretManager(BaseSecretManager):
                 new_secret_value_from_vault: Final = json_resp.get("data", {}).get("data", {}).get(data_key, None)
                 if new_secret_value_from_vault != new_secret_value:
                     verbose_logger.exception(
-                        "New secret value mismatch. Expected: %s, Got: %s",
-                        new_secret_value,
-                        new_secret_value_from_vault,
+                        "New secret value mismatch for secret %s",
+                        new_secret_name,
                     )
                     return {
                         "status": "error",
-                        "message": f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}",
+                        "message": f"New secret value mismatch for secret {new_secret_name}",
                     }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
@@ -607,11 +607,13 @@ class HashicorpSecretManager(BaseSecretManager):
                         "message": f"Failed to verify new secret {new_secret_name}",
                     }
                 verbose_logger.exception(
-                    "Error verifying new secret: %s", e.response.text if hasattr(e, "response") else str(e)
+                    "Error verifying new secret: status %s",
+                    e.response.status_code if hasattr(e, "response") else "unknown",
                 )
+                verify_status_code: Final = e.response.status_code if hasattr(e, "response") else "unknown"
                 return {
                     "status": "error",
-                    "message": f"HTTP error occurred while verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}",
+                    "message": f"HTTP error {verify_status_code} occurred while verifying new secret",
                 }
             except Exception as e:
                 verbose_logger.exception("Error verifying new secret: %s", e)

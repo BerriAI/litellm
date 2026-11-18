@@ -6432,7 +6432,7 @@ class PrismaClient:
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
-                    WHERE schemaname = '{pg_schema}' AND viewname IN (
+                    WHERE schemaname = $1 AND viewname IN (
                         {expected_views_str}
                     )
                 )
@@ -6441,6 +6441,7 @@ class PrismaClient:
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
                 """,
+                pg_schema,
             )
             expected_total_views: Final = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:

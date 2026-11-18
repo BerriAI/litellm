@@ -18099,3 +18099,49 @@ async def test_a_provider_set_after_setup_reaches_callbacks_in_both_fields(
 
     assert await provider_logs.next_providers() == ("cohere", "cohere")
     assert request_params == {"metadata": {}}
+
+
+def test_start_sentry_missing_dependency_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.litellm_logging import start_sentry
+
+    start_sentry.cache_clear()
+    real_import: Final = __import__
+
+    def mock_import(name: str, *args: object, **kwargs: object):
+        if name == "sentry_sdk":
+            raise ImportError("No module named 'sentry_sdk'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+    with pytest.raises(ImportError, match="Package 'sentry_sdk' is missing"):
+        start_sentry("https://example.com/123")
+
+
+def test_set_callbacks_slack_missing_dependency_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.litellm_logging import set_callbacks
+
+    real_import: Final = __import__
+
+    def mock_import(name: str, *args: object, **kwargs: object):
+        if name == "slack_bolt":
+            raise ImportError("No module named 'slack_bolt'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+    with pytest.raises(ImportError, match="Package 'slack_bolt' is missing"):
+        set_callbacks(["slack"])
+
+
+def test_supabase_missing_dependency_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.supabase import Supabase
+
+    real_import: Final = __import__
+
+    def mock_import(name: str, *args: object, **kwargs: object):
+        if name == "supabase":
+            raise ImportError("No module named 'supabase'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+    with pytest.raises(ImportError, match="Package 'supabase' is missing"):
+        Supabase()

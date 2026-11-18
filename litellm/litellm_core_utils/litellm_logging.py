@@ -10,7 +10,6 @@ import json
 import math
 import os
 import re
-import subprocess
 import sys
 import time
 import traceback
@@ -6743,10 +6742,10 @@ _get_masked_values = get_masked_values
 def start_sentry(dsn: str) -> None:
     try:
         import sentry_sdk
-    except ImportError:
-        print_verbose("Package 'sentry_sdk' is missing. Installing it...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
-        import sentry_sdk
+    except ImportError as e:
+        raise ImportError(
+            "Package 'sentry_sdk' is missing. Please install it at build time using 'pip install sentry-sdk'."
+        ) from e
     from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
 
     sentry_sdk.init(**build_sentry_init_options({**os.environ, "SENTRY_DSN": dsn}))
@@ -6800,10 +6799,10 @@ def set_callbacks(
             elif callback == "slack":
                 try:
                     from slack_bolt import App
-                except ImportError:
-                    print_verbose("Package 'slack_bolt' is missing. Installing it...")
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "slack_bolt"])
-                    from slack_bolt import App
+                except ImportError as e:
+                    raise ImportError(
+                        "Package 'slack_bolt' is missing. Please install it at build time using 'pip install slack-bolt'."
+                    ) from e
                 slack_app = App(
                     token=os.environ.get("SLACK_API_TOKEN"),
                     signing_secret=os.environ.get("SLACK_API_SECRET"),
