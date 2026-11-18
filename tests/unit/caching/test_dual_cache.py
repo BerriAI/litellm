@@ -123,6 +123,18 @@ def test_dual_cache_batch_get_cache_throttles_repeat_redis_reads():
     mock_redis.batch_get_cache.assert_called_once()
 
 
+def test_dual_cache_batch_get_cache_reads_every_memory_miss_from_redis_when_unthrottled():
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.batch_get_cache.side_effect = [{"late_key": None}, {"late_key": "written_since"}]
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10)
+
+    first: Final = dual_cache.batch_get_cache(keys=["late_key"], throttle_redis=False)
+    second: Final = dual_cache.batch_get_cache(keys=["late_key"], throttle_redis=False)
+
+    assert first == [None]
+    assert second == ["written_since"]
+
+
 def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
     mock_redis = MagicMock(spec=RedisCache)
     mock_redis.batch_get_cache.side_effect = RuntimeError("redis unavailable")

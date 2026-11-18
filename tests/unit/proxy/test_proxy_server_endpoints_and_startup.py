@@ -13443,6 +13443,7 @@ def _patched_coordination_redis_module_state(
         ),
         patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
         patch.object(proxy_server_module, "cli_sso_session_cache", DualCache()),
+        patch.object(proxy_server_module, "thought_signature_cache", DualCache()),
         patch.object(proxy_server_module, "llm_router", None),
         patch.object(proxy_server_module, "litellm_config_cache", config_cache),
         patch.object(proxy_server_module, "RedisCache", redis_cache_class),

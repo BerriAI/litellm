@@ -202,6 +202,7 @@ class DualCache(BaseCache):
         keys: list,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
+        throttle_redis: bool = True,
         **kwargs,
     ):
         try:
@@ -213,7 +214,9 @@ class DualCache(BaseCache):
             if None not in result or self.redis_cache is None or local_only:
                 return result
 
-            sublist_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
+            sublist_keys, previous_access_times = self._reserve_redis_batch_keys(
+                time.time(), keys, result, throttle_redis
+            )
             if len(sublist_keys) == 0:
                 return result
 
@@ -280,11 +283,14 @@ class DualCache(BaseCache):
         current_time: float,
         keys: list[str],
         result: Sequence[object],
+        throttle_redis: bool = True,
     ) -> tuple[list[str], dict[str, float | None]]:
         """
         Atomically choose keys to fetch from Redis and reserve their access time.
         This prevents check-then-act races under concurrent async callers.
         """
+        if not throttle_redis:
+            return [key for key, value in zip(keys, result) if value is None], {}
         sublist_keys: Final[list[str]] = []
         previous_access_times: Final[dict[str, float | None]] = {}
 

@@ -23,6 +23,7 @@ import respx
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     convert_to_gemini_tool_call_invoke,
@@ -31,6 +32,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     get_thought_signature_from_tool,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.vertex_ai.gemini.thought_signature_store import (
+    restore_thought_signatures,
+    thought_signature_cache,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -354,8 +359,20 @@ WEATHER_TOOL: Final = {"type": "function", "function": WEATHER_FUNCTION}
 USER_TURN: Final = {"role": "user", "content": "What is the weather in Paris?"}
 
 
-def _function_call_candidate(native_id: str | None) -> dict[str, object]:
-    function_call: Final = {"name": "get_weather", "args": {"city": "Paris"}}
+PARIS: Final = MappingProxyType({"city": "Paris"})
+SHORT_IDS: Final = MappingProxyType({"thought_signature_in_tool_call_id": False})
+
+
+@pytest.fixture(autouse=True)
+def empty_thought_signature_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(thought_signature_cache, "redis_cache", None)
+    thought_signature_cache.in_memory_cache.flush_cache()
+    yield
+    thought_signature_cache.in_memory_cache.flush_cache()
+
+
+def _function_call_candidate(native_id: str | None, args: Mapping[str, object] = PARIS) -> dict[str, object]:
+    function_call: Final = {"name": "get_weather", "args": dict(args)}
     return {
         "content": {
             "role": "model",
@@ -371,30 +388,30 @@ def _function_call_candidate(native_id: str | None) -> dict[str, object]:
     }
 
 
-def _gemini_body(native_id: str | None) -> dict[str, object]:
+def _gemini_body(native_id: str | None, args: Mapping[str, object] = PARIS) -> dict[str, object]:
     return {
-        "candidates": [_function_call_candidate(native_id)],
+        "candidates": [_function_call_candidate(native_id, args)],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 7, "totalTokenCount": 12},
     }
 
 
-def _gemini_response(native_id: str | None, stream: bool) -> httpx.Response:
-    body: Final = _gemini_body(native_id)
+def _gemini_response(native_id: str | None, stream: bool, args: Mapping[str, object] = PARIS) -> httpx.Response:
+    body: Final = _gemini_body(native_id, args)
     if stream:
         return httpx.Response(200, text=f"data: {json.dumps(body)}\n\n", headers={"content-type": "text/event-stream"})
     return httpx.Response(200, json=body)
 
 
-def _gemini_answer() -> httpx.Response:
-    return httpx.Response(
-        200,
-        json={
-            "candidates": [
-                {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
-            ],
-            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
-        },
-    )
+def _gemini_answer(stream: bool = False) -> httpx.Response:
+    body: Final = {
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+    }
+    if stream:
+        return httpx.Response(200, text=f"data: {json.dumps(body)}\n\n", headers={"content-type": "text/event-stream"})
+    return httpx.Response(200, json=body)
 
 
 class _GeminiTurn(TypedDict):
@@ -492,10 +509,7 @@ def test_bounded_tool_call_id_round_trips_to_gemini(client_keeps_provider_fields
         )
         sent_body: Final = json.loads(route.calls.last.request.content)
 
-    replayed_signatures: Final = _replayed_signatures(sent_body)
-    assert len(replayed_signatures) == 1
-    assert (replayed_signatures[0] == LONG_SIGNATURE) is client_keeps_provider_fields
-    assert replayed_signatures[0]
+    assert _replayed_signatures(sent_body) == [LONG_SIGNATURE]
 
 
 def test_tool_result_with_bare_id_matches_call_whose_id_the_client_re_signed():
@@ -530,6 +544,252 @@ def test_tool_result_with_bare_id_matches_call_whose_id_the_client_re_signed():
     function_responses: Final = [part["function_response"] for part in parts if "function_response" in part]
     assert [part["thoughtSignature"] for part in function_calls] == [LONG_SIGNATURE]
     assert [response["name"] for response in function_responses] == ["get_weather"]
+
+
+NATIVE_ID: Final = "call_7404291677032892581"
+PLACEHOLDER_SIGNATURE: Final = get_dummy_thought_signature()
+CALLER_SIGNATURE: Final = "Q2FsbGVy" * 40
+ZURICH: Final = MappingProxyType({"city": "Zürich", "unit": "celsius"})
+
+
+async def _first_turn_tool_call(
+    use_async: bool,
+    stream: bool,
+    request_params: Mapping[str, object] = SHORT_IDS,
+    args: Mapping[str, object] = PARIS,
+) -> dict[str, object]:
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [USER_TURN],
+        "tools": [WEATHER_TOOL],
+        "stream": stream,
+        "api_key": "test-gemini-key",
+        **request_params,
+    }
+    with respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(NATIVE_ID, stream, args))
+        response: Final = await litellm.acompletion(**request) if use_async else litellm.completion(**request)
+        if not isinstance(response, CustomStreamWrapper):
+            return response.choices[0].message.tool_calls[0].model_dump()
+        chunks: Final = [chunk async for chunk in response] if use_async else list(response)
+    calls: Final = [call.model_dump() for chunk in chunks for call in chunk.choices[0].delta.tool_calls or ()]
+    assert len(calls) == 1
+    return calls[0]
+
+
+def _bare_replay(call: Mapping[str, object], **function: str) -> dict[str, object]:
+    returned_function: Final = call["function"]
+    assert isinstance(returned_function, dict)
+    return {
+        "id": call["id"],
+        "type": "function",
+        "function": {"name": returned_function["name"], "arguments": returned_function["arguments"], **function},
+    }
+
+
+async def _signatures_sent_for(
+    use_async: bool,
+    replayed_call: Mapping[str, object],
+    request_params: Mapping[str, object] = SHORT_IDS,
+    stream: bool = False,
+) -> list[object]:
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [
+            USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [replayed_call]},
+            {"role": "tool", "tool_call_id": replayed_call["id"], "content": '{"temp_c": 21}'},
+        ],
+        "tools": [WEATHER_TOOL],
+        "stream": stream,
+        "api_key": "test-gemini-key",
+        **request_params,
+    }
+    with respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer(stream))
+        answer: Final = await litellm.acompletion(**request) if use_async else litellm.completion(**request)
+        if isinstance(answer, CustomStreamWrapper):
+            chunks: Final = [chunk async for chunk in answer] if use_async else list(answer)
+            assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Sunny"
+        else:
+            assert answer.choices[0].message.content == "Sunny"
+        sent_body: Final = json.loads(route.calls.last.request.content)
+    return _replayed_signatures(sent_body)
+
+
+TURN_SHAPES: Final = pytest.mark.parametrize(
+    ("use_async", "stream"),
+    [(True, False), (True, True), (False, False), (False, True)],
+    ids=["async", "async-stream", "sync", "sync-stream"],
+)
+
+
+@TURN_SHAPES
+async def test_tool_call_replayed_without_its_signature_gets_the_one_gemini_returned(
+    use_async: bool, stream: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    returned_call: Final = await _first_turn_tool_call(use_async, stream)
+
+    assert returned_call["id"] == NATIVE_ID
+    assert await _signatures_sent_for(use_async, _bare_replay(returned_call), stream=stream) == [LONG_SIGNATURE]
+
+
+@TURN_SHAPES
+async def test_signature_remembered_on_one_worker_is_replayed_by_another_through_redis(
+    use_async: bool,
+    stream: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    router_redis: tuple[RedisCache, object],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(thought_signature_cache, "redis_cache", router_redis[0])
+    returned_call: Final = await _first_turn_tool_call(use_async, stream)
+    thought_signature_cache.in_memory_cache.flush_cache()
+
+    assert await _signatures_sent_for(use_async, _bare_replay(returned_call), stream=stream) == [LONG_SIGNATURE]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{"city": "Z\\u00fcrich", "unit": "celsius"}',
+        '{"unit":"celsius","city":"Zürich"}',
+        '{ "city" : "Zürich", "unit" : "celsius" }',
+    ],
+    ids=["ascii-escaped", "reordered-compact", "spaced"],
+)
+async def test_tool_call_whose_arguments_the_client_re_serialized_still_gets_its_signature(arguments: str):
+    returned_call: Final = await _first_turn_tool_call(False, False, args=ZURICH)
+
+    assert await _signatures_sent_for(False, _bare_replay(returned_call, arguments=arguments)) == [LONG_SIGNATURE]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("id", "call_7404291677032892582"), ("name", "get_time"), ("arguments", '{"city": "Lyon"}')],
+)
+async def test_tool_call_that_differs_from_the_returned_one_gets_no_stored_signature(field: str, value: str):
+    returned_call: Final = await _first_turn_tool_call(False, False)
+    replayed_call: Final = (
+        {**_bare_replay(returned_call), "id": value} if field == "id" else _bare_replay(returned_call, **{field: value})
+    )
+
+    assert await _signatures_sent_for(False, replayed_call) == [PLACEHOLDER_SIGNATURE]
+
+
+async def test_parallel_tool_calls_replay_only_the_signature_gemini_gave_the_first():
+    parts: Final = [
+        {
+            "functionCall": {"name": "get_weather", "args": dict(PARIS), "id": NATIVE_ID},
+            "thoughtSignature": LONG_SIGNATURE,
+        },
+        {"functionCall": {"name": "get_weather", "args": {"city": "Lyon"}, "id": "call_7404291677032892582"}},
+    ]
+    body: Final = {
+        "candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 7, "totalTokenCount": 12},
+    }
+    with respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=httpx.Response(200, json=body))
+        response: Final = litellm.completion(
+            model="gemini/gemini-3.5-flash", messages=[USER_TURN], tools=[WEATHER_TOOL], api_key="k", **SHORT_IDS
+        )
+    replayed_calls: Final = [_bare_replay(call.model_dump()) for call in response.choices[0].message.tool_calls]
+    with respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        litellm.completion(
+            model="gemini/gemini-3.5-flash",
+            messages=[
+                USER_TURN,
+                {"role": "assistant", "content": None, "tool_calls": replayed_calls},
+                *({"role": "tool", "tool_call_id": call["id"], "content": "{}"} for call in replayed_calls),
+            ],
+            tools=[WEATHER_TOOL],
+            api_key="k",
+            **SHORT_IDS,
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    model_parts: Final = chain.from_iterable(turn["parts"] for turn in sent_body["contents"] if turn["role"] == "model")
+    assert [part.get("thoughtSignature") for part in model_parts] == [LONG_SIGNATURE, None]
+
+
+async def test_replayed_call_with_arguments_that_are_not_json_still_answers_400():
+    returned_call: Final = await _first_turn_tool_call(False, False)
+
+    with pytest.raises(litellm.BadRequestError):
+        await _signatures_sent_for(False, _bare_replay(returned_call, arguments="{not json"))
+
+
+async def test_replayed_call_with_null_arguments_still_answers():
+    returned_call: Final = await _first_turn_tool_call(False, False)
+    null_arguments: Final = {**_bare_replay(returned_call), "function": {"name": "get_weather", "arguments": None}}
+
+    assert await _signatures_sent_for(False, null_arguments) == [PLACEHOLDER_SIGNATURE]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_signature_carried_in_the_id_by_default_is_not_stored(use_async: bool, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    returned_call: Final = await _first_turn_tool_call(use_async, False, request_params={})
+    returned_id: Final = returned_call["id"]
+    assert isinstance(returned_id, str)
+    bare_id_call: Final = {**_bare_replay(returned_call), "id": returned_id.split(THOUGHT_SIGNATURE_SEPARATOR)[0]}
+
+    assert await _signatures_sent_for(use_async, bare_id_call) == [PLACEHOLDER_SIGNATURE]
+
+
+def _signed_by_caller(call: dict[str, object], carrier: str) -> dict[str, object]:
+    fields: Final = {"provider_specific_fields": {"thought_signature": CALLER_SIGNATURE}}
+    function: Final = call["function"]
+    assert isinstance(function, dict)
+    if carrier == "tool_call":
+        return {**call, **fields}
+    if carrier == "function":
+        return {**call, "function": {**function, **fields}}
+    return {**call, "id": encode_tool_call_id_with_signature(NATIVE_ID, CALLER_SIGNATURE)}
+
+
+@pytest.mark.parametrize("carrier", ["tool_call", "function", "id"])
+async def test_signature_the_caller_replays_wins_over_the_stored_one(carrier: str):
+    returned_call: Final = await _first_turn_tool_call(False, False)
+
+    sent: Final = await _signatures_sent_for(False, _signed_by_caller(_bare_replay(returned_call), carrier))
+
+    assert sent == [CALLER_SIGNATURE]
+
+
+async def test_restoring_leaves_every_message_it_does_not_sign_the_same_object():
+    returned_call: Final = await _first_turn_tool_call(False, False)
+    unknown_call: Final = {**_bare_replay(returned_call), "id": "call_never_returned"}
+    nothing_stored: Final = [
+        {"role": "user", "content": USER_TURN["content"]},
+        {"role": "assistant", "content": None, "tool_calls": [unknown_call]},
+    ]
+    known_call: Final = _bare_replay(returned_call)
+    one_stored: Final = [*nothing_stored, {"role": "assistant", "content": None, "tool_calls": [known_call]}]
+
+    restored: Final = restore_thought_signatures(one_stored)
+
+    assert restore_thought_signatures(nothing_stored) is nothing_stored
+    assert restored[0] is one_stored[0] and restored[1] is one_stored[1]
+    assert get_thought_signature_from_tool(restored[2]["tool_calls"][0]) == LONG_SIGNATURE
+
+
+@TURN_SHAPES
+async def test_request_still_answers_when_the_store_redis_is_down(
+    use_async: bool, stream: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        thought_signature_cache, "redis_cache", RedisCache(host="127.0.0.1", port=1, socket_timeout=0.2)
+    )
+    returned_call: Final = await _first_turn_tool_call(use_async, stream)
+    thought_signature_cache.in_memory_cache.flush_cache()
+
+    assert returned_call["id"] == NATIVE_ID
+    assert await _signatures_sent_for(use_async, _bare_replay(returned_call), stream=stream) == [PLACEHOLDER_SIGNATURE]
 
 
 ANTHROPIC_WEATHER_TOOL: Final = {
@@ -576,7 +836,6 @@ async def test_messages_tool_use_keeps_thought_signature_kept_out_of_its_id(
 
 
 RESPONSES_WEATHER_TOOL: Final = {"type": "function", **WEATHER_FUNCTION}
-SHORT_IDS: Final = MappingProxyType({"thought_signature_in_tool_call_id": False})
 
 
 def _responses_function_call_items(stream: bool, request_params: Mapping[str, object] = SHORT_IDS) -> list[object]:
@@ -692,10 +951,7 @@ def test_responses_function_call_replays_its_thought_signature_to_gemini(client_
         )
         sent_body: Final = json.loads(route.calls.last.request.content)
 
-    replayed_signatures: Final = _replayed_signatures(sent_body)
-    assert len(replayed_signatures) == 1
-    assert (replayed_signatures[0] == LONG_SIGNATURE) is client_keeps_provider_fields
-    assert replayed_signatures[0]
+    assert _replayed_signatures(sent_body) == [LONG_SIGNATURE]
 
 
 @pytest.mark.parametrize("requested_value", ["false", "False", 0])

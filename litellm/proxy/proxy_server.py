@@ -361,6 +361,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MODEL_CREATED_AT_TIME,
+    GEMINI_THOUGHT_SIGNATURE_STORE_TTL_SECONDS,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
@@ -435,6 +436,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.llms.vertex_ai.gemini.thought_signature_store import thought_signature_cache
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
@@ -5664,8 +5666,8 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the CLI SSO login-session
-    cache, the SAML SSO sign-in cache, the cluster-wide config cache, and (only
-    when opted in) the virtual-key auth cache.
+    cache, the SAML SSO sign-in cache, the Gemini thought signature store, the
+    cluster-wide config cache, and (only when opted in) the virtual-key auth cache.
 
     The CLI SSO login-session cache and the SAML SSO sign-in cache are always
     backed by Redis when available so that the browser SSO flows behind
@@ -5684,6 +5686,10 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     saml_sso_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS,
+    )
+    thought_signature_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=GEMINI_THOUGHT_SIGNATURE_STORE_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(
