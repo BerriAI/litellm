@@ -26,6 +26,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
@@ -173,6 +174,9 @@ def _without_audio_input_parts_in_item(value: object) -> object:
 
 def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
+
+
+_SYSTEM_INPUT_PROVIDERS: Final = frozenset({"openai", "azure", "azure_ai", "bedrock_mantle"})
 
 
 def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
@@ -555,9 +559,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         *,
         drop_params: bool = False,
         keep_prompt_cache_breakpoints: bool = False,
+        preserve_system_instructions: bool = True,
     ) -> tuple[list[object], str | None]:
         converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(
-            messages, drop_params=drop_params
+            messages, drop_params=drop_params, preserve_system_instructions=preserve_system_instructions
         )
         return (
             converted_input_items
@@ -567,7 +572,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
     def _convert_chat_completion_messages_to_responses_input(
-        self, messages: list["AllMessageValues"], *, drop_params: bool = False
+        self,
+        messages: list["AllMessageValues"],
+        *,
+        drop_params: bool = False,
+        preserve_system_instructions: bool = True,
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
         instructions: str | None = None
@@ -593,8 +602,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tool_call_id = msg.get("tool_call_id")
 
             if role == "system":
-                # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
+                if preserve_system_instructions and isinstance(content, str) and index < leading_system_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
@@ -776,15 +784,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         request_data: dict[str, object],
         responses_api_request: "ResponsesAPIOptionalRequestParams",
-        instructions: str | None,
     ) -> None:
         """Add non-None values from responses_api_request into request_data."""
         for key, value in responses_api_request.items():
             if value is None:
                 continue
-            if key == "instructions" and instructions:
-                request_data["instructions"] = instructions
-            elif key == "user" and isinstance(value, str):
+            if key == "user" and isinstance(value, str):
                 # OpenAI API requires user param to be max 64 chars - truncate if longer
                 if len(value) <= 64:
                     request_data["user"] = value
@@ -803,6 +808,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
+        request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
+        preserve_system_instructions: Final = any(
+            params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
+            for params in (
+                request_params,
+                as_str_mapping(request_params.get("extra_body")) or {},
+                litellm_params,
+                as_str_mapping(litellm_params.get("extra_body")) or {},
+            )
+        )
+        provider: Final = litellm_params.get("custom_llm_provider")
         base_model: Final = litellm_params.get("base_model")
         supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
             isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model)
@@ -811,6 +827,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+            preserve_system_instructions=preserve_system_instructions or provider not in _SYSTEM_INPUT_PROVIDERS,
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
@@ -840,11 +857,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()
 
-        # Set instructions if we found a system message
-        if instructions:
-            responses_api_request["instructions"] = instructions
-
         self._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
+
+        caller_instructions: Final = responses_api_request.get("instructions")
+        if instructions:
+            responses_api_request["instructions"] = (
+                f"{instructions}\n{caller_instructions}" if caller_instructions else instructions
+            )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug("Chat provider: Stream parameter: %s", stream)
@@ -852,12 +871,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Ensure stream is properly set in the request
         if stream:
             responses_api_request["stream"] = True
-
-        # Handle session management if previous_response_id is provided
-        previous_response_id: Final = optional_params.get("previous_response_id")
-        if previous_response_id:
-            # Use the existing session handler for responses API
-            verbose_logger.debug("Chat provider: Warning ignoring previous response ID: %s", previous_response_id)
 
         # Convert back to responses API format for the actual request
 
@@ -879,7 +892,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         verbose_logger.debug("Chat provider: Final request model=%s, input_items=%s", api_model, len(input_items))
 
-        self._merge_responses_api_request_into_request_data(request_data, responses_api_request, instructions)
+        self._merge_responses_api_request_into_request_data(request_data, responses_api_request)
 
         if headers:
             request_data["extra_headers"] = headers

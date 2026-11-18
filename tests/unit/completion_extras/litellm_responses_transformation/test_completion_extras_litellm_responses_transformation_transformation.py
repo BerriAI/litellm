@@ -4568,6 +4568,131 @@ def test_leading_system_strings_still_join_instructions_without_a_following_turn
     assert input_items == []
 
 
+def _bridged_transform_request(
+    model: str,
+    messages: list[dict[str, object]],
+    litellm_params: dict[str, object],
+    optional_params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params=dict(optional_params or {}),
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+
+_HI_USER_ITEM: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+
+
+def test_leading_system_strings_remain_separate_input_items_when_instructions_are_not_preserved():
+    input_items, instructions = (
+        LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+            [
+                {"role": "system", "content": "Be brief."},
+                {"role": "system", "content": "Answer in French."},
+                {"role": "user", "content": "hi"},
+            ],
+            preserve_system_instructions=False,
+        )
+    )
+
+    assert instructions is None
+    assert input_items == [_system_input_item("Be brief."), _system_input_item("Answer in French."), _HI_USER_ITEM]
+
+
+@pytest.mark.parametrize(
+    ("provider", "system_in_input"),
+    [
+        ("openai", True),
+        ("azure", True),
+        ("azure_ai", True),
+        ("bedrock_mantle", True),
+        ("xai", False),
+        ("anthropic", False),
+        (None, False),
+    ],
+)
+def test_system_input_is_limited_to_openai_family_bridges(provider: str | None, system_in_input: bool) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": provider},
+    )
+
+    assert request.get("instructions") == (None if system_in_input else "Be brief.")
+    assert request["input"] == [*([_system_input_item("Be brief.")] if system_in_input else []), _HI_USER_ITEM]
+
+
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
+def test_chained_turn_keeps_leading_system_strings_in_instructions(continuation: dict[str, str], location: str) -> None:
+    copied_continuation: Final = copy.deepcopy(continuation)
+    optional: Final = (
+        copied_continuation
+        if location == "optional"
+        else {"extra_body": copied_continuation}
+        if location == "extra_body"
+        else {}
+    )
+    params: Final = {"custom_llm_provider": "openai", **(copied_continuation if location == "litellm" else {})}
+    request: Final = _bridged_transform_request(
+        "gpt-6.2",
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "hi"},
+        ],
+        params,
+        optional,
+    )
+
+    assert request["instructions"] == "Be brief. Be helpful."
+    assert request["input"] == [_HI_USER_ITEM]
+
+
+@pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
+def test_auto_truncation_keeps_system_prompt_in_instructions(location: str) -> None:
+    truncation: Final = {"truncation": "auto"}
+    optional: Final = (
+        truncation if location == "optional" else {"extra_body": truncation} if location == "extra_body" else {}
+    )
+    params: Final = {
+        "custom_llm_provider": "openai",
+        **(
+            truncation
+            if location == "litellm"
+            else {"extra_body": truncation}
+            if location == "litellm_extra_body"
+            else {}
+        ),
+    }
+    request: Final = _bridged_transform_request(
+        "gpt-6.2",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        params,
+        optional,
+    )
+
+    assert request.get("instructions") == "Be brief."
+    assert request["input"] == [_HI_USER_ITEM]
+
+
+@pytest.mark.parametrize("continuation", [{}, {"previous_response_id": "resp_prior"}])
+def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai"},
+        {"instructions": "Caller instructions", **continuation},
+    )
+
+    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
+    assert request["input"] == [*([] if continuation else [_system_input_item("Be brief.")]), _HI_USER_ITEM]
+
+
 def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_identical_input_items():
     handler: Final = LiteLLMResponsesTransformationHandler()
     reminder: Final = "<total_tokens>14982391 tokens left</total_tokens>"
