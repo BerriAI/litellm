@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
+    provider_origin_status,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -3891,3 +3892,50 @@ def test_only_an_http_error_reply_is_exposed_as_the_provider_error():
     assert answered_with_an_error.value.response.text == "provider reply"
     assert answered_with_success.value.response.status_code != 200
     assert answered_with_success.value.response.text == ""
+
+
+@pytest.mark.parametrize(
+    ("provider", "provider_status", "mapped_error", "public_status"),
+    [
+        ("anthropic", 529, litellm.InternalServerError, 500),
+        ("anthropic", 429, litellm.RateLimitError, 429),
+        ("openai", 529, litellm.APIError, 529),
+        ("openai", 429, litellm.RateLimitError, 429),
+    ],
+)
+def test_a_mapped_provider_error_keeps_the_providers_own_status_beside_its_public_one(
+    provider: str,
+    provider_status: int,
+    mapped_error: type[litellm.InternalServerError | litellm.RateLimitError | litellm.APIError],
+    public_status: int,
+    quiet_exception_mapping: None,
+) -> None:
+    with pytest.raises(mapped_error, match="upstream failure") as raised:
+        exception_type(
+            model="model-under-test",
+            original_exception=_UpstreamHTTPError(status_code=provider_status, message="upstream failure"),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is mapped_error
+    assert (raised.value.status_code, provider_origin_status(raised.value)) == (public_status, provider_status)
+
+
+def test_an_error_litellm_raised_itself_carries_no_provider_status(quiet_exception_mapping: None) -> None:
+    synthetic: Final = litellm.RateLimitError(message="deployment at capacity", llm_provider="", model="m")
+
+    returned: Final = exception_type(model="m", original_exception=synthetic, custom_llm_provider="openai")
+
+    assert returned is synthetic
+    assert provider_origin_status(returned) is None
+
+
+def test_a_status_litellm_made_up_for_a_provider_error_is_not_kept_as_the_providers(
+    quiet_exception_mapping: None,
+) -> None:
+    made_up: Final = BaseLLMException(status_code=429, message="no status upstream", status_code_is_synthesized=True)
+
+    with pytest.raises(litellm.RateLimitError, match="no status upstream") as raised:
+        exception_type(model="m", original_exception=made_up, custom_llm_provider="openai")
+
+    assert provider_origin_status(raised.value) is None
