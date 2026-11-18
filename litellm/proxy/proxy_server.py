@@ -1653,10 +1653,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
 
 def register_prompt_cache_alerts(
-    settings: Mapping[str, object], prisma: PrismaClient | None, resources: AsyncExitStack
+    settings: Mapping[str, object],
+    prisma: PrismaClient | None,
+    resources: AsyncExitStack,
 ) -> None:
     """Off unless `general_settings.prompt_cache_alerts` is true and a database and a shared salt exist. The logger
-    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends."""
+    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends.
+    """
     if settings.get("prompt_cache_alerts") is not True or prisma is None:
         return
     from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
@@ -3857,12 +3860,17 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
 async def customer_accounting_counters(
     ids: CustomerHierarchyIds | None,
     admitted_scopes: tuple[CustomerScopeAuth, ...] | None = None,
+    *,
+    started_at: datetime | None = None,
 ) -> tuple[BudgetCounter, ...]:
     if ids is None:
         return ()
     from itertools import chain
 
-    from litellm.proxy.auth.customer_hierarchy_auth import get_customer_scopes_for_accounting
+    from litellm.proxy.auth.customer_hierarchy_auth import (
+        get_customer_scopes_for_accounting,
+    )
+    from litellm.proxy.management_helpers.customer_hierarchy import utc_datetime
 
     try:
         scopes: Final = (
@@ -3879,7 +3887,7 @@ async def customer_accounting_counters(
             "Unable to load customer budget windows for spend accounting"
         )
         return ()
-    now: Final = datetime.now(timezone.utc)
+    now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
             customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
@@ -3994,7 +4002,8 @@ async def _increment_spend_counters_batched(
     customer_counters: Sequence[BudgetCounter] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
-    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
+    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments.
+    """
     committed_counter_keys: Final = (
         tuple(counter_key for counter_key in committed_spend_scope.tracked() if has_committed_twin(counter_key))
         if committed_spend_scope is not None and response_cost is not None and response_cost > 0
@@ -4290,7 +4299,8 @@ def _flatten_spend_scopes(
 @dataclass(frozen=True, slots=True)
 class _ReservationCounterUpdate:
     """The reserved counters the direct increment must skip, and the adjustments that settle them on the actual
-    cost, still to be written; both empty when the reservation could not be reconciled and was dropped."""
+    cost, still to be written; both empty when the reservation could not be reconciled and was dropped.
+    """
 
     reserved_counter_keys: frozenset[str] = frozenset()
     pending: tuple[PendingSpendIncrement, ...] = ()
@@ -4753,7 +4763,8 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
 def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
     """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
     new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
-    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
+    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does.
+    """
     settlement: Final = spend_counter_store.increment_many_post_call(
         tuple((item.counter_key, item.increment) for item in pending)
     )
@@ -4765,9 +4776,12 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     return True
 
 
-async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def increment_spend_counters_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """One INCRBYFLOAT+EXPIRE pipeline for every pending counter, returning each counter's new value in order; on
-    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch."""
+    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch.
+    """
     if not spend_counter_store.has_redis:
         return await run_spend_counter_pipeline(pending=pending)
     try:
@@ -4778,9 +4792,12 @@ async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrem
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def run_spend_counter_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """The pipeline behind ``increment_spend_counters_pipeline`` without its invalidation: the caller decides what
-    happens to counters whose increment may or may not have landed when the pipeline fails."""
+    happens to counters whose increment may or may not have landed when the pipeline fails.
+    """
     if not pending:
         return ()
     if not spend_counter_store.has_redis:
@@ -14326,13 +14343,23 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 @router.post(
     "/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 async def audio_transcriptions(
     request: Request,
@@ -15835,7 +15862,10 @@ async def _try_native_responses_count(
 
 
 async def _provider_token_count(
-    count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+    count_with: Callable[
+        [str, str | None],
+        Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]],
+    ],
     model_to_use: str,
     request_model: str,
     settings: TokenCountSettings,
@@ -15845,7 +15875,8 @@ async def _provider_token_count(
     """Count with the provider, using the token_count_model in its region when one is set.
 
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
-    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    estimate stands in for it and that failure is the answer if the estimate cannot read the request.
+    """
     count_model: Final = settings.count_model
     counting_model: Final = (
         model_to_use

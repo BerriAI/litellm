@@ -29,6 +29,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetGroups,
     BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
@@ -71,8 +72,16 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "https://www.litellm.ai/enterprise",
         ),
         ErrorCode.NOT_FOUND: (404, "Not found", "Customer entity not found."),
-        ErrorCode.PARENT_NOT_FOUND: (404, "Parent not found", "Customer parent not found."),
-        ErrorCode.ALREADY_EXISTS: (409, "Already exists", "Customer entity ID already exists."),
+        ErrorCode.PARENT_NOT_FOUND: (
+            404,
+            "Parent not found",
+            "Customer parent not found.",
+        ),
+        ErrorCode.ALREADY_EXISTS: (
+            409,
+            "Already exists",
+            "Customer entity ID already exists.",
+        ),
         ErrorCode.INVALID_DEFAULT_BUDGET: (
             422,
             "Invalid default budget",
@@ -81,16 +90,28 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ErrorCode.TEMPLATE_NOT_IN_ORG: (
             422,
             "Template not in organization",
-            "Budget template must belong to the member's organization.",
+            "Budget template must belong to the selected member or organization budget group catalog.",
         ),
-        ErrorCode.HAS_CHILDREN: (409, "Has children", "Delete the customer's children before deleting the parent."),
+        ErrorCode.HAS_CHILDREN: (
+            409,
+            "Has children",
+            "Delete the customer's children before deleting the parent.",
+        ),
         ErrorCode.INVALID_TEMPLATE_NAMES: (
             422,
             "Invalid template names",
             "Budget template names must be unique within the organization.",
         ),
-        ErrorCode.TEMPLATE_IN_USE: (409, "Template in use", "A default or referenced template cannot be deleted."),
-        ErrorCode.BUDGET_REQUIRED: (422, "Budget required", "A member requires a template or a budget override."),
+        ErrorCode.TEMPLATE_IN_USE: (
+            409,
+            "Template in use",
+            "A default or referenced template cannot be deleted.",
+        ),
+        ErrorCode.BUDGET_REQUIRED: (
+            422,
+            "Budget required",
+            "A member requires a template or a budget override.",
+        ),
         ErrorCode.INCREASE_NOT_ALLOWED: (
             422,
             "Increase not allowed",
@@ -106,14 +127,26 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Request already pending",
             "The member already has an increase request waiting for review.",
         ),
-        ErrorCode.EXPIRY_IN_PAST: (422, "Expiry in past", "A temporary increase must expire in the future."),
+        ErrorCode.EXPIRY_IN_PAST: (
+            422,
+            "Expiry in past",
+            "A temporary increase must expire in the future.",
+        ),
         ErrorCode.KEY_NOT_IN_ORG: (
             403,
             "Key not in organization",
             "The key may only act for members of its own customer organization.",
         ),
-        ErrorCode.FORBIDDEN: (403, "Forbidden", "Only proxy admins can manage customer hierarchies."),
-        ErrorCode.DATABASE_UNAVAILABLE: (503, "Database not connected", "Database not connected."),
+        ErrorCode.FORBIDDEN: (
+            403,
+            "Forbidden",
+            "Only proxy admins can manage customer hierarchies.",
+        ),
+        ErrorCode.DATABASE_UNAVAILABLE: (
+            503,
+            "Database not connected",
+            "Database not connected.",
+        ),
         ErrorCode.CONFIGURATION_CONFLICT: (
             409,
             "Budget groups changed",
@@ -214,6 +247,42 @@ def get_user_api_key_cache() -> UserApiKeyCache:
 
 
 AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+
+@router.get(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable organization budget groups and their revision. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_customer_organization_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(await hierarchy.transaction(lambda store: store.get_budget_groups(None)))
+
+
+@router.patch(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete organization budget group list with its expected_revision. "
+    "default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_customer_organization_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> BudgetGroups:
+    groups: Final = resolve(await hierarchy.transaction(lambda store: store.configure_templates(None, data, actor)))
+    members, aliases = resolve(
+        await hierarchy.transaction(
+            lambda store: store.organization_group_consumers(tuple(group.budget_id for group in groups.default_budgets))
+        )
+    )
+    await forget_customer_hierarchies(members, cache)
+    await forget_customer_organization_aliases(aliases, cache)
+    return groups
 
 
 @router.get(

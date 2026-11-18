@@ -1,5 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { $api } from "@/lib/http/api";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import {
   act,
@@ -76,6 +77,10 @@ describe("CustomerHierarchySettings", () => {
   beforeEach(() => {
     registerBaseUrlGetter(() => "http://localhost");
     testQueryClient.clear();
+    testQueryClient.setQueryData(
+      $api.queryOptions("get", "/management/v1/customer_organization_budget_groups", {}).queryKey,
+      { default_budgets: [{ budget_id: "shared", name: "Growth" }] },
+    );
     fetchMock.mockReset();
     onSaved.mockReset();
     onDeleted.mockReset();
@@ -97,29 +102,79 @@ describe("CustomerHierarchySettings", () => {
     );
     expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("Example organization");
     expect(screen.getByRole("textbox", { name: "Identifier" })).toHaveAttribute("readonly");
-    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(100);
+    expect(screen.getByRole("combobox", { name: "Customer monthly budget (USD)" })).toHaveValue("100");
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
-  it("should preserve other limits when saving a zero organization spend limit", async () => {
+  it.each(["1mo", "7d", null])("preserves limits and reset %s", async (budget_duration) => {
     const user = userEvent.setup();
-    fetchMock.mockResolvedValue(json(organization));
+    const custom = { ...organization, budget: { ...organization.budget, budget_duration } };
+    fetchMock.mockResolvedValue(json(custom));
     render(
       <CustomerHierarchySettings
-        entity={{ kind: "organization", record: organization }}
-        organization={organization}
+        entity={{ kind: "organization", record: custom }}
+        organization={custom}
         onSaved={onSaved}
         onDeleted={onDeleted}
       />,
     );
-    act(() =>
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } }),
-    );
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const save = screen.getByRole("button", { name: "Save changes" });
+    const budget = screen.getByRole("combobox", { name: "Customer monthly budget (USD)" });
+    await user.clear(budget);
+    await user.type(budget, "$0");
+    await user.click(save);
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
     expect(lastRequest().method).toBe("PATCH");
     expect(new URL(lastRequest().url).pathname).toBe("/management/v1/customer_organizations/org-1");
-    expect(await lastRequest().clone().json()).toEqual({ budget: { ...organization.budget, max_budget: 0 } });
+    expect(await lastRequest().clone().json()).toEqual({ budget: { ...custom.budget, max_budget: 0 } });
+  });
+
+  it.each(["$175", ""])("replaces a group with custom budget %s", async (amount) => {
+    const user = userEvent.setup();
+    const grouped = { ...organization, budget_id: "shared" };
+    fetchMock.mockImplementation(async () => json(grouped));
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "organization", record: grouped }}
+        organization={grouped}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    const save = screen.getByRole("button", { name: "Save changes" });
+    const budget = screen.getByRole("combobox", { name: "Customer monthly budget (USD)" });
+    expect(budget).toHaveValue("Growth");
+    await user.clear(budget);
+    if (amount) await user.type(budget, amount);
+    await user.click(save);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toEqual({
+      budget: amount ? { ...organization.budget, max_budget: 175, budget_limits: null } : null,
+    });
+  });
+
+  it("preserves group assignment while the catalog is loading", async () => {
+    testQueryClient.clear();
+    const grouped = { ...organization, budget_id: "shared" };
+    fetchMock.mockImplementation(async (request) => {
+      if (request instanceof Request && request.url.endsWith("customer_organization_budget_groups"))
+        return new Promise<Response>(() => {});
+      return json(grouped);
+    });
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "organization", record: grouped }}
+        organization={grouped}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Customer monthly budget (USD)" })).toBeDisabled();
+    expect(screen.queryByRole("spinbutton", { name: "Tokens per minute" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toEqual({ alias: "Renamed" });
   });
 
   it("should show friendly template names while sending the selected template identifier", async () => {

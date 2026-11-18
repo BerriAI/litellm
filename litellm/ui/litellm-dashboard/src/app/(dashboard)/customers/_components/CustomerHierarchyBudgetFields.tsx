@@ -1,12 +1,14 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
+import { $api } from "@/lib/http/api";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CustomerHierarchyFields, CustomerHierarchyEntity, Organization } from "./customerHierarchyForms";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
+import CustomerBudgetInput from "./CustomerBudgetInput";
 
 interface Props {
   kind: CustomerHierarchyEntity["kind"];
@@ -26,11 +28,30 @@ export default function CustomerHierarchyBudgetFields({
   operation,
 }: Props) {
   const { t } = useTranslation();
+  const groups = $api.useQuery(
+    "get",
+    "/management/v1/customer_organization_budget_groups",
+    {},
+    { enabled: kind === "organization" },
+  );
+  const usingGroup =
+    kind === "organization" && groups.data?.default_budgets.some((group) => group.budget_id === fields.templateId);
+  const budgetReady = kind !== "organization" || Boolean(groups.data);
+  const monthly = organization.budget?.budget_limits?.some((window) => window.budget_duration === "1mo");
+  const newScalarBudget = organization.budget?.max_budget == null && !monthly;
+  const updateBudget = (budgetId: string, amount: string) => {
+    if (groups.data?.default_budgets.some((group) => group.budget_id === budgetId))
+      return update("templateId", budgetId);
+    update("templateId", budgetId);
+    update("maxBudget", amount);
+    if (usingGroup || newScalarBudget) update("budgetDuration", "1mo");
+    update("budgetEnabled", Boolean(budgetId || amount.trim()));
+  };
   const templateLabel = (templateId: string): string => {
     if (!templateId) return t("customerPortal.hierarchy.noTemplate");
-    const template = organization.default_budgets.find((budget) => budget.budget_id === templateId);
+    const template = organization?.default_budgets.find((budget) => budget.budget_id === templateId);
     if (!template) return t("customerPortal.hierarchy.unknownTemplate", { id: templateId });
-    if (templateId === organization.default_budget_template_id)
+    if (templateId === organization?.default_budget_template_id)
       return t("customerPortal.hierarchy.defaultTemplate", { name: template.name });
     return template.name;
   };
@@ -50,6 +71,14 @@ export default function CustomerHierarchyBudgetFields({
           {t(kind === "member" ? "customerPortal.hierarchy.memberBudgetHint" : "customerPortal.hierarchy.budgetHint")}
         </p>
       </div>
+      {kind === "organization" && (
+        <CustomerBudgetInput
+          id={`${idPrefix}-budget`}
+          budgetId={fields.templateId}
+          amount={fields.maxBudget}
+          onChange={updateBudget}
+        />
+      )}
       {kind === "member" && (
         <div className="max-w-sm space-y-1.5">
           <Label htmlFor={`${idPrefix}-template`}>{t("customerPortal.hierarchy.template")}</Label>
@@ -61,10 +90,10 @@ export default function CustomerHierarchyBudgetFields({
               <SelectValue>{templateLabel(fields.templateId)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {(operation === "edit" || !organization.default_budget_template_id) && (
+              {(operation === "edit" || !organization?.default_budget_template_id) && (
                 <SelectItem value="__none__">{t("customerPortal.hierarchy.noTemplate")}</SelectItem>
               )}
-              {organization.default_budgets.map((template) => (
+              {organization?.default_budgets.map((template) => (
                 <SelectItem key={template.budget_id} value={template.budget_id}>
                   {templateLabel(template.budget_id)}
                 </SelectItem>
@@ -73,7 +102,7 @@ export default function CustomerHierarchyBudgetFields({
           </Select>
         </div>
       )}
-      <div className="space-y-1.5">
+      <div hidden={kind === "organization"} className="space-y-1.5">
         <div className="flex items-center gap-2">
           <Checkbox
             id={`${idPrefix}-budget-enabled`}
@@ -87,11 +116,11 @@ export default function CustomerHierarchyBudgetFields({
           </Label>
         </div>
       </div>
-      {fields.budgetEnabled && (
+      {budgetReady && !usingGroup && fields.budgetEnabled && (
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             {numericFields.map(([name, label, step]) => (
-              <div className="space-y-1.5" key={name}>
+              <div hidden={kind === "organization" && name === "maxBudget"} className="space-y-1.5" key={name}>
                 <Label htmlFor={`${idPrefix}-${name}`}>{t(label)}</Label>
                 <Input
                   id={`${idPrefix}-${name}`}

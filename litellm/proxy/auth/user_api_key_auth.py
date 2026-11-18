@@ -36,7 +36,11 @@ from litellm.constants import (
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
+from litellm.integrations.otel.runtime import (
+    phase_event,
+    phase_span,
+    seed_request_identity,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -46,6 +50,7 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_he
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
+from litellm.proxy.auth.app_auth import resolve_app_hierarchy
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     TeamNotFoundError,
     _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -3218,7 +3223,11 @@ async def _authorize_authenticated_request_checks(
                         user_api_key_cache=user_api_key_cache,
                         llm_router=llm_router,
                         request_model=get_model_from_request_context(
-                            request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+                            request_data,
+                            route,
+                            request,
+                            llm_router,
+                            team_id=user_api_key_auth_obj.team_id,
                         ),
                         route=route,
                         key_metadata=_KEY_METADATA_ADAPTER.validate_python(
@@ -3229,6 +3238,30 @@ async def _authorize_authenticated_request_checks(
                     user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                     raise
                 user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
+
+        app_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
+            getattr(user_api_key_auth_obj, "metadata", None) or {}
+        )
+        if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):
+            user_api_key_auth_obj.customer_hierarchy = (
+                await resolve_app_hierarchy(  # rebind-ok: trusted request auth state
+                    user_api_key_auth_obj.customer_hierarchy,
+                    request.headers,
+                    app_metadata,
+                    prisma_client,
+                    user_api_key_cache,
+                    llm_router,
+                    get_model_from_request_context(
+                        request_data,
+                        route,
+                        request,
+                        llm_router,
+                        team_id=user_api_key_auth_obj.team_id,
+                    ),
+                    route,
+                    user_api_key_auth_obj,
+                )
+            )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)

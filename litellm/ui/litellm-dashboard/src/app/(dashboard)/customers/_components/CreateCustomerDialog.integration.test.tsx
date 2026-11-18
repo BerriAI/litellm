@@ -36,6 +36,13 @@ beforeEach(() => {
       if (url.pathname.endsWith("/.well-known/litellm-ui-config")) {
         return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
       }
+      if (url.pathname === "/management/v1/customer_organization_budget_groups")
+        return Response.json({
+          default_budgets: [
+            { budget_id: "saved-group", name: "100" },
+            { budget_id: "named-group", name: "Growth" },
+          ],
+        });
       if (url.pathname === "/management/v1/customer_organizations" && request.method === "POST") {
         creations.push(await request.json());
         if (freeTierReached)
@@ -58,6 +65,32 @@ afterEach(() => {
 });
 
 describe("CreateCustomerDialog", () => {
+  it.each(["group", "named group", "100", "$100"])(
+    "creates an organization using %s in the budget field",
+    async (choice) => {
+      const user = userEvent.setup();
+      renderWithProviders(<Harness />);
+      fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+      const submit = screen.getByRole("button", { name: "Create customer" });
+      const budget = screen.getByRole("combobox", { name: "Customer monthly budget (USD)" });
+      await waitFor(() => expect(budget).toBeEnabled());
+      const isGroup = choice.endsWith("group");
+      if (isGroup) {
+        await user.click(budget);
+        if (choice === "named group") await user.type(budget, "Growth");
+        await user.click(await screen.findByRole("option", { name: choice === "group" ? "100" : "Growth" }));
+      } else await user.type(budget, choice);
+      await user.click(submit);
+      await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
+      expect(creations[0]).toMatchObject(
+        isGroup
+          ? { budget_id: choice === "group" ? "saved-group" : "named-group" }
+          : { budget: { max_budget: 100, budget_duration: "1mo" } },
+      );
+      expect(creations[0]).not.toHaveProperty(isGroup ? "budget" : "budget_id");
+    },
+  );
+
   it("adds budget groups without a secure browser context", async () => {
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });
     renderWithProviders(<Harness />);

@@ -1,8 +1,16 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
-import { render, screen, fireEvent, waitFor } from "../../../../../tests/test-utils";
+import {
+  render,
+  renderWithProviders,
+  testQueryClient,
+  screen,
+  fireEvent,
+  waitFor,
+} from "../../../../../tests/test-utils";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
+import CustomerSettings from "../settings/page";
 import type { Organization } from "./customerHierarchyForms";
 
 const organization: Organization = {
@@ -28,12 +36,48 @@ const json = (body: unknown, status = 200) =>
 
 describe("CustomerBudgetGroups", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     registerBaseUrlGetter(() => "http://localhost");
     fetchMock.mockReset();
     onSaved.mockReset();
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("creates and removes organization groups through the shared editor in Settings", async () => {
+    const user = userEvent.setup();
+    const catalog = { ...organization, default_budget_template_id: null, default_budgets: [] };
+    fetchMock.mockImplementation(async (input) => {
+      const request = input as Request;
+      expect(new URL(request.url).pathname).toBe("/management/v1/customer_organization_budget_groups");
+      return json(
+        request.method === "PATCH"
+          ? {
+              ...catalog,
+              default_budgets: [
+                { budget_id: "new", name: "Starter", budget_limits: [{ budget_duration: "1mo", max_budget: 0 }] },
+              ],
+            }
+          : catalog,
+      );
+    });
+    renderWithProviders(<CustomerSettings />);
+    await user.click(await screen.findByRole("button", { name: "Add budget group" }));
+    fireEvent.change(screen.getByLabelText("Group 1 name"), { target: { value: "Starter" } });
+    fireEvent.change(screen.getByLabelText("Group 1 monthly budget (USD)"), { target: { value: "0" } });
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
+    const request = fetchMock.mock.calls.at(-1)?.[0] as Request;
+    expect(await request.clone().json()).toEqual({
+      expected_revision: organization.budget_groups_revision,
+      default_budget_template: null,
+      default_budgets: [{ name: "Starter", budget_limits: [{ budget_duration: "1mo", max_budget: 0 }] }],
+    });
+    await user.click(screen.getByRole("button", { name: "Remove Starter" }));
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+  });
 
   it("should save additions, edited limits, the new default and deletions together", async () => {
     const user = userEvent.setup();
