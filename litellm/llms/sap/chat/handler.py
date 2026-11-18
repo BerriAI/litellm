@@ -152,7 +152,7 @@ class SAPStreamIterator:
                 continue
 
             try:
-                chunk = _StreamParser.to_openai_chunk(normalize_stream_event(obj))
+                chunk = _StreamParser.to_openai_chunk(dict(normalize_stream_event(obj)))
             except ValueError as e:
                 self._safe_close()
                 raise e
@@ -223,7 +223,7 @@ class AsyncSAPStreamIterator:
                 continue
 
             try:
-                chunk = _StreamParser.to_openai_chunk(normalize_stream_event(obj))
+                chunk = _StreamParser.to_openai_chunk(dict(normalize_stream_event(obj)))
             except ValueError as e:
                 await self._aclose()
                 raise GenAIHubOrchestrationError(502, str(e))

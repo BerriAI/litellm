@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -7,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from litellm.types.llms.openai import ChatCompletionThinkingBlock
 
 _OBJECT: Final = TypeAdapter(dict[str, object])
-_OBJECTS: Final = TypeAdapter(list[object])
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
 
 class _SAPThoughtBlock(BaseModel):
@@ -28,14 +29,14 @@ def _thinking_block(block: _SAPThoughtBlock) -> ChatCompletionThinkingBlock:
     return ChatCompletionThinkingBlock(type="thinking", thinking=block.content, signature=block.signature)
 
 
-def _as_object(value: object) -> dict[str, object] | None:
+def _as_object(value: object) -> Mapping[str, object] | None:
     try:
         return _OBJECT.validate_python(value)
     except ValidationError:
         return None
 
 
-def _as_objects(value: object) -> list[object] | None:
+def _as_objects(value: object) -> Sequence[object] | None:
     try:
         return _OBJECTS.validate_python(value)
     except ValidationError:
@@ -88,7 +89,7 @@ def normalize_reasoning_blocks(result: object, body_key: Literal["message", "del
 _STREAM_CHUNK_KEYS: Final = ("final_result", "orchestration_result")
 
 
-def normalize_stream_event(event: object) -> dict[str, object]:
+def normalize_stream_event(event: object) -> Mapping[str, object]:
     fields: Final = _as_object(event)
     if fields is None:
         return {}
