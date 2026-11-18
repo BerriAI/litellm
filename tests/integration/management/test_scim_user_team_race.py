@@ -52,6 +52,7 @@ SESSIONS_WAITING_ON_A_LOCK_SQL: Final = """
 SELECT count(*)::text AS waiting FROM pg_stat_activity
 WHERE datname = current_database() AND wait_event_type = 'Lock'
 """
+RENAME_TEAM_SQL: Final = 'UPDATE "LiteLLM_TeamTable" SET team_id = %s WHERE team_id = %s'
 TEAM_ENTRIES_SQL: Final = (
     'SELECT cardinality(array_positions(teams, %s))::text AS entries FROM "LiteLLM_UserTable" WHERE user_id = %s'
 )
@@ -357,3 +358,28 @@ def test_a_scim_user_write_with_an_unusable_group_or_token_leaves_the_users_team
         assert read_rows(TEAM_ENTRIES_SQL, (team, user)) == [{"entries": "1"}]
         assert _roster(team) == [user]
         assert read_rows(USER_TEAM_COUNT_SQL, (user,)) == [{"teams": "1"}]
+
+
+@pytest.mark.parametrize("write", [_put_with_group, _patch_replace_groups], ids=["put", "patch"])
+def test_a_team_recreated_while_the_write_waits_on_its_lock_stays_on_the_user(
+    gateway: Gateway, write: Callable[[Gateway, str, str], httpx.Response]
+) -> None:
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as pool:
+        (user,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(gateway, (user,)))
+        recreated: Final = created_team(scenario, create_group(gateway, ()))
+        parked: Final = f"integration-parked-team-{uuid.uuid4().hex}"
+        write_rows(RENAME_TEAM_SQL, (parked, recreated))
+        write_rows(APPEND_TEAM_SQL, (recreated, user))
+
+        with _held_team_lock(recreated) as holder:
+            pending: Final = pool.submit(write, gateway, user, team)
+            eventually(
+                lambda: waiters_on_lock_held_by(holder.info.backend_pid), lambda waiting: waiting >= 1, seconds=30
+            )
+            holder.execute(RENAME_TEAM_SQL, (recreated, parked))
+        response: Final = pending.result()
+
+        assert response.status_code == 200, response.text
+        assert users_referencing(recreated) == frozenset({user})
+        assert users_referencing(team) == frozenset({user})

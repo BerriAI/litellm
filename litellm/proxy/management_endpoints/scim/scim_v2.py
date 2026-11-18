@@ -1210,7 +1210,7 @@ async def _sync_requested_teams(
         )
 
     for deleted_team in sorted(teamless.intersection(record_teams)):
-        await prisma_client.writer_db.execute_raw(DETACH_TEAM_FROM_USERS_SQL, deleted_team, [user_id])
+        await _detach_deleted_team(prisma_client, user_id, deleted_team)
 
     teams_to_keep: Final = tuple(team for team in requested_teams if team not in teamless)
     await _handle_team_membership_changes(
@@ -1219,6 +1219,14 @@ async def _sync_requested_teams(
         new_teams=list(teams_to_keep),
     )
     return teams_to_keep
+
+
+async def _detach_deleted_team(prisma_client: PrismaClient, user_id: str, team_id: str) -> None:
+    async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        if await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id) is not None:
+            return
+        await tx.execute_raw(DETACH_TEAM_FROM_USERS_SQL, team_id, [user_id])
 
 
 SCIM_BLOCKED_METADATA_KEY: Final = "scim_blocked"

@@ -659,7 +659,13 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
     mock_client: Final = MagicMock()
     mock_client.writer_db = mock_client.db
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
-    mock_client.db.execute_raw = AsyncMock(return_value=1)
+    tx: Final = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.execute_raw = AsyncMock(return_value=1)
+    tx_context: Final = MagicMock()
+    tx_context.__aenter__ = AsyncMock(return_value=tx)
+    tx_context.__aexit__ = AsyncMock(return_value=False)
+    mock_client.tx = MagicMock(return_value=tx_context)
     mock_patch_team_membership: Final = AsyncMock()
 
     with patch(
@@ -674,7 +680,7 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
         )
 
     assert teams == expected_teams
-    assert [(call.args[1], call.args[2]) for call in mock_client.db.execute_raw.await_args_list] == [
+    assert [(call.args[1], call.args[2]) for call in tx.execute_raw.await_args_list] == [
         (team, ["user-groups"]) for team in expected_detached
     ]
     if expected_added is None:
