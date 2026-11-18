@@ -91,6 +91,31 @@ async def test_empty_flush_coalesces_baseline_recovery_claims(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("claim_size", "expected_claims"), [(32, 2), (31, 1)])
+async def test_baseline_recovery_immediately_retries_a_full_claim(
+    monkeypatch: pytest.MonkeyPatch, claim_size: int, expected_claims: int
+) -> None:
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: 10.0)
+    client = MockPrismaClient()
+    client.spend_log_flush_requested = asyncio.Event()
+    claims = iter(([{"scope": f"scope-{index}"} for index in range(claim_size)], [{"scope": "next"}]))
+
+    async def query(statement: str, *args: object) -> list[dict[str, object]]:
+        if not args:
+            return next(claims)
+        if "FOR UPDATE" in statement:
+            return [{"revision": 1, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}]
+        return []
+
+    client.db.query_raw.side_effect = query
+
+    await baseline_accounting.flush_baseline_accounting(client)
+    assert client.spend_log_flush_requested.is_set() == (expected_claims == 2)
+    await baseline_accounting.flush_baseline_accounting(client)
+    assert sum(len(call.args) == 1 for call in client.db.query_raw.await_args_list) == expected_claims
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_type",
     [
