@@ -231,6 +231,7 @@ describe("PublicAiHub", () => {
     expect(screen.getByRole("tab", { name: "Model Hub" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Skills Hub" })).toHaveAttribute("aria-selected", "false");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByText("Quick start with LiteLLM"));
     expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("https://gateway.example.com");
 
     await user.click(screen.getByRole("tab", { name: "Skills Hub" }));
@@ -394,7 +395,7 @@ describe("PublicAiHub", () => {
 
     expect(within(freeRow).getAllByRole("cell", { name: "Free" })).toHaveLength(2);
     expect(within(freeRow).getByRole("cell", { name: "0" })).toBeInTheDocument();
-    expect(within(pricedRow).getByRole("cell", { name: "$3.00" })).toBeInTheDocument();
+    expect(within(pricedRow).getByRole("cell", { name: "$3.00/M" })).toBeInTheDocument();
     expect(within(pricedRow).getByRole("cell", { name: "-" })).toBeInTheDocument();
     expect(within(pricedRow).queryByRole("cell", { name: "Free" })).not.toBeInTheDocument();
   });
@@ -526,9 +527,11 @@ describe("PublicAiHub", () => {
     renderWithProviders(<PublicAiHub accessToken={null} />);
     await screen.findByRole("link", { name: /claude-sonnet-4-5/ });
 
-    await user.click(screen.getByRole("checkbox", { name: /OpenAI/ }));
+    await user.click(screen.getByRole("combobox", { name: "All providers" }));
+    await user.click(await screen.findByRole("option", { name: "OpenAI" }));
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("checkbox", { name: "Vision" }));
-    await user.click(screen.getByRole("checkbox", { name: "Chat" }));
+    await user.click(screen.getByRole("button", { name: "Chat", exact: true }));
     fireEvent.change(screen.getByRole("textbox", { name: "Search models" }), { target: { value: "gpt" } });
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Sort by" }), "Input price");
 
@@ -559,6 +562,23 @@ describe("PublicAiHub", () => {
         expect.objectContaining({ query: expect.objectContaining({ sort: "-input_cost_per_token", q: "gpt" }) }),
       ),
     );
+    await user.click(screen.getByRole("button", { name: "All", exact: true }));
+
+    await waitFor(() =>
+      expect(apiGetMock).toHaveBeenLastCalledWith(
+        MODEL_HUB_PATH,
+        expect.objectContaining({
+          query: {
+            page: 1,
+            page_size: 50,
+            q: "gpt",
+            sort: "-input_cost_per_token",
+            "filter[providers][in]": "openai",
+            "filter[features][in]": "vision",
+          },
+        }),
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
 
     await waitFor(() =>
@@ -567,9 +587,10 @@ describe("PublicAiHub", () => {
         expect.objectContaining({ query: { page: 1, page_size: 50, q: "gpt", sort: "-input_cost_per_token" } }),
       ),
     );
-    expect(screen.getByRole("checkbox", { name: /OpenAI/ })).not.toBeChecked();
+    expect(screen.getByRole("combobox", { name: "All providers" })).toHaveValue("");
     expect(screen.getByRole("checkbox", { name: "Vision" })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Chat" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("combines skill domain and search filters and clears an empty result", async () => {

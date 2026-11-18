@@ -46,10 +46,13 @@ function PublicAiHubContent({ accessToken }: { accessToken: string | null }) {
         accessToken={accessToken}
         isPublicPage
         publicNavigation={
-          <TabsList variant="line" className={styles.navigation} aria-label={t("publicModelHub.header.title")}>
-            <TabsTrigger value="models">{t("publicModelHub.catalog.modelHub")}</TabsTrigger>
-            <TabsTrigger value="skills">{t("publicModelHub.catalog.skillsHub")}</TabsTrigger>
-          </TabsList>
+          <>
+            <span className={styles.brandLabel}>{hub.info.data?.docs_title || t("publicModelHub.header.title")}</span>
+            <TabsList variant="line" className={styles.navigation} aria-label={t("publicModelHub.header.title")}>
+              <TabsTrigger value="models">{t("publicModelHub.catalog.modelHub")}</TabsTrigger>
+              <TabsTrigger value="skills">{t("publicModelHub.catalog.skillsHub")}</TabsTrigger>
+            </TabsList>
+          </>
         }
       />
       <main className={styles.main}>

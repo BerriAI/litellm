@@ -88,7 +88,6 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
   return (
     <header className={styles.header}>
       <div>
-        <p className={styles.eyebrow}>{info?.docs_title || t("publicModelHub.catalog.eyebrow")}</p>
         <h1 className={styles.title}>
           {t(tab === "skills" ? "publicModelHub.catalog.skillsHub" : "publicModelHub.catalog.modelHub")}
         </h1>
@@ -100,13 +99,30 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
                 : "publicModelHub.catalog.modelsDescription",
             )}
         </p>
+        {status !== "unavailable" && (
+          <details className={styles.quickStart}>
+            <summary>{t("publicModelHub.catalog.quickStart")}</summary>
+            <div className={styles.connection}>
+              <BaseUrlField />
+              <LinksMenu info={info} />
+            </div>
+          </details>
+        )}
       </div>
-      {status !== "unavailable" && (
-        <div className={styles.connection}>
-          <BaseUrlField />
-          <LinksMenu info={info} />
-        </div>
-      )}
+      <svg className={styles.blueprint} viewBox="0 0 390 208" fill="none" aria-hidden="true">
+        <path
+          opacity=".09"
+          stroke="currentColor"
+          strokeWidth=".7"
+          d="M40 8v192M72 8v192M104 8v192M136 8v192M168 8v192M200 8v192M232 8v192M264 8v192M296 8v192M328 8v192M16 26h352M16 58h352M16 90h352M16 122h352M16 154h352M16 186h352"
+        />
+        <g stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="62" y="28" width="242" height="158" rx="8" className={styles.blueprintSurface} />
+          <path opacity=".3" d="M62 65h242M62 105h242M62 145h242M212 65v121" />
+          <path d="M85 46h76M85 85h98M235 85h42M85 125h70M235 125h42M85 165h85M235 165h42" />
+          <circle cx="276" cy="46" r="3" fill="currentColor" stroke="none" />
+        </g>
+      </svg>
     </header>
   );
 }

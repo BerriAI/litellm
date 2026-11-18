@@ -89,6 +89,7 @@ const Navbar: React.FC<NavbarProps> = ({
               <Link href={uiHref("")} className="flex items-center">
                 <div className="relative">
                   <div
+                    data-slot="navbar-logo"
                     className={cn(
                       "flex h-10 max-w-48 items-center justify-center overflow-hidden",
                       isPublicPage && "h-8 max-w-36 sm:h-10 sm:max-w-48",

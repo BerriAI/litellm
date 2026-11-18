@@ -1,16 +1,19 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, Boxes } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Boxes, ChevronRight } from "lucide-react";
 import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { displayMode } from "@/lib/decisionModels";
 
@@ -22,6 +25,7 @@ import { ProviderAvatar, SearchInput } from "./HubParts";
 import { type HubData, useOpenedModel } from "./useHubData";
 import { useOpenHref } from "./useHubUrlState";
 import { ModelInspector } from "./ModelInspector";
+import styles from "./catalog.module.css";
 
 const SORTS = [
   { value: "model_group", label: "Name", desc: false },
@@ -55,7 +59,7 @@ function SortControl({ models }: { models: Models }) {
           <span className="hidden text-muted-foreground sm:inline">{t("publicModelHub.sortControl.sort")}</span>
           <SelectValue />
         </SelectTrigger>
-        <SelectContent align="end" className="w-auto min-w-(--anchor-width)">
+        <SelectContent align="end" className={`${styles.typography} w-auto min-w-(--anchor-width)`}>
           {options.map((sort) => (
             <SelectItem key={sort.value} value={sort.value}>
               {sort.label}
@@ -87,7 +91,6 @@ function SortControl({ models }: { models: Models }) {
 interface FilterOption {
   value: string;
   label: string;
-  provider?: string;
 }
 
 function CatalogFilter({
@@ -113,7 +116,6 @@ function CatalogFilter({
                 onChange(checked ? [...values, option.value] : values.filter((value) => value !== option.value))
               }
             />
-            {option.provider && <ProviderAvatar provider={option.provider} />}
             <span className="min-w-0 break-words">{option.label}</span>
           </label>
         ))}
@@ -128,27 +130,53 @@ function ModelFilters({ hub }: { hub: HubData }) {
   return (
     <CatalogFilters count={models.columnFilters.length} onClear={() => models.onColumnFiltersChange([])}>
       <CatalogFilter
-        label={t("publicModelHub.catalog.provider", { defaultValue: "Provider" })}
-        options={facets.providers.map((provider) => ({ value: provider, label: providerName(provider), provider }))}
-        values={models.providerValues}
-        onChange={models.onProvidersChange}
-      />
-      <CatalogFilter
         label={t("publicModelHub.catalog.capabilities", { defaultValue: "Capabilities" })}
         options={facets.features.map((feature) => ({ value: feature, label: featureFacetLabel(feature) }))}
         values={models.featureValues}
         onChange={models.onFeaturesChange}
       />
-      <CatalogFilter
-        label={t("publicModelHub.catalog.mode", { defaultValue: "Mode" })}
-        options={[...new Set(facets.modes.map((mode) => displayMode(mode) ?? mode))].map((mode) => ({
-          value: mode,
-          label: modeLabel(mode),
-        }))}
-        values={models.modeValues}
-        onChange={models.onModesChange}
-      />
+      <fieldset data-slot="catalog-filter-section" className="min-w-0">
+        <legend className="mb-3 text-sm font-medium">{t("publicModelHub.catalog.provider")}</legend>
+        <MultiSelect
+          options={facets.providers.map((provider) => ({
+            value: provider,
+            label: providerName(provider),
+            icon: <ProviderAvatar provider={provider} />,
+          }))}
+          value={models.providerValues}
+          onValueChange={models.onProvidersChange}
+          placeholder={t("publicModelHub.catalog.allProviders")}
+          className={styles.providerSelect}
+          contentClassName={styles.typography}
+        />
+      </fieldset>
     </CatalogFilters>
+  );
+}
+
+function ModeFilters({ hub }: { hub: HubData }) {
+  const { t } = useTranslation();
+  const { models, facets } = hub;
+  const modes = [...new Set(facets.modes.map((mode) => displayMode(mode) ?? mode))];
+  return (
+    <div className={styles.modeFilters}>
+      <span>{t("publicModelHub.catalog.mode")}</span>
+      <Button variant="ghost" aria-pressed={models.modeValues.length === 0} onClick={() => models.onModesChange([])}>
+        {t("publicModelHub.catalog.allModes")}
+      </Button>
+      <ToggleGroup
+        multiple
+        value={models.modeValues}
+        onValueChange={models.onModesChange}
+        aria-label={t("publicModelHub.catalog.mode")}
+      >
+        {modes.map((mode) => (
+          <ToggleGroupItem key={mode} value={mode}>
+            {modeLabel(mode)}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
   );
 }
 
@@ -173,10 +201,11 @@ function ModelLink({
     <a
       href={hrefFor(model.model_group)}
       aria-current={selected === model.model_group ? "true" : undefined}
-      className="flex min-w-0 items-center gap-3 rounded-sm py-2 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+      className={`${styles.modelLink} flex min-w-0 items-center gap-3 rounded-sm outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring`}
       onClick={follow}
     >
-      <ProviderAvatar provider={model.providers?.[0] ?? ""} className="size-6 shrink-0 sm:size-8" />
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <ProviderAvatar provider={model.providers?.[0] ?? ""} className="size-[30px] shrink-0 rounded-sm ring-0" />
       <span className="flex min-w-0 flex-col gap-1">
         <span className="font-medium whitespace-normal wrap-anywhere">{model.model_group}</span>
         <span className="text-xs whitespace-normal text-muted-foreground">
@@ -211,6 +240,7 @@ export function ModelsPane({
     {
       accessorKey: "model_group",
       meta: { skeleton: "twoLine" },
+      size: 245,
       sortDescFirst: false,
       header: ({ column }) => (
         <DataTableSortHeader column={column} title={t("publicModelHub.catalog.model", { defaultValue: "Model" })} />
@@ -219,7 +249,7 @@ export function ModelsPane({
     },
     {
       accessorKey: "max_input_tokens",
-      meta: { numeric: true, className: "hidden sm:table-cell" },
+      meta: { className: "hidden sm:table-cell tabular-nums" },
       size: 140,
       sortDescFirst: true,
       header: ({ column }) => (
@@ -232,7 +262,7 @@ export function ModelsPane({
     },
     {
       accessorKey: "input_cost_per_token",
-      meta: { numeric: true },
+      meta: { className: "tabular-nums" },
       size: 130,
       sortDescFirst: false,
       header: ({ column }) => (
@@ -241,11 +271,16 @@ export function ModelsPane({
           title={t("publicModelHub.catalog.inputPrice", { defaultValue: "Input /1M" })}
         />
       ),
-      cell: ({ row }) => formatPerMillion(row.original.input_cost_per_token),
+      cell: ({ row }) => (
+        <span>
+          {formatPerMillion(row.original.input_cost_per_token)}
+          {!!row.original.input_cost_per_token && t("publicModelHub.catalog.perMillion")}
+        </span>
+      ),
     },
     {
       accessorKey: "output_cost_per_token",
-      meta: { numeric: true },
+      meta: { className: "tabular-nums" },
       size: 130,
       sortDescFirst: false,
       header: ({ column }) => (
@@ -254,7 +289,12 @@ export function ModelsPane({
           title={t("publicModelHub.catalog.outputPrice", { defaultValue: "Output /1M" })}
         />
       ),
-      cell: ({ row }) => formatPerMillion(row.original.output_cost_per_token),
+      cell: ({ row }) => (
+        <span>
+          {formatPerMillion(row.original.output_cost_per_token)}
+          {!!row.original.output_cost_per_token && t("publicModelHub.catalog.perMillion")}
+        </span>
+      ),
     },
   ];
   const clear = () => {
@@ -271,12 +311,15 @@ export function ModelsPane({
             onChange={models.onSearchChange}
             placeholder={t("publicModelHub.catalog.searchModels", { defaultValue: "Search models" })}
           />
-          <SortControl models={models} />
         </div>
-        <div data-slot="catalog-count" className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
-          {models.isFetching || models.isLoading
-            ? t("publicModelHub.catalog.loadingModels", { defaultValue: "Loading models…" })
-            : !models.error && t("publicModelHub.catalog.modelCount", countOptions)}
+        <ModeFilters hub={hub} />
+        <div className={styles.resultsMeta}>
+          <div data-slot="catalog-count" aria-live="polite">
+            {models.isFetching || models.isLoading
+              ? t("publicModelHub.catalog.loadingModels", { defaultValue: "Loading models…" })
+              : !models.error && t("publicModelHub.catalog.modelCount", countOptions)}
+          </div>
+          <SortControl models={models} />
         </div>
         {models.error && models.rows.length > 0 && (
           <LoadFailed noun={t("publicModelHub.modelsPane.noun")} onRetry={models.refetch} />
