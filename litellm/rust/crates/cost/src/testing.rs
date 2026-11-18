@@ -400,6 +400,10 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
             "output_cost_per_image" => (Meter::Output(OutputUnit::Image(None)), Channel::Online),
             "input_cost_per_second" => (Meter::Input(InputUnit::Second), Channel::Online),
             "output_cost_per_second" => (Meter::Output(OutputUnit::Second(None)), Channel::Online),
+            "output_cost_per_video" => (Meter::Output(OutputUnit::Video), Channel::Online),
+            "output_cost_per_video_per_second" => {
+                (Meter::Output(OutputUnit::VideoSecond), Channel::Online)
+            }
             "input_cost_per_audio_token" => (AUDIO_INPUT, Channel::Online),
             "output_cost_per_audio_token" => (
                 Meter::Output(OutputUnit::Token(TokenKind::Audio)),
@@ -408,6 +412,39 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
             _ => return None,
         })
     };
+    let online = |meter: Meter| Price::online(meter, When::default());
+    let clips = fields["output_cost_per_video_clip"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .flat_map(|(length, cells)| {
+            cells
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(move |(resolution, rate)| {
+                    let clip = crate::price::VideoClip {
+                        length: length.as_str().into(),
+                        resolution: resolution.as_str().into(),
+                    };
+                    Some((
+                        online(Meter::Output(OutputUnit::VideoClip(clip))),
+                        UnitPrice::new(rate.as_f64()?)?,
+                    ))
+                })
+        });
+    let resolutions = fields
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, rate)| {
+            let resolution =
+                crate::price::Resolution::new(key.strip_prefix("output_cost_per_second_")?)?;
+            Some((
+                online(Meter::Output(OutputUnit::Second(Some(resolution)))),
+                UnitPrice::new(rate.as_f64()?)?,
+            ))
+        });
     let rates = fields
         .as_object()
         .into_iter()
@@ -423,6 +460,8 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
                 UnitPrice::new(rate.as_f64()?)?,
             ))
         })
+        .chain(clips)
+        .chain(resolutions)
         .collect();
     TestRow {
         prices: Prices::new(rates, None, Billing::default()),
