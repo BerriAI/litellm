@@ -137,6 +137,8 @@ pub enum MessagesStreamEvent {
     MessageStop {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<MessagesStreamUsage>,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
     },
     Ping,
     Error {

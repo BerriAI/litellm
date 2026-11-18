@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-env.workspace = true
 litellm-secret-value.workspace = true
 bytes.workspace = true
 flate2 = { workspace = true, features = ["zlib-rs"] }
@@ -20,6 +21,7 @@ litellm-http.workspace = true
 litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
+litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true

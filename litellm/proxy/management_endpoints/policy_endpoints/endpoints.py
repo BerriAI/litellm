@@ -334,7 +334,7 @@ async def test_policies_and_guardrails(
             item_result = await apply_policies(
                 policy_names=data.policy_names,
                 inputs=inp,
-                request_data=data.request_data,
+                request_data=copy.deepcopy(data.request_data),
                 input_type=data.input_type,
                 proxy_logging_obj=logging_obj,
                 guardrail_names=data.guardrail_names,

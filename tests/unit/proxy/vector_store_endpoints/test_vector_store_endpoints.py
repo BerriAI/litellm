@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
 )
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
@@ -451,6 +452,83 @@ async def test_vector_store_file_list_uses_single_team_model_for_router_routing(
     assert result["model"] == "provider/*"
     assert "api_key" not in result
     assert "api_base" not in result
+
+
+def _family_wildcard_of_a_model_in(known_models: set[str]) -> str:
+    family, _, _ = min(model for model in known_models if "-" in model and "/" not in model).partition("-")
+    return f"{family}-*"
+
+
+def _team_openai_deployment(public_model_name: str, model: str, api_key: str) -> DeploymentTypedDict:
+    return {
+        "model_name": public_model_name,
+        "litellm_params": {"model": model, "api_key": api_key},
+        "model_info": {"id": f"team-a-{api_key}", "team_id": "team-a", "team_public_model_name": public_model_name},
+    }
+
+
+async def _list_fallback_data_for_a_key_wildcard_over(
+    key_provider_models: set[str], other_team_deployments: tuple[DeploymentTypedDict, ...] = ()
+) -> dict[str, object]:
+    llm_router: Final = litellm.Router(
+        model_list=[*other_team_deployments, _team_openai_deployment("openai/*", "openai/*", "sk-team-openai")]
+    )
+    return await _update_request_data_with_model_routing_hint(
+        data={"vector_store_id": "vs_123"},
+        request=Request(scope={"type": "http", "query_string": b"", "headers": []}),
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-a",
+            team_models=[*(deployment["model_name"] for deployment in other_team_deployments), "openai/*"],
+            models=[_family_wildcard_of_a_model_in(key_provider_models)],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_gives_a_key_wildcard_the_team_openai_wildcard_serving_its_models():
+    result: Final = await _list_fallback_data_for_a_key_wildcard_over(litellm.open_ai_chat_completion_models)
+
+    assert result["api_key"] == "sk-team-openai"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_skips_a_team_openai_model_the_key_wildcard_cannot_use():
+    result: Final = await _list_fallback_data_for_a_key_wildcard_over(
+        litellm.open_ai_chat_completion_models,
+        other_team_deployments=(_team_openai_deployment("team-shared", "openai/team-shared", "sk-team-shared"),),
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_refuses_the_team_openai_wildcard_to_a_key_wildcard_of_another_provider():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    with pytest.raises(ProxyException):
+        await _list_fallback_data_for_a_key_wildcard_over(litellm.anthropic_models)
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_refuses_the_proxy_openai_wildcard_to_a_key_that_does_not_name_it():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    proxy_openai_wildcard: Final[DeploymentTypedDict] = {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*", "api_key": "sk-proxy-openai"},
+    }
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data={"vector_store_id": "vs_123"},
+            request=Request(scope={"type": "http", "query_string": b"", "headers": []}),
+            llm_router=litellm.Router(model_list=[proxy_openai_wildcard]),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test-key", team_id="team-a", team_models=["openai/*"], models=["gpt-4o-mini"]
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -3055,15 +3133,24 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
 
 @pytest.mark.parametrize(
-    ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+    ("store_key", "provider", "expected_status", "expected_searches"),
+    [
+        ("opensearch_index_name", "opensearch", 400, 0),
+        ("opensearch_index_name", "opensearch/x", 400, 0),
+        ("opensearch_index_name", "openai", 200, 1),
+        ("opensearch_search_pipeline", "opensearch", 400, 0),
+        ("opensearch_hybrid_search", "opensearch/x", 400, 0),
+        ("opensearch_search_pipeline", "openai", 200, 1),
+        ("opensearch_text_field", "opensearch", 200, 1),
+        ("opensearch_embedding_field", "opensearch/x", 200, 1),
+    ],
 )
-def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
-    provider, expected_status, expected_searches
+def test_vector_store_search_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
+    store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: a caller must not pick the index an OpenSearch store searches, while
-    other providers keep ignoring the key as they did before OpenSearch support.
+    Regression: a caller must not change which index, pipeline, or hybrid mode an OpenSearch store
+    searches with, while the field keys and other providers' requests pass through as before.
     """
     from fastapi.testclient import TestClient
 
@@ -3097,13 +3184,14 @@ def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opense
             with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
                 response = TestClient(app).post(
                     "/v1/vector_stores/kb/search",
-                    json={"query": "q", "opensearch_index_name": "another-teams-index"},
+                    json={"query": "q", store_key: "_none"},
                 )
     finally:
         app.dependency_overrides = original_overrides
 
     assert response.status_code == expected_status, response.json()
-    assert fake_search.await_count == expected_searches
+    assert [call.kwargs.get(store_key) for call in fake_search.await_args_list] == ["_none"] * expected_searches
+    assert expected_status == 200 or store_key in str(response.json())
 
 
 def test_vector_store_search_accepts_a_query_image_without_a_query():

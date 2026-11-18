@@ -140,7 +140,10 @@ pub(crate) fn kind_classes(kind: FailureKind) -> &'static [&'static str] {
         FailureKind::CallerCredentialRateLimit => {
             &["CallerCredentialRateLimitError", "RateLimitError"]
         }
-        FailureKind::GuardrailIntervention | FailureKind::Declined | FailureKind::Other => &[],
+        FailureKind::GuardrailIntervention
+        | FailureKind::Declined
+        | FailureKind::QueueRejected
+        | FailureKind::Other => &[],
     }
 }
 

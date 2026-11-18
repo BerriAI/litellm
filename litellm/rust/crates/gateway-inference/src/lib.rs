@@ -31,6 +31,7 @@ pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    client_side_credentials: bool,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -50,6 +51,13 @@ impl Gateway {
         }
     }
 
+    pub fn with_client_side_credentials(self, allowed: bool) -> Self {
+        Self {
+            client_side_credentials: allowed,
+            ..self
+        }
+    }
+
     pub fn new(
         resources: CoreResources,
         http: HttpClientConfig,
@@ -60,6 +68,7 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            client_side_credentials: false,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),

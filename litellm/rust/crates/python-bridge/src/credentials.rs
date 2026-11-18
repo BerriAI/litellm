@@ -6,7 +6,7 @@ use litellm_auth::ResolvedCredential;
 use litellm_secret_value::SecretValue;
 
 use pyo3::{
-    exceptions::PyTypeError,
+    exceptions::{PyException, PyTypeError},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyString},
@@ -45,23 +45,43 @@ pub(crate) fn azure_ad_token_provider(
 
 impl CallerTokenProvider {
     pub(crate) fn acquire(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
+        self.acquire_or(
+            py,
+            |token| {
+                let message = PyString::new(token.py(), NOT_A_STRING)
+                    .call_method1("format", (token.get_type(),))?;
+                Ok(PyTypeError::new_err(message.unbind()))
+            },
+            |py, error| wrap_failure::<()>(py, FAILED, Err(error)).unwrap_err(),
+        )
+    }
+
+    /// Calls the provider. A token that is not a string raises what `not_a_string` builds, and any
+    /// other failure, including one building that error, is handed to `failed`.
+    pub(crate) fn acquire_or<'py>(
+        &self,
+        py: Python<'py>,
+        not_a_string: impl FnOnce(&Bound<'py, PyAny>) -> PyResult<PyErr>,
+        failed: impl FnOnce(Python<'py>, PyErr) -> PyErr,
+    ) -> PyResult<ResolvedCredential> {
         let provider = self.provider.bind(py);
         if !provider.is_callable() {
             return Err(NotCallable.into());
         }
-        let token = wrap_failure(
-            py,
-            FAILED,
-            (|| {
-                let token = provider.call0()?;
-                if !token.is_instance_of::<PyString>() {
-                    let message = PyString::new(py, NOT_A_STRING)
-                        .call_method1("format", (token.get_type(),))?;
-                    return Err(PyTypeError::new_err(message.unbind()));
-                }
-                Ok(token)
-            })(),
-        )?;
+        let token = (|| {
+            let token = provider.call0()?;
+            if !token.is_instance_of::<PyString>() {
+                return Err(not_a_string(&token)?);
+            }
+            Ok(token)
+        })()
+        .map_err(|error| {
+            if error.is_instance_of::<PyTypeError>(py) || !error.is_instance_of::<PyException>(py) {
+                error
+            } else {
+                failed(py, error)
+            }
+        })?;
         Ok(ResolvedCredential::AccessToken {
             token: SecretValue::new(token.extract::<String>()?),
             expires_on: None,
