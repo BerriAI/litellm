@@ -299,6 +299,7 @@ def _tool_config_keeps_the_old_search_drop(tool_config: Mapping[str, object]) ->
 
 
 _SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
+_NANO_UNSUPPORTED_PARAMS: Final = frozenset({"temperature", "top_p", "top_k", "seed"})
 _NON_INTEGER_BUDGET_REASON: Final = (
     "Gemini takes budget_tokens only as an integer, so it uses its default thinking budget."
 )
@@ -1178,6 +1179,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return True
 
     @staticmethod
+    def _is_nano_banana_2_1(model: str) -> bool:
+        bare: Final = model.split("/")[-1].lower()
+        return "nano-banana-2.1" in bare
+
+    @staticmethod
+    def _is_flash_image_3_1(model: str) -> bool:
+        bare: Final = model.split("/")[-1].lower()
+        return "3.1-flash-image" in bare or "3-1-flash-image" in bare
+
+    @staticmethod
     def supports_sampling_params(model: str) -> bool:
         """Whether Google still honors ``temperature`` / ``top_p`` / ``top_k`` for ``model``.
 
@@ -1188,6 +1199,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         check raises or drops them and ``allowed_openai_params`` still forwards them verbatim;
         ``top_k`` is a provider-specific kwarg that bypasses that check and is gated while the
         request body is built."""
+        if VertexGeminiConfig._is_nano_banana_2_1(model):
+            return False
         rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
         bare: Final = model.split("/")[-1]
         for candidate in (model, bare, f"vertex_ai/{bare}", f"gemini/{bare}"):
@@ -1973,6 +1986,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
+        if VertexGeminiConfig._is_nano_banana_2_1(model) or VertexGeminiConfig._is_flash_image_3_1(model):
+            return True
         providers: Final = ("gemini", "vertex_ai")
         key: Final = "supports_minimal_reasoning_effort"
         declared_by_model_map: Final = any(
@@ -2005,6 +2020,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
+        if model and VertexGeminiConfig._is_nano_banana_2_1(model) and reasoning_effort == "low":
+            raise UnsupportedParamsError(
+                message=(
+                    f"{model} does not support reasoning_effort='low'. Supported levels are: minimal, medium, high."
+                ),
+                status_code=400,
+            )
+        if model and VertexGeminiConfig._is_flash_image_3_1(model) and reasoning_effort in ("low", "medium"):
+            raise UnsupportedParamsError(
+                message=(
+                    f"{model} does not support reasoning_effort={reasoning_effort!r}. "
+                    "Supported levels are: minimal, high."
+                ),
+                status_code=400,
+            )
         supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
         sends_thoughts: Final = VertexGeminiConfig._include_thoughts(include_thoughts)
         if reasoning_effort == "minimal":
@@ -2385,7 +2415,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             allow_parameters_json_schema,
             keeps_search_tools_with_functions,
         )
+        is_nano: Final = self._is_nano_banana_2_1(model)
         for param, value in request_params.items():
+            if is_nano and param in _NANO_UNSUPPORTED_PARAMS and value is not None:
+                if drops_unsupported_params(drop_params):
+                    continue
+                raise UnsupportedParamsError(
+                    message=(
+                        f"{model} does not support {param}. "
+                        "To drop unsupported params, set `litellm.drop_params = True`."
+                    ),
+                    status_code=400,
+                )
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
                 continue
             if param in ("logprobs", "top_logprobs") and drops_logprobs:

@@ -14346,3 +14346,59 @@ def test_gemini_tools_measure_the_enum_budget_in_utf8_bytes(const: str, pinned: 
     assert declarations[0]["parameters"]["properties"]["source"] == (
         {"type": "string", "enum": [const]} if pinned else {"type": "string"}
     )
+
+
+_NANO_MODEL: Final = "gemini-nano-banana-2.1"
+_FLASH_IMAGE_MODEL: Final = "gemini-3.1-flash-image"
+
+
+def test_nano_minimal_does_not_become_unsupported_low() -> None:
+    config: Final = VertexGeminiConfig()
+    mapped: Final = config.map_openai_params({"reasoning_effort": "minimal"}, {}, _NANO_MODEL, False)
+    thinking_level: Final = mapped["thinkingConfig"]["thinkingLevel"].lower()
+    assert thinking_level == "minimal"
+
+
+@pytest.mark.parametrize(
+    "model,effort", [(_NANO_MODEL, "low"), (_FLASH_IMAGE_MODEL, "low"), (_FLASH_IMAGE_MODEL, "medium")]
+)
+def test_unsupported_effort_is_rejected_before_provider(model: str, effort: str) -> None:
+    config: Final = VertexGeminiConfig()
+    with pytest.raises(litellm.UnsupportedParamsError):
+        config.map_openai_params({"reasoning_effort": effort}, {}, model, False)
+
+
+@pytest.mark.parametrize(
+    "parameter,value",
+    [("temperature", 1.0), ("top_p", 0.9), ("top_k", 10), ("seed", 42)],
+)
+def test_nano_unsupported_sampling_is_rejected_before_provider(parameter: str, value: object) -> None:
+    config: Final = VertexGeminiConfig()
+    with pytest.raises(litellm.UnsupportedParamsError):
+        config.map_openai_params({parameter: value}, {}, _NANO_MODEL, False)
+
+
+def test_nano_unsupported_sampling_dropped_when_drop_params_true() -> None:
+    config: Final = VertexGeminiConfig()
+    mapped: Final = config.map_openai_params(
+        {"temperature": 1.0, "top_p": 0.9, "top_k": 10, "seed": 42, "logprobs": True, "max_tokens": 50},
+        {},
+        _NANO_MODEL,
+        True,
+    )
+    assert "temperature" not in mapped
+    assert "top_p" not in mapped
+    assert "top_k" not in mapped
+    assert "seed" not in mapped
+    assert "responseLogprobs" not in mapped
+    assert mapped.get("max_output_tokens") == 50
+
+
+@pytest.mark.parametrize(
+    "model,effort",
+    [(_NANO_MODEL, "medium"), (_NANO_MODEL, "high"), (_FLASH_IMAGE_MODEL, "minimal"), (_FLASH_IMAGE_MODEL, "high")],
+)
+def test_valid_thinking_levels_are_preserved(model: str, effort: str) -> None:
+    config: Final = VertexGeminiConfig()
+    mapped: Final = config.map_openai_params({"reasoning_effort": effort}, {}, model, False)
+    assert mapped["thinkingConfig"]["thinkingLevel"].lower() == effort
