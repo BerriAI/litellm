@@ -74,10 +74,7 @@ export default function CustomerUsageOverview({ customerId }: { customerId: stri
             budget={null}
             showBudgetHint={false}
             spendDetails={
-              <CustomerSurchargeBreakdown
-                spend={totals.spend}
-                surcharge={data.metadata?.total_customer_margin_spend}
-              />
+              <CustomerSurchargeBreakdown spend={totals.spend} surcharge={data.metadata?.total_customer_margin_spend} />
             }
           />
           <UsageBreakdownChart results={results} loading={usage.isPending} />
