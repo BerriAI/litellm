@@ -5,6 +5,7 @@ import socket
 import struct
 import zlib
 from types import MappingProxyType
+from collections.abc import Mapping
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2059,10 +2060,47 @@ async def test_calls_after_a_health_check_still_use_the_global_model_fallbacks(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
     monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
-    deployment: Final = {"model": "anthropic/missing-model", "api_base": "https://deployment.example", "api_key": "sk-test"}
+    deployment: Final = {
+        "model": "anthropic/missing-model",
+        "api_base": "https://deployment.example",
+        "api_key": "sk-test",
+    }
     _ = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, "https://deployment.example/v1/messages")
 
     _ = await ahealth_check(deployment, mode="chat")
     response: Final = await litellm.acompletion(**deployment, messages=[{"role": "user", "content": "hi"}])
 
     assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_params",
+    [
+        pytest.param({}, id="no-max-output-tokens"),
+        pytest.param({"max_output_tokens": None}, id="null-max-output-tokens"),
+    ],
+)
+async def test_a_responses_probe_is_bounded_by_the_health_check_max_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    deployment: Final = respx_mock.post("https://deployment.example/v1/responses").mock(
+        return_value=httpx.Response(404, json={"error": {"message": "model unavailable", "type": "not_found"}})
+    )
+
+    _ = await ahealth_check(
+        {
+            "model": "openai/probe-model",
+            "api_base": "https://deployment.example/v1",
+            "api_key": "sk-test",
+            "max_tokens": 37,
+            **deployment_params,
+        },
+        mode="responses",
+    )
+
+    sent: Final = json.loads(deployment.calls.last.request.content)
+    assert sent["max_output_tokens"] == 37
+    assert "max_tokens" not in sent
