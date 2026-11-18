@@ -29,18 +29,16 @@ pub(super) async fn presented<H: AuthHost>(
     })
 }
 
-/// A key the caller already holds names the end user before the request does.
+/// The end user the credential names is read before the request's.
 pub(super) async fn resolved<H: AuthHost>(
     host: &H,
     hash: KeyHash,
     key: Keyed<KeyRow<H>>,
+    credential_end_user: Option<&str>,
     requested_end_user: Option<&str>,
     settings: &KeySettings,
 ) -> Result<Lookup<H>, Refused<H::Rows>> {
-    let named = key
-        .record
-        .end_user_id
-        .as_deref()
+    let named = credential_end_user
         .filter(|end_user_id| !end_user_id.is_empty())
         .or(requested_end_user);
     let end_user = request_end_user(host, None, named, settings)
@@ -142,7 +140,11 @@ pub(super) fn gate<K>(
         return Gate::MasterKey;
     }
     if !settings.has_db {
-        return Gate::Denied(KeyDenial::NoDb);
+        return Gate::Denied(if settings.db_configured {
+            KeyDenial::NoDb
+        } else {
+            KeyDenial::NoDbConfigured
+        });
     }
     match (key, presented) {
         (Some(key), _) => Gate::Held(key),

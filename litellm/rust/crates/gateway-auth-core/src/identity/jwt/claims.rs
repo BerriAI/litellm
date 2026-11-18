@@ -25,6 +25,12 @@ pub(crate) enum InternalClaim {
     OrgId,
     #[strum(serialize = "_litellm_end_user_id")]
     EndUserId,
+    #[strum(serialize = "_litellm_customer_org_alias")]
+    CustomerOrgAlias,
+    #[strum(serialize = "_litellm_customer_member_id")]
+    CustomerMemberId,
+    #[strum(serialize = "_litellm_customer_team_id")]
+    CustomerTeamId,
 }
 
 /// `get_nested_value(data, key_path)` with no default. Only objects are walked into.
@@ -362,6 +368,9 @@ pub struct MappedClaims {
     pub org_id: Option<String>,
     pub org_alias: Option<String>,
     pub end_user_id: Option<String>,
+    pub customer_org_alias: Option<String>,
+    pub customer_member_id: Option<String>,
+    pub customer_team_id: Option<String>,
     pub object_id: Option<String>,
     pub agent_claim: Option<String>,
 }
@@ -376,6 +385,27 @@ pub fn claims(claims: &Claims, settings: &JwtSettings) -> MappedClaims {
         org_id: org_id(claims, settings),
         org_alias: org_alias(claims, settings),
         end_user_id: end_user_id(claims, settings),
+        customer_org_alias: trusted_or_configured(
+            claims,
+            settings,
+            InternalClaim::CustomerOrgAlias,
+            settings.config.customer_org_alias_jwt_field.as_ref(),
+        )
+        .and_then(id_text),
+        customer_member_id: trusted_or_configured(
+            claims,
+            settings,
+            InternalClaim::CustomerMemberId,
+            settings.config.customer_member_id_jwt_field.as_ref(),
+        )
+        .and_then(id_text),
+        customer_team_id: trusted_or_configured(
+            claims,
+            settings,
+            InternalClaim::CustomerTeamId,
+            settings.config.customer_team_id_jwt_field.as_ref(),
+        )
+        .and_then(id_text),
         object_id: object_id(claims, settings),
         agent_claim: agent_claim(claims, settings),
     }

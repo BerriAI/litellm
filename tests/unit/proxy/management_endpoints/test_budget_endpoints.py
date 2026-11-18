@@ -35,12 +35,15 @@ def client_and_mocks(monkeypatch):
 
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
+        litellm_config=types.SimpleNamespace(find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerteamtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerorganizationtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_dailyspend=mock_table,
         query_raw=AsyncMock(return_value=[{"referenced": False}]),
     )
+
+    mock_prisma.writer_db = mock_prisma.db
 
     # Monkeypatch Mocked Prisma client into the server module
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -636,11 +639,26 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
 def admin_client(client_and_mocks):
     client, mock_prisma, mock_table = client_and_mocks
     mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
-    mock_prisma.db.litellm_customerorganizationtable = MagicMock()
+    mock_prisma.db.litellm_customerorganizationtable = MagicMock(
+        find_many=AsyncMock(return_value=[]), count=AsyncMock(return_value=0)
+    )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     return client, mock_prisma, mock_table
+
+
+@pytest.mark.parametrize("encoded", (False, True))
+def test_delete_budget_preserves_organization_catalog(admin_client, encoded: bool) -> None:
+    from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
+
+    client, database, table = admin_client
+    database.db.litellm_config.find_unique.return_value = Record.model_validate(
+        {"param_value": json.dumps(["tpl-1"]) if encoded else ["tpl-1"]}
+    )
+    response: Final = client.post("/budget/delete", json={"id": "tpl-1"})
+    assert response.status_code == 409, response.text
+    table.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio

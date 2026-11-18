@@ -241,7 +241,7 @@ describe("CustomerHierarchyUsagePage", () => {
   it("keeps the selected dates in customer navigation and the return to all customers", async () => {
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
     await screen.findByRole("heading", { name: "Customer organization" });
-    for (const name of ["Customer teams", "Customer members", "Settings", "Customer organizations"]) {
+    for (const name of ["Customer teams", "Customer members", "Settings", "All customers"]) {
       const link = screen.getByRole("link", { name, exact: true });
       const url = new URL(link.getAttribute("href")!, "http://localhost");
       expect(url.searchParams.get("from")).toBe("2026-11-01");

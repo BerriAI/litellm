@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mappin
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
-from typing import Final, Literal, TypeAlias
+from typing import ClassVar, Final, Literal, TypeAlias, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -95,6 +95,8 @@ from litellm.types.utils import (
     Usage,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
 import inspect
 from typing import List, Optional
 from litellm.types.utils import GenericStreamingChunk, LiteLLMCommonStrings
@@ -156,6 +158,234 @@ def test_per_call_free_prices_override_catalog_unless_pricing_failed(
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
 
     assert obj.is_usage_explicitly_free(response) is (rate == 0.0 and not calculation_failed)
+
+
+class _FailureAttemptRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: list[StandardLoggingPayload] = []
+        self.failure_starts: list[datetime.datetime] = []
+        self.successes = 0
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.successes += 1
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.payloads.append(cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+        self.failure_starts.append(start_time)
+
+
+class _EveryFailureAttemptRecorder(_FailureAttemptRecorder):
+    logs_every_failed_attempt: ClassVar[bool] = True
+
+
+class _RateLimitGroupRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.groups: list[object] = []
+
+    async def log_model_group_rate_limit_error(
+        self, exception: Exception, original_model_group: object, kwargs: Mapping[str, object]
+    ) -> None:
+        self.groups.append(original_model_group)
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_hook_preserves_metadata_with_non_string_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder: Final = _RateLimitGroupRecorder()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="rate-limit-group",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {"model_group": 123, "model_group_size": 1, 7: "caller value"}
+    }
+
+    await logging_obj.special_failure_handlers(
+        litellm.RateLimitError("rate limit", model="gpt-4o-mini", llm_provider="openai")
+    )
+
+    assert recorder.groups == [123]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dynamic", [True, False])
+@pytest.mark.parametrize("omit_start_time", [False, True])
+async def test_reused_logging_dispatches_only_opted_in_loggers_for_each_failed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    dynamic: bool,
+    omit_start_time: bool,
+) -> None:
+    normal: Final = _FailureAttemptRecorder()
+    telemetry: Final = _EveryFailureAttemptRecorder()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [normal] if dynamic else [normal, telemetry])
+    start: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="attempts",
+        function_id="fn",
+        dynamic_async_failure_callbacks=[telemetry] if dynamic else None,
+        dynamic_async_success_callbacks=[normal, telemetry],
+    )
+    error: Final = litellm.ServiceUnavailableError("outage", model="gpt-4o", llm_provider="openai")
+    for index in range(3):
+        marker: Final = start + datetime.timedelta(seconds=index + 1)
+        logging_obj.model_call_details["litellm_params"] = {
+            "api_base": f"https://region-{index}.example/v1",
+            "custom_llm_provider": "openai",
+            "metadata": {},
+        }
+        logging_obj.model_call_details["api_call_start_time"] = marker
+        logging_obj.model_call_details["current_attempt_api_call_start_time"] = marker
+        prior_payload: Final = logging_obj.model_call_details.get("standard_logging_object")
+        await logging_obj.async_failure_handler(
+            error, "trace", None if omit_start_time else marker, marker + datetime.timedelta(seconds=1)
+        )
+        if index > 0:
+            assert logging_obj.model_call_details["standard_logging_object"] is prior_payload
+            assert logging_obj.model_call_details["async_failure_logged_attempt"] == start + datetime.timedelta(
+                seconds=1
+            )
+        saved_payload: Final = logging_obj.model_call_details["standard_logging_object"]
+        await logging_obj.async_failure_handler(
+            error, "trace", None if omit_start_time else marker, marker + datetime.timedelta(seconds=1)
+        )
+        assert logging_obj.model_call_details["standard_logging_object"] is saved_payload
+    await logging_obj.async_success_handler(
+        litellm.ModelResponse(model="gpt-4o"), start, start + datetime.timedelta(seconds=5)
+    )
+    assert [p["api_base"] for p in telemetry.payloads] == [f"https://region-{i}.example/v1" for i in range(3)]
+    assert [p["api_base"] for p in normal.payloads] == ["https://region-0.example/v1"]
+    assert all(p["status"] == "failure" for p in telemetry.payloads)
+    first_start: Final = start if omit_start_time else start + datetime.timedelta(seconds=1)
+    assert normal.failure_starts == [first_start]
+    assert telemetry.failure_starts == [
+        first_start,
+        start + datetime.timedelta(seconds=2),
+        start + datetime.timedelta(seconds=3),
+    ]
+    assert normal.successes == telemetry.successes == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_params",
+    [
+        "bogus",
+        {"metadata": "bogus"},
+        {"metadata": {"_otel_internal": "bogus"}},
+        {"metadata": {"_otel_internal": ["bogus"]}},
+        {"metadata": {"_otel_internal": {1: "bogus"}}},
+        {"metadata": {}},
+    ],
+)
+async def test_invalid_retry_metadata_never_escapes_failure_handler(
+    monkeypatch: pytest.MonkeyPatch, retry_params: object
+) -> None:
+    telemetry: Final = _EveryFailureAttemptRecorder()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [telemetry])
+    start: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="invalid-retry-metadata",
+        function_id="fn",
+    )
+    error: Final = litellm.ServiceUnavailableError("outage", model="gpt-4o", llm_provider="openai")
+    logging_obj.model_call_details["litellm_params"] = {"custom_llm_provider": "openai", "metadata": {}}
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = start
+    await logging_obj.async_failure_handler(error, "trace", start, start)
+    logging_obj.model_call_details["litellm_params"] = retry_params
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = start + datetime.timedelta(seconds=1)
+
+    if isinstance(retry_params, dict) and isinstance(retry_params.get("metadata"), dict):
+        await logging_obj.async_failure_handler(error, "trace", start, start + datetime.timedelta(seconds=2))
+    else:
+        await logging_obj._log_failed_attempt(error, "trace", start, start + datetime.timedelta(seconds=2))
+
+    assert len(telemetry.payloads) == 2
+    assert all(payload["status"] == "failure" for payload in telemetry.payloads)
+    assert logging_obj.model_call_details["litellm_params"] is retry_params
+
+
+@pytest.mark.asyncio
+async def test_retry_spans_preserve_request_failure_metric_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
+    reader: Final = InMemoryMetricReader()
+    exporter: Final = InMemorySpanExporter()
+    tracer: Final = TracerProvider()
+    tracer.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(litellm, "callback_settings", {})
+    telemetry: Final = OpenTelemetryV2(
+        config=OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True),
+        tracer_provider=tracer,
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+    monkeypatch.setattr(litellm, "_async_failure_callback", [telemetry])
+    start: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="metric-attempts",
+        function_id="fn",
+    )
+    error: Final = litellm.ServiceUnavailableError("outage", model="gpt-4o", llm_provider="openai")
+    for index in range(3):
+        marker: Final = start + datetime.timedelta(seconds=index + 1)
+        logging_obj.model_call_details["litellm_params"] = {
+            "api_base": f"https://region-{index}.example/v1",
+            "custom_llm_provider": "openai",
+            "metadata": {},
+        }
+        logging_obj.model_call_details["api_call_start_time"] = marker
+        logging_obj.model_call_details["current_attempt_api_call_start_time"] = marker
+        await logging_obj.async_failure_handler(error, "trace", marker, marker + datetime.timedelta(seconds=1))
+    spans: Final = exporter.get_finished_spans()
+    assert len(spans) == 3, spans
+    metrics: Final = reader.get_metrics_data()
+    assert metrics is not None
+    for resource in metrics.resource_metrics:
+        for scope in resource.scope_metrics:
+            duration: Final = next(
+                metric for metric in scope.metrics if metric.name == "gen_ai.client.operation.duration"
+            )
+            assert sum(point.count for point in duration.data.data_points) == 1
 
 
 @pytest.fixture
@@ -1345,6 +1575,59 @@ class TestGetRouterModelId:
         """Should return None when no model_info is present."""
         logging_obj.litellm_params = {"api_base": ""}
         assert logging_obj.get_router_model_id() is None
+
+    def test_falls_back_to_original_model_id_when_clone_is_unregistered(self, logging_obj):
+        """A forwarded-credential clone has a new unregistered id; price it by its source."""
+        litellm.model_cost["configured-deploy-1"] = {
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        }
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {
+                    "id": "request-scoped-clone-1",
+                    "original_model_id": "configured-deploy-1",
+                },
+            },
+        }
+        try:
+            assert logging_obj.get_router_model_id() == "configured-deploy-1"
+        finally:
+            litellm.model_cost.pop("configured-deploy-1", None)
+
+    def test_prefers_a_registered_clone_id_over_the_original(self, logging_obj):
+        """When the clone's own pricing is registered, keep using it."""
+        litellm.model_cost["registered-clone-1"] = {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        }
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {
+                    "id": "registered-clone-1",
+                    "original_model_id": "configured-deploy-1",
+                },
+            },
+        }
+        try:
+            assert logging_obj.get_router_model_id() == "registered-clone-1"
+        finally:
+            litellm.model_cost.pop("registered-clone-1", None)
+
+    def test_returns_clone_id_when_neither_id_is_registered(self, logging_obj):
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {
+                    "id": "unknown-clone-1",
+                    "original_model_id": "unknown-configured-1",
+                },
+            },
+        }
+        assert logging_obj.get_router_model_id() == "unknown-clone-1"
 
     def test_returns_none_when_no_litellm_params(self):
         """Should return None when litellm_params is not set."""
@@ -5307,7 +5590,9 @@ def _log_a_sync_chunk_held_open_across_the_stream_end() -> None:
     chunk_log: Final = threading.Thread(
         target=logging_obj.success_handler,
         kwargs={
-            "result": litellm.ModelResponseStream(model="gpt-4o", choices=[{"index": 0, "delta": {"content": "Hello"}}]),
+            "result": litellm.ModelResponseStream(
+                model="gpt-4o", choices=[{"index": 0, "delta": {"content": "Hello"}}]
+            ),
             "start_time": start,
             "end_time": start,
         },

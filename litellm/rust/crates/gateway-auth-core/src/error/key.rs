@@ -1,5 +1,7 @@
 use jiff::Timestamp;
 
+use crate::KeyHash;
+
 const INVALID_VIRTUAL_KEY_ERROR_MESSAGE: &str = "LiteLLM Virtual Key expected";
 const INVALID_API_KEY_ERROR_MESSAGE: &str = "Authentication Error, Invalid API key provided.";
 const JWT_AUTH_DISABLED_HINT: &str = " This key has the structure of a JWT, but JWT auth is not enabled on this proxy, so it \
@@ -29,12 +31,18 @@ pub enum KeyDenial {
     #[error("No connected db.")]
     NoDb,
     #[error(
+        "Authentication Error, Invalid proxy server token passed. The key does not match the master key, and no \
+         database is configured to look up virtual keys. Set DATABASE_URL to use virtual keys."
+    )]
+    NoDbConfigured,
+    #[error(
         "{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={received}, expected to start with 'sk-'.{}",
         if *jwt_hint { JWT_AUTH_DISABLED_HINT } else { "" }
     )]
     NotVirtualKey { received: String, jwt_hint: bool },
+    /// `hash` is what the host looked up, which only its log line names.
     #[error("{INVALID_API_KEY_ERROR_MESSAGE}")]
-    NotFound,
+    NotFound { hash: KeyHash },
     #[error("Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.")]
     Blocked,
     #[error(

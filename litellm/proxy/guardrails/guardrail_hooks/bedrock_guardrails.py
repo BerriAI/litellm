@@ -250,12 +250,28 @@ def _without_image_bytes(content: Sequence[BedrockContentItem]) -> tuple[Bedrock
     )
 
 
+def bedrock_error_type(response: BedrockGuardrailResponse) -> str | None:
+    error_type: Final = str((response.get("Output") or {}).get("__type", ""))
+    return error_type if "Exception" in error_type else None
+
+
+def _apply_guardrail_status(response: BedrockGuardrailResponse, images_sent: int) -> GuardrailStatus:
+    if bedrock_error_type(response) is not None:
+        return "guardrail_failed_to_respond"
+    images: Final = (response.get("guardrailCoverage") or {}).get("images") or {}
+    return "not_run" if images.get("guarded", 0) < images_sent else "success"
+
+
 def _allowed_dynamic_body_params(params: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in params.items() if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST}
 
 
 def _overridden(guardrail: object, name: str) -> bool:
     return getattr(getattr(guardrail, name, None), "__func__", None) is not getattr(BedrockGuardrail, name)
+
+
+def overrides_bedrock_call(guardrail: object) -> bool:
+    return _overridden(guardrail, "apply_guardrail") or _overridden(guardrail, "make_bedrock_api_request")
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -1062,6 +1078,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         merged_response: Final = self._merge_bedrock_guardrail_responses(responses)
         self._log_apply_guardrail_success(
             merged_response=merged_response,
+            images_sent=sum(1 for item in content if "image" in item),
             request_data=request_data,
             event_type=event_type,
             start_time=start_time,
@@ -1397,6 +1414,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_success(
         self,
         merged_response: BedrockGuardrailResponse,
+        images_sent: int,
         request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
@@ -1416,11 +1434,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=dict(merged_response),
             request_data=request_data if request_data is not None else {},
-            guardrail_status=(
-                "guardrail_failed_to_respond"
-                if "Exception" in str((merged_response.get("Output") or {}).get("__type", ""))
-                else "success"
-            ),
+            guardrail_status=_apply_guardrail_status(merged_response, images_sent),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
@@ -2567,7 +2581,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None:
-        if _overridden(self, "apply_guardrail") or _overridden(self, "make_bedrock_api_request"):
+        if overrides_bedrock_call(self):
             return
         attachments: Final = find_request_attachments(
             data,
@@ -2591,23 +2605,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             await self._scan_document_texts(attachments.document_texts, request_data=data, event_type=event_type)
         if not images:
             return
-        bedrock_request_data: Final = {
-            "source": "INPUT",
-            **_allowed_dynamic_body_params(
-                self.get_guardrail_dynamic_request_body_params(request_data=data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
-            ),
-        }
-        api_key: Final = data.get("api_key")
         try:
             for start in range(0, len(images), _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES):
-                await self._apply_guardrail_to_content(
-                    content=images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
-                    bedrock_request_data=bedrock_request_data,
-                    api_key=api_key if isinstance(api_key, str) else None,
+                await self.async_scan_images(
+                    images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
                     request_data=data,
+                    source="INPUT",
                     event_type=event_type,
-                    start_time=datetime.now(timezone.utc),
-                    allow_chunking=False,
                 )
         except (HTTPException, ModifyResponseException):
             raise
@@ -2616,6 +2620,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 raise
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to scan attachments: %s", str(e))
             raise Exception(f"Bedrock guardrail failed: {e}") from e  # noqa: TRY002  # same error the text scan raises
+
+    async def async_scan_images(
+        self,
+        images: Sequence[BedrockContentItem],
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
+        source: Literal["INPUT", "OUTPUT"],
+        event_type: GuardrailEventHooks,
+    ) -> BedrockGuardrailResponse:
+        api_key: Final = request_data.get("api_key")
+        return await self._apply_guardrail_to_content(
+            content=images,
+            bedrock_request_data={
+                "source": source,
+                **_allowed_dynamic_body_params(
+                    self.get_guardrail_dynamic_request_body_params(request_data=request_data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
+                ),
+            },
+            api_key=api_key if isinstance(api_key, str) else None,
+            request_data=request_data,
+            event_type=event_type,
+            start_time=datetime.now(timezone.utc),
+            allow_chunking=False,
+        )
 
     async def _scan_document_texts(
         self,

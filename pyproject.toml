@@ -541,6 +541,9 @@ lint.extend-select = [
     "SIM114", "SIM118", "SIM201", "SIM211", "SIM222", "TC005", "UP006", "UP007", "UP008",
     "UP012", "UP018", "UP024", "UP032", "UP034", "UP035", "UP036", "UP037", "UP045",
     "C404", "C419", "TID253",
+    # Rust repositories stay behind the Python repositories in litellm/repositories/.
+    # The banned names live in [tool.ruff.lint.flake8-tidy-imports.banned-api] below.
+    "TID251",
 ]
 # RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
 # `# noqa` directives that protect rules enforced elsewhere. List those codes as external
@@ -571,6 +574,18 @@ lint.exclude = ["litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "t
 [tool.ruff.lint.flake8-tidy-imports]
 banned-module-level-imports = ["prisma"]
 
+# Only litellm/repositories/ reaches a Rust repository (the per-file-ignores below allow it
+# there); everything else goes through the Python repository that wraps it. tests/ is outside
+# this config's lint scope, so tests may patch and exercise rust_database directly.
+# .github/linters/ruff-strict.toml sets its own banned-api and per-file-ignores, which replace
+# these two tables rather than merge with them, so the strict gate's TID251 bans keep applying
+# to litellm/repositories/ and these Rust bans hard-fail here instead of being counted there.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"litellm.repositories.rust_database".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustKeyRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustJwtKeyMappingRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustModelAccessGroupRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+
 [tool.ruff.lint.per-file-ignores]
 "litellm/main.py" = ["F401"]
 "litellm/types/caching.py" = ["F401"]
@@ -587,6 +602,11 @@ banned-module-level-imports = ["prisma"]
 "litellm/llms/azure_ai/rerank/__init__.py" = ["F401"]
 "litellm/llms/bedrock/chat/__init__.py" = ["F401"]
 "litellm/proxy/utils.py" = ["F401"]
+# The only TID251 bans in this config are the Rust repository ones above, so this unbans nothing else.
+"litellm/repositories/**" = ["TID251"]
+"litellm/rust_bridge/**" = ["TID251"]
+# Tests patch and exercise rust_database directly (tests/unit/proxy/rust_auth_stores.py).
+"tests/**" = ["TID251"]
 
 [tool.pyright]
 extraPaths = ["litellm/runtime"]
