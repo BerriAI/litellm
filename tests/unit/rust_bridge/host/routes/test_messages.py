@@ -3283,6 +3283,32 @@ def test_settings_hand_the_route_the_deployment_facts_its_logging_would_price_wi
     assert settings["pricing"] == expected
 
 
+@pytest.mark.parametrize("deployment_location", ["us-east5", None])
+def test_the_route_prices_at_the_vertex_location_its_logging_would_price_at(
+    monkeypatch: pytest.MonkeyPatch, deployment_location: str | None
+) -> None:
+    """The route resolves the location without the call's optional params, which Logging reads, so the two must
+    agree once the resolved call is logged: the optional params Logging then holds are the Messages body fields."""
+    from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
+
+    monkeypatch.setattr(litellm, "vertex_location", "europe-west4")
+    deployment: Final = {} if deployment_location is None else {"vertex_location": deployment_location}
+    logger: Final = _priced_logger(deployment)
+    request: Final = {**_CALL, **deployment, "model": "vertex_ai/claude-opus-5-5", "litellm_logging_obj": logger}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+    messages_host._log_resolved_call(request, "vertex_ai")
+    logged_at: Final = resolve_vertex_location_for_cost(
+        custom_llm_provider="vertex_ai",
+        litellm_params=logger.litellm_params,
+        optional_params=logger.optional_params,
+        model=logger.model,
+    )
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == logged_at == (deployment_location or "europe-west4")
+
+
 def test_settings_leave_pricing_to_python_for_an_invoked_bedrock_model_id() -> None:
     logger: Final = _priced_logger(_ROUTED)
 
