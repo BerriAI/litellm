@@ -557,7 +557,7 @@ def _should_cooldown_deployment(
             num_fails_this_minute,
         )
 
-        if exception_status_int == 429 and not is_single_deployment_model_group:
+        if exception_status_int == 429 and not is_lone_deployment:
             return True
         elif percent_fails == 1.0 and total_requests_this_minute >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD:
             # Cooldown if all requests failed and we have reasonable traffic
@@ -565,7 +565,7 @@ def _should_cooldown_deployment(
         elif (
             percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT
             and total_requests_this_minute >= DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS
-            and not is_single_deployment_model_group  # by default we should avoid cooldowns on single deployment model groups
+            and not is_lone_deployment
         ):
             # Only apply error rate cooldown when we have enough requests to make the percentage meaningful
             return True

@@ -441,11 +441,11 @@ impl<C: RouterCache> Health<C> {
             } else {
                 0.0
             };
-            return Ok((status == 429 && !shape.single_deployment)
+            return Ok((status == 429 && !lone)
                 || (percent_fails == 1.0 && total >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD)
                 || (percent_fails > FAILURE_THRESHOLD_PERCENT
                     && total >= FAILURE_THRESHOLD_MINIMUM_REQUESTS
-                    && !shape.single_deployment)
+                    && !lone)
                 || !should_retry_status(status));
         }
         if lone && policy_fails.is_none() {
@@ -735,6 +735,42 @@ mod tests {
                 GroupShape::default(),
                 None,
                 &failure,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(cooldown.is_some(), cooled);
+    }
+
+    #[rstest]
+    #[case::server_errors_with_a_fallback(FailureKind::InternalServer, 500, 4, true, true)]
+    #[case::a_rate_limit_with_a_fallback(FailureKind::RateLimit, 429, 0, true, true)]
+    #[case::server_errors_alone(FailureKind::InternalServer, 500, 4, false, false)]
+    #[case::a_rate_limit_alone(FailureKind::RateLimit, 429, 0, false, false)]
+    #[tokio::test]
+    async fn a_single_deployment_cools_by_the_default_rules_only_when_its_group_has_a_fallback(
+        #[case] kind: FailureKind,
+        #[case] status: u16,
+        #[case] earlier_failures: usize,
+        #[case] has_fallback_group: bool,
+        #[case] cooled: bool,
+    ) {
+        let health = health();
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+        for _ in 0..earlier_failures {
+            health.count_failure("a").await.unwrap();
+        }
+
+        let cooldown = health
+            .record_failure(
+                &settings(RouterDynamicConfig::default()),
+                &deployment,
+                GroupShape {
+                    single_deployment: true,
+                    has_fallback_group,
+                },
+                None,
+                &AttemptError::new(kind, Some(status)),
             )
             .await
             .unwrap();

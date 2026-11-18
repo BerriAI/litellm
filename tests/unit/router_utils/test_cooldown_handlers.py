@@ -1080,6 +1080,56 @@ class TestSingleDeploymentModelGroupProtection:
         )
         assert should_cooldown is True, "explicit per-exception-type policy must still cool down a solo deployment"
 
+    @pytest.mark.parametrize(
+        ("fallbacks", "status", "exception", "earlier_failures", "cooled"),
+        [
+            pytest.param(
+                [{"gpt-4": ["backup"]}], 500, Exception("Internal error"), 4, True, id="server-errors-with-a-fallback"
+            ),
+            pytest.param(
+                [{"gpt-4": ["backup"]}],
+                429,
+                litellm.RateLimitError("Rate limit", "openai", "gpt-4"),
+                0,
+                True,
+                id="rate-limit-with-a-fallback",
+            ),
+            pytest.param([], 500, Exception("Internal error"), 4, False, id="server-errors-alone"),
+            pytest.param(
+                [], 429, litellm.RateLimitError("Rate limit", "openai", "gpt-4"), 0, False, id="rate-limit-alone"
+            ),
+        ],
+    )
+    def test_default_rules_cool_a_single_deployment_only_when_its_group_has_a_fallback(
+        self,
+        fallbacks: list[dict[str, list[str]]],
+        status: int,
+        exception: Exception,
+        earlier_failures: int,
+        cooled: bool,
+    ) -> None:
+        router: Final = _make_router(
+            model_list=[
+                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "solo"}},
+                {"model_name": "backup", "litellm_params": {"model": "openai/gpt-4o"}, "model_info": {"id": "spare"}},
+            ],
+            fallbacks=fallbacks,
+        )
+        ctx: Final = RoutingContext(router)
+        for _ in range(earlier_failures + 1):
+            increment_deployment_failures_for_current_minute(ctx=ctx, deployment_id="solo")
+
+        assert (
+            _should_cooldown_deployment(
+                ctx=ctx,
+                deployment="solo",
+                exception_status=status,
+                original_exception=exception,
+                requested_model_group="gpt-4",
+            )
+            is cooled
+        )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestShouldCooldownBasedOnAllowedFailsPolicyFalsyZero:

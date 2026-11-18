@@ -5,11 +5,11 @@ use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, Router, RouterCache, RouterConfig,
-    RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest, RouterResponse, RoutingContext,
-    SeededRandomness, SelectStage, Served, SuccessReport, UsageWindow, call::StreamOrigin,
-    fallback::Fallbacks, health::current_minute, host::UncountedRetries, select,
-    select::PassThrough,
+    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted, Randomness,
+    Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
+    RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
+    UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
+    host::UncountedRetries, select, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -38,6 +38,8 @@ struct ScriptedHost {
     /// The callback filters pin to this deployment until an attempt of the request failed on it,
     /// as `encrypted_content_affinity` does.
     pinned: Option<&'static str>,
+    /// A pick of the first name resolves the second group, as a pre-routing hook reroutes it.
+    pre_routes: Option<(&'static str, &'static str)>,
 }
 
 impl ScriptedHost {
@@ -118,6 +120,13 @@ impl RouterHost for ScriptedHost {
                 ..Served::new(attempt.deployment.id.clone(), 10)
             }),
         }
+    }
+
+    async fn pre_route(&self, ask: &PreRoute<'_>) -> Result<Option<PreRouted>, Error> {
+        Ok(self
+            .pre_routes
+            .filter(|(name, _)| *name == ask.name)
+            .map(|(_, group)| PreRouted::Model(group.to_owned())))
     }
 
     async fn select(
@@ -263,6 +272,27 @@ fn router(config: RouterConfig, dynamic: serde_json::Value, host: Arc<ScriptedHo
     let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
     let router = Router::builder(config, dynamic, HostFacts::everything())
         .randomness(Arc::new(SeededRandomness::new(7)))
+        .build()
+        .unwrap();
+    Hosted { router, host }
+}
+
+struct AlwaysFirstCandidate;
+
+impl Randomness for AlwaysFirstCandidate {
+    fn next_f64(&self) -> f64 {
+        0.0
+    }
+}
+
+fn first_candidate_router(
+    config: RouterConfig,
+    dynamic: serde_json::Value,
+    host: Arc<ScriptedHost>,
+) -> Hosted {
+    let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
+    let router = Router::builder(config, dynamic, HostFacts::everything())
+        .randomness(Arc::new(AlwaysFirstCandidate))
         .build()
         .unwrap();
     Hosted { router, host }
@@ -441,6 +471,67 @@ async fn an_error_the_router_made_itself_hands_back_no_host_error(config: Router
         ended.error
     );
     assert_eq!(ended.raised, None);
+}
+
+#[rstest]
+#[case::server_error(server_error())]
+#[case::timeout(failure(FailureKind::Timeout, 408))]
+#[case::connection_error(AttemptError::new(FailureKind::ApiConnection, None))]
+#[tokio::test]
+async fn a_retry_leaves_the_deployment_that_just_failed_the_request(
+    config: RouterConfig,
+    #[case] origin_failure: AttemptError,
+) {
+    let host = Arc::new(ScriptedHost {
+        first_failure: Mutex::new(Some(origin_failure)),
+        ..ScriptedHost::default()
+    });
+    let router = first_candidate_router(config, json!({"num_retries": 1}), host.clone());
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(
+        (host.selected(), response.attempted_retries),
+        (vec!["a1".to_owned(), "a2".to_owned()], 1)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_pre_routed_group_with_nothing_healthy_falls_back_by_its_own_chain() {
+    let host = Arc::new(ScriptedHost {
+        pre_routes: Some(("context", "primary")),
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        tiers(false),
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    router
+        .health()
+        .add_cooldown("p1", &server_error(), Duration::from_secs(60))
+        .await
+        .unwrap();
+    let response = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                model: "context".to_owned(),
+                pre_routes: true,
+                ..RouterRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            response.deployment_id.as_str(),
+            response.attempted_fallbacks
+        ),
+        ("b1", 1)
+    );
 }
 
 #[rstest]
@@ -1185,6 +1276,27 @@ async fn a_stream_retry_is_reported_before_its_attempt(config: RouterConfig) {
         .await
         .unwrap();
     assert_eq!((response.attempted_retries, host.retries()), (1, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_retry_leaves_the_deployment_the_stream_failed_on(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = first_candidate_router(config, json!({}), host.clone());
+    let origin = StreamOrigin {
+        deployment_id: Some("a1".to_owned()),
+        ..stream_origin()
+    };
+    router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin,
+            server_error(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), vec!["a2".to_owned()]);
 }
 
 fn pinned_to_a1() -> Arc<ScriptedHost> {
