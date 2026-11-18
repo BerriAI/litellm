@@ -2,6 +2,11 @@ name: LiteLLM Rust DB
 
 on:
   push:
+    branches:
+      - main
+      - "rc/**"
+      - "stable/**"
+      - "lts/**"
     paths:
       - "litellm/rust/crates/db/**"
       - "litellm/rust/crates/repositories/**"
@@ -20,6 +25,9 @@ on:
     branches:
       - main
       - "litellm_**"
+      - "rc/**"
+      - "stable/**"
+      - "lts/**"
     paths:
       - "litellm/rust/crates/db/**"
       - "litellm/rust/crates/repositories/**"
