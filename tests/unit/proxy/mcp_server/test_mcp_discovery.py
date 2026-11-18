@@ -110,6 +110,27 @@ class TestMCPRegistryFile:
             "env_vars": [],
         }
 
+    def test_deapi_uses_streamable_http_with_a_secret_api_key(self, registry_path: str) -> None:
+        with open(registry_path, "r") as f:
+            data: Final = json.load(f)
+
+        deapi: Final = next(server for server in data["servers"] if server["name"] == "deapi")
+        assert deapi == {
+            "name": "deapi",
+            "title": "deAPI",
+            "description": "Image, video, speech and music generation, transcription and OCR",
+            "icon_url": "https://deapi.ai/favicon-128.png",
+            "category": "Developer Tools",
+            "registry_url": (
+                "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.deapi-ai%2Fmcp-server-deapi/versions/latest"
+            ),
+            "transport": "http",
+            # deAPI's server.json in the MCP registry (checked 2026-11-18) lists this streamable HTTP remote, and the
+            # server takes the deAPI API key as a Bearer token https://github.com/deapi-ai/mcp-server-deapi
+            "url": "https://mcp.deapi.ai/mcp",
+            "env_vars": [{"name": "DEAPI_API_KEY", "description": "deAPI API key", "secret": True}],
+        }
+
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""
         with open(registry_path, "r") as f:

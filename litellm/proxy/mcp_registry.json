@@ -63,6 +63,19 @@
       ]
     },
     {
+      "name": "deapi",
+      "title": "deAPI",
+      "description": "Image, video, speech and music generation, transcription and OCR",
+      "icon_url": "https://deapi.ai/favicon-128.png",
+      "category": "Developer Tools",
+      "registry_url": "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.deapi-ai%2Fmcp-server-deapi/versions/latest",
+      "transport": "http",
+      "url": "https://mcp.deapi.ai/mcp",
+      "env_vars": [
+        {"name": "DEAPI_API_KEY", "description": "deAPI API key", "secret": true}
+      ]
+    },
+    {
       "name": "slack",
       "title": "Slack",
       "description": "Channel management, messaging, and Slack workspace integration",
