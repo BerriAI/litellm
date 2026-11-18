@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import asdict, fields, replace
 from datetime import date, datetime
+from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,6 +24,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     raise_public,
     spend_logs_window,
     sum_spend_metrics,
+    unless_database_fails,
 )
 from litellm.proxy.management_endpoints.daily_activity_scopes import (
     AGENT_RESOLVER,
@@ -149,9 +151,10 @@ async def _key_activity_rows(
     spend_window: Final[tuple[datetime, datetime] | None] = spend_logs_window(
         frozenset((resolved_scope.scope.start_date, resolved_scope.scope.end_date))
     )
-    metadata: Final[Mapping[str, KeyMetadataRow]] = await repository.key_metadata(
-        frozenset(row.api_key for row in rows if row.api_key),
-        spend_window,
+    metadata: Final[Mapping[str, KeyMetadataRow]] = await unless_database_fails(
+        repository.key_metadata(frozenset(row.api_key for row in rows if row.api_key), spend_window),
+        MappingProxyType({}),
+        "its key metadata",
     )
     return [_key_activity_row(row, metadata) for row in rows]
 
@@ -176,8 +179,10 @@ async def _user_activity_rows(
     repository: DailyActivityRepository,
     rows: Sequence[UserSpendRow],
 ) -> Sequence[UserActivityRow]:
-    metadata: Final[Mapping[str, UserMetadataRow]] = await repository.user_metadata(
-        frozenset(user_id for row in rows if (user_id := row.user_id) is not None)
+    metadata: Final[Mapping[str, UserMetadataRow]] = await unless_database_fails(
+        repository.user_metadata(frozenset(user_id for row in rows if (user_id := row.user_id) is not None)),
+        MappingProxyType({}),
+        "its user metadata",
     )
     return [_user_activity_row(row, metadata) for row in rows]
 
