@@ -83785,7 +83785,7 @@
         "mode": "responses",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -83801,6 +83801,7 @@
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": false,
+        "supports_prompt_cache_breakpoint": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -83830,7 +83831,7 @@
         "output_cost_per_token_above_272k_tokens": 6.6e-05,
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.000198,
         "output_cost_per_token_ultrafast": 0.000132,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -83846,6 +83847,7 @@
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": false,
+        "supports_prompt_cache_breakpoint": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -106052,7 +106054,7 @@
         "output_cost_per_token_above_272k_tokens": 6e-05,
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.00018,
         "output_cost_per_token_ultrafast": 0.00012,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -106090,7 +106092,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -106136,7 +106138,7 @@
         "output_cost_per_token_above_272k_tokens": 6.6e-05,
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.000198,
         "output_cost_per_token_ultrafast": 0.000132,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -106174,7 +106176,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -106220,7 +106222,7 @@
         "output_cost_per_token_above_272k_tokens": 6e-05,
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.00018,
         "output_cost_per_token_ultrafast": 0.00012,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_modalities": [
             "text",
             "image"
@@ -106253,7 +106255,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_modalities": [
             "text",
             "image"
