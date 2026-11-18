@@ -9,6 +9,8 @@ reasoning.encrypted_content for multi-turn stateless workflows.
 Related issue: https://github.com/BerriAI/litellm/issues/22189
 """
 
+import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -155,6 +157,29 @@ def test_openrouter_responses_returns_provider_reported_cost(cost):
     )
 
     assert get_response_cost_from_hidden_params(response.hidden_params) == cost
+
+
+@pytest.mark.parametrize("cost", [float("nan"), float("inf")])
+def test_openrouter_responses_drops_a_non_finite_provider_cost(cost: float) -> None:
+    body: Final = {
+        "id": "resp_test",
+        "created_at": 1,
+        "model": "unmapped-model",
+        "object": "response",
+        "output": [],
+        "status": "completed",
+        "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5, "cost": cost},
+    }
+    response: Final = OpenRouterResponsesAPIConfig().transform_response_api_response(
+        model="openrouter/unmapped-model",
+        raw_response=httpx.Response(
+            200, content=json.dumps(body).encode(), headers={"content-type": "application/json"}
+        ),
+        logging_obj=MagicMock(),
+    )
+
+    assert get_response_cost_from_hidden_params(response.hidden_params) is None
+    assert json.loads(json.dumps(response.model_dump(), allow_nan=False, default=str))["usage"]["cost"] is None
 
 
 @pytest.mark.parametrize(

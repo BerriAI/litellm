@@ -669,7 +669,7 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(
     import httpx2
     import yaml
     from integration._support.asgi import asgi_server
-    from integration._support.mcp import _drain_sse_streams
+    from integration._support.mcp import _acknowledge_notifications_after_dispatch, _drain_sse_streams
     from integration._support.process import owned_proxy
     from mcp import ClientSession, MCPError
     from mcp.client.streamable_http import streamable_http_client
@@ -769,7 +769,9 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(
         watchers = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
         await asyncio.wait_for(asyncio.gather(*watchers), 2)
 
-    hosted: Final = Starlette(routes=[Mount("/", app=app)], lifespan=lifespan)
+    hosted: Final = Starlette(
+        routes=[Mount("/", app=_acknowledge_notifications_after_dispatch(app))], lifespan=lifespan
+    )
     with asgi_server(hosted) as upstream_url, httpx.Client() as client:
         config: Final = tmp_path / "proxy.yaml"
         config.write_text(

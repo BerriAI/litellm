@@ -1,9 +1,11 @@
+import traceback
 from collections.abc import Iterator
 from typing import Final
 
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -109,24 +111,35 @@ def test_transform_audio_transcription_response_without_words_key_has_no_word_li
 @pytest.mark.parametrize(
     "payload",
     [
-        ["not", "an", "object"],
-        "plain text",
-        7,
-        {"text": ["not", "text"]},
-        {"text": "t", "words": None},
-        {"text": "t", "words": 7},
-        {"text": "t", "words": "not a list"},
-        {"text": "t", "words": ["not an object"]},
-        {"text": "t", "words": [{"type": "word", "text": "ok"}, None]},
+        ["sensitive", "an", "object"],
+        "sensitive text",
+        {"text": ["sensitive", "text"]},
+        {"text": "sensitive", "words": None},
+        {"text": "sensitive", "words": 7},
+        {"text": "sensitive", "words": "not a list"},
+        {"text": "sensitive", "words": ["not an object"]},
+        {"text": "sensitive", "words": [{"type": "word", "text": "ok"}, None]},
     ],
 )
-def test_transform_audio_transcription_response_wraps_malformed_payloads_with_the_raw_body(payload: object):
+def test_transform_audio_transcription_response_keeps_the_body_out_of_malformed_payload_errors(payload: object):
     raw_response = httpx.Response(200, json=payload)
 
     with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
         ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
 
-    assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+    assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
+
+
+def test_transform_audio_transcription_response_names_the_failing_lookup_of_a_malformed_payload():
+    raw_response = httpx.Response(200, json={"text": "sensitive", "words": [None]})
+
+    with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
+        ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
+
+    failing_lookup: Final = exc_info.value.__context__
+    assert isinstance(failing_lookup, ValidationError)
+    assert str(exc_info.value) == f"Error transforming ElevenLabs response: {failing_lookup}"
+    assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
 
 
 class TestElevenLabsAudioTranscription:

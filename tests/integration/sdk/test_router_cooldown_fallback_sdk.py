@@ -143,6 +143,6 @@ async def test_string_valued_fallbacks_still_cool_down_the_failing_primary(fallb
                 model="primary",
                 messages=[{"role": "user", "content": f"cooldown {uuid.uuid4().hex}"}],
             )
-        cooled: Final = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+        cooled: Final = await async_get_cooldown_deployments(ctx=router._core_ctx, parent_otel_span=None)
 
     assert tuple(cooled) == ("primary-deployment",)

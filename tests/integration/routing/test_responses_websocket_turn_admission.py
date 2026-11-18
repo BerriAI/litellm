@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import os
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
@@ -26,6 +27,7 @@ from integration._support.client import (
     list_value,
     object_value,
     string_value,
+    until_asserted,
 )
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_ws_peer import (
@@ -54,8 +56,10 @@ TURN_SPEND: Final = USAGE["input_tokens"] * INPUT_RATE + USAGE["output_tokens"] 
 TURN_TOKENS: Final = USAGE["total_tokens"]
 MANAGED_PROVIDER: Final = "mistral"
 SPEND_ROWS_FOR_KEY: Final = (
-    'SELECT request_id, spend, status, model_group, metadata, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
+    "SELECT request_id, spend, status, model_group, call_type, metadata, request_tags, proxy_server_request,"
+    ' extract(epoch from "startTime")::float8 AS started_at FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
 )
+STORED_TIME_RESOLUTION_SECONDS: Final = 0.001
 TURN_CHECK_FAULT: Final = "turn_check_fault"
 FAULTING_TURN_CHECK: Final = f"""
 from litellm.integrations.custom_logger import CustomLogger
@@ -71,6 +75,13 @@ class FaultingTurnCheck(CustomLogger):
 
 instance = FaultingTurnCheck()
 """
+HEAVY_TURN_TOKENS: Final = 600
+HEAVY_TURN_USAGE: Final[dict[str, JsonValue]] = {
+    "input_tokens": 400,
+    "output_tokens": 200,
+    "total_tokens": HEAVY_TURN_TOKENS,
+}
+SOCKET_TPM_LIMIT: Final = 1000
 FrameReader = Callable[[], int]
 
 
@@ -96,6 +107,7 @@ def _config(directory: Path, router_settings: Mapping[str, JsonValue], callbacks
         yaml.safe_dump(
             {
                 **base,
+                "general_settings": {**object_value(base["general_settings"]), "store_prompts_in_spend_logs": True},
                 "litellm_settings": {
                     **object_value(base["litellm_settings"]),
                     **({"callbacks": list(callbacks)} if callbacks else {}),
@@ -124,7 +136,16 @@ def _admitting_proxy(
         (directory / f"{module}.py").write_text(source)
     config: Final = _config(directory, router_settings, tuple(f"{module}.instance" for module in callback_sources))
     with gateway_from_environment() as base:
-        with owned_proxy(base, directory, {"SSL_CERT_FILE": str(cert[0])}, config=config) as proxy:
+        with owned_proxy(
+            base,
+            directory,
+            {
+                "SSL_CERT_FILE": str(cert[0]),
+                "REDIS_HOST": os.environ["REDIS_HOST"],
+                "REDIS_PORT": os.environ["REDIS_PORT"],
+            },
+            config=config,
+        ) as proxy:
             yield proxy
 
 
@@ -259,17 +280,54 @@ async def _until(read: Callable[[], float], satisfied: Callable[[float], bool]) 
     return await asyncio.to_thread(eventually, read, satisfied, 15)
 
 
-def _failure_rows(gateway: Gateway, key: str) -> list[dict[str, JsonValue]]:
-    rows: Final = eventually(
-        lambda: gateway.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
-        lambda found: any(row["status"] == "failure" for row in found),
-        seconds=70,
-    )
-    return [row for row in rows if row["status"] == "failure"]
+def _failures_now(gateway: Gateway, key: str) -> list[dict[str, JsonValue]]:
+    return [row for row in gateway.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)) if row["status"] == "failure"]
+
+
+def _failure_rows(gateway: Gateway, key: str, count: int = 1) -> list[dict[str, JsonValue]]:
+    return eventually(lambda: _failures_now(gateway, key), lambda found: len(found) >= count, seconds=70)
+
+
+def _settled_failure_rows(gateway: Gateway, key: str, count: int) -> list[dict[str, JsonValue]]:
+    return held(lambda: _failures_now(gateway, key), lambda found: len(found) == count, holding=5, seconds=70)
+
+
+@dataclass(frozen=True, slots=True)
+class AnsweredTurn:
+    text: str
+    sent_at: float
+    answered_at: float
+    received: tuple[dict[str, JsonValue], ...]
+
+
+async def _timed_turn(connection: websockets.ClientConnection, model: str, label: str) -> AnsweredTurn:
+    text: Final = f"{label} {uuid.uuid4().hex}"
+    sent_at: Final = time.time()
+    received: Final = await _say(connection, model, text)
+    return AnsweredTurn(text, sent_at, time.time(), received)
+
+
+def _stored_text(row: Mapping[str, JsonValue]) -> str:
+    message: Final = object_value(list_value(object_value(row["proxy_server_request"])["input"])[0])
+    return string_value(object_value(list_value(message["content"])[0])["text"])
+
+
+def _assert_logged_as_its_own_failure(
+    row: Mapping[str, JsonValue], turn: AnsweredTurn, deployment: Deployment
+) -> dict[str, JsonValue]:
+    assert _stored_text(row) == turn.text, row
+    started_at: Final = row["started_at"]
+    assert isinstance(started_at, float), row
+    assert turn.sent_at - STORED_TIME_RESOLUTION_SECONDS <= started_at, (turn, row)
+    assert started_at <= turn.answered_at + STORED_TIME_RESOLUTION_SECONDS, (turn, row)
+    assert row["model_group"] == deployment.name, row
+    assert row["call_type"] == "_aresponses_websocket", row
+    assert float(row["spend"]) == 0.0, row
+    return object_value(object_value(row["metadata"])["error_information"])
 
 
 @pytest.mark.parametrize("relay", ("native", "managed"))
-def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_logged_once_as_its_failure(
+def test_each_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_logged_as_its_own_failure(
     limited: Gateway, cert: tuple[Path, Path], relay: str
 ) -> None:
     with responses_peer(cert) as peer, limited.scenario() as scenario:
@@ -278,25 +336,71 @@ def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_log
         key: Final = scenario.key(models=[deployment.name])
         tag: Final = f"ws-turn-{uuid.uuid4().hex}"
 
-        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], tuple[AnsweredTurn, ...], list[str]]:
             async with _socket(limited, key, deployment.name, {"x-litellm-tags": tag}) as connection:
                 first: Final = await _say(connection, deployment.name)
                 await _until(lambda: _deployment_spend(deployment), lambda spent: spent > TURN_SPEND / 2)
-                return (first, await _say(connection, deployment.name), await _say(connection, deployment.name))
+                refused: Final = (
+                    await _timed_turn(connection, deployment.name, "second"),
+                    await _timed_turn(connection, deployment.name, "third"),
+                )
+                logged_while_open: Final = await asyncio.to_thread(_failure_rows, limited, key, len(refused))
+                return first, refused, [string_value(row["request_id"]) for row in logged_while_open]
 
-        first, second, third = asyncio.run(session())
+        first, refused, logged_while_open = asyncio.run(session())
 
         completed(first)
-        _assert_refused(second)
-        _assert_refused(third)
+        for answered in refused:
+            _assert_refused(answered.received)
         assert deployment.forwarded_turns() == 1
-        failures: Final = _failure_rows(limited, key)
-        assert len(failures) == 1, failures
-        assert failures[0]["model_group"] == deployment.name, failures
-        assert tag in list_value(failures[0]["request_tags"]), failures
-        assert float(failures[0]["spend"]) == 0.0, failures
-        error: Final = object_value(object_value(failures[0]["metadata"])["error_information"])
-        assert str(error["error_code"]) == "429", error
+        failures: Final = _settled_failure_rows(limited, key, len(refused))
+        assert sorted(string_value(row["request_id"]) for row in failures) == sorted(logged_while_open), failures
+        assert len(set(logged_while_open)) == len(refused), failures
+        by_text: Final = {_stored_text(row): row for row in failures}
+        for answered in refused:
+            row = by_text[answered.text]
+            error = _assert_logged_as_its_own_failure(row, answered, deployment)
+            assert str(error["error_code"]) == "429", error
+            assert tag in list_value(row["request_tags"]), row
+
+
+def test_a_refused_turn_s_failure_row_leaves_the_socket_s_parallel_slot_held_until_the_socket_closes(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer, max_budget=TURN_SPEND / 2, budget_duration="1d")
+        key: Final = scenario.key(models=[deployment.name], max_parallel_requests=1)
+
+        async def opened_once() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+            async with _socket(limited, key, deployment.name) as connection:
+                received: Final = await _say(connection, deployment.name)
+                await asyncio.wait_for(connection.wait_closed(), timeout=20)
+                return received, connection.close_code
+
+        async def second_socket_while_the_first_is_open() -> None:
+            async with _socket(limited, key, deployment.name) as holding:
+                completed(await _say(holding, deployment.name))
+                await _until(lambda: _deployment_spend(deployment), lambda spent: spent > TURN_SPEND / 2)
+                _assert_refused(await _say(holding, deployment.name))
+                await asyncio.to_thread(_failure_rows, limited, key)
+                second, second_close_code = await opened_once()
+                _assert_refused(second)
+                assert "max_parallel_requests" in string_value(object_value(second[0]["error"])["message"]), second
+                assert second_close_code == 1008, second
+
+        def reopened_once_the_slot_frees() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+            try:
+                received, close_code = asyncio.run(opened_once())
+            except websockets.exceptions.InvalidStatus as refused:
+                raise AssertionError(refused) from refused
+            assert close_code != 1008, received
+            return received, close_code
+
+        asyncio.run(second_socket_while_the_first_is_open())
+        reopened, _ = until_asserted(reopened_once_the_slot_frees, seconds=15)
+
+        _assert_refused(reopened)
+        assert deployment.forwarded_turns() == 1
 
 
 def _set_turn_check_fault(gateway: Gateway, deployment: Deployment, fault: str) -> None:
@@ -338,27 +442,30 @@ def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_the_socket_serv
         key: Final = scenario.key(models=[deployment.name])
         fault: Final = f"turn check unavailable {uuid.uuid4().hex}"
 
-        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], tuple[AnsweredTurn, ...], AnsweredTurn]:
             async with _socket(faulting, key, deployment.name) as connection:
                 first: Final = await _say(connection, deployment.name)
                 await asyncio.to_thread(_set_turn_check_fault, faulting, deployment, fault)
-                second: Final = await _say(connection, deployment.name)
-                third: Final = await _say(connection, deployment.name)
+                failed: Final = (
+                    await _timed_turn(connection, deployment.name, "second"),
+                    await _timed_turn(connection, deployment.name, "third"),
+                )
                 await asyncio.to_thread(_set_turn_check_fault, faulting, deployment, "")
-                return first, second, third, await _say(connection, deployment.name)
+                return first, failed, await _timed_turn(connection, deployment.name, "fourth")
 
-        first, second, third, fourth = asyncio.run(session())
+        first, failed, fourth = asyncio.run(session())
 
         completed(first)
-        _assert_turn_check_failed(second, fault)
-        _assert_turn_check_failed(third, fault)
-        completed(fourth)
+        for answered in failed:
+            _assert_turn_check_failed(answered.received, fault)
+        completed(fourth.received)
         assert deployment.forwarded_turns() == 2
-        failures: Final = _failure_rows(faulting, key)
-        assert len(failures) == 1, failures
-        assert failures[0]["model_group"] == deployment.name, failures
-        recorded: Final = object_value(object_value(failures[0]["metadata"])["error_information"])
-        assert fault in string_value(recorded["error_message"]), recorded
+        failures: Final = _settled_failure_rows(faulting, key, len(failed))
+        assert len({row["request_id"] for row in failures}) == len(failed), failures
+        by_text: Final = {_stored_text(row): row for row in failures}
+        for answered in failed:
+            recorded = _assert_logged_as_its_own_failure(by_text[answered.text], answered, deployment)
+            assert fault in string_value(recorded["error_message"]), recorded
 
 
 def test_a_turn_still_streaming_when_the_next_turns_check_fails_completes_and_is_billed(
@@ -518,9 +625,7 @@ def test_a_tpm_limit_lowered_while_the_socket_is_open_applies_to_its_next_turn(
         assert deployment.forwarded_turns() == 1
 
 
-def test_a_socket_on_an_otpm_limited_deployment_reserves_once_and_serves_every_turn(
-    limited: Gateway, cert: tuple[Path, Path]
-) -> None:
+def test_a_socket_on_an_otpm_limited_deployment_serves_every_turn(limited: Gateway, cert: tuple[Path, Path]) -> None:
     with responses_peer(cert) as peer, limited.scenario() as scenario:
         deployment: Final = _native(scenario, peer, otpm=10_000)
         key: Final = scenario.key(models=[deployment.name])
@@ -536,6 +641,115 @@ def test_a_socket_on_an_otpm_limited_deployment_reserves_once_and_serves_every_t
         assert deployment.forwarded_turns() == 5
 
 
+IO_TOKEN_LIMIT: Final = 10_000
+TOKENS_PER_TURN: Final = MappingProxyType({"itpm": USAGE["input_tokens"], "otpm": USAGE["output_tokens"]})
+
+
+def _io_tokens_counted(identity: str, kind: str, minute: str) -> int:
+    with _redis() as redis:
+        return sum(int(redis.get(key) or 0) for key in redis.scan_iter(f"global_router:{identity}:*:{kind}:{minute}"))
+
+
+def _add_io_tokens(deployment: Deployment, kind: str, minute: str, tokens: int) -> None:
+    with _redis() as redis:
+        redis.incrby(f"global_router:{deployment.identity}:openai/{PROVIDER_MODEL}:{kind}:{minute}", tokens)
+
+
+async def _say_until_counted(
+    connection: websockets.ClientConnection, deployment: Deployment, counted: Callable[[], float], expected: int
+) -> tuple[dict[str, JsonValue], ...]:
+    received: Final = await _say(connection, deployment.name)
+    await _until(counted, lambda tokens: tokens == expected)
+    return received
+
+
+@pytest.mark.parametrize("kind", ("otpm", "itpm"))
+def test_a_turn_is_refused_once_earlier_turns_fill_the_deployment_io_token_limit(
+    limited: Gateway, cert: tuple[Path, Path], kind: str
+) -> None:
+    per_turn: Final = TOKENS_PER_TURN[kind]
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer, **{kind: IO_TOKEN_LIMIT})
+        key: Final = scenario.key(models=[deployment.name])
+        minute: Final = _fresh_minute()
+        counted: Final = partial(_io_tokens_counted, deployment.identity, kind, minute)
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(limited, key, deployment.name) as connection:
+                first: Final = await _say_until_counted(connection, deployment, counted, per_turn)
+                await asyncio.to_thread(_add_io_tokens, deployment, kind, minute, IO_TOKEN_LIMIT - 5 * per_turn)
+                answered: Final = tuple(
+                    [
+                        await _say_until_counted(
+                            connection, deployment, counted, IO_TOKEN_LIMIT - (5 - number) * per_turn
+                        )
+                        for number in range(2, 6)
+                    ]
+                )
+                return (first, *answered, await _say(connection, deployment.name))
+
+        turns: Final = asyncio.run(session())
+
+        assert [completed(received)["status"] for received in turns[:5]] == ["completed"] * 5
+        _assert_refused(turns[5])
+        assert deployment.forwarded_turns() == 5
+        assert held(counted, lambda tokens: tokens == IO_TOKEN_LIMIT, holding=3, seconds=20) == IO_TOKEN_LIMIT
+
+
+def test_a_socket_at_half_its_deployment_otpm_serves_ten_turns(limited: Gateway, cert: tuple[Path, Path]) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer, otpm=IO_TOKEN_LIMIT)
+        key: Final = scenario.key(models=[deployment.name])
+        minute: Final = _fresh_minute()
+        _add_io_tokens(deployment, "otpm", minute, IO_TOKEN_LIMIT // 2)
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(limited, key, deployment.name) as connection:
+                return tuple([await _say(connection, deployment.name) for _ in range(10)])
+
+        turns: Final = asyncio.run(session())
+
+        assert [completed(received)["status"] for received in turns] == ["completed"] * 10
+        assert deployment.forwarded_turns() == 10
+        expected: Final = IO_TOKEN_LIMIT // 2 + 10 * USAGE["output_tokens"]
+        counted: Final = partial(_io_tokens_counted, deployment.identity, "otpm", minute)
+        assert held(counted, lambda tokens: tokens == expected, holding=3, seconds=20) == expected
+
+
+@pytest.mark.parametrize("relay", ("native", "managed"))
+def test_every_turn_counts_its_actual_tokens_toward_the_deployment_itpm_and_otpm(
+    limited: Gateway, cert: tuple[Path, Path], relay: str
+) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        limits: Final = {"itpm": 1_000_000, "otpm": 1_000_000}
+        deployment: Final = _native(scenario, peer, **limits) if relay == "native" else _managed(scenario, **limits)
+        key: Final = scenario.key(models=[deployment.name])
+        minute: Final = _fresh_minute()
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(limited, key, deployment.name) as connection:
+                return tuple([await _say(connection, deployment.name) for _ in range(3)])
+
+        turns: Final = asyncio.run(session())
+
+        usages: Final = tuple(object_value(completed(received)["usage"]) for received in turns)
+        expected: Final = {
+            "itpm": sum(int(str(usage["input_tokens"])) for usage in usages),
+            "otpm": sum(int(str(usage["output_tokens"])) for usage in usages),
+        }
+        assert any(tokens > 0 for tokens in expected.values()), usages
+        counted: Final = {
+            kind: held(
+                partial(_io_tokens_counted, deployment.identity, kind, minute),
+                lambda tokens, kind=kind: tokens == expected[kind],
+                holding=3,
+                seconds=20,
+            )
+            for kind in expected
+        }
+        assert counted == expected
+
+
 def test_usage_based_routing_refuses_a_turn_only_once_earlier_turns_used_up_the_deployment_tpm(
     usage_routed: Gateway, cert: tuple[Path, Path]
 ) -> None:
@@ -549,6 +763,159 @@ def test_usage_based_routing_refuses_a_turn_only_once_earlier_turns_used_up_the_
         completed(second)
         _assert_refused(third)
         assert counted_after_first == TURN_TOKENS
+        assert deployment.forwarded_turns() == 2
+
+
+def _heavy_turn(response_id: str) -> tuple[dict[str, JsonValue], ...]:
+    *started, done = events(response_id, "heavy")
+    return (*started, {**done, "response": {**object_value(done["response"]), "usage": HEAVY_TURN_USAGE}})
+
+
+def _counted_tokens(counter: str) -> int:
+    with _redis() as redis:
+        return int(redis.get(counter) or 0)
+
+
+def _chat(gateway: Gateway, key: str, model: str, headers: Mapping[str, str] | None = None) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": f"after the socket {uuid.uuid4().hex}"}]},
+        key=key,
+        headers=headers,
+    )
+
+
+def _two_heavy_turns_then_chat(
+    gateway: Gateway,
+    cert: tuple[Path, Path],
+    counter: Callable[[str], str],
+    headers: Mapping[str, str],
+    **limits: JsonValue,
+) -> httpx.Response:
+    with responses_peer(cert, _heavy_turn) as peer, gateway.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        chat: Final = scenario.model()
+        key: Final = scenario.key(models=[deployment.name, chat], **limits)
+        _fresh_minute()
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(gateway, key, deployment.name, headers) as connection:
+                return (await _say(connection, deployment.name), await _say(connection, deployment.name))
+
+        turns: Final = asyncio.run(session())
+
+        assert [completed(received)["status"] for received in turns] == ["completed"] * 2
+        eventually(
+            partial(_counted_tokens, counter(key)),
+            lambda tokens: tokens >= 2 * HEAVY_TURN_TOKENS,
+            seconds=15,
+        )
+        return _chat(gateway, key, chat, headers)
+
+
+def test_websocket_turn_tokens_count_toward_the_key_tpm_so_its_next_http_call_is_refused(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    refused: Final = _two_heavy_turns_then_chat(
+        limited, cert, lambda key: f"{{api_key:{_key_hash(key)}}}:tokens", {}, tpm_limit=SOCKET_TPM_LIMIT
+    )
+
+    assert refused.status_code == 429, refused.text
+    assert "token" in refused.text.lower(), refused.text
+
+
+def test_websocket_turn_tokens_count_toward_the_tag_tpm_so_its_next_http_call_is_refused(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    tag: Final = f"ws-tag-tpm-{uuid.uuid4().hex}"
+    limited.post("/tag/new", {"name": tag, "tpm_limit": SOCKET_TPM_LIMIT})
+    try:
+        refused: Final = _two_heavy_turns_then_chat(
+            limited, cert, lambda _: f"{{tag:{tag}}}:tokens", {"x-litellm-tags": tag}
+        )
+    finally:
+        limited.post("/tag/delete", {"name": tag})
+
+    assert refused.status_code == 429, refused.text
+    assert "tag" in refused.text.lower(), refused.text
+
+
+def _key_tokens(key: str) -> int:
+    return _counted_tokens(f"{{api_key:{_key_hash(key)}}}:tokens")
+
+
+def test_a_turn_is_refused_on_the_open_socket_once_earlier_turns_used_up_the_key_tpm(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert, _heavy_turn) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        key: Final = scenario.key(models=[deployment.name], tpm_limit=SOCKET_TPM_LIMIT)
+
+        async def session() -> tuple[tuple[tuple[dict[str, JsonValue], ...], ...], int | None]:
+            async with _socket(limited, key, deployment.name) as connection:
+                answered: Final = (await _say(connection, deployment.name), await _say(connection, deployment.name))
+                await _until(partial(_key_tokens, key), lambda tokens: tokens >= 2 * HEAVY_TURN_TOKENS)
+                refused: Final = (await _say(connection, deployment.name), await _say(connection, deployment.name))
+                return (*answered, *refused), connection.close_code
+
+        (first, second, third, fourth), close_code = asyncio.run(session())
+
+        assert [completed(received)["status"] for received in (first, second)] == ["completed"] * 2
+        _assert_refused(third)
+        _assert_refused(fourth)
+        assert close_code is None
+        assert deployment.forwarded_turns() == 2
+
+
+def test_managed_socket_turns_count_toward_the_sockets_tag_tpm_like_the_key_tpm(limited: Gateway) -> None:
+    tag: Final = f"ws-managed-tag-tpm-{uuid.uuid4().hex}"
+    limited.post("/tag/new", {"name": tag, "tpm_limit": 1_000_000})
+    try:
+        with limited.scenario() as scenario:
+            deployment: Final = _managed(scenario)
+            key: Final = scenario.key(models=[deployment.name], tpm_limit=1_000_000)
+
+            async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+                async with _socket(limited, key, deployment.name, {"x-litellm-tags": tag}) as connection:
+                    return (await _say(connection, deployment.name), await _say(connection, deployment.name))
+
+            turns: Final = asyncio.run(session())
+            turn_tokens: Final = sum(
+                int(str(object_value(completed(received)["usage"])["total_tokens"])) for received in turns
+            )
+            assert turn_tokens > 0, turns
+
+            eventually(
+                lambda: (_key_tokens(key), _counted_tokens(f"{{tag:{tag}}}:tokens")),
+                lambda counters: counters[0] >= turn_tokens and counters[0] == counters[1],
+                seconds=20,
+            )
+    finally:
+        limited.post("/tag/delete", {"name": tag})
+
+
+def test_a_socket_opened_after_turns_used_up_the_key_tpm_gets_the_turn_refusal_frame_and_closes_1008(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert, _heavy_turn) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        key: Final = scenario.key(models=[deployment.name], tpm_limit=SOCKET_TPM_LIMIT)
+
+        async def spend_then_reopen() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+            async with _socket(limited, key, deployment.name) as spending:
+                completed(await _say(spending, deployment.name))
+                completed(await _say(spending, deployment.name))
+            await _until(partial(_key_tokens, key), lambda tokens: tokens >= 2 * HEAVY_TURN_TOKENS)
+            async with _socket(limited, key, deployment.name) as refused:
+                received: Final = await _say(refused, deployment.name)
+                await asyncio.wait_for(refused.wait_closed(), timeout=20)
+                return received, refused.close_code
+
+        received, close_code = asyncio.run(spend_then_reopen())
+
+        _assert_refused(received)
+        assert close_code == 1008, close_code
         assert deployment.forwarded_turns() == 2
 
 

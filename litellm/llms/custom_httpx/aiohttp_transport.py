@@ -16,7 +16,7 @@ import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, Self, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -110,6 +110,15 @@ def map_aiohttp_exceptions() -> Generator[None, None, None]:
         raise mapped_exc(message) from exc
 
 
+def _unread_payload(content: object) -> bytes:
+    """Bytes the upstream sent before the connection dropped that aiohttp buffered but never handed out, since its
+    reads raise the stored payload error ahead of the buffer."""
+    if not isinstance(content, aiohttp.StreamReader):
+        return b""
+    buffered: Final = b"".join(content._buffer)  # pyright: ignore[reportPrivateUsage]  # no public read drains it
+    return buffered[content._buffer_offset :]  # pyright: ignore[reportPrivateUsage]  # see above
+
+
 def _release_transport_anchor(_transport: object) -> None:
     """Release a transport anchored to a response stream. See ``_anchor_transport_to``."""
 
@@ -121,11 +130,16 @@ def _anchor_transport_to(stream: "AiohttpResponseStream", transport: object) -> 
     live response back to that session references the transport, so a client dropped
     mid-stream would close the session under the body. ``weakref.finalize`` holds the
     transport in its own registry rather than on the stream, which keeps the transport
-    out of the response's reference cycle (an exception carrying the response, for one)
-    so it is finalized by refcount once the anchor drops and can still schedule an async
-    close, instead of being collected in the same cyclic pass as the session it closes.
+    out of the response's reference cycle (an exception carrying the response, for one).
     """
     weakref.finalize(stream, _release_transport_anchor, transport)
+
+
+def _abort_unreleased_connection(response: ClientResponse) -> None:
+    connection: Final = response.connection
+    transport: Final = None if connection is None else connection.transport
+    if transport is not None:
+        transport.abort()
 
 
 class AiohttpResponseStream(httpx.AsyncByteStream):
@@ -144,6 +158,12 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             raise httpx.ReadError(str(e)) from e
         except aiohttp.http_exceptions.TransferEncodingError as e:
             raise httpx.ReadError(str(e)) from e
+        except aiohttp.ClientPayloadError:
+            unread: Final = _unread_payload(self._aiohttp_response.content)
+            if unread:
+                yield unread
+            with map_aiohttp_exceptions():
+                raise
         except Exception:
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
@@ -157,9 +177,11 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # until the proxy is restarted, even after the backend recovers.
             # On a fully-read response the connection was already released
             # at EOF and close() is a no-op.
+            _abort_unreleased_connection(self._aiohttp_response)
             self._aiohttp_response.close()
 
     async def aclose(self) -> None:
+        _abort_unreleased_connection(self._aiohttp_response)
         with map_aiohttp_exceptions():
             await self._aiohttp_response.__aexit__(None, None, None)
 
@@ -209,6 +231,24 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         default_factory: Final[Callable[[], ClientSession]] = client if callable(client) else ClientSession
         self._client_factory: Callable[[], ClientSession] = session_factory or default_factory
+        self._session_finalizer: weakref.finalize[[ClientSession], Self] | None = None
+        if owns_session and isinstance(client, ClientSession):
+            self._close_session_when_collected(client)
+
+    def _close_session_when_collected(self, session: ClientSession) -> None:
+        """Dispose ``session`` once this transport is freed, even when a reference cycle frees it.
+
+        The finalizer registry holds the session strongly, keeping it out of the transport's cyclic garbage,
+        where aiohttp's own finalizers would report it and its connector as unclosed.
+        """
+        if self._session_finalizer is not None:
+            self._session_finalizer.detach()
+        self._session_finalizer = weakref.finalize(self, LiteLLMAiohttpTransport._dispose_owned_session, session)
+
+    @staticmethod
+    def _dispose_owned_session(session: ClientSession) -> None:
+        with contextlib.suppress(Exception):
+            LiteLLMAiohttpTransport._close_recycled_session(session)
 
     def _rebuild_session(self) -> ClientSession:
         """
@@ -220,6 +260,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         """
         session: Final = self._client_factory()
         self._owns_session = True
+        self._close_session_when_collected(session)
         return session
 
     @classmethod
@@ -259,8 +300,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         except (RuntimeError, AttributeError, OSError) as e:
             verbose_logger.debug("Best-effort connector close failed: %s", e)
 
-    def _close_recycled_session(self, session: ClientSession) -> None:
-        """Deterministically dispose a ClientSession this transport is replacing.
+    @classmethod
+    def _close_recycled_session(cls, session: ClientSession) -> None:
+        """Deterministically dispose a ClientSession a transport is replacing, or owned when it was collected.
 
         Covers the three lifecycles a recycled session can be in:
         - its loop is the current running loop: schedule an async close and keep
@@ -288,32 +330,24 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     future: Final = asyncio.run_coroutine_threadsafe(session.close(), session_loop)
                 except RuntimeError as e:  # loop shut down between the checks
                     verbose_logger.debug("Threadsafe session close failed: %s", e)
-                    self._mark_connector_closed(session)
+                    cls._mark_connector_closed(session)
                 else:
-                    future.add_done_callback(self._on_threadsafe_close_done)
+                    future.add_done_callback(cls._on_threadsafe_close_done)
                 return
 
             # Foreign loop that is stopped or closed: an async close can no
             # longer run there, and running it on the current loop would touch
             # another loop's internals. Dispose synchronously instead.
-            self._mark_connector_closed(session)
+            cls._mark_connector_closed(session)
             return
 
         if current_loop is None:
-            self._mark_connector_closed(session)
+            cls._mark_connector_closed(session)
             return
 
         task: Final = current_loop.create_task(session.close())
-        cls: Final = type(self)
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
-
-    def __del__(self) -> None:
-        session: Final = getattr(self, "client", None)
-        if not getattr(self, "_owns_session", False) or not isinstance(session, ClientSession):
-            return
-        with contextlib.suppress(Exception):
-            self._close_recycled_session(session)
 
     def get_valid_client_session(self) -> ClientSession:
         """

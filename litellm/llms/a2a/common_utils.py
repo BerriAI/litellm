@@ -2,11 +2,12 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Final
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final
 
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -67,7 +68,15 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
-def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
+def _join_with_spaces(texts: Sequence[object]) -> str:
+    strings: Final = [text for text in texts if isinstance(text, str)]
+    if len(strings) == len(texts):
+        return " ".join(strings)
+    first_bad: Final = next(position for position, text in enumerate(texts) if not isinstance(text, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(texts[first_bad]).__name__} found")
+
+
+def extract_text_from_a2a_message(message: object, depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
 
@@ -82,19 +91,20 @@ def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_d
     if message is None or depth >= max_depth:
         return ""
 
-    parts: Final = message.get("parts", [])
-    text_parts: Final[list[str]] = []
+    parts: Final = iter_items(decoded_json_object(message).get("parts", []))
+    text_parts: Final[list[object]] = []
 
     for part in parts:
-        if part.get("kind") == "text":
-            text_parts.append(part.get("text", ""))
+        part_fields = decoded_json_object(part)
+        if part_fields.get("kind") == "text":
+            text_parts.append(part_fields.get("text", ""))
         # Handle nested parts if they exist
-        elif "parts" in part:
-            nested_text = extract_text_from_a2a_message(part, depth + 1, max_depth)
+        elif "parts" in part_fields:
+            nested_text = extract_text_from_a2a_message(part_fields, depth + 1, max_depth)
             if nested_text:
                 text_parts.append(nested_text)
 
-    return " ".join(text_parts)
+    return _join_with_spaces(text_parts)
 
 
 def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_depth: int = 10) -> str:
@@ -160,8 +170,11 @@ async def resolve_a2a_hop_auth_header(
     litellm_params: Mapping[str, object],
     custom_llm_provider: object,
     resolve_entra_header: AgentAuthHeaderResolver = resolve_azure_ai_agent_auth_header,
+    agent_extra_headers: Mapping[str, str] | None = None,
 ) -> Mapping[str, str] | None:
-    """Entra credentials authenticate the A2A hop only; a completion-bridge agent hands them to the model provider it bridges to."""
-    if not a2a_hop_uses_entra(litellm_params, custom_llm_provider):
+    if a2a_hop_uses_entra(litellm_params, custom_llm_provider):
+        return await resolve_entra_header(litellm_params)
+    if custom_llm_provider or any(name.lower() == "authorization" for name in (agent_extra_headers or {})):
         return None
-    return await resolve_entra_header(litellm_params)
+    api_key: Final = litellm_params.get("api_key")
+    return {"Authorization": f"Bearer {api_key}"} if isinstance(api_key, str) and api_key else None

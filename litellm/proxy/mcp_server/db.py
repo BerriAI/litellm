@@ -5,6 +5,7 @@ import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
 from fastapi import HTTPException
@@ -34,6 +35,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     encrypt_value_helper,
     get_salt_key,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.mcp_server.oauth_identity_binding import (
     RefreshTokenPresented,
     credential_binding_matches,
@@ -68,8 +70,11 @@ if TYPE_CHECKING:
 
 
 class _UserEnvVarsTransactionClient(Protocol):
-    litellm_mcpuserenvvars: "TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]"
-    litellm_mcpservertable: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]"
+    @property
+    def litellm_mcpuserenvvars(self) -> "TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]": ...
+
+    @property
+    def litellm_mcpservertable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPServerTable]": ...
 
     async def execute_raw(self, query: str, *args: object) -> int: ...
 
@@ -77,7 +82,13 @@ class _UserEnvVarsTransactionClient(Protocol):
 class _UserEnvVarsTransaction(Protocol):
     async def __aenter__(self) -> _UserEnvVarsTransactionClient: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +148,10 @@ def _blank_to_none(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _submitted_or(submitted: Mapping[str, object], field: str, fallback: str | None) -> object:
+    return submitted.get(field, fallback)
 
 
 # Token-exchange settings with dedicated columns that also exist on
@@ -231,6 +246,7 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     connected_at: str
     scopes: list[str]
     server_id: str
+    needs_scopes: ReadOnly[Sequence[str]]
 
 
 OAuthGrantState = Literal["valid", "refreshable", "absent"]
@@ -676,15 +692,22 @@ async def find_mcp_server_identifier_conflict(
     )
 
 
+def _advisory_lock_key(name: str) -> int:
+    """Signed 64-bit Postgres advisory-lock key for ``name``: BLAKE2b-64, or the
+    first 8 bytes of SHA-256 when general_settings.fips_mode is on."""
+    digest: Final = (
+        hashlib.sha256(name.encode()).digest()[:8]
+        if fips_mode_active()
+        else hashlib.blake2b(name.encode(), digest_size=8).digest()
+    )
+    return int.from_bytes(digest, "big", signed=True)
+
+
 def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
     """Deterministic advisory-lock keys for the lowercased identifiers, sorted
     so concurrent requests for the same pair always lock in the same order."""
     return tuple(
-        int.from_bytes(
-            hashlib.blake2b(f"mcp_identifier:{normalized}".encode(), digest_size=8).digest(),
-            "big",
-            signed=True,
-        )
+        _advisory_lock_key(f"mcp_identifier:{normalized}")
         for normalized in sorted(frozenset(value.lower() for value in identifiers if value))
     )
 
@@ -1379,8 +1402,10 @@ async def update_mcp_server(
             "credentials": safe_dumps(
                 _bind_submitted_oauth_client(
                     safe_submitted,
-                    _blank_to_none(cleared_auth_fields.get("issuer", prepared_data.get("issuer", old_issuer))),
-                    _blank_to_none(prepared_data.get("url", existing.url if existing else None)),
+                    _blank_to_none(
+                        cleared_auth_fields.get("issuer", _submitted_or(prepared_data, "issuer", old_issuer))
+                    ),
+                    _blank_to_none(_submitted_or(prepared_data, "url", existing.url if existing else None)),
                 )
             )
         }
@@ -1898,6 +1923,26 @@ async def get_user_oauth_credential(
     if decoded is None:
         _warn_undecryptable_credential(user_id, server_id)
     return _parse_oauth_payload(decoded)
+
+
+async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
+    """Note on the saved grant that the provider refused a call for ``scope``, so the connect page sends the user
+    back to the provider. The next save of the grant drops the note; a grant saved since the read is left alone."""
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None:
+        return
+    waiting: Final = grant.get("needs_scopes", ())
+    refused: Final = tuple(name for name in dict.fromkeys(scope.split() or ("",)) if name not in waiting)
+    if not refused:
+        return
+    await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": user_id, "server_id": server_id, "credential_b64": row.credential_b64},
+        data={
+            "credential_b64": encrypt_value_helper(json.dumps({**grant, "needs_scopes": [*waiting, *refused]})),
+            "updated_at": row.updated_at,
+        },
+    )
 
 
 def _server_user_credential_item(
@@ -2499,11 +2544,7 @@ async def merge_user_env_vars(
     so an admin retiring a user-scoped variable also clears its stored value.
     """
     allowed: Final = set(allowed_names)
-    lock_key: Final = int.from_bytes(
-        hashlib.blake2b(f"{user_id}:{server_id}".encode(), digest_size=8).digest(),
-        "big",
-        signed=True,
-    )
+    lock_key: Final = _advisory_lock_key(f"{user_id}:{server_id}")
     async with _db_transaction_manager(prisma_client) as tx:
         await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
         row: Final[prisma_db_models.LiteLLM_MCPUserEnvVars | None] = await tx.litellm_mcpuserenvvars.find_unique(

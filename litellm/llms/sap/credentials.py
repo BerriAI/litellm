@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +16,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
@@ -74,12 +75,12 @@ def _get_nested(d: object, path: Sequence[str]) -> object:
     return cur
 
 
-def _load_json_env(var_name: str) -> Mapping[str, Sequence[Mapping[str, object]]] | None:
+def _load_json_env(var_name: str) -> object:
     raw: Final = os.environ.get(var_name)
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        return _DECODED_JSON.validate_python(json.loads(raw))
     except json.JSONDecodeError:
         return None
 
@@ -91,15 +92,23 @@ def _str_or_none(value: object) -> str | None:
         return None
 
 
-def _load_vcap() -> Mapping[str, Sequence[Mapping[str, object]]]:
+def _load_vcap() -> object:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 
+def _vcap_service_groups(vcap: object) -> Iterable[object]:
+    services_by_name: Final = as_str_mapping(vcap)
+    if services_by_name is not None:
+        return services_by_name.values()
+    raise AttributeError(f"'{type(vcap).__name__}' object has no attribute 'values'", name="values", obj=vcap)
+
+
 def _get_vcap_service(label: str) -> Mapping[str, object] | None:
-    for services in _load_vcap().values():
-        for svc in services:
-            if svc.get("label") == label:
-                return svc
+    for services in _vcap_service_groups(_load_vcap()):
+        for svc in iter_items(services):
+            service = decoded_json_object(svc)
+            if service.get("label") == label:
+                return service
     return None
 
 

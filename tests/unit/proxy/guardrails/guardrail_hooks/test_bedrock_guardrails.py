@@ -2,9 +2,11 @@
 Unit tests for Bedrock Guardrails
 """
 
+import contextlib
 import json
 import asyncio
 import logging
+from collections.abc import Callable, Mapping
 from typing import Final
 from datetime import datetime, timezone
 import sys
@@ -20,6 +22,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -27,8 +30,9 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
     _redact_pii_matches,
 )
+from litellm.proxy.guardrails.guardrail_initializers import initialize_bedrock
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import BedrockGuardrailOutputScope, Guardrail, GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockTextContent,
@@ -1021,6 +1025,64 @@ def _anthropic_tool_result_conversation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [None, "INTERVENTIONS", "FULL"])
+async def test_configured_output_scope_reaches_bedrock_and_preserves_healthy_assessments(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, scope: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    params: Final = LitellmParams.model_validate(
+        {
+            "guardrail": "bedrock",
+            "mode": "post_call",
+            "guardrailIdentifier": "test-guardrail",
+            "guardrailVersion": "DRAFT",
+            "contextual_grounding_from_messages": True,
+            "aws_access_key_id": "test-access-key",
+            "aws_secret_access_key": "test-secret-key",
+            "aws_region_name": "us-east-1",
+            "aws_bedrock_runtime_endpoint": "https://bedrock.example",
+            **({"outputScope": scope} if scope is not None else {}),
+        }
+    )
+    guardrail: Final = initialize_bedrock(params, Guardrail(guardrail_name="grounding", litellm_params=params))
+    assessment: Final = {
+        "contextualGroundingPolicy": {
+            "filters": [{"type": "GROUNDING", "score": 0.96, "threshold": 0.8, "detected": False, "action": "NONE"}]
+        }
+    }
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"action": "NONE", "assessments": [assessment] if body.get("outputScope") == "FULL" else []},
+        )
+
+    route: Final = respx_mock.post("https://bedrock.example/guardrail/test-guardrail/version/DRAFT/apply").mock(
+        side_effect=provider
+    )
+    request_data: Final = {
+        "messages": [
+            {"role": "system", "content": "The tower is 330 metres tall."},
+            {"role": "user", "content": "How tall is the tower?"},
+        ]
+    }
+    result: Final = await guardrail.apply_guardrail(
+        inputs={"texts": ["The tower is 330 metres tall."]}, request_data=request_data, input_type="response"
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    if scope is None:
+        assert "outputScope" not in sent
+    else:
+        assert sent["outputScope"] == scope
+    assert sent["source"] == "OUTPUT"
+    assert result["texts"] == ["The tower is 330 metres tall."]
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"][-1]["guardrail_response"]
+    assert recorded["assessments"] == ([assessment] if scope == "FULL" else [])
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
     """A tool_result-only latest user turn must not post an empty content list to Bedrock.
 
@@ -1805,7 +1867,11 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
 
 @pytest.mark.asyncio
 async def test_make_bedrock_api_request_filters_dynamic_evaluation_overrides():
-    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        outputScope=BedrockGuardrailOutputScope.INTERVENTIONS,
+    )
     mock_credentials = MagicMock()
     mock_credentials.access_key = "test-access-key"
     mock_credentials.secret_key = "test-secret-key"
@@ -6220,19 +6286,24 @@ async def test_attachment_scan_sends_image_only_turn_to_apply_guardrail_and_bloc
 
 
 @pytest.mark.asyncio
-async def test_attachment_scan_lets_a_passing_image_through():
+@pytest.mark.parametrize(
+    ("guarded", "logged_status"),
+    [(1, "success"), (0, "not_run")],
+    ids=["image-evaluated", "policy-without-image-modality"],
+)
+async def test_attachment_scan_lets_a_passing_image_through(guarded: int, logged_status: str):
     guardrail = _attachment_guardrail()
     data = _image_only_chat_request()
-    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(
-        guardrail, _passing_bedrock_httpx_response("ok")
-    )
+    response = _passing_bedrock_httpx_response("ok")
+    response.json.return_value["guardrailCoverage"] = {"images": {"guarded": guarded, "total": 1}}
+    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(guardrail, response)
 
     with post_patch as mock_post, credentials_patch, prepare_patch:
         await guardrail.async_scan_request_attachments(data=data, call_type=CallTypes.acompletion.value)
 
     assert mock_post.await_count == 1
     logged = data["metadata"]["standard_logging_guardrail_information"]
-    assert [entry["guardrail_status"] for entry in logged] == ["success"]
+    assert [entry["guardrail_status"] for entry in logged] == [logged_status]
 
 
 @pytest.mark.asyncio
@@ -8105,3 +8176,121 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()
     assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"
+
+
+_APPLY_GUARDRAIL_API: Final = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
+_GUARDRAIL_CHECKS_API: Final = {
+    "checks": {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}},
+    "content_filter_threshold": 0.5,
+}
+_APPLY_GUARDRAIL_BLOCKED: Final = {
+    "action": "GUARDRAIL_INTERVENED",
+    "outputs": [{"text": "blocked"}],
+    "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}],
+}
+
+
+def _answering(status_code: int, body: object) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(status_code, json=body)
+
+
+def _violence_scored(severity: float) -> Callable[[httpx.Request], httpx.Response]:
+    return _answering(
+        200, {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": severity}]}}}
+    )
+
+
+def _unreachable(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_config", "bedrock", "recorded_status"),
+    [
+        pytest.param(
+            _APPLY_GUARDRAIL_API,
+            _answering(200, {"action": "NONE", "outputs": [], "assessments": []}),
+            "success",
+            id="apply_guardrail-allowed",
+        ),
+        pytest.param(
+            _APPLY_GUARDRAIL_API,
+            _answering(200, _APPLY_GUARDRAIL_BLOCKED),
+            "guardrail_intervened",
+            id="apply_guardrail-blocked",
+        ),
+        pytest.param(
+            _APPLY_GUARDRAIL_API,
+            _answering(500, {"message": "internal failure"}),
+            "guardrail_failed_to_respond",
+            id="apply_guardrail-error",
+        ),
+        pytest.param(
+            _APPLY_GUARDRAIL_API, _unreachable, "guardrail_failed_to_respond", id="apply_guardrail-unreachable"
+        ),
+        pytest.param(_GUARDRAIL_CHECKS_API, _violence_scored(0.1), "success", id="guardrail_checks-allowed"),
+        pytest.param(
+            _GUARDRAIL_CHECKS_API, _violence_scored(0.9), "guardrail_intervened", id="guardrail_checks-blocked"
+        ),
+        pytest.param(
+            _GUARDRAIL_CHECKS_API,
+            _answering(500, {"message": "internal failure"}),
+            "guardrail_failed_to_respond",
+            id="guardrail_checks-error",
+        ),
+        pytest.param(
+            _GUARDRAIL_CHECKS_API,
+            _answering(200, ["unexpected"]),
+            "guardrail_failed_to_respond",
+            id="guardrail_checks-unparseable",
+        ),
+    ],
+)
+async def test_verdict_is_recorded_on_a_request_dict_that_starts_empty(
+    guardrail_config: Mapping[str, object],
+    bedrock: Callable[[httpx.Request], httpx.Response],
+    recorded_status: str,
+) -> None:
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-guard",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        **guardrail_config,
+    )
+    request_data: Final[dict[str, object]] = {}
+
+    with contextlib.suppress(Exception):
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_status"] for record in recorded] == [recorded_status]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_config", "bedrock"),
+    [
+        pytest.param(_APPLY_GUARDRAIL_API, _answering(503, {"message": "unavailable"}), id="apply_guardrail-error"),
+        pytest.param(_GUARDRAIL_CHECKS_API, _answering(500, {"message": "internal failure"}), id="guardrail_checks-error"),
+    ],
+)
+async def test_a_failed_bedrock_call_keeps_reporting_as_http_exception_to_metrics_and_logs(
+    guardrail_config: Mapping[str, object],
+    bedrock: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-guard",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        **guardrail_config,
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert type(raised.value) is HTTPException

@@ -1,12 +1,13 @@
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import iter_items
@@ -35,6 +36,7 @@ from litellm.proxy.management_helpers.resource_display_names import (
     agent_display_names,
     key_display_names,
     mcp_server_display_names,
+    vector_store_display_names,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
@@ -68,6 +70,9 @@ class _AccessGroupRecord(Protocol):
     def access_agent_ids(self) -> Sequence[str] | None: ...
 
     @property
+    def access_vector_store_ids(self) -> Sequence[str] | None: ...
+
+    @property
     def assigned_team_ids(self) -> Sequence[str] | None: ...
 
     @property
@@ -98,11 +103,11 @@ class _KeyRecord(Protocol):
 class _AccessGroupTable(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> _AccessGroupRecord | None: ...
 
-    async def find_many(self, order: Mapping[str, object]) -> Sequence[_AccessGroupRecord]: ...
+    async def find_many(self, *, order: Mapping[str, object]) -> Sequence[_AccessGroupRecord]: ...
 
     async def create(self, data: Mapping[str, object]) -> _AccessGroupRecord: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _AccessGroupRecord: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> _AccessGroupRecord | None: ...
 
     async def delete(self, where: Mapping[str, object]) -> object: ...
 
@@ -118,9 +123,9 @@ class _TeamTable(Protocol):
 class _KeyTable(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> _KeyRecord | None: ...
 
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_KeyRecord]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_KeyRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _AgentRecord(Protocol):
@@ -132,9 +137,9 @@ class _AgentRecord(Protocol):
 
 
 class _AgentTable(Protocol):
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_AgentRecord]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_AgentRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _HasSomeFilter(TypedDict):
@@ -170,7 +175,13 @@ class _AccessGroupTx(Protocol):
 class _AccessGroupTransaction(Protocol):
     async def __aenter__(self) -> _AccessGroupTx: ...
 
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 def _access_group_transaction(prisma_client: PrismaClient) -> _AccessGroupTransaction:
@@ -210,6 +221,7 @@ def _explicitly_set_fields(data: AccessGroupUpdateRequest) -> Mapping[str, objec
 class _ResourceNames:
     mcp_servers: Mapping[str, str]
     agents: Mapping[str, str]
+    vector_stores: Mapping[str, str]
     teams: Mapping[str, str | None]
     keys: Mapping[str, str]
 
@@ -227,6 +239,7 @@ def _record_to_response(
             "assigned_team_ids": assigned_team_ids,
             "access_mcp_servers": _label(record.access_mcp_server_ids or (), names.mcp_servers),
             "access_agents": _label(record.access_agent_ids or (), names.agents),
+            "access_vector_stores": _label(record.access_vector_store_ids or (), names.vector_stores),
             "assigned_teams": _label(assigned_team_ids, names.teams),
             "assigned_keys": _label(record.assigned_key_ids or (), names.keys),
         }
@@ -246,7 +259,7 @@ async def _responses_for(
     if not records:
         return ()
     teams: Final = await _teams_touching(TeamRepository(prisma_client).table, records)
-    mcp_servers, agents, keys = await asyncio.gather(
+    mcp_servers, agents, vector_stores, keys = await asyncio.gather(
         mcp_server_display_names(
             prisma_client,
             _ids_across(records, lambda record: record.access_mcp_server_ids),
@@ -255,11 +268,17 @@ async def _responses_for(
         agent_display_names(
             prisma_client, _ids_across(records, lambda record: record.access_agent_ids), global_agent_registry
         ),
+        vector_store_display_names(
+            prisma_client,
+            _ids_across(records, lambda record: record.access_vector_store_ids),
+            litellm.vector_store_registry.vector_stores if litellm.vector_store_registry is not None else (),
+        ),
         key_display_names(prisma_client, _ids_across(records, lambda record: record.assigned_key_ids)),
     )
     names: Final = _ResourceNames(
         mcp_servers=mcp_servers,
         agents=agents,
+        vector_stores=vector_stores,
         teams=MappingProxyType({team.team_id: team.team_alias for team in teams}),
         keys=keys,
     )
@@ -347,47 +366,45 @@ async def _cache_access_group_record(record: _AccessGroupRecord) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _sync_add_access_group_to_teams(tx: _AccessGroupTx, team_ids: list[str], access_group_id: str) -> None:
-    """Add access_group_id to each team's access_group_ids (idempotent)."""
-    for team_id in team_ids:
+async def _sync_access_group_on_teams(
+    tx: _AccessGroupTx, add: Sequence[str], remove: Sequence[str], access_group_id: str
+) -> None:
+    """Rows are locked in sorted team_id order, the order every spend writer locks team rows in, so this
+    cannot deadlock with them."""
+    to_add: Final = frozenset(add)
+    for team_id in sorted(to_add | frozenset(remove)):
         team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
-        if team is not None and access_group_id not in (team.access_group_ids or []):
+        if team is None:
+            continue
+        current = list(team.access_group_ids or [])
+        if team_id in to_add and access_group_id not in current:
+            await tx.litellm_teamtable.update(
+                where={"team_id": team_id}, data={"access_group_ids": [*current, access_group_id]}
+            )
+        elif team_id not in to_add and access_group_id in current:
             await tx.litellm_teamtable.update(
                 where={"team_id": team_id},
-                data={"access_group_ids": list(team.access_group_ids or []) + [access_group_id]},
+                data={"access_group_ids": list(_without_access_group(current, access_group_id))},
             )
 
 
-async def _sync_remove_access_group_from_teams(tx: _AccessGroupTx, team_ids: list[str], access_group_id: str) -> None:
-    """Remove access_group_id from each team's access_group_ids (idempotent)."""
-    for team_id in team_ids:
-        team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
-        if team is not None and access_group_id in (team.access_group_ids or []):
-            await tx.litellm_teamtable.update(
-                where={"team_id": team_id},
-                data={"access_group_ids": [ag for ag in (team.access_group_ids or ()) if ag != access_group_id]},
-            )
-
-
-async def _sync_add_access_group_to_keys(tx: _AccessGroupTx, key_tokens: list[str], access_group_id: str) -> None:
-    """Add access_group_id to each key's access_group_ids (idempotent)."""
-    for token in key_tokens:
+async def _sync_access_group_on_keys(
+    tx: _AccessGroupTx, add: Sequence[str], remove: Sequence[str], access_group_id: str
+) -> None:
+    """Rows are locked in sorted token order, the order every spend writer locks key rows in."""
+    to_add: Final = frozenset(add)
+    for token in sorted(to_add | frozenset(remove)):
         key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
-        if key is not None and access_group_id not in (key.access_group_ids or []):
+        if key is None:
+            continue
+        current = list(key.access_group_ids or [])
+        if token in to_add and access_group_id not in current:
             await tx.litellm_verificationtoken.update(
-                where={"token": token},
-                data={"access_group_ids": list(key.access_group_ids or []) + [access_group_id]},
+                where={"token": token}, data={"access_group_ids": [*current, access_group_id]}
             )
-
-
-async def _sync_remove_access_group_from_keys(tx: _AccessGroupTx, key_tokens: list[str], access_group_id: str) -> None:
-    """Remove access_group_id from each key's access_group_ids (idempotent)."""
-    for token in key_tokens:
-        key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
-        if key is not None and access_group_id in (key.access_group_ids or []):
+        elif token not in to_add and access_group_id in current:
             await tx.litellm_verificationtoken.update(
-                where={"token": token},
-                data={"access_group_ids": [ag for ag in (key.access_group_ids or ()) if ag != access_group_id]},
+                where={"token": token}, data={"access_group_ids": list(_without_access_group(current, access_group_id))}
             )
 
 
@@ -574,6 +591,7 @@ async def create_access_group(
                     "mcp_tool_permissions": _tool_permissions_json(data.mcp_tool_permissions),
                     "access_agent_ids": data.access_agent_ids or [],
                     "access_skill_names": list(data.access_skill_names or ()),
+                    "access_vector_store_ids": list(data.access_vector_store_ids or ()),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -582,8 +600,8 @@ async def create_access_group(
             )
 
             # Sync team and key tables to reference the new access group
-            await _sync_add_access_group_to_teams(tx, data.assigned_team_ids or [], record.access_group_id)
-            await _sync_add_access_group_to_keys(tx, data.assigned_key_ids or [], record.access_group_id)
+            await _sync_access_group_on_teams(tx, data.assigned_team_ids or [], (), record.access_group_id)
+            await _sync_access_group_on_keys(tx, data.assigned_key_ids or [], (), record.access_group_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -672,6 +690,7 @@ async def update_access_group(
             "access_mcp_server_ids",
             "access_agent_ids",
             "access_skill_names",
+            "access_vector_store_ids",
         ):
             value = list(iter_items(value or ()))
         update_data[field] = (
@@ -718,10 +737,8 @@ async def update_access_group(
                 data=update_data,
             )
 
-            await _sync_add_access_group_to_teams(tx, teams_to_add, access_group_id)
-            await _sync_remove_access_group_from_teams(tx, teams_to_remove, access_group_id)
-            await _sync_add_access_group_to_keys(tx, keys_to_add, access_group_id)
-            await _sync_remove_access_group_from_keys(tx, keys_to_remove, access_group_id)
+            await _sync_access_group_on_teams(tx, teams_to_add, teams_to_remove, access_group_id)
+            await _sync_access_group_on_keys(tx, keys_to_add, keys_to_remove, access_group_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -735,6 +752,8 @@ async def update_access_group(
 
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
+    if record is None:
+        raise AttributeError("'NoneType' object has no attribute 'dict'", name="dict", obj=None)
     await _cache_access_group_record(record)
     await _patch_team_caches_add_access_group(teams_to_add, access_group_id, user_api_key_cache, proxy_logging_obj)
     await _patch_team_caches_remove_access_group(
@@ -790,25 +809,8 @@ async def delete_access_group(
             )
             affected_key_tokens = list(all_affected_key_tokens)
 
-            # Update teams returned by find_many directly — we already have their data.
-            for team in teams_with_group:
-                await tx.litellm_teamtable.update(
-                    where={"team_id": team.team_id},
-                    data={"access_group_ids": [ag for ag in (team.access_group_ids or ()) if ag != access_group_id]},
-                )
-            # Use _sync_remove only for out-of-sync teams not found by the hasSome query.
-            out_of_sync_team_ids: Final = set(existing.assigned_team_ids or []) - {t.team_id for t in teams_with_group}
-            await _sync_remove_access_group_from_teams(tx, list(out_of_sync_team_ids), access_group_id)
-
-            # Update keys returned by find_many directly — we already have their data.
-            for key in keys_with_group:
-                await tx.litellm_verificationtoken.update(
-                    where={"token": key.token},
-                    data={"access_group_ids": [ag for ag in (key.access_group_ids or ()) if ag != access_group_id]},
-                )
-            # Use _sync_remove only for out-of-sync keys not found by the hasSome query.
-            out_of_sync_key_tokens: Final = set(existing.assigned_key_ids or []) - {k.token for k in keys_with_group}
-            await _sync_remove_access_group_from_keys(tx, list(out_of_sync_key_tokens), access_group_id)
+            await _sync_access_group_on_teams(tx, (), affected_team_ids, access_group_id)
+            await _sync_access_group_on_keys(tx, (), affected_key_tokens, access_group_id)
 
             detached_agent_ids: Final = await _detach_access_group_from_agents(tx, access_group_id)
 

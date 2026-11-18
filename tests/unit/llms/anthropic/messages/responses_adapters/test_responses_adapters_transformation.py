@@ -3,13 +3,22 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 (litellm/llms/anthropic/messages/responses_adapters/transformation.py)
 """
 
+import copy
 import json
 import os
-from typing import Any, Dict, Final, List
+from collections.abc import Mapping
+from typing import Any, Dict, Final, List, Literal
 from unittest.mock import MagicMock
 
 import pytest
-from openai.types.responses import ResponseInputImageParam
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseInputImageParam,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseReasoningItem,
+)
+from openai.types.responses.response_reasoning_item import Summary
 from pydantic import TypeAdapter
 
 from litellm.constants import (
@@ -20,17 +29,26 @@ from litellm.constants import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
+)
+from litellm.llms.anthropic.messages.adapters.transformation import (
+    LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
 )
-from litellm.types.llms.openai import ResponseAPIUsage
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 def _make_request(**overrides) -> AnthropicMessagesRequest:
@@ -44,6 +62,7 @@ def _make_request(**overrides) -> AnthropicMessagesRequest:
 
 
 _ADAPTER = LiteLLMAnthropicToResponsesAPIAdapter()
+_MODEL: Final = "openai/gpt-6.1-sol"
 
 
 # ---------------------------------------------------------------------------
@@ -138,21 +157,23 @@ class TestOutputConfigStructuredOutput:
     }
 
     def test_output_config_format_json_schema_converted(self):
-        """output_config.format.json_schema is converted to OpenAI text.format, defaulting strict to False."""
+        """output_config.format.json_schema becomes strict OpenAI text.format."""
         req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
         assert fmt["type"] == "json_schema"
         assert fmt["schema"] == self._SCHEMA
-        assert fmt["strict"] is False
+        assert fmt["strict"] is True
         assert fmt["name"] == "structured_output"
 
-    def test_output_config_format_explicit_strict_true_is_preserved(self):
-        """Nested output_config.format with explicit strict=True is preserved."""
-        req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": True}})
-        kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["text"]["format"]["strict"] is True
+    @pytest.mark.parametrize("strict", (True, False))
+    def test_output_config_format_explicit_strict_is_preserved(self, strict: bool) -> None:
+        req: Final = _make_request(
+            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": strict}}
+        )
+        kwargs: Final = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is strict
 
     def test_output_config_without_format_does_not_set_text(self):
         """output_config with only non-format keys doesn't produce text.format."""
@@ -161,12 +182,12 @@ class TestOutputConfigStructuredOutput:
         assert "text" not in kwargs
 
     def test_output_format_still_works(self):
-        """The original output_format field still takes precedence when present, defaulting strict to False."""
+        """The original output_format field still defaults to strict mode."""
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
-        assert kwargs["text"]["format"]["strict"] is False
+        assert kwargs["text"]["format"]["strict"] is True
 
     def test_output_format_explicit_strict_false_is_preserved(self):
         """output_format with an explicit strict=False is preserved as False."""
@@ -180,6 +201,23 @@ class TestOutputConfigStructuredOutput:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["strict"] is True
 
+    @pytest.mark.parametrize("format_field", ("output_format", "output_config"))
+    @pytest.mark.parametrize("strict_options", ({}, {"strict": None}))
+    def test_default_strict_matches_messages_to_chat_adapter(
+        self,
+        format_field: Literal["output_format", "output_config"],
+        strict_options: Mapping[str, None],
+    ) -> None:
+        output_format: Final = {"type": "json_schema", "schema": self._SCHEMA, **strict_options}
+        request: Final = _make_request(
+            **{format_field: output_format if format_field == "output_format" else {"format": output_format}}
+        )
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+        responses: Final = _ADAPTER.translate_request(request)
+
+        assert chat["response_format"]["json_schema"]["strict"] is True
+        assert responses["text"]["format"]["strict"] is chat["response_format"]["json_schema"]["strict"]
+
     def test_output_format_takes_precedence_over_output_config(self):
         """output_format takes precedence over output_config.format, for both schema and strict."""
         other_schema = {"type": "object", "properties": {"id": {"type": "integer"}}}
@@ -191,8 +229,8 @@ class TestOutputConfigStructuredOutput:
         assert kwargs["text"]["format"]["schema"] == self._SCHEMA
         assert kwargs["text"]["format"]["strict"] is False
 
-    def test_optional_property_stays_out_of_required_list(self):
-        """A property absent from required must stay absent from required in the translated schema."""
+    def test_optional_property_stays_out_of_required_list_when_not_strict(self):
+        """Without strict, a property absent from required stays absent from required in the translated schema."""
         schema = {
             "type": "object",
             "properties": {
@@ -202,7 +240,7 @@ class TestOutputConfigStructuredOutput:
             "required": ["name"],
             "additionalProperties": False,
         }
-        req = _make_request(output_format={"type": "json_schema", "schema": schema})
+        req = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
         kwargs = _ADAPTER.translate_request(req)
         fmt_schema = kwargs["text"]["format"]["schema"]
         assert fmt_schema["required"] == ["name"]
@@ -220,6 +258,79 @@ class TestOutputConfigStructuredOutput:
 
         assert output_format == snapshot
         assert req["output_format"] == snapshot
+
+    @pytest.mark.parametrize("format_field", ("output_format", "output_config"))
+    @pytest.mark.parametrize("strict_options", ({}, {"strict": True}))
+    def test_strict_schema_closes_every_object_like_messages_to_chat_adapter(
+        self,
+        format_field: Literal["output_format", "output_config"],
+        strict_options: Mapping[str, bool],
+    ) -> None:
+        """Regression for #51200: strict output schemas must be closed at every nesting level."""
+
+        def open_object(properties: Mapping[str, object], required: list[str]) -> dict[str, object]:
+            return {"type": "object", "properties": properties, "required": required, "additionalProperties": True}
+
+        def closed_object(properties: Mapping[str, object]) -> dict[str, object]:
+            return {
+                "type": "object",
+                "properties": properties,
+                "required": list(properties),
+                "additionalProperties": False,
+            }
+
+        schema: Final = {
+            **open_object(
+                {
+                    "entry": open_object({"value": {"type": "string"}, "note": {"type": "string"}}, ["value"]),
+                    "rows": {"type": "array", "items": open_object({"id": {"type": "integer"}}, [])},
+                    "choice": {"anyOf": [open_object({"a": {"type": "string"}}, []), {"type": "null"}]},
+                    "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**open_object({"flag": {"type": "boolean"}}, []), "type": ["object", "null"]},
+                },
+                ["entry"],
+            ),
+            "$defs": {"Item": open_object({"label": {"type": "string"}}, [])},
+        }
+        output_format: Final = {"type": "json_schema", "schema": schema, **strict_options}
+        snapshot: Final = copy.deepcopy(output_format)
+        request: Final = _make_request(
+            **{format_field: output_format if format_field == "output_format" else {"format": output_format}}
+        )
+        expected_schema: Final = {
+            **closed_object(
+                {
+                    "entry": closed_object({"value": {"type": "string"}, "note": {"type": "string"}}),
+                    "rows": {"type": "array", "items": closed_object({"id": {"type": "integer"}})},
+                    "choice": {"anyOf": [closed_object({"a": {"type": "string"}}), {"type": "null"}]},
+                    "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**closed_object({"flag": {"type": "boolean"}}), "type": ["object", "null"]},
+                }
+            ),
+            "$defs": {"Item": closed_object({"label": {"type": "string"}})},
+        }
+
+        translated: Final = _ADAPTER.translate_request(request)
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+        assert translated["text"] == {
+            "format": {"type": "json_schema", "name": "structured_output", "schema": expected_schema, "strict": True}
+        }
+        assert chat.get("response_format") == {
+            "type": "json_schema",
+            "json_schema": {"name": "structured_output", "schema": expected_schema, "strict": True},
+        }
+        assert output_format == snapshot
+
+    def test_non_strict_schema_is_forwarded_unchanged(self) -> None:
+        schema: Final = {
+            "type": "object",
+            "properties": {"entry": {"type": "object", "properties": {"value": {"type": "string"}}}},
+            "additionalProperties": True,
+        }
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
+
+        assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == schema
 
 
 # ---------------------------------------------------------------------------
@@ -957,13 +1068,13 @@ class TestTranslateThinkingToReasoning:
     """Anthropic thinking param -> Responses API reasoning param."""
 
     def test_budget_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000}, model=_MODEL)
         # Default (reasoning_auto_summary=False): only effort, no summary
         assert result == {"effort": "high"}
         assert result is not None and "summary" not in result
 
     def test_budget_above_threshold_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000}, model=_MODEL)
         assert result is not None
         assert result["effort"] == "high"
         assert "summary" not in result
@@ -973,7 +1084,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result == {"effort": "medium"}
         assert result is not None and "summary" not in result
@@ -983,13 +1095,14 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result == {"effort": "low"}
         assert result is not None and "summary" not in result
 
     def test_budget_minimal_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500}, model=_MODEL)
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -998,7 +1111,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_high is not None
         assert result_high["effort"] == "high"
@@ -1006,7 +1120,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_medium is not None
         assert result_medium["effort"] == "medium"
@@ -1015,23 +1130,24 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_low is not None
         assert result_low["effort"] == "low"
         assert "summary" not in result_low
 
     def test_disabled_type_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"}, model=_MODEL)
         assert result is None
 
     def test_non_dict_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning("enabled")  # type: ignore
+        result = _ADAPTER.translate_thinking_to_reasoning("enabled", model=_MODEL)  # type: ignore
         assert result is None
 
     def test_missing_budget_defaults_to_minimal(self):
         """Missing budget_tokens defaults to 0, below the low threshold -> minimal."""
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"}, model=_MODEL)
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -1042,7 +1158,7 @@ class TestTranslateThinkingToReasoning:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = True
-            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
+            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000}, model=_MODEL)
             assert result == {"effort": "high", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
@@ -1059,7 +1175,8 @@ class TestTranslateThinkingToReasoning:
                 {
                     "type": "enabled",
                     "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                }
+                },
+                model=_MODEL,
             )
             assert result == {"effort": "medium", "summary": "detailed"}
         finally:
@@ -1304,20 +1421,14 @@ def _make_mock_response(
     return resp
 
 
-def _make_output_message(texts: List[str]) -> MagicMock:
-    """Build a mock ResponseOutputMessage with output_text parts."""
-    from openai.types.responses import ResponseOutputMessage  # type: ignore[import]
-
-    parts = []
-    for t in texts:
-        part = MagicMock()
-        part.type = "output_text"
-        part.text = t
-        parts.append(part)
-
-    msg = MagicMock(spec=ResponseOutputMessage)
-    msg.content = parts
-    return msg
+def _make_output_message(texts: List[str]) -> ResponseOutputMessage:
+    return ResponseOutputMessage(
+        id="msg_test_1",
+        content=[ResponseOutputText(type="output_text", text=text, annotations=[]) for text in texts],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
 
 
 def _make_refusal_message(refusal_text: str):
@@ -1332,35 +1443,19 @@ def _make_refusal_message(refusal_text: str):
     )
 
 
-def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMock:
-    """Build a mock ResponseFunctionToolCall."""
-    from openai.types.responses import ResponseFunctionToolCall  # type: ignore[import]
-
-    item = MagicMock(spec=ResponseFunctionToolCall)
-    item.call_id = call_id
-    item.id = call_id
-    item.name = name
-    item.arguments = arguments
-    return item
+def _make_function_call_item(call_id: str, name: str, arguments: str) -> ResponseFunctionToolCall:
+    return ResponseFunctionToolCall(call_id=call_id, id=call_id, name=name, arguments=arguments, type="function_call")
 
 
 def _make_reasoning_item(
     summaries: List[str], item_id: str = "rs_test_1", encrypted_content: str | None = None
-) -> MagicMock:
-    """Build a mock ResponseReasoningItem."""
-    from openai.types.responses import ResponseReasoningItem  # type: ignore[import]
-
-    summary_mocks = []
-    for text in summaries:
-        s = MagicMock()
-        s.text = text
-        summary_mocks.append(s)
-
-    item = MagicMock(spec=ResponseReasoningItem)
-    item.id = item_id
-    item.summary = summary_mocks
-    item.encrypted_content = encrypted_content
-    return item
+) -> ResponseReasoningItem:
+    return ResponseReasoningItem(
+        id=item_id,
+        summary=[Summary(text=text, type="summary_text") for text in summaries],
+        type="reasoning",
+        encrypted_content=encrypted_content,
+    )
 
 
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
@@ -1490,7 +1585,7 @@ class TestTranslateResponse:
         reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")
         response = _make_mock_response(output=[reasoning])
         result: Any = _ADAPTER.translate_response(response)
-        assert [block["signature"] for block in result["content"]] == [None]
+        assert [block["signature"] for block in result["content"]] == [""]
         assert "rs_abc123" not in json.dumps(result["content"])
 
     def test_summary_parts_join_into_one_thinking_block(self):
@@ -1578,7 +1673,7 @@ class TestTranslateResponse:
             ]
         )
         result: Any = _ADAPTER.translate_response(response)
-        assert result["content"] == [{"type": "thinking", "thinking": "Weighing the options.", "signature": None}]
+        assert result["content"] == [{"type": "thinking", "thinking": "Weighing the options.", "signature": ""}]
 
     @pytest.mark.parametrize(
         ("summaries", "encrypted_content"),
@@ -2424,3 +2519,51 @@ class TestPromptCacheBreakpointToResponses:
             extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
         )
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+class TestTranslateChatBridgedResponse:
+    @staticmethod
+    def _bridged(message: Message, finish_reason: str) -> ResponsesAPIResponse:
+        return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Say OK",
+            responses_api_request={},
+            chat_completion_response=ModelResponse(
+                model="deepseek-v4-pro", choices=[Choices(index=0, finish_reason=finish_reason, message=message)]
+            ),
+        )
+
+    def test_reasoning_and_text_are_kept(self):
+        response: Final = self._bridged(
+            Message(role="assistant", content="OK", reasoning_content="The user wants OK."), "stop"
+        )
+
+        result: Final = _ADAPTER.translate_response(response)
+
+        assert result["content"] == [
+            {"type": "thinking", "thinking": "The user wants OK.", "signature": ""},
+            {"type": "text", "text": "OK"},
+        ]
+        assert result["stop_reason"] == "end_turn"
+
+    def test_tool_call_is_kept(self):
+        response: Final = self._bridged(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Oslo"}'},
+                    }
+                ],
+            ),
+            "tool_calls",
+        )
+
+        result: Final = _ADAPTER.translate_response(response)
+
+        assert result["content"] == [
+            {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}
+        ]
+        assert result["stop_reason"] == "tool_use"
