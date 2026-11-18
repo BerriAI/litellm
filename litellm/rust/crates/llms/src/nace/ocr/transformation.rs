@@ -143,7 +143,9 @@ enum Refusal {
         "`page_ranges` must be a list of {{\"start\", \"end\"}} integers with 1 <= start <= end"
     )]
     PageRanges,
-    #[error("pass `password` as the top-level option, not in `extra_body`, so that logs mask it")]
+    #[error(
+        "pass `password` as the top-level option, not in `extra_body`, so that the logging callbacks mask it"
+    )]
     NestedPassword,
     #[error(
         "the upload URL must be on the API base origin, or https on a public address, without credentials"
@@ -423,7 +425,7 @@ impl BaseOcrConfig for NaceParseConfig {
         let followups = Followups::new(&context);
         let response = match context
             .hooks
-            .response_received(&without_source(&bytes))
+            .response_received(&without_source(&bytes, context.headers))
             .await
         {
             Ok(()) => match decode_response::<ParseJob>(&bytes, followups.native) {
@@ -832,12 +834,22 @@ fn api_key(headers: &[(String, String)]) -> Option<&str> {
 }
 
 /// A job as the response hooks see it: without its `source`, which can be the caller's signed
-/// link. Other OCR providers do not echo the document link in their responses either.
-fn without_source(job: &[u8]) -> Vec<u8> {
+/// link, and with `error.code` and `error.message` cleaned by `clean_text`, which also masks the
+/// API key in `headers`. Other OCR providers do not echo the document link in their responses
+/// either.
+fn without_source(job: &[u8], headers: &[(String, String)]) -> Vec<u8> {
+    let secrets: Vec<&str> = api_key(headers).into_iter().collect();
     serde_json::from_slice::<Map<String, Value>>(job)
         .ok()
         .and_then(|mut job| {
-            job.remove("source");
+            job.shift_remove("source");
+            if let Some(Value::Object(error)) = job.get_mut("error") {
+                for field in ["code", "message"] {
+                    if let Some(Value::String(text)) = error.get_mut(field) {
+                        *text = clean_text(text, &secrets);
+                    }
+                }
+            }
             serde_json::to_vec(&job).ok()
         })
         .unwrap_or_else(|| job.to_vec())
@@ -936,7 +948,7 @@ impl<'a> Followups<'a> {
             }
             if !job.data.is_pending() {
                 self.hooks
-                    .response_received(&without_source(&decoded))
+                    .response_received(&without_source(&decoded, self.headers))
                     .await?;
                 return Ok(job);
             }
@@ -2082,6 +2094,66 @@ mod tests {
         assert_eq!(clean_text(text, &["tok-123-abc"]), expected);
     }
 
+    #[rstest]
+    #[case::signed_link_in_both(
+        "fetch_failed https://b.example/a.pdf?sig=1",
+        "could not read https://b.example/a.pdf?sig=1",
+        "fetch_failed https://b.example/a.pdf",
+        "could not read https://b.example/a.pdf"
+    )]
+    #[case::exact_key_in_both(
+        "bad key-123",
+        "key key-123 is revoked",
+        "bad ****",
+        "key **** is revoked"
+    )]
+    #[case::credentials_in_both(
+        "Bearer abc.DEF",
+        "key nace_sk_live_9f8e7d is revoked",
+        "****",
+        "key **** is revoked"
+    )]
+    fn without_source_drops_the_source_and_cleans_the_error_in_place(
+        #[case] code: &str,
+        #[case] message: &str,
+        #[case] clean_code: &str,
+        #[case] clean_message: &str,
+    ) {
+        let headers = [("Authorization".to_owned(), "Bearer key-123".to_owned())];
+        let job = json!({
+            "job_id": "job-1",
+            "source": {"type": "url", "url": "https://b.example/a.pdf?sig=1"},
+            "status": "failed",
+            "error": {"code": code, "message": message, "retryable": false},
+            "timing": {"elapsed_ms": 1}
+        });
+
+        let seen = without_source(&serde_json::to_vec(&job).unwrap(), &headers);
+
+        let expected = json!({
+            "job_id": "job-1",
+            "status": "failed",
+            "error": {"code": clean_code, "message": clean_message, "retryable": false},
+            "timing": {"elapsed_ms": 1}
+        });
+        assert_eq!(
+            String::from_utf8(seen).unwrap(),
+            serde_json::to_string(&expected).unwrap()
+        );
+    }
+
+    #[rstest]
+    #[case::null_error(json!({"job_id": "job-1", "error": null}))]
+    #[case::null_fields(json!({"job_id": "job-1", "error": {"code": null, "message": null}}))]
+    #[case::no_error(json!({"job_id": "job-1", "status": "succeeded"}))]
+    fn without_source_keeps_an_error_without_text(#[case] job: Value) {
+        let headers = [("Authorization".to_owned(), "Bearer key-123".to_owned())];
+
+        let seen = without_source(&serde_json::to_vec(&job).unwrap(), &headers);
+
+        assert_eq!(serde_json::from_slice::<Value>(&seen).unwrap(), job);
+    }
+
     #[test]
     fn clean_text_is_capped() {
         let text = "x".repeat(MAX_MESSAGE_CHARS * 10);
@@ -2366,6 +2438,8 @@ mod tests {
         use super::*;
 
         const BAD_UNITS: &str = r#"{"job_id":"job-1","status":"running","units":"invalid"}"#;
+        const RUNNING: &str = r#"{"job_id":"job-1","status":"running"}"#;
+        const FAILED_WITH_KEY: &str = r#"{"job_id":"job-1","status":"failed","error":{"code":"bad_key key-123","message":"Nace saw Bearer key-123 and key-123","retryable":false}}"#;
 
         struct Hooks {
             reject: bool,
@@ -2392,9 +2466,32 @@ mod tests {
             }
         }
 
-        /// A local Nace that answers the first request with `body` and every later one with a
-        /// 204, and records each request line.
-        async fn local_nace(body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+        /// Hooks that keep every body the response hook receives.
+        #[derive(Default)]
+        struct Recorder {
+            bodies: Mutex<Vec<String>>,
+        }
+
+        impl CallHooks<Error> for Recorder {
+            fn before_provider_request(
+                &self,
+                wire: WireRequest,
+            ) -> BoxFuture<'_, Result<WireRequest, Error>> {
+                Box::pin(async move { Ok(wire) })
+            }
+
+            fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+                self.bodies
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(body).into_owned());
+                Box::pin(async move { Ok(()) })
+            }
+        }
+
+        /// A local Nace that answers the n-th request with the n-th of `bodies` and every later
+        /// one with a 204, and records each request line.
+        async fn local_nace(bodies: &'static [&'static str]) -> (String, Arc<Mutex<Vec<String>>>) {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             let seen = Arc::new(Mutex::new(Vec::new()));
@@ -2409,17 +2506,17 @@ mod tests {
                         .next()
                         .unwrap_or_default()
                         .to_owned();
-                    let first = {
+                    let answer = {
                         let mut seen = recorder.lock().unwrap();
                         seen.push(line);
-                        seen.len() == 1
+                        bodies.get(seen.len() - 1)
                     };
-                    let response = match first {
-                        true => format!(
+                    let response = match answer {
+                        Some(body) => format!(
                             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()
                         ),
-                        false => "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_owned(),
+                        None => "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_owned(),
                     };
                     socket.write_all(response.as_bytes()).await.unwrap();
                 }
@@ -2476,7 +2573,7 @@ mod tests {
             #[case] reject: bool,
             #[case] reported: &str,
         ) {
-            let (base, seen) = local_nace(BAD_UNITS).await;
+            let (base, seen) = local_nace(&[BAD_UNITS]).await;
             let client = OcrClient::for_test();
             let created = client
                 .polling_http()
@@ -2512,6 +2609,52 @@ mod tests {
                     "POST /v1/documents/parse HTTP/1.1",
                     "DELETE /v1/documents/jobs/job-1 HTTP/1.1"
                 ]
+            );
+        }
+
+        #[rstest]
+        #[case::create(&[FAILED_WITH_KEY], 1)]
+        #[case::poll(&[RUNNING, FAILED_WITH_KEY], 2)]
+        #[tokio::test]
+        async fn the_response_hook_gets_job_errors_with_the_api_key_masked(
+            #[case] answers: &'static [&'static str],
+            #[case] hook_calls: usize,
+        ) {
+            let (base, _) = local_nace(answers).await;
+            let client = OcrClient::for_test();
+            let created = client
+                .polling_http()
+                .post(format!("{base}/v1/documents/parse"))
+                .send()
+                .await
+                .unwrap();
+            let connection = connection(Some(&base), InputSource::Deployment);
+            let headers = [("Authorization".to_owned(), "Bearer key-123".to_owned())];
+            let hooks = Recorder::default();
+
+            let result = NaceParseConfig
+                .async_transform_ocr_response(
+                    "parse-low",
+                    created,
+                    OcrResponseContext {
+                        client: &client,
+                        connection: &connection,
+                        hooks: &hooks,
+                        request_format: OcrResponseFormat::Litellm,
+                        url: "",
+                        headers: &headers,
+                        optional_params: &CallArguments::default(),
+                    },
+                )
+                .await;
+
+            assert!(result.is_err());
+            let bodies = hooks.bodies.lock().unwrap();
+            assert_eq!(bodies.len(), hook_calls, "{bodies:?}");
+            let failed: Value = serde_json::from_str(bodies.last().unwrap()).unwrap();
+            assert_eq!(
+                failed["error"],
+                json!({"code": "bad_key ****", "message": "Nace saw **** and ****", "retryable": false})
             );
         }
     }
