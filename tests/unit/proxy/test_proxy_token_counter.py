@@ -6126,6 +6126,116 @@ async def test_deployment_with_a_custom_tokenizer_never_waits_for_its_base_model
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_cooling_down_deployment_with_a_custom_tokenizer_never_downloads_its_base_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = _custom_named_llama_router(
+        {
+            "id": "my-llama-deployment",
+            "custom_tokenizer": {"identifier": "lit-tests/my-llama", "revision": "main", "auth_token": None},
+        }
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    downloads: Final[list[str]] = []
+    _stub_hub_downloads(monkeypatch, downloads.append)
+    router.health().cooldowns.add_deployment_to_cooldown(
+        model_id="my-llama-deployment",
+        original_exception=Exception("rate limited"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+
+    assert await _my_llama_tokenizer_type() == "openai_tokenizer"
+    assert downloads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_custom_named_deployments_whose_base_models_share_a_tokenizer_download_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {"model": f"hosted_vllm/{name}", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": f"hosted_vllm/meta-llama/{base_model}"},
+                }
+                for name, base_model in (
+                    ("my-llama-70b", "Llama-3.3-70B-Instruct"),
+                    ("my-llama-8b", "Llama-3.1-8B-Instruct"),
+                )
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    second_download: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def hanging_download(identifier: str) -> None:
+        downloads.append(identifier)
+        (second_download if download_started.is_set() else download_started).set()
+        hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, hanging_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type(model: str) -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model=model, messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    first: Final = asyncio.ensure_future(tokenizer_type("my-llama-70b"))
+    try:
+        await asyncio.to_thread(download_started.wait, 10)
+        second: Final = asyncio.ensure_future(tokenizer_type("my-llama-8b"))
+        await asyncio.to_thread(second_download.wait, 0.5)
+    finally:
+        hub_released.set()
+
+    assert await asyncio.wait_for(asyncio.gather(first, second), 8) == ["huggingface_tokenizer"] * 2
+    assert downloads == [_LLAMA_3_HUB_TOKENIZER]
+
+
+@pytest.mark.asyncio
+async def test_deployment_whose_own_model_has_a_tokenizer_keeps_it_when_base_model_names_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "http://127.0.0.1:9/v1"}
+    own_model: Final = "hosted_vllm/deepseek-ai/DeepSeek-V4-Flash"
+    base_model: Final = "anthropic/claude-opus-5-5"
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "based",
+                    "litellm_params": {"model": own_model, **credentials},
+                    "model_info": {"base_model": base_model},
+                },
+                {"model_name": "own", "litellm_params": {"model": own_model, **credentials}},
+                {"model_name": "base", "litellm_params": {"model": base_model, **credentials}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    based, own, base = [
+        (await _token_counter_route(TokenCountRequest(model=name, messages=messages))).total_tokens
+        for name in ("based", "own", "base")
+    ]
+
+    assert based == own != base
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
 async def test_framed_count_still_estimates_while_base_model_tokenizer_downloads_hang(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
