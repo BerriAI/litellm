@@ -5,7 +5,7 @@ Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orches
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 from pydantic import BaseModel
@@ -411,8 +411,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        raw_body: Final = cast(dict[str, object], raw_response.json())
-        response = ModelResponse.model_validate(normalize_reasoning_blocks(raw_body["final_result"], "message"))
+        response = ModelResponse.model_validate(
+            normalize_reasoning_blocks(raw_response.json()["final_result"], "message")
+        )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```

@@ -1119,3 +1119,43 @@ class TestStreamGeminiThoughtSignatures:
 
         assert delta.reasoning_content == "plain reasoning"
         assert getattr(delta, "thinking_blocks", None) is None
+
+    def test_non_object_stream_line_is_skipped(self):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines = ["data: [1, 2]", _stream_event("final_result", {"content": "OPEN"})]
+
+        chunks = list(SAPStreamIterator(response=iter(lines)))
+
+        assert [chunk.choices[0].delta.content for chunk in chunks] == ["OPEN"]
+
+    @pytest.mark.asyncio
+    async def test_list_shaped_reasoning_content_in_async_stream_delta(self):
+        from litellm.llms.sap.chat.handler import AsyncSAPStreamIterator
+
+        async def lines():
+            yield _stream_event(
+                "final_result",
+                {"content": "OPEN", "reasoning_content": [{"content": "It is open.", "signature": "sig-one"}]},
+            )
+
+        chunks = [chunk async for chunk in AsyncSAPStreamIterator(response=lines())]
+
+        delta = chunks[0].choices[0].delta
+        assert delta.reasoning_content == "It is open."
+        assert delta.thinking_blocks == [{"type": "thinking", "thinking": "It is open.", "signature": "sig-one"}]
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            None,
+            {"choices": None},
+            {"choices": ["not a choice"]},
+            {"choices": [{"index": 0}]},
+            {"choices": [{"delta": "not a delta"}]},
+        ],
+    )
+    def test_results_without_reasoning_blocks_pass_through(self, result):
+        from litellm.llms.sap.chat.reasoning import normalize_reasoning_blocks
+
+        assert normalize_reasoning_blocks(result, "delta") == result

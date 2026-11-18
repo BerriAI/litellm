@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import Final, Literal, cast
+from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.types.llms.openai import ChatCompletionThinkingBlock
+
+_OBJECT: Final = TypeAdapter(dict[str, object])
+_OBJECTS: Final = TypeAdapter(list[object])
 
 
 class _SAPThoughtBlock(BaseModel):
@@ -25,6 +28,20 @@ def _thinking_block(block: _SAPThoughtBlock) -> ChatCompletionThinkingBlock:
     return ChatCompletionThinkingBlock(type="thinking", thinking=block.content, signature=block.signature)
 
 
+def _as_object(value: object) -> dict[str, object] | None:
+    try:
+        return _OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _as_objects(value: object) -> list[object] | None:
+    try:
+        return _OBJECTS.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def _parse_thoughts(body: object) -> _SAPThoughts | None:
     try:
         return _SAPThoughts.model_validate(body)
@@ -34,40 +51,49 @@ def _parse_thoughts(body: object) -> _SAPThoughts | None:
 
 def _normalize_body(body: object) -> object:
     parsed: Final = _parse_thoughts(body)
-    if parsed is None:
+    fields: Final = _as_object(body)
+    if parsed is None or fields is None:
         return body
 
     blocks: Final = tuple(_thinking_block(block) for block in parsed.reasoning_content)
     reasoning_text: Final = "".join(block.content for block in parsed.reasoning_content)
 
     return {
-        **cast(dict[str, object], body),
+        **fields,
         "reasoning_content": reasoning_text or None,
         "thinking_blocks": [*parsed.thinking_blocks, *blocks],
     }
 
 
 def _normalize_choice(choice: object, body_key: Literal["message", "delta"]) -> object:
-    if not isinstance(choice, dict):
+    fields: Final = _as_object(choice)
+    if fields is None or body_key not in fields:
         return choice
 
-    choice_dict: Final = cast(dict[str, object], choice)
-    if body_key not in choice_dict:
-        return choice_dict
-
-    return {**choice_dict, body_key: _normalize_body(choice_dict[body_key])}
+    return {**fields, body_key: _normalize_body(fields[body_key])}
 
 
 def normalize_reasoning_blocks(result: object, body_key: Literal["message", "delta"]) -> object:
-    if not isinstance(result, dict):
+    fields: Final = _as_object(result)
+    if fields is None:
         return result
 
-    result_dict: Final = cast(dict[str, object], result)
-    choices: Final = result_dict.get("choices")
-    if not isinstance(choices, list):
-        return result_dict
+    choices: Final = _as_objects(fields.get("choices"))
+    if choices is None:
+        return result
 
-    return {
-        **result_dict,
-        "choices": [_normalize_choice(choice, body_key) for choice in cast(list[object], choices)],
+    return {**fields, "choices": [_normalize_choice(choice, body_key) for choice in choices]}
+
+
+_STREAM_CHUNK_KEYS: Final = ("final_result", "orchestration_result")
+
+
+def normalize_stream_event(event: object) -> dict[str, object]:
+    fields: Final = _as_object(event)
+    if fields is None:
+        return {}
+
+    nested: Final = {
+        key: normalize_reasoning_blocks(fields[key], "delta") for key in _STREAM_CHUNK_KEYS if key in fields
     }
+    return _as_object(normalize_reasoning_blocks({**fields, **nested}, "delta")) or {}
