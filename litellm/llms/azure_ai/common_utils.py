@@ -56,6 +56,7 @@ AZURE_AI_AGENTS_SCOPE: Final = "https://ai.azure.com/.default"
 FOUNDRY_PROJECT_PATH_PREFIX: Final = ("api", "projects")
 OPENAI_V1_PATH: Final = ("openai", "v1")
 CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")
+_OPENAI_V1_ROUTES: Final = (CHAT_COMPLETIONS_PATH, ("responses",), ("responses", "compact"))
 FOUNDRY_PROJECT_NEXT_SEGMENTS: Final = ((), ("openai",), ("models",), ("v1",))
 FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 
@@ -85,7 +86,9 @@ def foundry_v1_root(base_url: httpx.URL) -> tuple[str, ...] | None:
     if project_root:
         return (*project_root, *OPENAI_V1_PATH)
     segments: Final = _path_segments(base_url)
-    route_free: Final = segments[:-2] if segments[-2:] == CHAT_COMPLETIONS_PATH else segments
+    route_free: Final = next(
+        (segments[: -len(route)] for route in _OPENAI_V1_ROUTES if segments[-len(route) :] == route), segments
+    )
     return route_free if route_free[-2:] == OPENAI_V1_PATH else None
 
 

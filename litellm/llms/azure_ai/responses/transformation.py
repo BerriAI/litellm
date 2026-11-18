@@ -19,6 +19,11 @@ from litellm.llms.azure_ai.common_utils import (
     with_foundry_project_scope,
     without_api_version,
 )
+from litellm.responses.litellm_completion_transformation.custom_tools import (
+    convert_custom_tool_to_function_tool,
+    extract_custom_tool_names,
+    unwrap_custom_tool_arguments,
+)
 from litellm.types.llms.azure_ai import FoundryAgentReference
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -37,8 +42,8 @@ _AGENT_OWNED_PARAMS: Final = frozenset({"temperature", "top_p", "tools", "text",
 _CALLER_AGENT_KEYS: Final = ("agent", "agent_reference")
 _RESPONSE_FIELDS: Final = TypeAdapter(dict[str, object])
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[object, ...])
-_TOOL_PARAMS: Final = frozenset({"tools", "tool_choice"})
-_INPUT_ITEMS: Final = TypeAdapter(list[object])
+_ITEMS: Final = TypeAdapter(list[object])
+_UNENCODED_HEADERS: Final = frozenset({"content-encoding", "content-length"})
 
 
 def _responses_url(api_base: str) -> str:
@@ -63,51 +68,42 @@ def _event_without_agent_instructions(event: Mapping[str, object]) -> Mapping[st
     return {**event, "response": {**fields, "instructions": None}}
 
 
-def _is_custom_tool(tool: object) -> bool:
-    match tool:
-        case {"type": "custom"}:
-            return True
-        case _:
-            return False
+def _router_function_tool(tool: object) -> object:
+    if not isinstance(tool, Mapping):
+        return tool
+    fields: Final = _RESPONSE_FIELDS.validate_python(tool)
+    function_tool: Final = convert_custom_tool_to_function_tool(fields)
+    if function_tool is None:
+        return fields
+    return {**{key: value for key, value in function_tool.items() if key != "function"}, **function_tool["function"]}
 
 
-def _without_custom_members(tool: object) -> object | None:
+def _router_tool(tool: object) -> object:
     match tool:
-        case {"type": "custom"}:
-            return None
-        case {"type": "namespace" | "allowed_tools", "tools": list()}:
+        case {"type": "namespace", "tools": list()}:
             fields: Final = _RESPONSE_FIELDS.validate_python(tool)
             members: Final = _REQUEST_TOOLS.validate_python(fields["tools"])
-            kept: Final = [member for member in members if not _is_custom_tool(member)]
-            if not kept:
-                return None
-            if len(kept) == len(members):
-                return tool
-            return {**fields, "tools": kept}
+            return {**fields, "tools": [_router_function_tool(member) for member in members]}
         case _:
-            return tool
+            return _router_function_tool(tool)
 
 
-def _without_custom_tools(mapped: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, object]:
-    tools: Final = _REQUEST_TOOLS.validate_python(mapped.get("tools") or ())
-    stripped: Final = tuple(_without_custom_members(tool) for tool in tools)
-    tool_choice: Final = _without_custom_members(mapped.get("tool_choice"))
-    if tool_choice is mapped.get("tool_choice") and all(kept is tool for kept, tool in zip(stripped, tools)):
-        return mapped
-    if not drop_params:
-        raise UnsupportedParamsError(
-            message=(
-                "azure_ai Model Router rejects `custom` tools on the Responses API. Send them as function tools, or "
-                "set `drop_params: true` to drop them"
-            ),
-            llm_provider=LlmProviders.AZURE_AI.value,
-            model=model,
-        )
-    kept_tools: Final = [tool for tool in stripped if tool is not None]
-    rest: Final = {key: value for key, value in mapped.items() if key not in _TOOL_PARAMS}
-    if not kept_tools:
-        return rest
-    return {**rest, "tools": kept_tools, **({} if tool_choice is None else {"tool_choice": tool_choice})}
+def _router_choice_member(member: object) -> object:
+    match member:
+        case {"type": "custom"}:
+            return {**_RESPONSE_FIELDS.validate_python(member), "type": "function"}
+        case _:
+            return member
+
+
+def _router_tool_choice(tool_choice: object) -> object:
+    match tool_choice:
+        case {"type": "allowed_tools", "tools": list()}:
+            fields: Final = _RESPONSE_FIELDS.validate_python(tool_choice)
+            members: Final = _REQUEST_TOOLS.validate_python(fields["tools"])
+            return {**fields, "tools": [_router_choice_member(member) for member in members]}
+        case _:
+            return _router_choice_member(tool_choice)
 
 
 def _function_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
@@ -133,11 +129,88 @@ def _router_input_item(item: object) -> object:
             return item
 
 
-def _with_router_input(model: str, request: Mapping[str, object]) -> Mapping[str, object]:
-    request_input: Final = request.get("input")
-    if not isinstance(request_input, list) or AzureFoundryModelInfo.get_azure_ai_route(model) != "model_router":
+def _router_request(model: str, request: Mapping[str, object]) -> Mapping[str, object]:
+    if AzureFoundryModelInfo.get_azure_ai_route(model) != "model_router":
         return request
-    return {**request, "input": [_router_input_item(item) for item in _INPUT_ITEMS.validate_python(request_input)]}
+    request_input: Final = request.get("input")
+    tools: Final = request.get("tools")
+    return {
+        **request,
+        **(
+            {"input": [_router_input_item(item) for item in _ITEMS.validate_python(request_input)]}
+            if isinstance(request_input, list)
+            else {}
+        ),
+        **(
+            {"tools": [_router_tool(tool) for tool in _REQUEST_TOOLS.validate_python(tools)]}
+            if isinstance(tools, list)
+            else {}
+        ),
+        **({"tool_choice": _router_tool_choice(request["tool_choice"])} if "tool_choice" in request else {}),
+    }
+
+
+class _RequestedTools(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    tools: tuple[object, ...] | None = None
+
+
+def _custom_tool_names(model: str, logging_obj: "LiteLLMLoggingObj") -> frozenset[str]:
+    if AzureFoundryModelInfo.get_azure_ai_route(model) != "model_router":
+        return frozenset()
+    requested: Final = _RequestedTools.model_validate(logging_obj.model_call_details.get("optional_params") or {})
+    return frozenset(extract_custom_tool_names(requested.tools))
+
+
+def _caller_output_item(item: object, custom_tool_names: frozenset[str]) -> object:
+    match item:
+        case {"type": "function_call", "name": str() as name} if name in custom_tool_names:
+            fields: Final = _RESPONSE_FIELDS.validate_python(item)
+            arguments: Final = fields.get("arguments")
+            return {
+                **{key: value for key, value in fields.items() if key != "arguments"},
+                "type": "custom_tool_call",
+                "input": unwrap_custom_tool_arguments(arguments if isinstance(arguments, str) else ""),
+            }
+        case _:
+            return item
+
+
+def _caller_response(response: Mapping[str, object], custom_tool_names: frozenset[str]) -> Mapping[str, object]:
+    output: Final = response.get("output")
+    if not custom_tool_names or not isinstance(output, list):
+        return response
+    return {
+        **response,
+        "output": [_caller_output_item(item, custom_tool_names) for item in _ITEMS.validate_python(output)],
+    }
+
+
+def _with_custom_tool_calls(raw_response: httpx.Response, custom_tool_names: frozenset[str]) -> httpx.Response:
+    if not custom_tool_names:
+        return raw_response
+    try:
+        body: Final = _RESPONSE_FIELDS.validate_json(raw_response.content)
+    except ValidationError:
+        return raw_response
+    return httpx.Response(
+        status_code=raw_response.status_code,
+        headers={key: value for key, value in raw_response.headers.items() if key.lower() not in _UNENCODED_HEADERS},
+        json=_caller_response(body, custom_tool_names),
+        request=raw_response.request,
+    )
+
+
+def _caller_event(model: str, event: Mapping[str, object], logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
+    match event:
+        case {"type": "response.output_item.done", "item": item}:
+            return {**event, "item": _caller_output_item(item, _custom_tool_names(model, logging_obj))}
+        case {"response": Mapping()}:
+            fields: Final = _RESPONSE_FIELDS.validate_python(event["response"])
+            return {**event, "response": _caller_response(fields, _custom_tool_names(model, logging_obj))}
+        case _:
+            return event
 
 
 def _stamp_routed_model(model: str, response: ResponsesAPIResponse) -> None:
@@ -199,7 +272,7 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
             headers=headers,
         )
         url, body = compact
-        return url, dict(_with_router_input(model, body))
+        return url, dict(_router_request(model, body))
 
     def transform_responses_api_request(
         self,
@@ -216,7 +289,7 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        return dict(_with_router_input(model, request))
+        return dict(_router_request(model, request))
 
     def should_fake_stream(
         self, model: str | None, stream: bool | None, custom_llm_provider: str | None = None
@@ -224,21 +297,6 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         if model is not None and AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router":
             return False
         return super().should_fake_stream(model, stream, custom_llm_provider)
-
-    def map_openai_params_for_deployment(
-        self,
-        response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        model: str,
-        drop_params: bool,
-        *,
-        declared_reasoning_efforts: Collection[str] | None,
-    ) -> Mapping[str, object]:
-        mapped: Final = super().map_openai_params_for_deployment(
-            response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
-        )
-        if AzureFoundryModelInfo.get_azure_ai_route(model) != "model_router":
-            return mapped
-        return _without_custom_tools(mapped, model, drop_params)
 
     def supports_native_websocket(self) -> bool:
         return False
@@ -256,7 +314,9 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         self, model: str, raw_response: httpx.Response, logging_obj: "LiteLLMLoggingObj"
     ) -> ResponsesAPIResponse:
         response: Final = _without_agent_instructions(
-            super().transform_response_api_response(model, raw_response, logging_obj)
+            super().transform_response_api_response(
+                model, _with_custom_tool_calls(raw_response, _custom_tool_names(model, logging_obj)), logging_obj
+            )
         )
         _stamp_routed_model(model, response)
         return response
@@ -268,7 +328,9 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> ResponsesAPIStreamingResponse:
         event: Final = super().transform_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # parent types parsed_chunk as a bare dict
-            model=model, parsed_chunk=dict(_event_without_agent_instructions(parsed_chunk)), logging_obj=logging_obj
+            model=model,
+            parsed_chunk=dict(_caller_event(model, _event_without_agent_instructions(parsed_chunk), logging_obj)),
+            logging_obj=logging_obj,
         )
         response: Final = getattr(event, "response", None)
         if isinstance(response, ResponsesAPIResponse):
@@ -356,7 +418,7 @@ def _with_system_prompt(instructions: str, request_input: object) -> Sequence[ob
     conversation: Final = (
         [{"type": "message", "role": "user", "content": request_input}]
         if isinstance(request_input, str)
-        else _INPUT_ITEMS.validate_python(request_input)
+        else _ITEMS.validate_python(request_input)
     )
     return [{"type": "message", "role": "system", "content": instructions}, *conversation]
 
