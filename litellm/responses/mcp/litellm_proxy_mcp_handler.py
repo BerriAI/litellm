@@ -1,3 +1,5 @@
+import base64
+import binascii
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -75,7 +77,61 @@ SplitTools: TypeAlias = tuple[list[ToolParam], list[Any]]
 class MCPToolResult(TypedDict):
     tool_call_id: str | None
     result: str
+    # Multimodal payload for the follow-up call; `result` stays the text view that the
+    # stream events and logs use. Absent on error paths.
+    content: "str | list[dict[str, object]]"
     name: str | None
+
+
+_TEXT_LIKE_MIME_PREFIXES: Final = ("text/", "application/json", "application/xml")
+
+
+def _mcp_mime_type(item: object) -> str | None:
+    """mcp.types spells it `mime_type`; the wire format and our docs say `mimeType`.
+
+    Accept both so the helper keeps working no matter which shape shows up (dicts that
+    came back from a passthrough hop, older pydantic-alias builds, hand-built mocks).
+    """
+    mime_type: Final = getattr(item, "mime_type", None) or getattr(item, "mimeType", None)
+    if mime_type is None and isinstance(item, Mapping):
+        mime_type = item.get("mime_type") or item.get("mimeType")
+    return mime_type if isinstance(mime_type, str) and mime_type else None
+
+
+def _image_content_part(image: object) -> "dict[str, object] | None":
+    """MCP ImageContent -> image_url part carrying a data: URL.
+
+    Servers send the image base64-encoded with a mime type; both dialects want a URL,
+    and a data URL is the one every provider in the chain already understands.
+    """
+    data: Final = getattr(image, "data", None)
+    mime_type: Final = _mcp_mime_type(image)
+    if not isinstance(data, str) or not data or not mime_type:
+        return None
+    return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{data}"}}
+
+
+def _blob_resource_part(resource: object) -> "dict[str, object] | None":
+    """PDF-ish blob resources -> file part; text-ish blobs -> inline text.
+
+    A text/plain resource is better off as text than as a file part, and inlining it
+    keeps the follow-up working for providers that can't take files at all.
+    """
+    blob: Final = getattr(resource, "blob", None)
+    mime_type: Final = _mcp_mime_type(resource) or "application/octet-stream"
+    if not isinstance(blob, str) or not blob:
+        return None
+    if mime_type.startswith(_TEXT_LIKE_MIME_PREFIXES):
+        try:
+            return {"type": "text", "text": base64.b64decode(blob).decode("utf-8")}
+        except (binascii.Error, UnicodeDecodeError):
+            pass
+    return {"type": "file", "file": {"file_data": f"data:{mime_type};base64,{blob}", "format": mime_type}}
+
+
+def _unsupported_part(description: str) -> dict[str, object]:
+    """Say what got dropped instead of silently handing the model a placeholder."""
+    return {"type": "text", "text": f"[Unsupported MCP content: {description} was not forwarded to the model]"}
 
 
 class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -879,6 +935,55 @@ class LiteLLM_Proxy_MCP_Handler:
         return result_text or "Tool executed successfully"
 
     @staticmethod
+    def _mcp_result_to_content(result: "CallToolResult") -> "str | list[dict[str, object]]":
+        """Turn an MCP result into something the follow-up call can send as tool output.
+
+        Text-only results come back as the same plain string `_parse_mcp_result` builds,
+        so nothing changes for tools that only return text. When the server also sent
+        images or resource blobs we return content parts instead: the tool message /
+        `function_call_output.output` field both take a list, and these parts are in the
+        chat dialect (image_url / file) that litellm's responses -> chat translation
+        already knows how to hand to the provider.
+        """
+        content: Final = getattr(result, "content", None)
+        if not content:
+            return LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+
+        try:
+            from mcp.types import BlobResourceContents, EmbeddedResource, ImageContent, TextContent
+        except ImportError:
+            return LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+
+        parts: Final[list[dict[str, object]]] = []
+        has_media: bool = False
+        for content_item in content:
+            if isinstance(content_item, TextContent):
+                parts.append({"type": "text", "text": str(content_item.text)})
+                continue
+            has_media = True
+            if isinstance(content_item, ImageContent):
+                image_part = _image_content_part(content_item)
+                parts.append(image_part if image_part else _unsupported_part("image without MIME type"))
+            elif isinstance(content_item, EmbeddedResource):
+                resource: Final = getattr(content_item, "resource", None)
+                resource_part: Final = (
+                    _blob_resource_part(resource) if isinstance(resource, BlobResourceContents) else None
+                )
+                parts.append(
+                    resource_part
+                    if resource_part
+                    else _unsupported_part(f"embedded resource ({_mcp_mime_type(resource) or 'unknown type'})")
+                )
+            else:
+                parts.append(_unsupported_part(type(content_item).__name__))
+
+        if has_media:
+            return parts
+        # Text-only, so hand back the old string: follow-up requests for tools that
+        # only return text stay exactly what they were before this change.
+        return LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+
+    @staticmethod
     @catalog_operation(global_manager)
     async def execute_tool_calls(
         tool_server_map: dict[str, str],
@@ -1092,11 +1197,11 @@ class LiteLLM_Proxy_MCP_Handler:
                         verbose_logger.exception("Failed to log MCP tool call success for %s", tool_name)
 
                 # Format result for inclusion in response
-                result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
-                        "result": result_text,
+                        "result": LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result),
+                        "content": LiteLLM_Proxy_MCP_Handler._mcp_result_to_content(result),
                         "name": tool_name,
                     }
                 )
@@ -1220,7 +1325,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     "role": "tool",
                     "tool_call_id": tool_result.get("tool_call_id"),
                     "name": tool_result.get("name"),
-                    "content": tool_result.get("result", ""),
+                    "content": tool_result.get("content") or tool_result.get("result", ""),
                 }
             )
 
@@ -1308,7 +1413,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 {
                     "type": "function_call_output",
                     "call_id": tool_result["tool_call_id"],
-                    "output": tool_result["result"],
+                    "output": tool_result.get("content") or tool_result["result"],
                 }
             )
 
