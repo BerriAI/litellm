@@ -1,0 +1,616 @@
+{
+ "source": "Captured once from main's Python (532df6ef85, LITELLM_LOCAL_MODEL_COST_MAP=True) through llms/fal_ai/cost_calculator.py. Each case holds the facts the adapter reads off the call, the deployment's prices, the cost fields of the fal_ai/<model> entry and of the fallback row, and main's total. Size keyed rows come from the bundled cost map",
+ "cases": [
+  {
+   "name": "keyed_by_returned_size",
+   "call": "image",
+   "model": "openai/gpt-image-2",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1024,
+      1024
+     ],
+     "pixels": 1048576
+    },
+    {
+     "target": [
+      1920,
+      1080
+     ],
+     "pixels": 2073600
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.145
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.145,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.369
+  },
+  {
+   "name": "keyed_default_size",
+   "call": "image",
+   "model": "gpt-image-2",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.145
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.145,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.145
+  },
+  {
+   "name": "keyed_named_size_low",
+   "call": "image",
+   "model": "gpt-image-2",
+   "quality": "low",
+   "images": [
+    {
+     "target": [
+      576,
+      1024
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      576,
+      1024
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      576,
+      1024
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.145
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.145,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.015
+  },
+  {
+   "name": "keyed_custom_size",
+   "call": "image",
+   "model": "openai/gpt-image-2/edit",
+   "quality": "medium",
+   "images": [
+    {
+     "target": [
+      2000,
+      1200
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      2000,
+      1200
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.151
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.151,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.106
+  },
+  {
+   "name": "entry_resolution",
+   "call": "image",
+   "model": "fal-ai/nano-banana-pro",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": null,
+   "resolution": "4K",
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.15,
+    "output_cost_per_image_1K": 0.15,
+    "output_cost_per_image_2K": 0.15,
+    "output_cost_per_image_4K": 0.3
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.15,
+    "output_cost_per_image_1K": 0.15,
+    "output_cost_per_image_2K": 0.15,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.6
+  },
+  {
+   "name": "entry_billable_units",
+   "call": "image",
+   "model": "google/nano-banana-2.1",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": 2.5,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_billable_unit": 1.0,
+    "output_cost_per_image": 0.04,
+    "output_cost_per_image_1K": 0.04,
+    "output_cost_per_image_2K": 0.059,
+    "output_cost_per_image_4K": 0.134
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.04,
+    "output_cost_per_image_1K": 0.04,
+    "output_cost_per_image_2K": 0.059,
+    "output_cost_per_billable_unit": 1.0,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 2.5
+  },
+  {
+   "name": "deployment_per_image",
+   "call": "image",
+   "model": "fal-ai/flux-pro/v1.1",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": {
+    "output_cost_per_image": 0.5
+   },
+   "entry": {
+    "output_cost_per_image": 0.04,
+    "output_cost_per_pixel": 3.814697265625e-08
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.5,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": 3.814697265625e-08,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 1.5
+  },
+  {
+   "name": "deployment_billable_units",
+   "call": "image",
+   "model": "fal-ai/flux-pro/v1.1",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": 4.0,
+   "resolution": null,
+   "deployment": {
+    "output_cost_per_billable_unit": 0.2
+   },
+   "entry": {
+    "output_cost_per_image": 0.04,
+    "output_cost_per_pixel": 3.814697265625e-08
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.04,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": 0.2,
+    "output_cost_per_pixel": 3.814697265625e-08,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.8
+  },
+  {
+   "name": "fallback_megapixels",
+   "call": "image",
+   "model": "fal-ai/flux-pro/v1.1",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1500,
+      1000
+     ],
+     "pixels": 1500000
+    },
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      1024,
+      1024
+     ],
+     "pixels": 1048576
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.04,
+    "output_cost_per_pixel": 3.814697265625e-08
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.04,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": 3.814697265625e-08,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.16
+  },
+  {
+   "name": "fallback_flat",
+   "call": "image",
+   "model": "fal-ai/flux-pro/v1.1-ultra",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    },
+    {
+     "target": [
+      1024,
+      768
+     ],
+     "pixels": null
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.06
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.06,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.12
+  },
+  {
+   "name": "fallback_deployment_pixel",
+   "call": "image",
+   "model": "fal-ai/flux/schnell",
+   "quality": "high",
+   "images": [
+    {
+     "target": [
+      2048,
+      2048
+     ],
+     "pixels": 4194304
+    }
+   ],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": {
+    "output_cost_per_pixel": 1e-08
+   },
+   "entry": {
+    "output_cost_per_image": 0.003,
+    "output_cost_per_pixel": 2.86102294921875e-09
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.003,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": 1e-08,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.04194304
+  },
+  {
+   "name": "no_images",
+   "call": "image",
+   "model": "fal-ai/ideogram/v3",
+   "quality": "high",
+   "images": [],
+   "billable_units": null,
+   "resolution": null,
+   "deployment": null,
+   "entry": {
+    "output_cost_per_image": 0.06
+   },
+   "fallback": {
+    "output_cost_per_video_clip": null,
+    "output_cost_per_video": null,
+    "output_cost_per_image": 0.06,
+    "output_cost_per_image_1K": null,
+    "output_cost_per_image_2K": null,
+    "output_cost_per_billable_unit": null,
+    "output_cost_per_pixel": null,
+    "output_cost_per_image_token": null,
+    "output_cost_per_image_token_batches": null,
+    "output_cost_per_image_token_priority": null
+   },
+   "expected": 0.0
+  },
+  {
+   "name": "submit_clip",
+   "call": "submit",
+   "model": "test/clip-video",
+   "seconds": 4.4,
+   "clip_resolution": "1080P ",
+   "image_resolution": "1080P ",
+   "images": 1,
+   "entry": {
+    "output_cost_per_video_clip": {
+     "4s": {
+      "720p": 0.2,
+      "1080p": 0.4
+     },
+     "8s": {
+      "720p": 0.35
+     }
+    },
+    "output_cost_per_video": 0.9
+   },
+   "expected": 0.4
+  },
+  {
+   "name": "submit_clip_half_rounds_even",
+   "call": "submit",
+   "model": "test/clip-video",
+   "seconds": 8.5,
+   "clip_resolution": "720p",
+   "image_resolution": "720p",
+   "images": 1,
+   "entry": {
+    "output_cost_per_video_clip": {
+     "4s": {
+      "720p": 0.2,
+      "1080p": 0.4
+     },
+     "8s": {
+      "720p": 0.35
+     }
+    },
+    "output_cost_per_video": 0.9
+   },
+   "expected": 0.35
+  },
+  {
+   "name": "submit_per_video_without_cell",
+   "call": "submit",
+   "model": "test/clip-video",
+   "seconds": 6.0,
+   "clip_resolution": "720p",
+   "image_resolution": "720p",
+   "images": 1,
+   "entry": {
+    "output_cost_per_video_clip": {
+     "4s": {
+      "720p": 0.2,
+      "1080p": 0.4
+     },
+     "8s": {
+      "720p": 0.35
+     }
+    },
+    "output_cost_per_video": 0.9
+   },
+   "expected": 0.9
+  },
+  {
+   "name": "submit_per_video",
+   "call": "submit",
+   "model": "fal-ai/ltx-video",
+   "seconds": 5.0,
+   "clip_resolution": null,
+   "image_resolution": null,
+   "images": 1,
+   "entry": {
+    "output_cost_per_video": 0.02
+   },
+   "expected": 0.02
+  },
+  {
+   "name": "submit_image_resolution",
+   "call": "submit",
+   "model": "test/resolution-image",
+   "seconds": null,
+   "clip_resolution": "2K",
+   "image_resolution": "2K",
+   "images": 3,
+   "entry": {
+    "output_cost_per_image": 0.05,
+    "output_cost_per_image_2K": 0.09
+   },
+   "expected": 0.27
+  },
+  {
+   "name": "submit_image_flat",
+   "call": "submit",
+   "model": "test/resolution-image",
+   "seconds": null,
+   "clip_resolution": "4K",
+   "image_resolution": "4K",
+   "images": 1,
+   "entry": {
+    "output_cost_per_image": 0.05,
+    "output_cost_per_image_2K": 0.09
+   },
+   "expected": 0.05
+  },
+  {
+   "name": "submit_billable_unit_row",
+   "call": "submit",
+   "model": "google/nano-banana-2.1",
+   "seconds": null,
+   "clip_resolution": null,
+   "image_resolution": null,
+   "images": 2,
+   "entry": {
+    "output_cost_per_billable_unit": 1.0,
+    "output_cost_per_image": 0.04,
+    "output_cost_per_image_1K": 0.04,
+    "output_cost_per_image_2K": 0.059,
+    "output_cost_per_image_4K": 0.134
+   },
+   "expected": null
+  }
+ ]
+}

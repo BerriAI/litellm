@@ -362,6 +362,19 @@ impl NativeModelCostMap {
         cost::price_units(py, &*self.cost_snapshot(py)?, document, &tables, catalog)
     }
 
+    /// Prices a fal.ai image response or queue submission from the facts in `document`. `catalog` is the
+    /// `fal_ai/<model>` row and `tables` the deployment's own prices and the fallback row the document flags
+    #[pyo3(signature = (document, tables=Vec::new(), catalog=None))]
+    fn price_fal(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+        tables: Vec<Bound<'_, PyMapping>>,
+        catalog: Option<&Bound<'_, PyMapping>>,
+    ) -> PyResult<Py<PyAny>> {
+        cost::price_fal(py, &*self.cost_snapshot(py)?, document, &tables, catalog)
+    }
+
     /// Prices many per-unit calls in one crossing, such as the lines of a batch output file. Each document names the
     /// index of its row in `rows`, the row `get_model_info` found for it, and each row is lowered once
     fn price_many(
