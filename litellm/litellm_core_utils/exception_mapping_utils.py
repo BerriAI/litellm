@@ -41,6 +41,7 @@ from ..exceptions import (
     Timeout,
     UnprocessableEntityError,
     error_response_without_credentials,
+    with_provider_reply,
 )
 
 
@@ -304,11 +305,11 @@ def _litellm_proxy_response(
     if not isinstance(headers, Mapping) or not headers:
         return response
     pairs: Final = headers.multi_items() if isinstance(headers, httpx.Headers) else headers.items()
-    return httpx.Response(
-        status_code=response.status_code,
-        headers=[(str(k), str(v)) for k, v in pairs],
-        request=getattr(original_exception, "request", None),
+    with_body: Final = error_response_without_credentials(
+        response.status_code, response, "https://docs.litellm.ai/docs"
     )
+    with_body.headers = httpx.Headers([(str(k), str(v)) for k, v in pairs])
+    return with_body
 
 
 def _without_credentials(response: httpx.Response | None) -> httpx.Response | None:
@@ -1003,7 +1004,7 @@ def _bedrock_response_with_status(original_exception: _ProviderHTTPException, st
         )
     if original_response.status_code == status_code:
         return original_response
-    return httpx.Response(status_code=status_code, headers=original_response.headers, request=original_response.request)
+    return error_response_without_credentials(status_code, original_response, "https://docs.litellm.ai/docs")
 
 
 def _came_from_bedrock_converse(original_exception: _ProviderHTTPException) -> bool:
@@ -2686,6 +2687,11 @@ def _is_guardrail_block(original_exception: Exception) -> bool:
     return is_guardrail_intervention(original_exception)
 
 
+def _carry_source_details(source: BaseException, mapped: BaseException) -> None:
+    carry_agentic_followup_mark(source=source, mapped=mapped)
+    _ = with_provider_reply(mapped, getattr(source, "response", None))
+
+
 def exception_type(
     model,
     original_exception,
@@ -3021,7 +3027,7 @@ def exception_type(
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
                 )
     except Exception as e:
-        carry_agentic_followup_mark(source=original_exception, mapped=e)
+        _carry_source_details(source=original_exception, mapped=e)
         # LOGGING
         exception_logging(
             logger_fn=None,

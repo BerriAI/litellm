@@ -121,9 +121,10 @@ def _upstream_body(response: object) -> bytes:
     if not isinstance(response, httpx.Response):
         return b""
     try:
-        return response.content
+        body: Final[object] = getattr(response, "content", b"")
     except httpx.ResponseNotRead:
         return b""
+    return body if isinstance(body, bytes) else b""
 
 
 def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.Request:
@@ -155,11 +156,34 @@ def error_response_without_credentials(status_code: int, upstream: object, fallb
         request=_request_without_credentials(upstream, fallback_url),
     )
     _ = response.read()
-    response.headers = httpx.Headers(upstream.headers if isinstance(upstream, httpx.Response) else None)
+    if isinstance(upstream, httpx.Response):
+        response.headers = httpx.Headers(upstream.headers)
+        response.encoding = upstream.encoding or "utf-8"
     elapsed: Final = _upstream_elapsed(upstream)
     if elapsed is not None:
         response.elapsed = elapsed
     return response
+
+
+_PROVIDER_REPLY_FALLBACK_URL: Final = "https://docs.litellm.ai/docs"
+_RESPONSE_ATTRIBUTE: Final = "response"
+
+
+def with_provider_reply(failure: BaseException, provider_reply: object) -> BaseException:
+    current: Final[object] = getattr(failure, _RESPONSE_ATTRIBUTE, None)
+    if current is not None and (not isinstance(current, httpx.Response) or _upstream_body(current)):
+        return failure
+    if not isinstance(provider_reply, httpx.Response) or not provider_reply.is_error:
+        return failure
+    if not _upstream_body(provider_reply):
+        return failure
+    reply: Final = error_response_without_credentials(
+        provider_reply.status_code, provider_reply, _PROVIDER_REPLY_FALLBACK_URL
+    )
+    reply.headers = httpx.Headers(current.headers if isinstance(current, httpx.Response) else None)
+    reply.request = _request_without_credentials(current, _PROVIDER_REPLY_FALLBACK_URL)
+    setattr(failure, _RESPONSE_ATTRIBUTE, reply)
+    return failure
 
 
 _NO_UPSTREAM_REQUEST_URL: Final = "https://cloud.google.com/vertex-ai/"

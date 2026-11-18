@@ -7540,3 +7540,264 @@ def test_merged_image_response_keeps_billing_metadata_without_sharing_it_with_th
     assert merged.hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND"}
     assert "response_cost" not in first.hidden_params
     assert "response_cost" not in ImageResponse(data=[]).hidden_params
+
+
+_WIRE_REJECTION: Final = json.dumps(
+    {"error": {"message": "wire says no", "type": "invalid_request_error", "param": "model", "code": "nope"}},
+    separators=(",", ":"),
+).encode()
+_WIRE_RATE_LIMIT: Final = b'{"error":{"message":"slow down","type":"tokens","code":"rate_limit_exceeded"}}'
+_WIRE_GUARDRAIL_BLOCK: Final = json.dumps(
+    {
+        "error": {
+            "message": "Blocked by guardrail",
+            "type": "None",
+            "param": "None",
+            "code": "400",
+            "provider_specific_fields": {"guardrail_name": "block-secret-project"},
+        }
+    },
+    separators=(",", ":"),
+).encode()
+_WIRE_SECRET: Final = "sk-wire-secret-value"
+
+
+class _UnreadWireBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    def __iter__(self):
+        yield self._content
+
+    async def __aiter__(self):
+        yield self._content
+
+
+def _replying(status_code: int, content: bytes, headers: Mapping[str, str] | None = None) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda _request: httpx.Response(status_code, content=content, headers=headers))
+
+
+def _replying_unread(status_code: int, content: bytes) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda _request: httpx.Response(status_code, stream=_UnreadWireBody(content)))
+
+
+def _sync_client(transport: httpx.MockTransport) -> HTTPHandler:
+    handler: Final = HTTPHandler()
+    handler.client = httpx.Client(transport=transport)
+    return handler
+
+
+def _async_client(transport: httpx.MockTransport) -> AsyncHTTPHandler:
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=transport)
+    return handler
+
+
+_RESPONSES_REJECTIONS: Final = (
+    ("openai/gpt-5.6", _WIRE_REJECTION),
+    ("litellm_proxy/gpt-5.6", _WIRE_REJECTION),
+    ("litellm_proxy/gpt-5.6", _WIRE_GUARDRAIL_BLOCK),
+)
+
+
+@pytest.mark.parametrize(("model", "wire_body"), _RESPONSES_REJECTIONS)
+def test_responses_error_exposes_the_provider_reply(model: str, wire_body: bytes):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model=model,
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(_replying(400, wire_body)),
+        )
+
+    assert caught.value.response.status_code == 400
+    assert caught.value.response.text == wire_body.decode()
+    assert caught.value.response.json() == json.loads(wire_body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "wire_body"), _RESPONSES_REJECTIONS)
+async def test_aresponses_error_exposes_the_provider_reply(model: str, wire_body: bytes):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await litellm.aresponses(
+            model=model,
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_async_client(_replying(400, wire_body)),
+        )
+
+    assert caught.value.response.status_code == 400
+    assert caught.value.response.text == wire_body.decode()
+    assert caught.value.response.json() == json.loads(wire_body)
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.6", "litellm_proxy/gpt-5.6"])
+def test_streaming_responses_error_is_mapped_and_exposes_the_unread_provider_reply(model: str):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model=model,
+            input="hi",
+            stream=True,
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(_replying_unread(400, _WIRE_REJECTION)),
+        )
+
+    assert caught.value.status_code == 400
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["openai/gpt-5.6", "litellm_proxy/gpt-5.6"])
+async def test_async_streaming_responses_error_is_mapped_and_exposes_the_unread_provider_reply(model: str):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await litellm.aresponses(
+            model=model,
+            input="hi",
+            stream=True,
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_async_client(_replying_unread(400, _WIRE_REJECTION)),
+        )
+
+    assert caught.value.status_code == 400
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+def test_shared_handler_chat_error_exposes_the_provider_reply():
+    with pytest.raises(litellm.RateLimitError) as caught:
+        litellm.completion(
+            model="groq/llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_WIRE_SECRET,
+            client=_sync_client(_replying(429, _WIRE_RATE_LIMIT)),
+            max_retries=0,
+        )
+
+    assert caught.value.response.status_code == 429
+    assert caught.value.response.json() == json.loads(_WIRE_RATE_LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_shared_handler_async_chat_error_exposes_the_provider_reply():
+    with pytest.raises(litellm.RateLimitError) as caught:
+        await litellm.acompletion(
+            model="groq/llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_WIRE_SECRET,
+            client=_async_client(_replying(429, _WIRE_RATE_LIMIT)),
+            max_retries=0,
+        )
+
+    assert caught.value.response.status_code == 429
+    assert caught.value.response.json() == json.loads(_WIRE_RATE_LIMIT)
+
+
+def test_shared_handler_streaming_chat_error_exposes_the_unread_provider_reply():
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.completion(
+            model="groq/llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            api_key=_WIRE_SECRET,
+            client=_sync_client(_replying_unread(400, _WIRE_REJECTION)),
+            max_retries=0,
+        )
+
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+def test_provider_reply_on_an_error_never_carries_the_outbound_credentials():
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model="openai/gpt-5.6",
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(_replying(400, _WIRE_REJECTION)),
+        )
+
+    reply: Final = caught.value.response
+    assert reply.json() == json.loads(_WIRE_REJECTION)
+    assert "authorization" not in reply.request.headers
+    assert _WIRE_SECRET not in repr(reply.request.headers.raw)
+    assert _WIRE_SECRET not in str(reply.request.url)
+    assert reply.request.content == b""
+
+
+def test_provider_reply_decodes_with_the_charset_the_provider_declared():
+    wire_text: Final = '{"error":{"message":"caf\u00e9 ferm\u00e9"}}'
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model="openai/gpt-5.6",
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(
+                _replying(400, wire_text.encode("latin-1"), {"content-type": "application/json; charset=latin-1"})
+            ),
+        )
+
+    assert caught.value.response.text == wire_text
+
+
+def _rejected_call(wire_body: bytes = _WIRE_REJECTION) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request(
+        "POST", "https://provider.example/v1/chat", headers={"authorization": f"Bearer {_WIRE_SECRET}"}
+    )
+    return httpx.HTTPStatusError(
+        "rejected", request=request, response=httpx.Response(400, content=wire_body, request=request)
+    )
+
+
+def test_handle_error_without_a_provider_config_keeps_the_provider_reply():
+    with pytest.raises(BaseLLMException) as caught:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=None)
+
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+    assert "authorization" not in caught.value.response.request.headers
+
+
+def test_handle_error_keeps_the_provider_reply_when_the_config_raises_its_error():
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    with pytest.raises(BaseLLMException) as caught:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=OpenAIResponsesAPIConfig())
+
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+def test_handle_error_fills_only_a_response_the_provider_config_left_empty():
+    populated: Final = httpx.Response(
+        418, content=b"from the config", request=httpx.Request("POST", "https://provider.example/v1/chat")
+    )
+
+    class _ConfigWithItsOwnResponse:
+        def __init__(self, response: httpx.Response | None) -> None:
+            self._response = response
+
+        def get_error_class(self, error_message: str, status_code: int, headers: object) -> BaseLLMException:
+            return BaseLLMException(status_code=status_code, message=error_message, response=self._response)
+
+    with pytest.raises(BaseLLMException) as left_empty:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=_ConfigWithItsOwnResponse(None))
+    with pytest.raises(BaseLLMException) as already_populated:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=_ConfigWithItsOwnResponse(populated))
+
+    assert left_empty.value.response.json() == json.loads(_WIRE_REJECTION)
+    assert already_populated.value.response is populated
+
+
+def test_handle_error_attaches_only_a_provider_reply_that_has_a_body():
+    with pytest.raises(BaseLLMException) as with_body:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=None)
+    with pytest.raises(BaseLLMException) as without_body:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(wire_body=b""), provider_config=None)
+
+    assert with_body.value.response.json() == json.loads(_WIRE_REJECTION)
+    assert without_body.value.status_code == 400
+    assert without_body.value.response.text == ""
+    assert without_body.value.response.request.url == "https://docs.litellm.ai/docs"

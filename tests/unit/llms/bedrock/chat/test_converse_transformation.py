@@ -10204,6 +10204,9 @@ def test_not_found_error(model, path, monkeypatch):
     assert exc_info.value.status_code == 404
     assert exc_info.value.response.status_code == 404
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-123"
+    assert exc_info.value.response.json() == {"message": "The provided model identifier is invalid."}
+    assert "authorization" in sent[0].headers
+    assert "authorization" not in exc_info.value.response.request.headers
     assert [request.url.raw_path for request in sent] == [path]
 
 

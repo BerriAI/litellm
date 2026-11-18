@@ -44,6 +44,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
 from litellm.images.fan_out import (
     merge_billed_image_responses,
@@ -6753,21 +6754,27 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            raise BaseLLMException(
-                status_code=status_code,
-                message=error_text,
-                headers=error_headers,
-                status_code_is_synthesized=not isinstance(received_status_code, int),
+            raise with_provider_reply(
+                BaseLLMException(
+                    status_code=status_code,
+                    message=error_text,
+                    headers=error_headers,
+                    status_code_is_synthesized=not isinstance(received_status_code, int),
+                ),
+                error_response,
             )
 
-        provider_error: Final = provider_config.get_error_class(
-            error_message=error_text,
-            status_code=status_code,
-            headers=error_headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=error_text,
+                status_code=status_code,
+                headers=error_headers,
+            )
+        except BaseLLMException as raised_by_config:
+            raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise provider_error
+        raise with_provider_reply(provider_error, error_response)
 
     def handle_error(
         self,
