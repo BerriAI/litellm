@@ -143,6 +143,28 @@ async def test_customer_margin_reaches_the_final_cost_and_logging_once(logging_o
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("binding", "factor"),
+    [('{"customer_org_id": "org-1"}', 1.02), ("{}", 1.0), (None, 1.0)],
+    ids=["bound to a customer", "malformed binding", "no binding"],
+)
+async def test_a_key_bound_to_a_customer_is_surcharged_without_customer_headers(
+    logging_obj: Logging, binding: str | None, factor: float
+) -> None:
+    logging_obj.update_environment_variables(
+        model=MODEL,
+        custom_llm_provider="vertex_ai",
+        litellm_params={"metadata": {"user_api_key_customer_usage": binding}},
+        optional_params={},
+    )
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        finalized: Final = await finalize_response_cost(logging_obj, response(), Counter(2), NOW)
+
+    assert finalized is not None
+    assert finalized.amount == pytest.approx(0.5 * factor)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("used", "expected"), [(0, 0.48), (1, 0.49), (2, 0.5)])
 async def test_header_and_logging_share_one_allowance_allocation(
     logging_obj: Logging, used: int, expected: float

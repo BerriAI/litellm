@@ -66,7 +66,7 @@ def _cost_is_finalized(payload: Mapping[str, object]) -> bool:
 
 
 def apply_customer_cost_margin(cost: FinalizedCost, margin: float | None) -> FinalizedCost:
-    if margin is None:
+    if margin is None or margin == 0:
         return cost
     if cost.breakdown is not None and "customer_margin_amount" in cost.breakdown:
         return cost

@@ -77,3 +77,9 @@ def test_a_free_request_stays_free_with_a_customer_margin() -> None:
 )
 def test_surcharge_share_of_a_spend_row(metadata: dict[str, object], spend: float, expected: float) -> None:
     assert customer_margin_share_of_spend(metadata, spend) == pytest.approx(expected)
+
+
+def test_a_zero_surcharge_leaves_the_cost_and_its_breakdown_untouched() -> None:
+    cost: Final = finalize_cost(3.0, None)
+
+    assert apply_customer_cost_margin(cost, 0.0) is cost
