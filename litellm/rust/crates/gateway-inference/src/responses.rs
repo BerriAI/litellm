@@ -21,6 +21,7 @@ use crate::{
     model_restamp::ReportedModel,
     request,
     routing::{self, Host, RouteAttempt},
+    stream_event,
     stream_outcome::{self, Streamed},
 };
 
@@ -104,7 +105,7 @@ impl<H: Host> RouteAttempt for ResponsesAttempt<'_, H> {
                     self.gateway,
                     deployment,
                     chunks,
-                    stream_outcome::responses_event,
+                    stream_event::responses_event,
                 );
                 Served {
                     deferred: true,

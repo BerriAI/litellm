@@ -5,6 +5,7 @@ use axum::{
 };
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
+use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
 use serde_json::{Map, Value, json};
 
@@ -104,19 +105,19 @@ impl IntoResponse for Error {
     }
 }
 
-/// The error a request ended on, with the deployment the router says raised it, which the proxy
-/// names in `x-litellm-model-id`.
+/// The error a request ended on, with what the router did for the call it ended: the deployment
+/// the router says raised it, or everything it did for a stream the provider failed before any
+/// content and no other attempt answered for.
 #[derive(Debug)]
 pub struct Ended {
     pub error: Box<Error>,
-    pub deployment_id: Option<String>,
+    pub routing: Option<Routing>,
 }
 
 impl Ended {
-    /// What the router did for the call, which the routing headers layer reads off the response.
+    /// What the routing headers layer reads off the response.
     pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
-        let deployment_id = self.deployment_id.as_deref()?;
-        Some(Extension(Routing::failed_on(deployment_id)))
+        self.routing.clone().map(Extension)
     }
 }
 
@@ -124,7 +125,7 @@ impl<E: Into<Error>> From<E> for Ended {
     fn from(error: E) -> Self {
         Self {
             error: Box::new(error.into()),
-            deployment_id: None,
+            routing: None,
         }
     }
 }
@@ -268,16 +269,16 @@ fn ocr_status(error: &OcrError) -> StatusCode {
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-fn error_type(status: StatusCode) -> &'static str {
+fn error_type(status: StatusCode) -> MessagesErrorType {
     match status.as_u16() {
-        400 => "invalid_request_error",
-        401 => "authentication_error",
-        403 => "permission_error",
-        404 => "not_found_error",
-        413 => "request_too_large",
-        429 => "rate_limit_error",
-        529 => "overloaded_error",
-        _ => "api_error",
+        400 => MessagesErrorType::InvalidRequestError,
+        401 => MessagesErrorType::AuthenticationError,
+        403 => MessagesErrorType::PermissionError,
+        404 => MessagesErrorType::NotFoundError,
+        413 => MessagesErrorType::RequestTooLarge,
+        429 => MessagesErrorType::RateLimitError,
+        529 => MessagesErrorType::OverloadedError,
+        _ => MessagesErrorType::ApiError,
     }
 }
 
@@ -454,6 +455,15 @@ mod tests {
             error.body(None),
             json!({"type": "error", "error": {"type": "rate_limit_error", "message": message}})
         );
+    }
+
+    #[rstest]
+    fn an_error_events_status_is_the_one_its_type_is_answered_with(
+        #[values(400, 401, 403, 404, 413, 429, 529)] status: u16,
+    ) {
+        let answered_as = error_type(StatusCode::from_u16(status).unwrap());
+
+        assert_eq!(answered_as.status(), status);
     }
 
     #[rstest]

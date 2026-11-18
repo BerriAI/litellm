@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Where a streamed response came from: the attempt that returned it.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StreamOrigin {
     /// The name the attempt served: the requested group, or the fallback target.
@@ -54,6 +54,29 @@ pub struct StreamPolicy {
     /// `_stream_retry_budget` for the failure kind asked about: the budget, and whether a retry
     /// policy governs the retry.
     pub retry_budget: Option<(u32, bool)>,
+}
+
+/// The take-over of a stream that failed before content, which the core found an attempt may
+/// still run for. The failed stream is closed before it runs.
+pub struct TakeOver<'a> {
+    router: &'a Router,
+    request: RouterRequest,
+    origin: StreamOrigin,
+    failure: AttemptError,
+}
+
+/// A stream retry that served nothing, with the budget its group committed to, which the
+/// fallback that answers next reports as `x-litellm-max-retries` (`record_retry_attempt`).
+struct Spent<F> {
+    ended: Box<CallError<F>>,
+    committed_budget: Option<u32>,
+}
+
+/// A take-over whose attempts served nothing. `raised` is the host's error of the newest attempt
+/// that raised one, `None` when the take-over ends on the stream's own failure.
+#[derive(Debug, PartialEq)]
+pub struct Unanswered<F> {
+    pub raised: Option<F>,
 }
 
 impl StreamOrigin {
@@ -217,7 +240,24 @@ impl Router {
         origin: StreamOrigin,
         failure: AttemptError,
     ) -> Result<super::RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
-        self.live()?;
+        self.retry_in_group(host, op, request, origin, failure)
+            .await
+            .map_err(|spent| spent.ended)
+    }
+
+    async fn retry_in_group<H: RouterHost>(
+        &self,
+        host: &H,
+        op: Op,
+        request: RouterRequest,
+        origin: StreamOrigin,
+        failure: AttemptError,
+    ) -> Result<super::RouterResponse<H::Response>, Spent<H::Failure>> {
+        let mut committed_budget = origin.committed_budget;
+        self.live().map_err(|error| Spent {
+            ended: error.into(),
+            committed_budget,
+        })?;
         let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();
         let request = Arc::new(request);
@@ -264,6 +304,7 @@ impl Router {
                 all,
             );
             host.sleep(delay).await;
+            committed_budget = Some(budget);
             host.observe(&RouterEvent::Retry {
                 model_group: target.group.clone(),
                 retry: attempt + 1,
@@ -284,6 +325,7 @@ impl Router {
                 Ok(mut response) => {
                     response.attempted_retries = attempt + 1;
                     response.max_retries = Some(budget);
+                    response.origin.committed_budget = Some(budget);
                     return Ok(response);
                 }
                 Err(failed) => match *failed.error {
@@ -308,14 +350,97 @@ impl Router {
                             break;
                         }
                     }
-                    other => return Err(call.ended(other)),
+                    other => {
+                        return Err(Spent {
+                            ended: call.ended(other),
+                            committed_budget,
+                        });
+                    }
                 },
             }
         }
-        Err(call.ended(Error::Attempt {
-            failure: last,
-            raised_at,
-        }))
+        Err(Spent {
+            ended: call.ended(Error::Attempt {
+                failure: last,
+                raised_at,
+            }),
+            committed_budget,
+        })
+    }
+
+    /// The take-over of a stream from `origin` that failed with `failure` before content
+    /// (`_anthropic_recover_stream_error`). `None` when no attempt may answer in the stream's
+    /// place: no retry clears the failure, or neither a retry nor a fallback is left.
+    pub fn take_over_stream(
+        &self,
+        request: &RouterRequest,
+        origin: &StreamOrigin,
+        failure: &AttemptError,
+    ) -> Option<TakeOver<'_>> {
+        if failure
+            .status
+            .is_some_and(|status| !should_retry_status(status))
+        {
+            return None;
+        }
+        let policy = self.stream_policy(request, origin, Some(failure.kind));
+        let retries = policy
+            .retry_budget
+            .is_some_and(|(budget, _)| budget > origin.attempted_retries);
+        (retries || policy.can_fall_back).then(|| TakeOver {
+            router: self,
+            request: request.clone(),
+            origin: origin.clone(),
+            failure: failure.clone(),
+        })
+    }
+}
+
+impl TakeOver<'_> {
+    /// A retry in the stream's group while the failure's retry budget lasts, then the fallbacks,
+    /// which start from the newest failure. The response that answers says where its own stream
+    /// came from, so a take-over of that stream starts from its `origin`.
+    pub async fn run<H: RouterHost>(
+        self,
+        host: &H,
+        op: Op,
+    ) -> Result<super::RouterResponse<H::Response>, Unanswered<H::Failure>> {
+        let Self {
+            router,
+            request,
+            origin,
+            failure,
+        } = self;
+        let retried = router
+            .retry_in_group(
+                host,
+                op.clone(),
+                request.clone(),
+                origin.clone(),
+                failure.clone(),
+            )
+            .await;
+        let (newest, raised, committed_budget) = match retried {
+            Ok(answer) => return Ok(answer),
+            Err(Spent {
+                ended,
+                committed_budget,
+            }) => (
+                ended.error.attempt().cloned().unwrap_or(failure),
+                ended.raised.map(|raised| raised.failure),
+                committed_budget,
+            ),
+        };
+        router
+            .fallback_stream(host, op, request, origin, newest)
+            .await
+            .map(|answer| super::RouterResponse {
+                max_retries: answer.max_retries.or(committed_budget),
+                ..answer
+            })
+            .map_err(|ended| Unanswered {
+                raised: ended.raised.map(|raised| raised.failure).or(raised),
+            })
     }
 }
 

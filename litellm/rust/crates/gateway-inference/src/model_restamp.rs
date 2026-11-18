@@ -163,7 +163,7 @@ mod tests {
     use bytes::Bytes;
     use futures_util::stream;
     use litellm_framer::sse;
-    use litellm_router_core::Served;
+    use litellm_router_core::{Served, call::StreamOrigin};
     use rstest::rstest;
     use serde_json::json;
 
@@ -195,6 +195,7 @@ mod tests {
             attempted_retries: 0,
             max_retries: None,
             attempted_fallbacks,
+            origin: StreamOrigin::default(),
         }
     }
 
