@@ -347,7 +347,7 @@ _SELECTION_CALLS: Final[Mapping[str, str]] = MappingProxyType(
         "acompletion": "_acompletion",
         "completion": "_completion",
         "atext_completion": "_atext_completion",
-        "text_completion": "_text_completion",
+        "text_completion": "text_completion",
     }
 )
 
