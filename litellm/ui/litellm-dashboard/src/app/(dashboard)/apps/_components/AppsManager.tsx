@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
+import { parseAsString, useQueryState } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -21,7 +21,9 @@ import {
   type App,
   type AppResource,
 } from "./appForms";
-import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources } from "./appApi";
+import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources, loadApps } from "./appApi";
+import { applicationRows } from "./applications";
+import ApplicationsTable from "./ApplicationsTable";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
 import AppProfileSelect from "./AppProfileSelect";
@@ -37,49 +39,79 @@ export default function AppsManager() {
     queryFn: () => loadAppResources(resourceType!),
     enabled: canManage && resourceType !== null,
   });
-  const [selected, setSelected] = useState<string | null>(null);
+  const apps = useQuery({
+    queryKey: ["apps", resourceType],
+    queryFn: () => loadApps(),
+    enabled: canManage && resourceType !== null,
+  });
+  const [selected, setSelected] = useQueryState("app", parseAsString);
+  const [search, setSearch] = useState("");
+  const rows = useMemo(
+    () => applicationRows(resources.data ?? [], apps.data ?? [], search),
+    [resources.data, apps.data, search],
+  );
   const resource = resources.data?.find((row) => row.resource_id === selected);
   if (isLoading) return <p role="status">{t("apps.loading")}</p>;
-  if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.settingsTitle")} />;
+  if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
+  if (selected && resource)
+    return (
+      <main className="mx-auto w-full max-w-[1200px] space-y-6 px-4 py-6 sm:px-6">
+        <header className="space-y-1">
+          <h1 className="text-lg font-semibold">{resource.alias}</h1>
+          <p className="font-mono text-xs text-muted-foreground">{resource.resource_id}</p>
+        </header>
+        <ResourceDefaults
+          key={`${resource.resource_type}:${resource.resource_id}:${resource.app_id ?? "new"}`}
+          resource={resource}
+        />
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-xs text-muted-foreground"
+          onClick={() => void setSelected(null)}
+        >
+          {t("apps.list.back")}
+        </Button>
+      </main>
+    );
   return (
-    <main className="mx-auto w-full max-w-[1200px] space-y-8 p-6">
+    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
       <header>
-        <h1 className="text-2xl font-semibold">{t("apps.settingsTitle")}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{t("apps.settingsHint")}</p>
+        <h1 className="text-lg font-semibold">{t("apps.title")}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t("apps.settingsHint")}</p>
       </header>
-      <AppDefinitionSetting />
       {resourceType && (
-        <section className="space-y-5 border-t pt-6" aria-label={t("apps.defaultsTitle")}>
-          <div>
-            <h2 className="text-base font-semibold">{t("apps.defaultsTitle")}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{t("apps.defaultsHint")}</p>
-          </div>
-          {resources.isError && (
-            <ErrorState message={extractProxyErrorMessage(resources.error)} onRetry={() => void resources.refetch()} />
-          )}
-          <div className="max-w-md space-y-2">
-            <label htmlFor="app-defaults-resource" className="block text-sm">
-              {t("apps.selectApp")}
-            </label>
-            <SearchSelect
-              id="app-defaults-resource"
-              className="w-full"
-              placeholder={t("apps.selectApp")}
-              value={selected}
-              onValueChange={setSelected}
-              disabled={!resources.data}
-              options={resources.data?.map((row) => ({ value: row.resource_id, label: row.alias })) ?? []}
+        <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
+            <Input
+              className="max-w-xs"
+              aria-label={t("apps.list.searchPlaceholder")}
+              placeholder={t("apps.list.searchPlaceholder")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
             />
+            <span className="text-xs text-muted-foreground">{t("apps.list.count", { count: rows.length })}</span>
           </div>
-          {resources.data?.length === 0 && <p className="text-sm text-muted-foreground">{t("apps.noResources")}</p>}
-          {resource && (
-            <ResourceDefaults
-              key={`${resource.resource_type}:${resource.resource_id}:${resource.app_id ?? "new"}`}
-              resource={resource}
+          {resources.isError || apps.isError ? (
+            <div className="p-3">
+              <ErrorState
+                message={extractProxyErrorMessage(resources.error ?? apps.error)}
+                onRetry={() => void (resources.isError ? resources.refetch() : apps.refetch())}
+              />
+            </div>
+          ) : (
+            <ApplicationsTable
+              rows={rows}
+              loading={resources.isPending || apps.isPending}
+              searching={search.trim() !== ""}
+              onOpen={(resourceId) => void setSelected(resourceId)}
             />
           )}
         </section>
       )}
+      <section className={resourceType ? "border-t pt-6" : undefined}>
+        <AppDefinitionSetting />
+      </section>
     </main>
   );
 }

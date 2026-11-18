@@ -1,8 +1,28 @@
 {
   "apps": {
-    "title": "Apps",
-    "settingsTitle": "App budget settings",
-    "settingsHint": "Configure how apps are identified and reuse customer organization budget groups for app budgets.",
+    "title": "Applications",
+    "list": {
+      "title": "All applications",
+      "searchPlaceholder": "Search applications",
+      "count_one": "{{count}} application",
+      "count_other": "{{count}} applications",
+      "loading": "Loading applications…",
+      "noMatches": "No applications match your search.",
+      "back": "Back to applications",
+      "gatewaySurcharge": "Gateway default",
+      "customersAllowed": "Allowed",
+      "customersBlocked": "Blocked",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "columns": {
+        "application": "Application",
+        "spend": "Spend",
+        "surcharge": "Surcharge",
+        "newCustomers": "New customers"
+      }
+    },
+    "settingsTitle": "Applications",
+    "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
     "alias": "App",
     "edit": "Edit",
     "cancel": "Cancel",
@@ -41,7 +61,7 @@
     "viewUsageFor": "View usage for {{alias}}",
     "organizationHint": "Set a separate budget for this customer in each app. The global organization budget above also applies.",
     "addBudget": "Add app budget",
-    "defineFirst": "Define what an app is in your Gateway before adding app budgets. Choose Teams, Projects, or Virtual keys in App budget settings.",
+    "defineFirst": "Define what an app is in your Gateway before adding app budgets. Choose Teams, Projects, or Virtual keys in Applications.",
     "noOrganizationBudgets": "No app budgets assigned to this customer yet.",
     "organizationSettings": "Customer app budget",
     "budgetFor": "Budget for {{alias}}",

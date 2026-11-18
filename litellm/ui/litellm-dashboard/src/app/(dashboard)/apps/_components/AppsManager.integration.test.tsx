@@ -7,6 +7,7 @@ import {
   renderWithProviders as render,
   screen,
   waitFor,
+  within,
   testQueryClient,
 } from "../../../../../tests/test-utils";
 import AppsManager from "./AppsManager";
@@ -31,10 +32,14 @@ const app = {
   updated_by: "",
 };
 let definition: { resource_type: string | null };
+let configuredApps: unknown[];
+let resources: unknown[];
 let requests: Request[];
 
 beforeEach(() => {
   definition = { resource_type: null };
+  configuredApps = [];
+  resources = [resource];
   requests = [];
   testQueryClient.clear();
   registerBaseUrlGetter(() => "http://localhost");
@@ -47,13 +52,15 @@ beforeEach(() => {
       if (request.method === "PUT") definition = await request.clone().json();
       return json(definition);
     }
-    if (path.endsWith("/apps/resources")) return json([resource]);
+    if (path.endsWith("/apps/resources")) return json(resources);
+    if (path.endsWith("/apps/app-chat")) return json(configuredApps[0]);
     if (path.endsWith("/customer_organization_budget_groups"))
       return json({
         default_budgets: [{ budget_id: "standard", name: "Standard", max_budget: 100 }],
         revision: "a".repeat(64),
       });
     if (path.endsWith("/apps") && request.method === "POST") return json(app);
+    if (path.endsWith("/apps")) return json(configuredApps);
     if (path.endsWith("/models")) return json({ data: [] });
     throw new Error(`Unexpected request ${path}`);
   });
@@ -91,7 +98,7 @@ describe("Gateway app definition", () => {
     definition = { resource_type: "team" };
     const user = userEvent.setup();
     render(<AppsManager />);
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    await user.click(await screen.findByRole("button", { name: "chat" }));
     await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), "Standard");
     expect(screen.getByText("$100.00")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
@@ -111,7 +118,7 @@ describe("Gateway app definition", () => {
     const user = userEvent.setup();
     definition = { resource_type: "team" };
     render(<AppsManager />);
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    await user.click(await screen.findByRole("button", { name: "chat" }));
     await user.click(await screen.findByRole("checkbox", { name: "This app may create new customers" }));
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
     await waitFor(() => expect(requests.some((request) => request.method === "POST")).toBe(true));
@@ -125,7 +132,7 @@ describe("Gateway app definition", () => {
     const user = userEvent.setup();
     definition = { resource_type: "team" };
     render(<AppsManager />);
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    await user.click(await screen.findByRole("button", { name: "chat" }));
     const field = await screen.findByRole("spinbutton", { name: "Surcharge on customer requests (%)" });
     fireEvent.change(field, { target: { value: "2.5" } });
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
@@ -151,6 +158,47 @@ describe("Gateway app definition", () => {
       resource_type: "team",
       auto_create_customers_without_app: false,
     });
+  });
+
+  it("should list every application with its surcharge, customer creation and configured state", async () => {
+    definition = { resource_type: "team" };
+    resources = [
+      { ...resource, app_id: "app-chat" },
+      { resource_type: "team", resource_id: "team-search", alias: "search", app_id: null },
+    ];
+    configuredApps = [{ ...app, spend: 12.5, customer_margin: 0.05, auto_create_customers: false }];
+    render(<AppsManager />);
+    await screen.findByRole("button", { name: "chat" });
+    const table = screen.getByRole("table", { name: "Applications" });
+    const [chat, search] = within(table).getAllByRole("row").slice(1);
+    expect(chat).toHaveTextContent("chat");
+    expect(chat).toHaveTextContent("$12.50");
+    expect(chat).toHaveTextContent("5%");
+    expect(chat).toHaveTextContent("Blocked");
+    expect(chat).toHaveTextContent("Configured");
+    expect(search).toHaveTextContent("search");
+    expect(search).toHaveTextContent("Gateway default");
+    expect(search).toHaveTextContent("Allowed");
+    expect(search).toHaveTextContent("Not configured");
+  });
+
+  it("should narrow the list with the search box and say when nothing matches", async () => {
+    definition = { resource_type: "team" };
+    render(<AppsManager />);
+    await screen.findByRole("button", { name: "chat" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Search applications" }), { target: { value: "billing" } });
+    expect(screen.queryByRole("button", { name: "chat" })).not.toBeInTheDocument();
+    expect(screen.getByText("No applications match your search.")).toBeInTheDocument();
+  });
+
+  it("should return from an application's settings to the list", async () => {
+    const user = userEvent.setup();
+    definition = { resource_type: "team" };
+    render(<AppsManager />);
+    await user.click(await screen.findByRole("button", { name: "chat" }));
+    expect(await screen.findByRole("form", { name: "Defaults for chat" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to applications" }));
+    expect(await screen.findByRole("table", { name: "Applications" })).toBeInTheDocument();
   });
 
   it("should show definition failures without presenting an empty resource list", async () => {

@@ -36,6 +36,7 @@ import {
   Bell,
   Blocks,
   Bot,
+  AppWindow,
   Building2,
   Boxes,
   ChevronRight,
@@ -217,7 +218,7 @@ const customerPortalGroups: MenuGroup[] = [
         key: "apps",
         page: "apps",
         label: "apps.title",
-        icon: <Building2 {...ICON} />,
+        icon: <AppWindow {...ICON} />,
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
       {
