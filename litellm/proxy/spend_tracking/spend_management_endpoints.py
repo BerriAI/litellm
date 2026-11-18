@@ -4951,13 +4951,13 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
 def _reads_spend_logs_as_key(user_api_key_dict: UserAPIKeyAuth, *, route: str) -> bool:
     from litellm.proxy.auth.route_checks import RouteChecks
     from litellm.proxy.auth.user_api_key_auth import is_no_auth_dev_mode
-    from litellm.proxy.proxy_server import general_settings, master_key
+    from litellm.proxy.proxy_server import general_settings_view, master_key
 
     return not RouteChecks.key_allowed_routes_grant(route=route, valid_token=user_api_key_dict) or not (
         is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         or user_api_key_dict.user_role == LitellmUserRoles.ORG_ADMIN
         or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
-        or is_no_auth_dev_mode(master_key, general_settings)
+        or is_no_auth_dev_mode(master_key, general_settings_view())
     )
 
 
