@@ -376,7 +376,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             level_check_waived=bool(declared_reasoning_efforts) or _REASONING_EFFORT in allowed_openai_params,
             drop_params=drop_params or litellm.drop_params is True,
         )
-        mapped_params: Final = {
+        mapped_params: Final[dict[str, object]] = {
             **super().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
