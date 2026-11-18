@@ -13,6 +13,10 @@ use crate::price::{CacheReadMode, CacheTtl, Residency, SearchContextSize, Servic
 use crate::row::RowRef;
 use crate::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage, WebSearch};
 
+pub use crate::ocr::OcrQuery;
+pub use crate::rerank::RerankQuery;
+pub use crate::vector_store::VectorStoreSearchQuery;
+
 /// One call to price, tagged by `kind`
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(
@@ -25,10 +29,10 @@ pub enum PriceQuery {
     Image(Header),
     Speech(Header),
     Transcription(Header),
-    Ocr(Header),
-    Rerank(Header),
+    Ocr(Box<OcrQuery>),
+    Rerank(Box<RerankQuery>),
     Search(Header),
-    VectorStoreSearch(Header),
+    VectorStoreSearch(Box<VectorStoreSearchQuery>),
     Video(Header),
     /// Realtime, Live and Responses websocket sessions
     Session(Header),
@@ -130,6 +134,9 @@ pub enum PriceSource {
     FlatPerToken(FlatRates),
     /// `custom_cost_per_second`
     PerSecond { rate: UnitPrice },
+    /// Rows the caller resolved, such as a deployment's own prices, read ahead of the first candidate's catalog row
+    /// in the order the kind's main calculator reads them
+    Rows { rows: Vec<RowRef> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -386,7 +393,7 @@ impl TokenUsage {
                 }),
                 ..Search::default()
             },
-            text_messages: 0,
+            ..Usage::default()
         }
     }
 
@@ -494,7 +501,10 @@ mod tests {
     #[rstest]
     #[case::tokens(serde_json::json!({"kind": "tokens", "usage": {"prompt_tokens": 3}}), Kind::Tokens)]
     #[case::session(serde_json::json!({"kind": "session"}), Kind::Session)]
-    #[case::vector_store(serde_json::json!({"kind": "vector_store_search"}), Kind::VectorStoreSearch)]
+    #[case::vector_store(
+        serde_json::json!({"kind": "vector_store_search", "queries": 1}),
+        Kind::VectorStoreSearch
+    )]
     fn a_query_deserializes_by_kind(#[case] body: serde_json::Value, #[case] expected: Kind) {
         let header = serde_json::json!({
             "candidates": [{"model": "claude-opus-4-8", "provider": "anthropic"}],

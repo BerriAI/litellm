@@ -8,12 +8,12 @@ mod breakdown;
 mod custom;
 mod rule;
 
-use crate::adjust::{Adjusted, AdjustmentKey, Discount, Margin, adjust};
+use crate::adjust::{Discount, Margin};
 use crate::calculate;
 use crate::call::CallContext;
 use crate::money::Usd;
 use crate::priced::Outcome;
-use crate::query::{AdjustmentPolicy, Candidate, Kind, PriceSource, TokensQuery};
+use crate::query::{Candidate, Kind, PriceSource, TokensQuery};
 use crate::quote::Quote;
 use crate::receipt::{PriceOutcome, Receipt, Unpriced};
 use crate::row::{LoweredRow, RowRef, RowSource};
@@ -33,7 +33,9 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &TokensQuery) -> PriceOutco
     };
     match &header.source {
         PriceSource::FlatPerToken(rates) => custom::price(source, query, rates),
-        PriceSource::PerSecond { .. } => Unpriced::NotPorted(Kind::Tokens).into(),
+        PriceSource::PerSecond { .. } | PriceSource::Rows { .. } => {
+            Unpriced::NotPorted(Kind::Tokens).into()
+        }
         PriceSource::Row {
             row: at,
             breakdown_by_name,
@@ -141,54 +143,17 @@ fn attempt<S: RowSource>(
         basis: basis.clone(),
         total: 0.0,
     };
-    Some(adjusted(source, query, candidate, receipt).into())
+    Some(
+        receipt
+            .settled(source, &query.header.adjustments, Some(&candidate.model))
+            .into(),
+    )
 }
 
 fn quote_of<'a>(row: &'a impl LoweredRow, call: &CallContext, prompt_tokens: u64) -> Quote<'a> {
     row.prices()
         .for_prompt(prompt_tokens)
         .quote(call, prompt_tokens)
-}
-
-/// Applies the discount and margin the query asks for and settles the total
-fn adjusted<S: RowSource>(
-    source: &S,
-    query: &TokensQuery,
-    candidate: &Candidate,
-    receipt: Receipt,
-) -> Receipt {
-    let original = receipt.original();
-    let Adjusted {
-        cost,
-        discount,
-        margin,
-    } = match &query.header.adjustments {
-        AdjustmentPolicy::None => Adjusted {
-            cost: original,
-            discount: Discount::default(),
-            margin: Margin::default(),
-        },
-        AdjustmentPolicy::Apply {
-            provider,
-            model,
-            region,
-        } => adjust(
-            source.discounts(),
-            source.margins(),
-            original,
-            &AdjustmentKey {
-                provider: provider.as_deref(),
-                model: Some(model.as_deref().unwrap_or(&candidate.model)),
-                region: region.as_deref(),
-            },
-        ),
-    };
-    Receipt {
-        discount,
-        margin,
-        total: cost,
-        ..receipt
-    }
 }
 
 #[cfg(test)]
@@ -446,7 +411,7 @@ mod tests {
     use crate::call::{InferenceGeo, Speed};
     use crate::money::Multiplier;
     use crate::price::{Adjustments, Meter, Uplift};
-    use crate::query::{Provider, TokenUsage};
+    use crate::query::{AdjustmentPolicy, Provider, TokenUsage};
     use crate::row::{Provenance, ProviderEntry, RowFacts};
     use crate::testing::{TestRow, TestSource, candidate, row_ref, text_row, tokens_query, usage};
 

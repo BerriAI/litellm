@@ -9,7 +9,7 @@ use crate::query::{FlatRates, Kind, TokensQuery};
 use crate::receipt::{BilledRates, PriceOutcome, Receipt, Unpriced};
 use crate::row::RowSource;
 
-use super::{adjusted, breakdown};
+use super::breakdown;
 
 pub(super) fn price<S: RowSource>(
     source: &S,
@@ -99,7 +99,9 @@ pub(super) fn price<S: RowSource>(
         basis: query.header.basis.clone(),
         total: 0.0,
     };
-    adjusted(source, query, candidate, receipt).into()
+    receipt
+        .settled(source, &query.header.adjustments, Some(&candidate.model))
+        .into()
 }
 
 #[cfg(test)]
