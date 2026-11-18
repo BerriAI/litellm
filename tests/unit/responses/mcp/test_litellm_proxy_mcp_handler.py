@@ -1,16 +1,25 @@
 import asyncio
+import base64
 import importlib
 import sys
 import types
-from types import MappingProxyType
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from mcp.types import CallToolResult, ListToolsResult, TextContent
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    ListToolsResult,
+    ResourceLink,
+    TextContent,
+)
 from mcp.types import Tool as MCPTool
 from openai.types.responses.tool_param import Mcp
 
@@ -18,16 +27,20 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.proxy.mcp_server import operations as mcp_operations
+from litellm.proxy._types import (
+    UI_TEAM_ID,
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTableCachedObj,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.user_api_key_cache import object_permission_cache_key
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.proxy.mcp_server import operations as mcp_operations
 from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
-from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTableCachedObj
 from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds, granted_toolset_ids
-from litellm.types.mcp_server.mcp_toolset import MCPToolset
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
@@ -38,6 +51,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_toolset import MCPToolset
 from litellm.types.responses.main import OutputFunctionToolCall
 from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
@@ -150,9 +164,7 @@ def test_chat_follow_up_answers_only_tool_calls_in_its_assistant_turn():
                 "message": {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [
-                        {"id": call_id, "type": "function", "function": {"name": "foo", "arguments": "{}"}}
-                    ],
+                    "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
                 },
                 "finish_reason": "tool_calls",
             }
@@ -596,8 +608,12 @@ async def test_initialized_content_filter_blocks_mcp_according_to_its_config(
     monkeypatch: pytest.MonkeyPatch, behavior: Literal["tool_result", "raise"] | None
 ) -> None:
     for name in (
-        "callbacks", "input_callback", "success_callback", "failure_callback",
-        "_async_success_callback", "_async_failure_callback",
+        "callbacks",
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
     ):
         monkeypatch.setattr(litellm, name, [])
     handler: Final = InMemoryGuardrailHandler()
@@ -758,7 +774,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
         user_api_key_auth=None,
     )
 
-    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name}]
+    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "content": "[REDACTED]", "name": tool_name}]
     assert logging_obj.async_success_handler.await_args.kwargs["result"].content[0].text == "[REDACTED]"
     assert logging_obj.async_success_handler.await_args.kwargs["result"].structured_content is None
 
@@ -793,7 +809,7 @@ async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypat
         user_api_key_auth=None,
     )
 
-    assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
+    assert results == [{"tool_call_id": "call-1", "result": "ok", "content": "ok", "name": tool_name}]
     proxy_logging_obj.post_mcp_call_hook.assert_awaited_once()
 
 
@@ -831,7 +847,7 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
         user_api_key_auth=None,
     )
 
-    assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
+    assert results == [{"tool_call_id": "call-1", "result": "ok", "content": "ok", "name": tool_name}]
     assert proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"] == logging_obj.model_call_details
 
 
@@ -874,7 +890,7 @@ async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeyp
         user_api_key_auth=None,
     )
 
-    assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
+    assert results == [{"tool_call_id": "call-1", "result": "ok", "content": "ok", "name": tool_name}]
 
 
 @pytest.mark.asyncio
@@ -1688,7 +1704,9 @@ TOOLSET_ROWS: Final = (
         tools=[{"server_id": "srv-1", "tool_name": "add"}, {"server_id": "srv-1", "tool_name": "calc-subtract"}],
     ),
     MCPToolset(
-        toolset_id="ts-subtract", toolset_name="subtract-toolset", tools=[{"server_id": "srv-1", "tool_name": "subtract"}]
+        toolset_id="ts-subtract",
+        toolset_name="subtract-toolset",
+        tools=[{"server_id": "srv-1", "tool_name": "subtract"}],
     ),
 )
 GATEWAY_SERVERS: Final = (
@@ -1826,7 +1844,11 @@ async def _calls_the_entries_run(
         monkeypatch, user, mcp_tools, _team_grants(*granted_toolsets), servers=servers
     )
     _deduplicated, tool_server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(tools, server_names)
-    tool_choice: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": allowed_label}]}
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "mcp", "server_label": allowed_label}],
+    }
     gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
         tool_choice, {**tool_server_map, **unresolvable_tools}, mcp_tools, user, _team_grants(*granted_toolsets)
     )
@@ -2262,3 +2284,200 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
     assert scoped.object_permission is not None
     assert scoped.object_permission.mcp_servers == ["srv-1"]
     assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+# --- multimodal tool results -------------------------------------------------
+# A vision model behind the proxy never saw the image an MCP tool returned: the
+# result was flattened into "[Generated Image]" before the follow-up call. These
+# cover the content plumbing so that stops silently happening again.
+
+_JPEG_B64 = "aGVsbG8taW1hZ2UtYnl0ZXM="
+
+
+def _image_result(*items):
+    return CallToolResult(content=list(items))
+
+
+def test_image_result_keeps_bytes_as_image_part():
+    image = ImageContent(type="image", data=_JPEG_B64, mime_type="image/jpeg")
+
+    content = LiteLLM_Proxy_MCP_Handler._mcp_result_to_content(_image_result(image))
+
+    assert isinstance(content, list)
+    assert content == [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{_JPEG_B64}"},
+        }
+    ]
+
+
+def test_text_alongside_image_keeps_both():
+    result = _image_result(
+        TextContent(type="text", text="here is the chart"),
+        ImageContent(type="image", data=_JPEG_B64, mime_type="image/png"),
+    )
+
+    content = LiteLLM_Proxy_MCP_Handler._mcp_result_to_content(result)
+
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "here is the chart"}
+    assert content[1]["type"] == "image_url"
+
+
+def test_pdf_blob_resource_becomes_file_part():
+    pdf = base64.b64encode(b"%PDF-1.4 fake body").decode()
+    resource = EmbeddedResource(
+        type="resource",
+        resource=BlobResourceContents(uri="test://document.pdf", blob=pdf, mime_type="application/pdf"),
+    )
+
+    content = LiteLLM_Proxy_MCP_Handler._mcp_result_to_content(_image_result(resource))
+
+    assert isinstance(content, list)
+    assert content[0]["type"] == "file"
+    assert content[0]["file"]["format"] == "application/pdf"
+    assert content[0]["file"]["file_data"].startswith("data:application/pdf;base64,")
+
+
+def test_text_blob_resource_is_inlined_not_wrapped_in_a_file():
+    payload = base64.b64encode(b"line one\nline two").decode()
+    resource = EmbeddedResource(
+        type="resource",
+        resource=BlobResourceContents(uri="test://notes.txt", blob=payload, mime_type="text/plain"),
+    )
+
+    content = LiteLLM_Proxy_MCP_Handler._mcp_result_to_content(_image_result(resource))
+
+    assert content == [{"type": "text", "text": "line one\nline two"}]
+
+
+def test_unsupported_content_says_so_instead_of_a_bare_placeholder():
+    content = LiteLLM_Proxy_MCP_Handler._mcp_result_to_content(
+        _image_result(ResourceLink(type="resource_link", name="notes", uri="test://notes"))
+    )
+
+    assert content == [
+        {
+            "type": "text",
+            "text": "[Unsupported MCP content: ResourceLink was not forwarded to the model]",
+        }
+    ]
+
+
+def test_text_only_result_stays_a_plain_string():
+    """Text-only tools must produce byte-identical follow-up requests to before."""
+    result = _image_result(TextContent(type="text", text="42"))
+
+    content = LiteLLM_Proxy_MCP_Handler._mcp_result_to_content(result)
+
+    assert content == "42"
+    assert content == LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+
+
+def test_follow_up_input_sends_image_part_as_function_output():
+    tool_results = [
+        {
+            "tool_call_id": "call-1",
+            "name": "screenshot",
+            "result": "[Generated Image]",
+            "content": [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_JPEG_B64}"}}],
+        }
+    ]
+    response = ResponsesAPIResponse(
+        id="resp-1",
+        created_at=0,
+        output=[
+            OutputFunctionToolCall(
+                type="function_call",
+                id="fc-1",
+                call_id="call-1",
+                name="screenshot",
+                arguments="{}",
+                status="completed",
+            )
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(response, tool_results)
+
+    output_item = next(item for item in follow_up if item.get("type") == "function_call_output")
+    assert isinstance(output_item["output"], list)
+    assert output_item["output"][0]["type"] == "image_url"
+
+
+def test_follow_up_chat_message_sends_image_part_as_content():
+    tool_results = [
+        {
+            "tool_call_id": "call-1",
+            "name": "screenshot",
+            "result": "[Generated Image]",
+            "content": [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_JPEG_B64}"}}],
+        }
+    ]
+    response = ModelResponse(
+        id="resp-2",
+        choices=[
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}}
+                    ],
+                },
+            }
+        ],
+        model="gpt",
+        created=0,
+        object="chat.completion",
+    )
+
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
+        [{"role": "user", "content": "what is in this image?"}], response, tool_results
+    )
+
+    tool_message = follow_up[-1]
+    assert tool_message["role"] == "tool"
+    assert tool_message["content"][0]["type"] == "image_url"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_fills_content_for_every_result(monkeypatch):
+    result = _image_result(
+        TextContent(type="text", text="saved"),
+        ImageContent(type="image", data=_JPEG_B64, mime_type="image/png"),
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj)
+    )
+    fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(return_value=result),
+        get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (None, None))
+
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={"screenshot": "srv"},
+        tool_calls=[{"id": "call-1", "function": {"name": "screenshot", "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert len(results) == 1
+    assert [part["type"] for part in results[0]["content"]] == ["text", "image_url"]
+    # the text view is unchanged, so stream events and logs keep working
+    assert results[0]["result"] == "saved [Generated Image]"
