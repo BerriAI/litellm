@@ -1436,7 +1436,7 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
         | Error::MultipleTeams { model }
         | Error::DefaultDeploymentRaises { model }
         | Error::IndexOutOfRange { model } => dict.set_item("error_model", model),
-        Error::ContextWindowExceeded { model, detail } => {
+        Error::ContextWindowExceeded { model, detail, .. } => {
             dict.set_item("error_model", model)?;
             dict.set_item("error_detail", detail)
         }

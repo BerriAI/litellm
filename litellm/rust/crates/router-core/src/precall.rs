@@ -169,6 +169,7 @@ pub fn filter(
             return Err(Error::ContextWindowExceeded {
                 model: model.to_owned(),
                 detail,
+                held_for_fallback: false,
             });
         }
     }
@@ -201,6 +202,7 @@ pub fn settle(
                 .iter()
                 .filter_map(|deployment| uncertain.get(&deployment.id).map(String::as_str))
                 .collect(),
+            held_for_fallback: true,
         });
     }
     Ok(unsure)
@@ -330,7 +332,12 @@ mod tests {
             assert_eq!(ids(&settled.unwrap()), ["one", "two"]);
             return;
         }
-        let Err(Error::ContextWindowExceeded { model, detail }) = settled else {
+        let Err(Error::ContextWindowExceeded {
+            model,
+            detail,
+            held_for_fallback: true,
+        }) = settled
+        else {
             panic!("expected a context window error, got {settled:?}");
         };
         assert_eq!(model, "g");
@@ -350,7 +357,12 @@ mod tests {
         );
         let found = facts(&[("one", counted(5, 9, false)), ("two", counted(6, 9, false))]);
         let error = filter("g", vec![one, two], &[], &found).unwrap_err();
-        let Error::ContextWindowExceeded { model, detail } = error else {
+        let Error::ContextWindowExceeded {
+            model,
+            detail,
+            held_for_fallback: false,
+        } = error
+        else {
             panic!("expected a context window error, got {error:?}");
         };
         assert_eq!(model, "g");

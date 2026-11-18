@@ -65,6 +65,7 @@ impl StreamOrigin {
             excluded: Arc::from([]),
             failover_excluded: Arc::from([]),
             routed: self.routed.clone(),
+            last_resort: false,
         }
     }
 

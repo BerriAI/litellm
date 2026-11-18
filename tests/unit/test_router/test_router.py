@@ -19714,6 +19714,36 @@ def _text_of_stand_in_tokens(tokens: int) -> str:
     return sentence * (tokens // litellm.token_counter(custom_tokenizer=stand_in_tokenizer(), text=sentence))
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "deployment",
+    [
+        pytest.param(
+            lambda window: _cost_map_deployment("ollama/my-fake-ollama-model", window), id="ollama-in-the-cost-map"
+        ),
+        pytest.param(
+            lambda window: _single_deployment("ollama_chat/my-unmapped-ollama-model", window)[0],
+            id="ollama-chat-operator-window",
+        ),
+        pytest.param(
+            lambda window: {
+                "model_name": "m",
+                "litellm_params": {"model": "my-unmapped-model", "custom_llm_provider": "ollama_chat"},
+                "model_info": {"id": "only", "max_input_tokens": window},
+            },
+            id="ollama-chat-custom-llm-provider",
+        ),
+    ],
+)
+def test_pre_call_checks_refuse_a_stand_in_overcount_for_a_provider_that_truncates_silently(
+    deployment: Callable[[int], dict[str, object]],
+):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={tokens - 1}, Got={tokens}"):
+        _kept_ids([deployment(tokens - 1)], _RUSSIAN_PROMPT)
+
+
 def test_pre_call_checks_refuse_a_stand_in_overcount_on_an_embedding_model():
     backend: Final = "cohere/embed-english-v3.0"
     window: Final = litellm.get_model_info(backend)["max_input_tokens"]
@@ -19838,12 +19868,8 @@ def test_a_sync_completion_sends_an_uncertain_stand_in_overflow_to_its_context_w
     assert response.choices[0].message.content == "fallback"
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-async def test_a_retry_policy_does_not_resend_an_uncertain_stand_in_overflow_the_provider_refused(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    provider: Final = respx_mock.post("https://refusing.local/v1/chat/completions").respond(
+def _refusing_provider(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://refusing.local/v1/chat/completions").respond(
         400,
         json={
             "error": {
@@ -19853,6 +19879,79 @@ async def test_a_retry_policy_does_not_resend_an_uncertain_stand_in_overflow_the
             }
         },
     )
+
+
+def _refusing_deployment(model_name: str, id: str, **params: object) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": _uncertain_overflow_model(),
+            "api_key": "my-fake-key",
+            "api_base": "https://refusing.local/v1",
+            **params,
+        },
+        "model_info": {"id": id},
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_list", "router_settings"),
+    [
+        (lambda: [_refusing_deployment("m", "m")], {"retry_policy": RetryPolicy(BadRequestErrorRetries=2)}),
+        (lambda: [_refusing_deployment("m", "m"), _refusing_deployment("n", "n")], {"fallbacks": [{"m": ["n"]}]}),
+        (lambda: [_refusing_deployment("m", "first", order=1), _refusing_deployment("m", "second", order=2)], {}),
+    ],
+    ids=["retry_policy", "generic_fallback", "order_fallback"],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_the_provider_refused_is_not_sent_again(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    model_list: Callable[[], list[dict[str, object]]],
+    router_settings: dict[str, object],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = _refusing_provider(respx_mock)
+    router: Final = Router(model_list=model_list(), enable_pre_call_checks=True, retry_after=0, **router_settings)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="maximum context length is 1000 tokens"):
+        await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert provider.call_count == 1
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_is_not_sent_after_its_context_window_fallback_was_refused(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = _refusing_provider(respx_mock)
+    router: Final = Router(
+        model_list=[_refusing_deployment("m", "m"), _refusing_deployment("n", "n")],
+        enable_pre_call_checks=True,
+        num_retries=0,
+        context_window_fallbacks=[{"m": ["n"]}],
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert provider.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("fallback", "router_settings"),
+    [
+        ("small", {}),
+        ({"model": "small", "temperature": 0.5}, {}),
+        ("fits", {"fallback_access_check": _AllowlistFallbackAccessCheck(frozenset())}),
+    ],
+    ids=["too_small_group", "too_small_params", "not_authorized"],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_reaches_its_provider_when_the_context_window_fallback_cannot_take_it(
+    fallback: str | dict[str, object], router_settings: dict[str, object]
+):
     router: Final = Router(
         model_list=[
             {
@@ -19860,20 +19959,38 @@ async def test_a_retry_policy_does_not_resend_an_uncertain_stand_in_overflow_the
                 "litellm_params": {
                     "model": _uncertain_overflow_model(),
                     "api_key": "my-fake-key",
-                    "api_base": "https://refusing.local/v1",
+                    "mock_response": "m",
                 },
                 "model_info": {"id": "m"},
-            }
+            },
+            {
+                "model_name": "small",
+                "litellm_params": {
+                    "model": _cost_map_window("openai/my-small-fake-model", 10),
+                    "api_key": "my-fake-key",
+                    "mock_response": "small",
+                },
+                "model_info": {"id": "small"},
+            },
+            {
+                "model_name": "fits",
+                "litellm_params": {
+                    "model": "openai/my-other-fake-model",
+                    "api_key": "my-fake-key",
+                    "mock_response": "fits",
+                },
+                "model_info": {"id": "fits"},
+            },
         ],
         enable_pre_call_checks=True,
-        retry_policy=RetryPolicy(BadRequestErrorRetries=2),
-        retry_after=0,
+        num_retries=0,
+        context_window_fallbacks=[{"m": [fallback]}],
+        **router_settings,
     )
 
-    with pytest.raises(litellm.ContextWindowExceededError, match="maximum context length is 1000 tokens"):
-        await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
+    response: Final = await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
 
-    assert provider.call_count == 1
+    assert response.choices[0].message.content == "m"
 
 
 @pytest.mark.parametrize(

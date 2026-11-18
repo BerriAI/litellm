@@ -91,6 +91,7 @@ struct FallbackHop {
 struct FallbackChain {
     attempted: Vec<Tried>,
     scopes: u32,
+    provider_refused_window: bool,
 }
 
 /// What one level of the chain serves: a group, or the same group at a later `order`, with the
@@ -107,6 +108,7 @@ struct Target {
     failover_excluded: Arc<[String]>,
     /// The group a pre-routing hook selected for the level's failed attempt, if it rewrote it.
     routed: Option<String>,
+    last_resort: bool,
 }
 
 /// A step of a level's fallback chain: a configured target, or an order level of the group.
@@ -191,6 +193,12 @@ fn unattempted_chain(
                     identity => !attempted.contains(&Tried::Target(identity)),
                 })
         })
+}
+
+fn refused_by_provider(error: &Error) -> bool {
+    error
+        .attempt()
+        .is_some_and(|failure| failure.is_a("ContextWindowExceededError"))
 }
 
 fn context_window_fallback_resolves(
@@ -339,6 +347,7 @@ impl Core {
             excluded: Arc::from([]),
             failover_excluded: Arc::from([]),
             routed: None,
+            last_resort: false,
         };
         let at = FallbackHop::default();
         // A fallbacks mock stands in for the requested group's retry loop: no pick, no attempt.
@@ -366,7 +375,15 @@ impl Core {
     ) -> BoxFuture<'a, Result<RouterResponse, Error>> {
         Box::pin(async move {
             let failed = match self
-                .with_retries(snapshot, op, request, &target, at, &chain.attempted)
+                .with_retries(
+                    snapshot,
+                    op,
+                    request,
+                    &target,
+                    at,
+                    &chain.attempted,
+                    &mut chain.provider_refused_window,
+                )
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -401,6 +418,17 @@ impl Core {
             served_as,
         } = failed;
         let error = *error;
+        let last_resort = matches!(
+            error,
+            Error::ContextWindowExceeded {
+                held_for_fallback: true,
+                ..
+            }
+        )
+        .then(|| Target {
+            last_resort: true,
+            ..target.clone()
+        });
         self.level_failed(at, &target, &error, false);
         if self.raises_without_fallback(snapshot, request, &error) {
             return Err(error);
@@ -487,6 +515,24 @@ impl Core {
             Err(raised) => raised,
         };
         if !order_path {
+            let error = match last_resort.filter(|_| !chain.provider_refused_window) {
+                Some(last_resort) => match self
+                    .with_retries(
+                        snapshot,
+                        op,
+                        request,
+                        &last_resort,
+                        at,
+                        &chain.attempted,
+                        &mut chain.provider_refused_window,
+                    )
+                    .await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(failed) => *failed.error,
+                },
+                None => error,
+            };
             self.host.observe(&RouterEvent::FallbacksFailed {
                 level: at.level,
                 chain: true,
@@ -662,6 +708,7 @@ impl Core {
                     excluded,
                     failover_excluded: target.failover_excluded.clone(),
                     routed: None,
+                    last_resort: false,
                 };
                 let parent = at;
                 let at = FallbackHop {
@@ -926,6 +973,7 @@ impl Core {
             .into())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn with_retries(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -934,6 +982,7 @@ impl Core {
         target: &Target,
         at: FallbackHop,
         attempted: &[Tried],
+        refused_window: &mut bool,
     ) -> Result<RouterResponse, Failed> {
         let place = (at, attempted);
         let mut inputs = SelectInputs {
@@ -941,9 +990,9 @@ impl Core {
             excluded_ids: target.excluded.clone(),
             requested: Some(target.group.clone()),
             fallback_hop: at.level > 0,
-            refuse_uncertain: context_window_fallback_resolves(
-                snapshot, request, target, at, attempted,
-            ),
+            refuse_uncertain: *refused_window
+                || (!target.last_resort
+                    && context_window_fallback_resolves(snapshot, request, target, at, attempted)),
             ..SelectInputs::default()
         };
         let counting = SelectInputs {
@@ -964,6 +1013,7 @@ impl Core {
             Ok(response) => return Ok(response),
             Err(failed) => failed,
         };
+        *refused_window |= refused_by_provider(&failed.error);
         self.pick_failed(at, target, &failed.error);
         // A guardrail's block and a failure no retry can clear are re-raised as they are, before
         // anything else looks at them (`async_function_with_retries`).
@@ -1156,6 +1206,7 @@ impl Core {
                     return Err(failed);
                 }
                 Err(next) => {
+                    *refused_window |= refused_by_provider(&next.error);
                     self.pick_failed(at, target, &next.error);
                     failed = next;
                 }

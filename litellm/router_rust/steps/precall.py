@@ -277,6 +277,15 @@ def _caps_below_catalog(
     return catalog_window is not None and window < catalog_window
 
 
+_SILENTLY_TRUNCATING_PROVIDERS: Final = frozenset({"ollama", "ollama_chat"})
+
+
+def _truncates_silently(deployment: Mapping[str, object]) -> bool:
+    params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+    provider: Final = params.get("custom_llm_provider") or str(params.get("model") or "").partition("/")[0]
+    return provider in _SILENTLY_TRUNCATING_PROVIDERS
+
+
 def _items(value: object) -> tuple[object, ...]:
     """The items of a list, tuple or set; nothing for any other value."""
     return tuple(value) if isinstance(value, list | tuple | set | frozenset) else ()  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # the items are read as objects
@@ -413,8 +422,11 @@ class PreCallFacts:
         }
 
     def _window_is_exact(self, id: str) -> bool:  # a deployment id
-        return self._model_infos[id].get("mode") == "embedding" or _caps_below_catalog(
-            self._registry, self._model, self._record(id), self._windows[id]
+        record: Final = self._record(id)
+        return (
+            self._model_infos[id].get("mode") == "embedding"
+            or _truncates_silently(record)
+            or _caps_below_catalog(self._registry, self._model, record, self._windows[id])
         )
 
     def _estimated(self, models: Mapping[str, str | None]) -> frozenset[str]:
