@@ -198,13 +198,9 @@ def has_json_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> bo
 def without_json_input(
     decision_input: DecisionsIRState | DecisionsIRMessages,
 ) -> DecisionsIRState | DecisionsIRMessages:
-    match decision_input:
-        case DecisionsIRState():
-            return decision_input
-        case DecisionsIRMessages():
-            return _messages_with_parts_where(decision_input, lambda part: not _is_json_part(part))
-        case _:
-            assert_never(decision_input)
+    if isinstance(decision_input, DecisionsIRState):
+        return decision_input
+    return _messages_with_parts_where(decision_input, lambda part: not _is_json_part(part))
 
 
 def remote_image_urls(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[str, ...]:
