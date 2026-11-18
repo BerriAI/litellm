@@ -601,4 +601,26 @@ def test_relayed_provider_specific_fields_keep_what_an_openai_shaped_body_adds()
         },
     )
 
-    assert relayed_provider_specific_fields(rejected) == {"innererror": {"code": "ResponsibleAIPolicyViolation"}}
+    assert relayed_provider_specific_fields(rejected) == {
+        "code": "content_filter",
+        "innererror": {"code": "ResponsibleAIPolicyViolation"},
+    }
+
+
+@pytest.mark.parametrize("provider_code", ["previous_response_not_found", 1211])
+def test_relayed_provider_specific_fields_keep_a_provider_code_that_is_not_the_http_status(
+    provider_code: str | int,
+) -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="Previous response not found.",
+        model="gpt-5.6",
+        llm_provider="openai",
+        body={
+            "message": "Previous response not found.",
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": provider_code,
+        },
+    )
+
+    assert relayed_provider_specific_fields(rejected) == {"code": provider_code}

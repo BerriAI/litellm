@@ -169,9 +169,13 @@ def _is_json_compliant(fields: Mapping[str, object]) -> bool:
 def _openai_error_object_extras(error_object: Mapping[str, object]) -> Mapping[str, object]:
     if not isinstance(error_object.get("message"), str):
         return MappingProxyType({})
-    return MappingProxyType(
-        {key: value for key, value in error_object.items() if key not in _OPENAI_ERROR_OBJECT_FIELDS}
-    )
+    return MappingProxyType({key: value for key, value in error_object.items() if _is_provider_specific(key, value)})
+
+
+def _is_provider_specific(key: str, value: object) -> bool:
+    if key == "code":
+        return value not in (None, "") and _http_error_status(value) is None
+    return key not in _OPENAI_ERROR_OBJECT_FIELDS
 
 
 def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:

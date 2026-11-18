@@ -16013,9 +16013,53 @@ async def test_openai_compatible_backend_400_relays_the_error_fields_beyond_open
             proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
         )
     assert json.loads(json.dumps(relayed.value.to_dict()["provider_specific_fields"])) == {
+        "code": "content_filter",
         "content_filters": list(_CONTENT_FILTERS),
         "innererror": {"code": "ResponsibleAIPolicyViolation"},
     }
+
+
+_DICT_MESSAGE_ROUTES: Final = (
+    *(route for route in _VLLM_ROUTES if route[0] != "completions"),
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="mistral/mistral-small-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            **_VLLM_BACKEND,
+        ),
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _DICT_MESSAGE_ROUTES)
+async def test_openai_compatible_backend_error_with_a_structured_message_relays_its_body_as_json(
+    route: str, call: Callable[[], object]
+) -> None:
+    detail: Final = {"type": "greater_than_equal", "loc": ["body", "max_tokens"], "msg": "must be >= 0"}
+    body: Final = {
+        "object": "error",
+        "message": {"detail": [detail]},
+        "type": "invalid_request_message_error",
+        "param": None,
+        "code": None,
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(422, json=body)
+        )
+        with pytest.raises((litellm.BadRequestError, litellm.UnprocessableEntityError)) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "mistral-small"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    message: Final = str(relayed.value.to_dict()["message"])
+    relayed_body: Final = json.loads(message[message.index("{") : message.rindex("}") + 1])
+    assert relayed_body["message"] == {"detail": [detail]}
 
 
 @pytest.mark.usefixtures("httpx_transport")

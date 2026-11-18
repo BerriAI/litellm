@@ -179,13 +179,15 @@ def get_error_message(error_obj) -> str | None:
             _error_obj_body: Final = attribute_or_none(error_obj, "body")
             if isinstance(_error_obj_body, dict):
                 # OpenAI-style: {"message": "...", "type": "...", ...}
-                if _error_obj_body.get("message"):
-                    return _error_obj_body.get("message")
+                top_level_message: Final = _error_obj_body.get("message")
+                if isinstance(top_level_message, str) and top_level_message:
+                    return top_level_message
 
                 # Azure-style: {"error": {"message": "...", ...}}
                 nested_error: Final = _error_obj_body.get("error")
                 if isinstance(nested_error, dict):
-                    return nested_error.get("message")
+                    nested_message: Final = nested_error.get("message")
+                    return nested_message if isinstance(nested_message, str) else None
 
         # If all else fails, return None
         return None
