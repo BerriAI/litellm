@@ -12,6 +12,7 @@ from typing import Final
 
 DECISIONS_PRICING_SUFFIX: Final = "_decisions"
 DECISIONS_CALL_TYPES: Final = frozenset({"decisions", "adecisions", "systemone", "asystemone"})
+QUERY_PRICED_DECISIONS_PROVIDERS: Final = frozenset({"parallel_ai"})
 
 
 def is_decisions_call_type(call_type: str) -> bool:
@@ -25,6 +26,17 @@ def decisions_pricing_fields(row: Mapping[str, object]) -> Mapping[str, object]:
         for key, value in row.items()
         if key.endswith(DECISIONS_PRICING_SUFFIX)
     }
+
+
+def decisions_request_price(model_info: Mapping[str, object], overrides: Mapping[str, object]) -> float | None:
+    if model_info.get("litellm_provider") not in QUERY_PRICED_DECISIONS_PROVIDERS:
+        return None
+    rates: Final = {**model_info, **overrides}
+    request_price: Final = rates.get("input_cost_per_query")
+    if not isinstance(request_price, (int, float)):
+        return None
+    bills_tokens: Final = any(rates.get(field) for field in ("input_cost_per_token", "output_cost_per_token"))
+    return None if bills_tokens and "input_cost_per_query" not in overrides else float(request_price)
 
 
 def apply_decisions_pricing(row: Mapping[str, object]) -> Mapping[str, object]:

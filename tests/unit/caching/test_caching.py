@@ -4,14 +4,20 @@ import json
 import logging
 import re
 import traceback
+import tracemalloc
 import uuid
+from collections import OrderedDict
 from datetime import timedelta
+from enum import Enum
+from functools import reduce
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm import acompletion, aembedding, completion, embedding
@@ -21,7 +27,7 @@ from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
+from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
@@ -94,9 +100,9 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     ],
 )
 def test_add_cache_timeout_only_joins_redis_throttle_for_redis_backends(backend, expected_level, caplog, monkeypatch):
-    throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=MagicMock(return_value=1_000.0))
+    throttle = RedisTimeoutLogThrottle(interval=5.0, clock=MagicMock(return_value=1_000.0))
     assert throttle.admit() == 0
-    monkeypatch.setattr(redis_cache_module, "_redis_timeout_log_throttle", throttle)
+    monkeypatch.setattr(redis_cache_module, "redis_timeout_log_throttle", throttle)
 
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     backend.set_cache.side_effect = TimeoutError("lit7520 backend timed out")
@@ -248,6 +254,38 @@ def test_semantic_cache_key_reads_tenant_identity_from_litellm_metadata():
     )
     assert key_a != key_b
     assert key_a == key_a_in_litellm_params
+
+
+def test_cache_rejects_unsupported_type() -> None:
+    cache_params: Final = {"type": "not-a-cache"}
+    with pytest.raises(
+        ValueError, match=re.escape("Unsupported cache type 'not-a-cache'. Supported types: ")
+    ) as raised:
+        Cache(**cache_params)
+    assert str(raised.value).split("Supported types: ")[1].split(", ") == [member.value for member in LiteLLMCacheType]
+
+
+class _PingableInMemoryCache(InMemoryCache):
+    async def ping(self) -> bool:
+        return True
+
+    async def delete_cache_keys(self, keys: list[str]) -> None:
+        for key in keys:
+            self.delete_cache(key)
+
+
+@pytest.mark.asyncio
+async def test_cache_ping_and_delete_cache_keys_reach_a_backend_that_supports_them() -> None:
+    backend: Final = _PingableInMemoryCache()
+    cache: Final = Cache(type="local", _backend=backend)
+    backend.set_cache("kept", "kept value")
+    backend.set_cache("dropped", "dropped value")
+
+    assert await cache.ping() is True
+    await cache.delete_cache_keys(["dropped"])
+
+    assert backend.get_cache("dropped") is None
+    assert backend.get_cache("kept") == "kept value"
 
 
 def test_semantic_cache_scope_rejects_unknown_value():
@@ -442,6 +480,8 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
 
     assert cache.get_cache_key(**request, _litellm_control={"stream_chunk_size": 64}) == base_key
     assert cache.get_cache_key(**request, litellm_trace_id="trace-1") == base_key
+    assert cache.get_cache_key(**request, _skip_mcp_handler=True) == base_key
+    assert cache.get_cache_key(**request, fake_stream=True) == base_key
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
 
 
@@ -461,6 +501,47 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="dG9rLTE=") == resumed_key
     assert cache.get_cache_key(**request, continuation_token=None) == first_segment_key
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
+
+
+def test_cache_key_tells_apart_requests_that_ask_for_token_ids() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    plain_key: Final = cache.get_cache_key(**request)
+
+    assert cache.get_cache_key(**request, return_token_ids=True) != plain_key
+    assert cache.get_cache_key(**request, return_token_ids=False) == plain_key
+    assert cache.get_cache_key(**request, return_token_ids=None) == plain_key
+
+
+def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_body() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    plain_key: Final = cache.get_cache_key(**request)
+    other_extra_body_key: Final = cache.get_cache_key(**request, extra_body={"top_k": 5})
+
+    assert cache.get_cache_key(**request, extra_body={"return_token_ids": True}) != plain_key
+    assert cache.get_cache_key(**request, extra_body={"top_k": 5, "return_token_ids": True}) != other_extra_body_key
+    assert cache.get_cache_key(**request, extra_body={"return_token_ids": False}) == plain_key
+    assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
+
+
+def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+    }
+
+    signed_ids_key: Final = cache.get_cache_key(**request)
+    short_ids_key: Final = cache.get_cache_key(**request, thought_signature_in_tool_call_id=False)
+
+    assert short_ids_key != signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id="false") == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=0) == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=True) == signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=None) == signed_ids_key
 
 
 class PhaseRecordingCache(InMemoryCache):
@@ -1230,6 +1311,22 @@ def test_custom_redis_cache_params(redis_client_without_network: None) -> None:
     assert cache.cache.redis_client.connection_pool.connection_kwargs["db"] == 4
 
 
+def test_redis_cache_ignores_a_leftover_disk_cache_dir(
+    redis_client_without_network: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert "disk_cache_dir" not in caplog.text
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cache: Final = Cache(
+            type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", disk_cache_dir="/tmp/litellm-cache"
+        )
+
+    assert isinstance(cache.cache, RedisCache)
+    assert "disk_cache_dir" in caplog.text
+
+
 def test_custom_redis_cache_with_key(monkeypatch: pytest.MonkeyPatch) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     monkeypatch.setattr(litellm, "cache", cache)
@@ -1566,3 +1663,110 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+class _LoudDict(dict[str, str]):
+    def __repr__(self) -> str:
+        return "<loud dict>"
+
+
+class _Role(str, Enum):
+    USER = "user"
+
+
+class _ContentPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    text: str
+
+
+_LARGE_DATA_URL: Final = "data:image/png;base64," + "QUJD" * 524_288
+
+
+def _self_referencing_list() -> list[object]:  # mutable-ok: a cycle can only be closed by appending to the list
+    looped: Final[list[object]] = [{"role": "user", "content": _LARGE_DATA_URL}]  # mutable-ok: closed below
+    looped.append({"role": "user", "content": looped})
+    return looped
+
+
+def _self_referencing_dict() -> dict[str, object]:  # mutable-ok: a cycle can only be closed by assigning a key
+    looped: Final[dict[str, object]] = {"role": "user", "content": _LARGE_DATA_URL}  # mutable-ok: closed below
+    looped["self"] = (looped, [looped])
+    return looped
+
+
+_KEY_PREIMAGE_CASES: Final = MappingProxyType(
+    {
+        "one_tuple": ({"role": "user", "content": "hi"},),
+        "empty_containers": [{"role": "user", "content": [], "a": {}, "b": (), "c": set(), "d": "", "e": frozenset()}],
+        "mixed_quotes": [{"role": "user", "content": "it's \"quoted\" and 'single'"}],
+        "emoji_newlines_backslashes": [{"role": "user", "content": "\U0001f600 line\nnext\ttab \\ back\r\x00"}],
+        "dict_subclass_custom_repr": [_LoudDict(role="user", content="hi")],
+        "ordered_dict": [OrderedDict([("content", "hi"), ("role", "user")])],
+        "str_enum_top_level": _Role.USER,
+        "str_enum_nested": [{"role": _Role.USER, "content": "hi"}],
+        "special_floats": [{"role": "user", "content": [float("nan"), -0.0, 1e300, float("inf")]}],
+        "bytes": [{"role": "user", "content": b"\x00\xffraw'\"bytes"}],
+        "nested_lone_surrogate": [{"role": "user", "content": "a\ud800b"}],
+        "deep_nesting": reduce(lambda inner, _: [inner], range(300), {"role": "user", "content": "leaf"}),
+        "pydantic_model": [{"role": "user", "content": [_ContentPart(type="text", text="hi")]}],
+        "large_data_url_in_one_tuple": [({"content": _LARGE_DATA_URL},)],
+        "large_data_url": [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": _LARGE_DATA_URL}}],
+            }
+        ],
+        "self_referencing_list": _self_referencing_list(),
+        "self_referencing_dict": [_self_referencing_dict()],
+        "large_data_url_nested_past_any_walk_depth": reduce(
+            lambda inner, _: [inner, ("x",)], range(600), {"role": "user", "content": _LARGE_DATA_URL}
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("case", _KEY_PREIMAGE_CASES.values(), ids=_KEY_PREIMAGE_CASES.keys())
+def test_cache_key_stays_the_sha256_of_the_formatted_request(case: object) -> None:
+    expected: Final = hashlib.sha256(f"model: mmessages: {case}stream: True".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages=case, stream=True) == expected
+
+
+def test_cache_key_for_a_top_level_lone_surrogate_still_raises() -> None:
+    with pytest.raises(UnicodeEncodeError):
+        Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="\ud800", stream=True)
+
+
+def test_cache_key_for_large_image_payloads_does_not_copy_the_whole_request() -> None:
+    image_bytes: Final = 1 << 20
+    image_messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"screenshot {index}"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + chr(65 + index) * image_bytes}},
+            ],
+        }
+        for index in range(16)
+    ]
+    payload_bytes: Final = 16 * image_bytes
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
+    try:
+        traced_before, _ = tracemalloc.get_traced_memory()
+        cache.get_cache_key(model="m", messages=image_messages, stream=True)
+        _, traced_peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    added_peak: Final = traced_peak - traced_before
+    assert added_peak < payload_bytes / 4, (
+        f"peak {added_peak / 2**20:.1f} MiB for a {payload_bytes / 2**20:.0f} MiB payload"
+    )

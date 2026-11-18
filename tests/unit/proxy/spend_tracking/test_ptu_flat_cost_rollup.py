@@ -2098,8 +2098,10 @@ async def test_scheduled_rollup_writes_nothing_when_ptu_attribution_is_disabled(
 
 
 def _router_holding(*entries):
-    """A stand-in for the proxy's router, carrying whatever model_list is passed."""
-    return types.SimpleNamespace(model_list=list(entries))
+    """A stand-in for the proxy's router whose registry().all() is the live model_list passed."""
+    model_list = list(entries)
+    registry = types.SimpleNamespace(all=lambda: model_list)
+    return types.SimpleNamespace(registry=lambda: registry)
 
 
 @pytest.mark.asyncio

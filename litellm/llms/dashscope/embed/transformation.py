@@ -11,12 +11,13 @@ Endpoint
 Docs - https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
 """
 
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import json_contains
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -25,9 +26,22 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import DashScopeError
+from ..common_utils import DashScopeError, resolve_dashscope_openai_api_base
 
 DEFAULT_API_BASE: Final = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def _subscript(value: object, key: str) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -91,7 +105,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         return resolved_api_key
 
     def _resolve_embedding_api_base(self, api_base: str | None) -> str:
-        return api_base or get_secret_str("DASHSCOPE_API_BASE") or DEFAULT_API_BASE
+        return resolve_dashscope_openai_api_base(api_base, default=DEFAULT_API_BASE)
 
     def validate_environment(
         self,
@@ -149,7 +163,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
     ) -> EmbeddingResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise DashScopeError(
                 status_code=raw_response.status_code,
@@ -163,8 +177,8 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             original_response=response_json,
         )
 
-        if "error" in response_json:
-            error: Final[object] = response_json["error"]
+        if json_contains(response_json, "error"):
+            error: Final = _subscript(response_json, "error")
             message: Final = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             raise DashScopeError(
                 status_code=raw_response.status_code,

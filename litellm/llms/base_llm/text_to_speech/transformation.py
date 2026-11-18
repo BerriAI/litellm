@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypedDict
 
 import httpx
 
@@ -36,6 +36,8 @@ class TextToSpeechRequestData(TypedDict, total=False):
 
 
 class BaseTextToSpeechConfig(ABC):
+    supports_streaming: ClassVar[bool] = False
+
     def __init__(self):
         pass
 
@@ -45,8 +47,7 @@ class BaseTextToSpeechConfig(ABC):
         return {
             k: v
             for k, v in class_attributes.items()
-            if not k.startswith("__")
-            and not k.startswith("_abc")
+            if not k.startswith("_")
             and not isinstance(
                 v,
                 (
@@ -134,6 +135,18 @@ class BaseTextToSpeechConfig(ABC):
         """
         Transform provider response to standard format
         """
+
+    async def async_transform_text_to_speech_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> "HttpxBinaryResponseContent":
+        return self.transform_text_to_speech_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
