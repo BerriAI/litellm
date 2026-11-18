@@ -189,8 +189,6 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
         <Input
           id="app-surcharge"
           type="number"
-          min="0"
-          max="1000"
           step="any"
           className="w-full"
           placeholder={t("apps.surchargePlaceholder")}

@@ -19,7 +19,7 @@ from litellm.proxy.spend_tracking.customer_cost_margin import (
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 
 
-@pytest.mark.parametrize(("margin", "expected"), [(0.02, 1.02), (0, 1.0), (10, 11.0)])
+@pytest.mark.parametrize(("margin", "expected"), [(0.02, 1.02), (10, 11.0)])
 def test_customer_margin_is_added_and_recorded_separately(margin: float, expected: float) -> None:
     cost: Final = apply_customer_cost_margin(finalize_cost(1.0, None), margin)
     assert cost.amount == pytest.approx(expected)
@@ -154,3 +154,9 @@ def test_a_hierarchy_without_an_app_serializes_without_app_fields() -> None:
 
     assert "app_customer_margin" not in plain
     assert with_app["app_customer_margin"] == 0.05
+
+
+def test_a_zero_surcharge_leaves_the_cost_and_its_breakdown_untouched() -> None:
+    cost: Final = finalize_cost(3.0, None)
+
+    assert apply_customer_cost_margin(cost, 0.0) is cost
