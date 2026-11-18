@@ -332,6 +332,12 @@ impl NativeModelCostMap {
         cost::price_units(py, &*self.cost_snapshot(py)?, document, &tables, catalog)
     }
 
+    /// Prices an agent call, an MCP tool call or a guardrail run from the facts in `document`, a receipt or why it
+    /// is unpriced
+    fn price_fee(&self, py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        cost::price_fee(py, &*self.cost_snapshot(py)?, document)
+    }
+
     /// The legacy budget hold and the input cost floor of a request. `rows` are the model info mappings its shapes
     /// read by index
     fn bound(

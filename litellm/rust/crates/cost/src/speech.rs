@@ -87,7 +87,7 @@ fn spoken<S: RowSource>(source: &S, query: &SpeechQuery) -> PriceOutcome {
     }
     let Some(characters) = query.characters else {
         return Unpriced::MissingUsage {
-            row: named.at,
+            row: Some(named.at),
             meter: CHARACTER,
         }
         .into();
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(
             price(&source, &query(None, None)),
             Unpriced::MissingUsage {
-                row: row_ref("tts-1"),
+                row: Some(row_ref("tts-1")),
                 meter: CHARACTER
             }
             .into()

@@ -39,9 +39,10 @@ pub(crate) fn named<'a, S: RowSource>(
                 at,
             })
         }),
-        PriceSource::Rows { .. } | PriceSource::FlatPerToken(_) | PriceSource::PerSecond { .. } => {
-            None
-        }
+        PriceSource::Rows { .. }
+        | PriceSource::FlatPerToken(_)
+        | PriceSource::PerSecond { .. }
+        | PriceSource::PerQuery { .. } => None,
     }
 }
 
@@ -186,6 +187,7 @@ pub(crate) fn receipt<S: RowSource>(
         discount: Discount::default(),
         margin: Margin::default(),
         breakdown: Breakdown::default(),
+        parts: Vec::new(),
         cache_savings: None,
         basis: header.basis.clone(),
         total: 0.0,

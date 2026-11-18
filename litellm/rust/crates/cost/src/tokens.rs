@@ -33,7 +33,7 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &TokensQuery) -> PriceOutco
     };
     match &header.source {
         PriceSource::FlatPerToken(rates) => custom::price(source, query, rates),
-        PriceSource::PerSecond { .. } | PriceSource::Rows { .. } => {
+        PriceSource::PerSecond { .. } | PriceSource::Rows { .. } | PriceSource::PerQuery { .. } => {
             Unpriced::NotPorted(Kind::Tokens).into()
         }
         PriceSource::Row {
@@ -135,6 +135,7 @@ fn attempt<S: RowSource>(
         additional: Usd::ZERO,
         discount: Discount::default(),
         margin: Margin::default(),
+        parts: Vec::new(),
         cache_savings: Some(breakdown::cache_savings(
             &quote,
             &query.usage,

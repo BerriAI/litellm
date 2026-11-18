@@ -303,7 +303,7 @@ pub(crate) fn price_units(
     outcome(py, litellm_cost::price(&rows, &query))
 }
 
-fn outcome(py: Python<'_>, outcome: PriceOutcome) -> PyResult<Py<PyAny>> {
+pub(super) fn outcome(py: Python<'_>, outcome: PriceOutcome) -> PyResult<Py<PyAny>> {
     let unpriced = |reason, row: Option<RowRef>| NativeUnpriced {
         reason,
         row: row.map(|row| row.key.into_string()),
@@ -317,7 +317,7 @@ fn outcome(py: Python<'_>, outcome: PriceOutcome) -> PyResult<Py<PyAny>> {
             unpriced("missing_rates", Some(row))
         }
         PriceOutcome::Unpriced(Unpriced::MissingUsage { row, .. }) => {
-            unpriced("missing_usage", Some(row))
+            unpriced("missing_usage", row)
         }
         PriceOutcome::Unpriced(Unpriced::CatalogDeferred) => unpriced("catalog_deferred", None),
         PriceOutcome::Unpriced(Unpriced::NotPorted(_)) => unpriced("not_ported", None),
