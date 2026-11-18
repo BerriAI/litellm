@@ -163,7 +163,7 @@ struct Read {
 type Reads = HashMap<SpendCounter, Read>;
 
 /// The counters a reservation holds, each with the key its entry carries, in entry order.
-type Held = Vec<(String, SpendCounter)>;
+pub(crate) type Held = Vec<(String, SpendCounter)>;
 
 /// What the reconcile left: the Redis keys of the counters the reservation still holds, which the
 /// charge skips, and the adjustments still to be written. Both are empty when the reconcile
@@ -690,7 +690,7 @@ const RECONCILE_FAILED: &str = "Failed to reconcile budget reservation after per
 
 /// `reseed_reserved_counter`: raise a counter the reconcile found inconsistent to its stored spend,
 /// then charge it the settled cost.
-async fn reseed_reserved(
+pub(crate) async fn reseed_reserved(
     store: &SpendCounters,
     host: &Host,
     held: &Held,
@@ -1160,7 +1160,7 @@ fn settled_stamps(
         .collect()
 }
 
-fn held_counters(reservation: &BudgetReservation) -> Held {
+pub(crate) fn held_counters(reservation: &BudgetReservation) -> Held {
     let mut seen = HashSet::new();
     reservation
         .entries

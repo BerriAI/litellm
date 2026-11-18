@@ -42,6 +42,15 @@ pub use queue::SpendLogQueue;
 pub use statement::{Retention, RowError};
 pub use store::PgLedgerStore;
 
+/// Why a settle-once job row could not be claimed; the caller queues it instead.
+#[derive(Debug, thiserror::Error)]
+pub enum ClaimError {
+    #[error(transparent)]
+    Row(#[from] RowError),
+    #[error(transparent)]
+    Database(#[from] litellm_db::Error),
+}
+
 /// The writer's limits. The defaults are the Python proxy's constants; the proxy passes the ones
 /// it reads from env vars.
 #[derive(Clone, Debug, PartialEq)]
@@ -121,6 +130,18 @@ impl<S: LedgerStore> SpendLogWriter<S> {
         max_bytes: usize,
     ) -> usize {
         self.queue.enqueue(rows, at_head, max_bytes)
+    }
+
+    /// Writes a settle-once job's cost row at once, outside the queue. Every poll of the job
+    /// carries the same delivery, so the insert that lands it owns the job's charge; returns
+    /// whether this one did.
+    pub async fn claim(
+        &self,
+        entry: &QueuedSpendLog,
+        retention: Option<&Retention>,
+    ) -> Result<bool, ClaimError> {
+        let write = statement::spend_log_write(entry, retention, chrono::Utc::now().naive_utc())?;
+        Ok(self.flusher.store().insert(&[write]).await? == 1)
     }
 
     /// Asks for a pass now rather than at the next poll, for a row a following request reads back

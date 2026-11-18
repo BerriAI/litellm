@@ -81,6 +81,13 @@ async def _park_failed_pass(
         await requeue_spend_logs(prisma_client, proxy_logging_obj, dequeue_from_rust(writer, rows))
 
 
+def spend_log_retention() -> tuple[tuple[str, ...] | None, tuple[str, ...] | None] | None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import configured_spend_logs_metadata_fields
+
+    fields: Final = configured_spend_logs_metadata_fields()
+    return None if fields is None else (fields.include, fields.exclude)
+
+
 async def flush_in_rust(
     writer: RustSpendLogWriter, prisma_client: "PrismaClient", proxy_logging_obj: "ProxyLogging", limit: int
 ) -> None:
@@ -90,14 +97,12 @@ async def flush_in_rust(
         process_spend_logs_guardrail_usage,
         retry_pending_guardrail_usage,
     )
-    from litellm.proxy.spend_tracking.spend_tracking_utils import configured_spend_logs_metadata_fields
     from litellm.proxy.utils import raise_failed_update_spend_exception
 
-    fields: Final = configured_spend_logs_metadata_fields()
     taken: Final = min(limit, len(writer))
     start_time: Final = time.time()
     try:
-        written: Final = await writer.flush(limit, None if fields is None else (fields.include, fields.exclude))
+        written: Final = await writer.flush(limit, spend_log_retention())
     except NativeDatabaseFailure as e:
         await _park_failed_pass(writer, prisma_client, proxy_logging_obj, taken)
         raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)

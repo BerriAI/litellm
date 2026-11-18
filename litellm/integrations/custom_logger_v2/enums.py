@@ -94,6 +94,7 @@ class Field(str, Enum):
     limiter_request = ("limiter_request", 46, FieldTier.small_record)
     spend_log_id = ("spend_log_id", 47, FieldTier.small_record)
     billed_retry_attempts = ("billed_retry_attempts", 48, FieldTier.small_record)
+    spend_log_input = ("spend_log_input", 49, FieldTier.compatibility)
 
 
 class Activation(str, Enum):
@@ -132,6 +133,7 @@ DERIVED_ONLY: Final = frozenset(
         Field.limiter_request,
         Field.spend_log_id,
         Field.billed_retry_attempts,
+        Field.spend_log_input,
     }
 )
 BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})

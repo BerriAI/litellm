@@ -69,6 +69,13 @@ pub struct RustSpendLogWriter {
     writer: Arc<SpendLogWriter<PgLedgerStore>>,
 }
 
+impl RustSpendLogWriter {
+    /// The installed writer, for the Rust spend logger that enqueues rows into it.
+    pub(crate) fn shared(&self) -> Arc<SpendLogWriter<PgLedgerStore>> {
+        Arc::clone(&self.writer)
+    }
+}
+
 #[pymethods]
 impl RustSpendLogWriter {
     /// `on_flush_request` is called, with the GIL, whenever a row asks to be written at once; the

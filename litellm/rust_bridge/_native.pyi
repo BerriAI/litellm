@@ -2187,6 +2187,16 @@ class RustObjectPermissionRepository:
     ) -> Future[str | None]: ...
 
 @final
+class RustSpendLog:
+    def __new__(
+        cls,
+        writer: RustSpendLogWriter,
+        spend_counters: NativeSpendCounters,
+        token_redactor: NativeTokenRedactor,
+    ) -> RustSpendLog: ...
+    def callback(self) -> RustHandle: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -2526,6 +2536,7 @@ __all__ = [
     "RustOrganizationRepository",
     "RustPlan",
     "RustProjectRepository",
+    "RustSpendLog",
     "RustSpendLogRepository",
     "RustSpendLogRowBuilder",
     "RustSpendLogWriter",

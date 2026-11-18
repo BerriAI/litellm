@@ -117,6 +117,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 from litellm.types.proxy.auth.customer_hierarchy import customer_budget_scopes_metadata
 
@@ -3218,8 +3219,7 @@ async def add_litellm_data_to_request(
     _customer_usage: Final = await resolve_customer_request_usage(
         _customer_metadata,
         user_api_key_dict,
-        ledger_enabled=general_settings_view is None
-        or general_settings_view.get("use_spend_logs_ledger", True) is not False,
+        ledger_enabled=general_settings_view is None or spend_logs_ledger_enabled(general_settings_view),
     )
     if _customer_usage is not None:
         data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = (  # rebind-ok: data is an out-param
