@@ -1,14 +1,40 @@
 {
   "apps": {
-    "title": "Apps",
-    "settingsTitle": "App budget settings",
-    "settingsHint": "Configure how apps are identified and reuse customer organization budget groups for app budgets.",
+    "title": "Applications",
+    "list": {
+      "title": "All applications",
+      "searchPlaceholder": "Search applications",
+      "count_one": "{{count}} application",
+      "count_other": "{{count}} applications",
+      "loading": "Loading applications…",
+      "noMatches": "No applications match your search.",
+      "back": "Back to applications",
+      "gatewaySurcharge": "Gateway default",
+      "customersAllowed": "Allowed",
+      "customersBlocked": "Blocked",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "columns": {
+        "application": "Application",
+        "spend": "Spend",
+        "surcharge": "Surcharge",
+        "newCustomers": "New customers"
+      }
+    },
+    "settingsTitle": "Applications",
+    "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
     "alias": "App",
     "edit": "Edit",
     "cancel": "Cancel",
     "close": "Close",
     "save": "Save app settings",
     "saved": "App settings saved.",
+    "autoCreateCustomers": "This app may create new customers",
+    "autoCreateCustomersHint": "When off, a request from this app that names an unknown customer organization or member is refused with 403. Known customers keep working.",
+    "surcharge": "Surcharge on customer requests (%)",
+    "surchargePlaceholder": "Use the gateway surcharge",
+    "surchargeHint": "Added to the cost of every request this app makes for a customer. It replaces the gateway surcharge for this app, so 0 turns the surcharge off for it. Leave empty to use the gateway surcharge.",
+    "surchargeInvalid": "Enter a surcharge between 0 and 1000 percent, or leave it empty.",
     "saveFailed": "The app settings could not be saved.",
     "retry": "Retry",
     "spend": "Tracked spend (USD)",
@@ -35,7 +61,7 @@
     "viewUsageFor": "View usage for {{alias}}",
     "organizationHint": "Set a separate budget for this customer in each app. The global organization budget above also applies.",
     "addBudget": "Add app budget",
-    "defineFirst": "Define what an app is in your Gateway before adding app budgets. Choose Teams, Projects, or Virtual keys in App budget settings.",
+    "defineFirst": "Define what an app is in your Gateway before adding app budgets. Choose Teams, Projects, or Virtual keys in Applications.",
     "noOrganizationBudgets": "No app budgets assigned to this customer yet.",
     "organizationSettings": "Customer app budget",
     "budgetFor": "Budget for {{alias}}",
@@ -88,6 +114,8 @@
       "virtual_key": "Virtual keys"
     },
     "definition": {
+      "autoCreateWithoutApp": "Requests with no app may create new customers",
+      "autoCreateWithoutAppHint": "When off, a request that belongs to no app and names an unknown customer organization or member is refused with 403. Known customers keep working.",
       "title": "Define apps for your Gateway",
       "hint": "Choose which existing Gateway resources represent your apps. This setting applies to every customer.",
       "label": "Apps are represented by",
@@ -6841,6 +6869,7 @@
         "columns": {
           "name": "Callback Name",
           "mode": "Mode",
+          "source": "Source",
           "actions": "Actions"
         },
         "modes": {
@@ -6848,6 +6877,11 @@
           "failure": "Failure",
           "successAndFailure": "Success & Failure"
         },
+        "sources": {
+          "config": "Config",
+          "db": "DB"
+        },
+        "configOwnedHint": "Set in config.yaml. Remove it from the file to delete it.",
         "readOnly": "Read only",
         "readOnlyHint": "Active callback that was not added through the dashboard. Edit it where it was configured.",
         "actions": {

@@ -28,6 +28,13 @@ class AppDefinition(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     resource_type: AppResourceType | None = None
+    auto_create_customers_without_app: bool = Field(
+        default=True,
+        description=(
+            "Whether a request that belongs to no app may register a customer organization or member the proxy "
+            "has never seen. When false, such a request is refused with 403."
+        ),
+    )
 
 
 class AppResource(BaseModel):
@@ -45,6 +52,23 @@ class AppSettings(BaseModel):
     budget: Budget | None = None
     default_tier_budget_id: str | None = None
     default_customer_member_budget: Budget | None = None
+    auto_create_customers: bool | None = Field(
+        default=None,
+        description=(
+            "Whether this app may register a customer organization or member the proxy has never seen. When false, "
+            "a request from this app naming an unknown customer is refused with 403. Defaults to true."
+        ),
+    )
+    customer_margin: float | None = Field(
+        default=None,
+        ge=0,
+        le=10,
+        description=(
+            "Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It "
+            "replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null "
+            "uses the gateway-wide customer surcharge."
+        ),
+    )
 
 
 class AppPatch(AppSettings):
@@ -72,6 +96,8 @@ class App(BaseModel):
     budget_id: str | None = None
     default_tier_budget_id: str | None = None
     default_customer_member_budget_id: str | None = None
+    auto_create_customers: bool = True
+    customer_margin: float | None = None
     created_at: datetime
     updated_at: datetime
     created_by: str

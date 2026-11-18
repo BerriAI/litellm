@@ -1960,12 +1960,16 @@ def _responses_continuation_request(
 
 
 def _responses_stream_retries(
-    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: BaseResponsesAPIStreamingIterator
+    attempt: StreamAttempt,
+    e: MidStreamFallbackError,
+    source_iterator: BaseResponsesAPIStreamingIterator,
+    output_started: bool,
 ) -> bool:
-    """Whether a broken Responses stream retries in its own group first: it broke before any output and
-    before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
-    ``/v1/messages`` stream does. After output the continuation fallback takes over instead."""
-    if not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
+    """Whether a broken Responses stream retries in its own group first: it broke before the client
+    received any event and before a tool call, with an error the retry rule takes (408, 409, 429, 5xx,
+    or no status), as a ``/v1/messages`` stream does. After output the continuation fallback takes over
+    instead."""
+    if output_started or not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
         return False
     status_code: Final = _stream_raised_error_status(_mid_stream_retry_trigger(e))
     return status_code is None or attempt.should_retry_status(status_code)
@@ -1983,7 +1987,7 @@ async def _responses_recover_stream_error(
     with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
     when a retry or a fallback answers."""
     last_error: MidStreamFallbackError = e  # rebind-ok: the newest failure once a retry also failed
-    if _responses_stream_retries(attempt, e, source_iterator):
+    if _responses_stream_retries(attempt, e, source_iterator, output_started):
         if hasattr(source_iterator, "aclose"):
             with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
                 await aclose_if_supported(source_iterator)

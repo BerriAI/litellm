@@ -7762,6 +7762,7 @@ class PrismaClient:
                             )
                             if isinstance(self.db, RoutingPrismaWrapper):
                                 self.db.mark_writer_recovered()
+                                await self.db.degrade_reader_unless_healthy()
                             await self._start_engine_watcher()
                             return
                     except Exception as probe_err:
@@ -8137,6 +8138,20 @@ class PrismaClient:
         )
         return rows[0]["present"]
 
+    async def _recover_unavailable_reader(self) -> None:
+        if not isinstance(self.db, RoutingPrismaWrapper) or not self.db.reader_unavailable:
+            return
+        try:
+            await asyncio.wait_for(
+                self.db.recover_reader(),
+                timeout=self._db_watchdog_reconnect_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning(
+                "Reader Prisma client did not recover within %ss; reads stay on the writer.",
+                self._db_watchdog_reconnect_timeout_seconds,
+            )
+
     async def _db_health_watchdog_loop(self) -> None:
         while True:
             try:
@@ -8152,6 +8167,7 @@ class PrismaClient:
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                     continue
+                await self._recover_unavailable_reader()
                 if await asyncio.wait_for(
                     self._writer_is_read_only(self.writer_db),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,

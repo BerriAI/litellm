@@ -87,6 +87,9 @@ class CustomerScopeAuth(BaseModel):
     cap_policy: CapPolicy | None = None
 
 
+_APP_FIELDS: Final = ("app_id", "app_alias", "app_customer_margin")
+
+
 class CustomerHierarchyAuth(BaseModel):
     """The levels a request is charged to. A request that named only an organization alias has no team or member."""
 
@@ -100,6 +103,9 @@ class CustomerHierarchyAuth(BaseModel):
     customer_member_alias: str | None = None
     app_id: str | None = None
     app_alias: str | None = None
+    app_customer_margin: float | None = Field(
+        default=None, description="The app's own customer surcharge; None uses the gateway-wide one"
+    )
     scopes: tuple[CustomerScopeAuth, ...]
     team_scopes: tuple[CustomerScopeAuth, ...] = Field(
         default=(),
@@ -109,7 +115,7 @@ class CustomerHierarchyAuth(BaseModel):
     @model_serializer(mode="wrap")
     def serialize_identity(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
         values: Final = TypeAdapter(Mapping[str, object]).validate_python(handler(self))
-        return {key: value for key, value in values.items() if key not in ("app_id", "app_alias") or value is not None}
+        return {key: value for key, value in values.items() if key not in _APP_FIELDS or value is not None}
 
 
 @dataclass(frozen=True, slots=True)

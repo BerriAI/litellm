@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -45,8 +46,13 @@ export default function CustomerOrganizationApps({
   const { t } = useTranslation();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<AppResource | null>(null);
+  const [pending, setPending] = useState(false);
   const { definition, resourceType, groups, resources, rows, loading, error, noRows, ready, setupNeeded } =
     useOrganizationApps(organizationId);
+  const closeDialog = () => {
+    setAdding(false);
+    setEditing(null);
+  };
   return (
     <section id="app-budgets" className="space-y-4 border-t pt-6" aria-label={t("apps.organizationTitle")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -82,43 +88,70 @@ export default function CustomerOrganizationApps({
           }}
         />
       )}
-      {adding && resourceType && (
-        <div className="max-w-md space-y-2">
-          <label htmlFor="organization-app" className="block text-sm font-medium">
-            {t("apps.selectApp")}
-          </label>
-          <SearchSelect
-            id="organization-app"
-            className="w-full"
-            placeholder={t("apps.selectApp")}
-            value={editing?.resource_id}
-            onValueChange={(value) =>
-              setEditing(resources.data?.find((resource) => resource.resource_id === value) ?? null)
-            }
-            disabled={!resources.data}
-            options={resources.data?.map((resource) => ({ value: resource.resource_id, label: resource.alias })) ?? []}
-          />
-          {resources.data?.length === 0 && <p className="text-sm text-muted-foreground">{t("apps.noResources")}</p>}
-          {resources.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {extractProxyErrorMessage(resources.error)}
-            </p>
+      <Dialog
+        open={adding || editing !== null}
+        onOpenChange={(open) => {
+          if (!open && !pending) closeDialog();
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl" showCloseButton={!pending}>
+          <DialogHeader>
+            <DialogTitle>{adding ? t("apps.addBudget") : t("apps.budgetFor", { alias: editing?.alias })}</DialogTitle>
+            <DialogDescription>{t("apps.organizationHint")}</DialogDescription>
+          </DialogHeader>
+          {adding && resourceType && (
+            <OrganizationAppPicker resources={resources} selected={editing} pending={pending} onChange={setEditing} />
           )}
-        </div>
-      )}
-      {editing && (
-        <OrganizationApp
-          key={`${editing.resource_type}:${editing.resource_id}`}
-          resource={editing}
-          organizationId={organizationId}
-          organizationAlias={organizationAlias}
-          onClose={() => {
-            setEditing(null);
-            setAdding(false);
-          }}
-        />
-      )}
+          {editing && (
+            <OrganizationApp
+              key={`${editing.resource_type}:${editing.resource_id}`}
+              resource={editing}
+              organizationId={organizationId}
+              organizationAlias={organizationAlias}
+              pending={pending}
+              onPendingChange={setPending}
+              onClose={closeDialog}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </section>
+  );
+}
+
+function OrganizationAppPicker({
+  resources,
+  selected,
+  pending,
+  onChange,
+}: {
+  resources: ReturnType<typeof useOrganizationApps>["resources"];
+  selected: AppResource | null;
+  pending: boolean;
+  onChange: (resource: AppResource | null) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-2">
+      <label htmlFor="organization-app" className="block text-sm font-medium">
+        {t("apps.selectApp")}
+      </label>
+      <SearchSelect
+        id="organization-app"
+        className="w-full"
+        placeholder={t("apps.selectApp")}
+        value={selected?.resource_id}
+        onValueChange={(value) => onChange(resources.data?.find((resource) => resource.resource_id === value) ?? null)}
+        disabled={!resources.data || pending}
+        options={resources.data?.map((resource) => ({ value: resource.resource_id, label: resource.alias })) ?? []}
+      />
+      {resources.data?.length === 0 && <p className="text-sm text-muted-foreground">{t("apps.noResources")}</p>}
+      {resources.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {extractProxyErrorMessage(resources.error)}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -267,11 +300,15 @@ function OrganizationApp({
   resource,
   organizationId,
   organizationAlias,
+  pending,
+  onPendingChange,
   onClose,
 }: {
   resource: AppResource;
   organizationId: string;
   organizationAlias?: string | null;
+  pending: boolean;
+  onPendingChange: (pending: boolean) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -293,6 +330,8 @@ function OrganizationApp({
       organizationId={organizationId}
       organizationAlias={organizationAlias}
       row={association.data ?? null}
+      pending={pending}
+      onPendingChange={onPendingChange}
       onClose={onClose}
     />
   );
@@ -309,12 +348,16 @@ function OrganizationAppForm({
   organizationId,
   organizationAlias,
   row,
+  pending,
+  onPendingChange: setPending,
   onClose,
 }: {
   resource: AppResource;
   organizationId: string;
   organizationAlias?: string | null;
   row: AppOrganization | null;
+  pending: boolean;
+  onPendingChange: (pending: boolean) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -327,7 +370,6 @@ function OrganizationAppForm({
   const [member, setMember] = useState(() =>
     appBudgetFields(row?.customer_member_budget_id ? row.effective_customer_member_budget : null),
   );
-  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const changeSource = (value: string | null) => {
     if (value !== "inherit" && value !== "profile" && value !== "custom") return;
@@ -380,7 +422,7 @@ function OrganizationAppForm({
     }
   };
   return (
-    <form onSubmit={save} className="space-y-5 border-l-2 pl-5" aria-label={t("apps.organizationSettings")}>
+    <form onSubmit={save} className="space-y-5" aria-label={t("apps.organizationSettings")}>
       <h3 className="font-semibold">{t("apps.budgetFor", { alias: resource.alias })}</h3>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
