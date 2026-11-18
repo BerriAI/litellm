@@ -152,7 +152,7 @@ describe("Gateway app definition", () => {
     const user = userEvent.setup();
     definition = { resource_type: "team" };
     render(<AppsManager />);
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    await user.click(await screen.findByRole("button", { name: "chat" }));
     fireEvent.change(await screen.findByRole("spinbutton", { name: "Surcharge on customer requests (%)" }), {
       target: { value },
     });
