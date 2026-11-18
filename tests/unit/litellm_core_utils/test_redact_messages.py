@@ -412,6 +412,116 @@ def test_redaction_hides_a_compaction_summary_in_responses_api_output(shape: str
     assert SECRET in str(result)
 
 
+
+_IMAGE_DATA_URL: Final = f"data:image/png;base64,{SECRET}"
+_IMAGE_SIGNED_URL: Final = f"https://example.invalid/generated.png?signature={SECRET}"
+
+
+def _chat_response_with_image(image_url: str) -> ModelResponse:
+    return ModelResponse(
+        id="chat-image-response",
+        model="test-image-model",
+        choices=[
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "generated image",
+                    "images": [
+                        {
+                            "index": 0,
+                            "type": "image_url",
+                            "image_url": {"url": image_url},
+                        }
+                    ],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        usage={"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
+    )
+
+
+def _responses_api_response_with_image() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse.model_validate(
+        {
+            **mock_responses_api_response("private answer").model_dump(),
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "id": "image_generation_1",
+                    "status": "completed",
+                    "result": SECRET,
+                }
+            ],
+        }
+    )
+
+
+@pytest.mark.parametrize("shape", ("object", "dict"))
+@pytest.mark.parametrize("image_url", (_IMAGE_DATA_URL, _IMAGE_SIGNED_URL))
+def test_redaction_removes_chat_image_urls_from_response_copies(shape: str, image_url: str) -> None:
+    response: Final = _chat_response_with_image(image_url)
+    original: Final = response.model_dump()
+    result: Final = response if shape == "object" else copy.deepcopy(original)
+
+    redacted: Final = perform_redaction({}, result)
+    redacted_payload: Final = redacted.model_dump() if shape == "object" else redacted
+
+    assert redacted_payload["choices"][0]["message"]["images"] is None
+    assert image_url not in json.dumps(redacted_payload)
+    assert response.model_dump() == original
+
+
+def test_redacted_standard_logging_payload_removes_chat_images_and_keeps_accounting() -> None:
+    response: Final = _chat_response_with_image(_IMAGE_DATA_URL)
+    payload: Final = {
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": response.model_dump(),
+        "model": "test-image-model",
+        "response_cost": 0.125,
+    }
+    original: Final = copy.deepcopy(payload)
+
+    redacted: Final = redacted_standard_logging_payload(payload)
+
+    assert redacted["response"]["choices"][0]["message"]["images"] is None
+    assert redacted["response"]["usage"] == original["response"]["usage"]
+    assert redacted["response_cost"] == original["response_cost"]
+    assert payload == original
+
+
+@pytest.mark.parametrize("shape", ("object", "dict"))
+def test_redaction_removes_responses_image_generation_results(shape: str) -> None:
+    response: Final = _responses_api_response_with_image()
+    original: Final = response.model_dump()
+    result: Final = response if shape == "object" else copy.deepcopy(original)
+
+    redacted: Final = perform_redaction({}, result)
+    redacted_payload: Final = redacted.model_dump() if shape == "object" else redacted
+
+    assert redacted_payload["output"][0]["result"] == REDACTED_BY_LITELLM
+    assert response.model_dump() == original
+
+
+def test_redacted_standard_logging_payload_removes_responses_images_and_keeps_accounting() -> None:
+    response: Final = _responses_api_response_with_image()
+    payload: Final = {
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": response.model_dump(),
+        "model": "test-image-model",
+        "response_cost": 0.125,
+    }
+    original: Final = copy.deepcopy(payload)
+
+    redacted: Final = redacted_standard_logging_payload(payload)
+
+    assert redacted["response"]["output"][0]["result"] == REDACTED_BY_LITELLM
+    assert redacted["response"]["usage"] == original["response"]["usage"]
+    assert redacted["response_cost"] == original["response_cost"]
+    assert payload == original
+
+
 @pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback", "helper"))
 def test_responses_redaction_removes_instructions_without_changing_the_response(surface: str) -> None:
     response: Final = litellm.ResponsesAPIResponse.model_validate(

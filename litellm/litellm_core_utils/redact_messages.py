@@ -225,6 +225,7 @@ def _redact_choice_content(choice):
             choice.message.thinking_blocks = None
         _drop_field_when_present(choice.message, "reasoning_items")
         _drop_field_when_present(choice.message, "audio")
+        _drop_field_when_present(choice.message, "images")
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -237,6 +238,7 @@ def _redact_choice_content(choice):
             choice.delta.thinking_blocks = None
         _drop_field_when_present(choice.delta, "reasoning_items")
         _drop_field_when_present(choice.delta, "audio")
+        _drop_field_when_present(choice.delta, "images")
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
@@ -436,6 +438,12 @@ def _redact_responses_api_output(output_items):
             output_item.arguments = REDACTED_BY_LITELLM
         if output_type == "custom_tool_call" and hasattr(output_item, "input"):
             output_item.input = REDACTED_BY_LITELLM
+        if output_type == "image_generation_call":
+            if isinstance(output_item, dict):
+                if output_item.get("result") is not None:
+                    output_item["result"] = REDACTED_BY_LITELLM
+            elif getattr(output_item, "result", None) is not None:
+                output_item.result = REDACTED_BY_LITELLM
         if output_type == "web_search_call" and getattr(output_item, "action", None) is not None:
             output_item.action = _redacted_web_search_action(output_item.action)
 
@@ -490,6 +498,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
         **(
             {"input": redacted_str}
             if item_mapping.get("type") == "custom_tool_call" and "input" in item_mapping
+            else {}
+        ),
+        **(
+            {"result": redacted_str}
+            if item_mapping.get("type") == "image_generation_call" and item_mapping.get("result") is not None
             else {}
         ),
         **(
@@ -608,7 +621,7 @@ def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str:
                 for field in ("content", "reasoning_content"):
                     if body.get(field) is not None:
                         body[field] = redacted_str
-                for field in ("thinking_blocks", "reasoning_items", "audio"):
+                for field in ("thinking_blocks", "reasoning_items", "audio", "images"):
                     if field in body:
                         body[field] = None
                 _redact_tool_calls_dict(body)
