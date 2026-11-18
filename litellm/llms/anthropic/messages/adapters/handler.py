@@ -114,6 +114,11 @@ def _logged_rejection_code(error: litellm.BadRequestError) -> str:
     return "could_not_be_verified"
 
 
+def _deployment_base_model(requested: object, deployment_model_info: Mapping[str, object] | None) -> str | None:
+    base_model: Final = requested or (deployment_model_info.get("base_model") if deployment_model_info else None)
+    return base_model if isinstance(base_model, str) else None
+
+
 def _completion_text(completion_kwargs: _CompletionKwargs, key: str) -> str:
     value: Final = completion_kwargs.get(key)
     return value if isinstance(value, str) else ""
@@ -805,6 +810,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["output_config"] = extra_kwargs["output_config"]
 
         api_base: Final = extra_kwargs.get("api_base")
+        deployment_model_info: Final = as_str_mapping(provider_kwargs.get("model_info"))
         (
             openai_request,
             tool_name_mapping,
@@ -812,7 +818,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
-            deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
+            base_model=_deployment_base_model(base_model, deployment_model_info),
+            deployment_model_info=deployment_model_info,
             model_group=model_group_from_metadata(
                 provider_kwargs.get("metadata"), provider_kwargs.get("litellm_metadata")
             ),

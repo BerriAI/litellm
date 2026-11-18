@@ -259,6 +259,7 @@ from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
@@ -311,39 +312,66 @@ def openai_thinking_routes_to_responses(
     return model_info.get("supports_reasoning") is not False
 
 
-def _chat_gate_refuses_effort_level(
-    level: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
-) -> bool:
+@dataclass(frozen=True, slots=True)
+class _GptReasoningChatGate:
+    config: "OpenAIGPT5Config"
+    model: str
+
+    def refuses(self, level: str) -> bool:
+        return level in self.config.ROUTE_SPECIFIC_REASONING_EFFORTS or self.config.refuses_reasoning_effort_level(
+            self.model, level
+        )
+
+
+def _gpt_reasoning_chat_gate(
+    model: str, custom_llm_provider: str | None, base_model: str | None
+) -> _GptReasoningChatGate | None:
     from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
     from litellm.utils import ProviderConfigManager
 
     provider: Final = custom_llm_provider if custom_llm_provider is not None else _inferred_provider(model)
     llm_provider: Final = next((member for member in LlmProviders if member.value == provider), None)
     if llm_provider is None:
-        return False
-    provider_model: Final = local_model_name(model, provider)
-    config: Final = ProviderConfigManager.get_provider_chat_config(model=provider_model, provider=llm_provider)
-    if not isinstance(config, OpenAIGPT5Config):
-        return False
-    gated_level: Final = normalize_reasoning_effort_value(
-        level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+        return None
+    deployment_model: Final = local_model_name(model, provider)
+    config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=deployment_model, provider=llm_provider, base_model=base_model
     )
-    return config.refuses_reasoning_effort_level(provider_model, gated_level)
+    if not isinstance(config, OpenAIGPT5Config):
+        return None
+    gated_model: Final = (base_model or deployment_model) if config.LOOKS_UP_BASE_MODEL else deployment_model
+    return _GptReasoningChatGate(config=config, model=gated_model)
 
 
-def _target_gate_refuses_effort_level(
-    thinking: Mapping[str, object], *, model: str, custom_llm_provider: str | None, deployment_model_info: object
-) -> Callable[[str], bool]:
-    def refuses(level: str) -> bool:
-        if openai_thinking_routes_to_responses(model, custom_llm_provider, thinking):
+def _gpt_reasoning_effort_gate(
+    thinking: Mapping[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    base_model: str | None,
+    deployment_model_info: object,
+) -> Callable[[str], bool] | None:
+    if openai_thinking_routes_to_responses(model, custom_llm_provider, thinking):
+
+        def responses_refuses(level: str) -> bool:
             return responses_gate_refuses_effort_level(
                 level, model=model, custom_llm_provider="openai", deployment_model_info=deployment_model_info
             )
-        return _chat_gate_refuses_effort_level(
-            level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+
+        return responses_refuses
+
+    chat_gate: Final = _gpt_reasoning_chat_gate(model, custom_llm_provider, base_model)
+    if chat_gate is None:
+        return None
+
+    def chat_refuses(level: str) -> bool:
+        return chat_gate.refuses(
+            normalize_reasoning_effort_value(
+                level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+            )
         )
 
-    return refuses
+    return chat_refuses
 
 
 def _keeps_encrypted_reasoning_for_responses(
@@ -413,6 +441,7 @@ class AnthropicAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        base_model: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         model_group: str | None = None,
         reasoning_summary: object | None = None,
@@ -451,6 +480,7 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            base_model=base_model,
             deployment_model_info=deployment_model_info,
             model_group=model_group,
             reasoning_summary=reasoning_summary,
@@ -1273,6 +1303,7 @@ class LiteLLMAnthropicMessagesAdapter:
         new_kwargs: ChatCompletionRequest,
         *,
         custom_llm_provider: str | None = None,
+        base_model: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         model_group: str | None = None,
         drop_params: bool = True,
@@ -1337,8 +1368,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking_config,
                 explicit_effort,
                 model=model,
-                budget_wins_on_enabled_thinking=is_claude_target or is_bedrock_target,
+                is_claude_target=is_claude_target,
                 custom_llm_provider=custom_llm_provider,
+                base_model=base_model,
                 deployment_model_info=deployment_model_info,
                 model_group=model_group,
                 drop_params=drop_params,
@@ -1372,8 +1404,9 @@ class LiteLLMAnthropicMessagesAdapter:
         explicit_effort: object,
         *,
         model: str,
-        budget_wins_on_enabled_thinking: bool,
+        is_claude_target: bool,
         custom_llm_provider: str | None,
+        base_model: str | None,
         deployment_model_info: Mapping[str, object] | None,
         model_group: str | None,
         drop_params: bool,
@@ -1382,7 +1415,15 @@ class LiteLLMAnthropicMessagesAdapter:
         match thinking.get("type"):
             case "adaptive":
                 return True
-            case "enabled" if not budget_wins_on_enabled_thinking:
+            case "enabled" if not is_claude_target and (
+                target_refuses_level := _gpt_reasoning_effort_gate(
+                    thinking,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    base_model=base_model,
+                    deployment_model_info=deployment_model_info,
+                )
+            ):
                 return not drops_explicit_reasoning_effort(
                     explicit_effort,
                     model=model,
@@ -1390,12 +1431,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     deployment_model_info=deployment_model_info,
                     model_group=model_group,
                     drop_params=drop_params,
-                    target_refuses_level=_target_gate_refuses_effort_level(
-                        thinking,
-                        model=model,
-                        custom_llm_provider=custom_llm_provider,
-                        deployment_model_info=deployment_model_info,
-                    ),
+                    target_refuses_level=target_refuses_level,
                     report=report_reasoning_drops,
                 )
             case _:
@@ -1446,6 +1482,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        base_model: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         model_group: str | None = None,
         reasoning_summary: object | None = None,
@@ -1494,6 +1531,7 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
             deployment_model_info=deployment_model_info,
             model_group=model_group,
             drop_params=drop_params,
