@@ -4536,3 +4536,55 @@ async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails
 
     assert await _charge_request_cost(charge_spend, dict(poll), 0.43, reservation) == charged
     assert charge_spend.calls == ((0.43, 0.43, reservation), *(() if second_call is None else (second_call,)))
+
+
+def _billed_failure_row(metadata: Mapping[str, object], snapshot: object) -> Mapping[str, object]:
+    return {"litellm_params": {"metadata": metadata}, "standard_logging_object": snapshot}
+
+
+def test_a_billed_failure_for_a_customer_carries_the_surcharge_and_records_it() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    snapshot: Final = {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}}
+    row: Final = _billed_failure_row({"user_api_key_customer_org_id": "org-1"}, snapshot)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.02)
+    recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
+    assert recorded["cost_breakdown"]["customer_margin_percent"] == 0.02
+    assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.02)
+    assert snapshot == {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}}
+
+
+@pytest.mark.parametrize(
+    ("metadata", "row_cost", "snapshot"),
+    [
+        ({"user_api_key_team_id": "team-1"}, 1.0, {"response_cost": 1.0}),
+        ({"user_api_key_customer_org_id": "org-1"}, 0.0, {"response_cost": 0.0}),
+        (
+            {"user_api_key_customer_org_id": "org-1"},
+            1.02,
+            {"response_cost": 1.02, "cost_finalized": True, "cost_breakdown": {"customer_margin_amount": 0.02}},
+        ),
+    ],
+    ids=["no customer", "nothing billed", "already surcharged"],
+)
+def test_a_failure_row_is_not_surcharged_without_a_customer_a_cost_or_twice(
+    metadata: Mapping[str, object], row_cost: float, snapshot: Mapping[str, object]
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = _billed_failure_row(metadata, dict(snapshot))
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(row_cost, row)
+    assert cost == row_cost
+    assert kwargs["standard_logging_object"] == snapshot
+
+
+def test_a_billed_failure_with_no_snapshot_is_still_surcharged() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = _billed_failure_row({"user_api_key_customer_org_id": "org-1"}, None)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, _ = _failure_row_with_customer_surcharge(2.0, row)
+    assert cost == pytest.approx(2.04)

@@ -7,6 +7,12 @@ from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt, TypeAdapter,
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, finalize_cost
+from litellm.proxy.common_utils.customer_usage import (
+    CUSTOMER_USAGE_METADATA_KEY,
+    CustomerUsageAttribution,
+    customer_usage_key_fields,
+    customer_usage_requested,
+)
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -35,8 +41,24 @@ def customer_cost_margin(has_customer: bool) -> float | None:
     return float(value) if isinstance(value, (int, float)) and is_valid_customer_margin(value) else None
 
 
+def _has_customer_usage_attribution(metadata: Mapping[str, object]) -> bool:
+    serialized: Final = metadata.get(CUSTOMER_USAGE_METADATA_KEY)
+    if not isinstance(serialized, str):
+        return False
+    try:
+        CustomerUsageAttribution.model_validate_json(serialized)
+    except ValidationError:
+        return False
+    return True
+
+
 def request_has_customer(metadata: Mapping[str, object]) -> bool:
-    return bool(metadata.get("user_api_key_customer_org_id"))
+    """Whether the request is charged to a customer organization, by request identity or by the key's binding."""
+    return bool(metadata.get("user_api_key_customer_org_id")) or _has_customer_usage_attribution(metadata)
+
+
+def key_has_customer(valid_token: object, has_customer_hierarchy: bool) -> bool:
+    return has_customer_hierarchy or customer_usage_requested({}, customer_usage_key_fields(valid_token))
 
 
 def _cost_is_finalized(payload: Mapping[str, object]) -> bool:
