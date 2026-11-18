@@ -333,9 +333,7 @@ async def test_a_token_signed_by_another_key_is_denied_with_the_proxy_message() 
 async def test_a_refused_jwt_is_raised_as_the_error_class_its_failure_row_records(
     headers: dict[str, str], error_class: type[Exception], message: str
 ) -> None:
-    token: Final = jwt.encode(
-        {"sub": "admin-1", "exp": int(time.time()) + 600}, SIGNING_KEY, algorithm="RS256", headers=headers
-    )
+    token: Final = jwt.encode({"sub": "admin-1"}, SIGNING_KEY, algorithm="RS256", headers=headers)
 
     outcome: Final = await _authorize(token, "/key/generate", UserApiKeyCache(), _Jwks())
 
