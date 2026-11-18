@@ -242,6 +242,9 @@ pub struct TokensQuery {
     /// The counts as reported, for the provider branches that bill them instead of `usage`
     #[cfg_attr(feature = "serde", serde(default))]
     pub raw: RawCounts,
+    /// A `/v1/decisions` or `/v1/systemone` call, which reads the row's `_decisions` prices
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub decisions: bool,
 }
 
 /// Which of main's token pricing paths prices the row
@@ -388,6 +391,7 @@ impl TokensQuery {
             characters: None,
             embedding: false,
             raw: RawCounts::default(),
+            decisions: false,
         }
     }
 }
