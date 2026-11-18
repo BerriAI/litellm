@@ -729,7 +729,7 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
             return invalid
     provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
     if isinstance(provider_rejection, str):
-        _log_resolved_call(request, request_provider)
+        log_resolved_call(request, request_provider)
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         rejection: Final = _provider_rejection(
             provider_rejection,
@@ -1071,7 +1071,7 @@ def _public_provider_error(
         return mapped
 
 
-def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> None:
+def log_resolved_call(request: Mapping[str, object], request_provider: str) -> None:
     """Tells the logger the resolved call, as Python's handler does before its provider config
     transforms the request."""
     logger: Final = request.get("litellm_logging_obj")
@@ -1200,7 +1200,7 @@ def map_failure(
         chained: Final = transport_timeout(str(error))
         error.__context__ = chained  # rebind-ok: Python chains the transport timeout as the exception context
     if getattr(error, "messages_late_rejection", False):
-        _log_resolved_call(request, request_provider)
+        log_resolved_call(request, request_provider)
     if getattr(error, "messages_python_raised", False):
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
@@ -1219,7 +1219,7 @@ def map_failure(
         )
     credential_failure: Final = _bedrock_credential_failure(error, request) if request_provider == "bedrock" else None
     if credential_failure is not None:
-        _log_resolved_call(request, request_provider)
+        log_resolved_call(request, request_provider)
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
@@ -1318,7 +1318,7 @@ def _raise_as_python_does(request: Mapping[str, object], asynchronous: bool) -> 
     try:
         _python_messages_url(api_base)
     except ValueError:
-        _log_resolved_call(request, "anthropic")
+        log_resolved_call(request, "anthropic")
         _flag_messages_call(logger, asynchronous)
         raise
 

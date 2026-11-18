@@ -12393,7 +12393,7 @@ def _claude_response(
         choices=[{"message": {"role": "assistant", "content": "hi", "annotations": annotations}}],
         usage=Usage(prompt_tokens=1000, completion_tokens=200, prompt_tokens_details=prompt_details),
     )
-    response._hidden_params = {**response._hidden_params, **(hidden_params or {})}
+    response.hidden_params = {**response.hidden_params, **(hidden_params or {})}
     return response
 
 
@@ -12402,9 +12402,9 @@ def _rust_priced(
     tools_params: StandardBuiltInToolsParams | None = None,
     reported_cost_applies: bool = False,
 ) -> float | None:
-    from litellm.cost_calculator import _rust_priced_cost
+    from litellm.cost_calculator import rust_priced_cost
 
-    return _rust_priced_cost(
+    return rust_priced_cost(
         completion_response=response,
         model="claude-opus-5-5",
         call_type="completion",

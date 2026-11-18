@@ -3297,7 +3297,7 @@ def test_the_route_prices_at_the_vertex_location_its_logging_would_price_at(
     request: Final = {**_CALL, **deployment, "model": "vertex_ai/claude-opus-5-5", "litellm_logging_obj": logger}
 
     priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
-    messages_host._log_resolved_call(request, "vertex_ai")
+    messages_host.log_resolved_call(request, "vertex_ai")
     logged_at: Final = resolve_vertex_location_for_cost(
         custom_llm_provider="vertex_ai",
         litellm_params=logger.litellm_params,

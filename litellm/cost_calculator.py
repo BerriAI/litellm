@@ -1789,7 +1789,7 @@ def _web_search_requests_for_rust(completion_response: object, usage: Usage) -> 
     return get_anthropic_web_search_requests_from_response(completion_response)
 
 
-def _rust_priced_cost(
+def rust_priced_cost(
     completion_response: object,
     model: str | None,
     call_type: str,
@@ -2081,7 +2081,7 @@ def completion_cost(
         )
 
         rust_priced: Final = (
-            _rust_priced_cost(
+            rust_priced_cost(
                 completion_response=completion_response,
                 model=model,
                 call_type=call_type,

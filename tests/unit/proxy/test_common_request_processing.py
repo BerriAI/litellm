@@ -13419,7 +13419,7 @@ class TestProcessChunkWithCostInjection:
             messages=[{"role": "user", "content": "test"}],
             stream=True,
             call_type="anthropic_messages",
-            start_time=None,
+            start_time=datetime.datetime(2025, 1, 1),
             litellm_call_id="route-left-unpriced",
             function_id="route-left-unpriced",
         )
