@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.types.llms.anthropic import ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -195,6 +196,32 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return 2
 
+    def recovers_thinking_binding_mismatch(self) -> bool:
+        """Whether this upstream is a Claude host that accepts ``thinking.block_binding``."""
+        return False
+
+    def carries_anthropic_betas_in_body(self) -> bool:
+        return False
+
+    def _thinking_binding_retry(self, e: httpx.HTTPStatusError, request_body: object) -> Mapping[object, object] | None:
+        from litellm.llms.anthropic.common_utils import anthropic_thinking_binding_retry
+
+        if e.response.status_code != 400 or not self.recovers_thinking_binding_mismatch():
+            return None
+        return anthropic_thinking_binding_retry(e.response.text, request_body)
+
+    def anthropic_messages_retry_header_betas(self, request_data: Mapping[str, object]) -> tuple[str, ...]:
+        """Betas the retried body needs in the ``anthropic-beta`` header."""
+        from litellm.llms.anthropic.common_utils import anthropic_request_drops_mismatched_thinking_blocks
+
+        if (
+            self.carries_anthropic_betas_in_body()
+            or not self.recovers_thinking_binding_mismatch()
+            or not anthropic_request_drops_mismatched_thinking_blocks(request_data)
+        ):
+            return ()
+        return (ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,)
+
     def should_retry_anthropic_messages_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: Mapping[str, object], request_body: object = None
     ) -> bool:
@@ -223,7 +250,7 @@ class BaseAnthropicMessagesConfig(ABC):
             and body is not None
             and tools_without_strict(body.get("tools")) is not None
         )
-        if drops_rejected_strict_tools:
+        if drops_rejected_strict_tools or self._thinking_binding_retry(e, request_body) is not None:
             return True
         caller_asked_for_this_error: Final = anthropic_request_errors_on_thinking_binding_mismatch(
             request_body
@@ -231,10 +258,11 @@ class BaseAnthropicMessagesConfig(ABC):
         return not caller_asked_for_this_error and is_anthropic_invalid_thinking_block_error(error_text)
 
     def transform_anthropic_messages_request_on_http_error(
-        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object], replaying: bool = False
     ) -> dict[str, object]:
         """
         Mutates request_data in place when retrying after a recoverable HTTP error.
+        ``replaying`` reapplies a recovery to a rebuilt body, which was already reported.
         """
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_block_error,
@@ -242,9 +270,20 @@ class BaseAnthropicMessagesConfig(ABC):
             strip_thinking_blocks_from_anthropic_messages_request_dict,
             tools_without_strict,
             warn_claude_strict_tools_dropped,
+            warn_thinking_binding_mismatch_recovered,
+            with_anthropic_beta,
         )
 
-        if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
+        binding_thinking: Final = self._thinking_binding_retry(e, request_data)
+        if binding_thinking is not None:
+            request_data["thinking"] = binding_thinking  # rebind-ok: the retry loop re-signs this same dict
+            if self.carries_anthropic_betas_in_body():
+                request_data["anthropic_beta"] = with_anthropic_beta(  # rebind-ok: same dict as above
+                    request_data.get("anthropic_beta"), ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER
+                )
+            if not replaying:
+                warn_thinking_binding_mismatch_recovered()
+        elif e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
         without_strict: Final = (
             tools_without_strict(request_data.get("tools"))

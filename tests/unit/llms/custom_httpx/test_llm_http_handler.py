@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import inspect
 import json
 import logging
@@ -37,6 +38,7 @@ from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
 from litellm.llms.azure.videos.transformation import AzureVideoConfig
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -2274,6 +2276,7 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     provider_config.max_retry_on_anthropic_messages_http_error = 2
     provider_config.should_retry_anthropic_messages_on_http_error = Mock(return_value=True)
     provider_config.transform_anthropic_messages_request_on_http_error = _mutate
+    provider_config.anthropic_messages_retry_header_betas = Mock(return_value=())
     # Re-sign returns no signed body (native anthropic path) -> must re-dump.
     provider_config.sign_request = Mock(return_value=({}, None))
 
@@ -2364,6 +2367,212 @@ async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_
     else:
         assert (await _post()).status_code == 200
     assert http_client.post.await_count == expected_posts
+
+
+_BINDING_BETA: Final = "thinking-binding-controls-2026-08-01"
+_DROP_BLOCK: Final = {"prefix_mismatch_behavior": "drop_block"}
+_NATIVE_OUTPUT_REJECTED: Final = "output_config.format is not supported"
+_BINDING_REPLAY: Final = (
+    {"role": "user", "content": "hi"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "sig"},
+            {"type": "redacted_thinking", "data": "opaque"},
+            {"type": "text", "text": "hello"},
+        ],
+    },
+    {"role": "user", "content": "again"},
+)
+
+
+class _UnsignedBedrockInvokeConfig(AmazonAnthropicClaudeMessagesConfig):
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
+        return headers, None
+
+    def should_retry_anthropic_messages_without_native_output(
+        self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
+    ) -> bool:
+        return _NATIVE_OUTPUT_REJECTED in e.response.text
+
+
+def _binding_http_client(*responses: tuple[int, str], url: str = "https://api.anthropic.com/v1/messages") -> Mock:
+    request: Final = httpx.Request("POST", url)
+    client: Final = Mock()
+    client.post = AsyncMock(side_effect=[httpx.Response(code, request=request, text=text) for code, text in responses])
+    return client
+
+
+def _posted_json(client: Mock, attempt: int) -> dict[str, object]:
+    return json.loads(client.post.await_args_list[attempt].kwargs["data"])
+
+
+async def _post_binding_replay(
+    client: Mock,
+    config: BaseAnthropicMessagesConfig,
+    request_body: dict[str, object],
+    headers: dict[str, str],
+    rebuild: Callable[[], Mapping[str, object]] | None = None,
+) -> httpx.Response:
+    logging_obj: Final = Mock(baseline_cache_context=None)
+    logging_obj.model_call_details = {}
+    return await BaseLLMHTTPHandler()._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=client,
+        request_url="https://api.anthropic.com/v1/messages",
+        headers=headers,
+        signed_json_body=None,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=config,
+        litellm_params=GenericLiteLLMParams(),
+        api_key="k",
+        model="claude-opus-5-5",
+        rebuild_without_native_output=rebuild,
+    )
+
+
+def _binding_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "bound to a different conversation" in record.getMessage()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("thinking", "expected_thinking"),
+    (
+        pytest.param(None, {"type": "adaptive", "block_binding": _DROP_BLOCK}, id="no_thinking"),
+        pytest.param(
+            {"type": "adaptive", "display": "summarized"},
+            {"type": "adaptive", "display": "summarized", "block_binding": _DROP_BLOCK},
+            id="adaptive_with_display",
+        ),
+    ),
+)
+async def test_a_binding_mismatch_retries_with_the_history_and_the_merged_beta(
+    caplog: pytest.LogCaptureFixture, thinking: dict[str, object] | None, expected_thinking: dict[str, object]
+) -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    client: Final = _binding_http_client((400, _BOUND_THINKING_ERROR), (200, "{}"))
+    request_body: Final[dict[str, object]] = {
+        "model": "claude-opus-5-5",
+        "messages": copy.deepcopy(list(_BINDING_REPLAY)),
+        **({} if thinking is None else {"thinking": thinking}),
+    }
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        response: Final = await _post_binding_replay(
+            client, AnthropicMessagesConfig(), request_body, {"Anthropic-Beta": "zeta-beta", "x-api-key": "k"}
+        )
+
+    assert response.status_code == 200
+    assert client.post.await_count == 2
+    first_headers: Final = client.post.await_args_list[0].kwargs["headers"]
+    retry_headers: Final = client.post.await_args_list[1].kwargs["headers"]
+    assert first_headers == {"Anthropic-Beta": "zeta-beta", "x-api-key": "k"}
+    assert "block_binding" not in str(_posted_json(client, 0).get("thinking"))
+    assert retry_headers == {"anthropic-beta": f"{_BINDING_BETA},zeta-beta", "x-api-key": "k"}
+    retried: Final = _posted_json(client, 1)
+    assert retried["messages"] == list(_BINDING_REPLAY)
+    assert retried["thinking"] == expected_thinking
+    (warning,) = _binding_warnings(caplog)
+    assert "still holds" in warning
+    assert "sig" not in warning and "plan" not in warning
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_drop_block_retry_is_the_error_the_caller_sees(caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    client: Final = _binding_http_client((400, _BOUND_THINKING_ERROR), (400, _BOUND_THINKING_ERROR + " again"))
+    request_body: Final[dict[str, object]] = {
+        "messages": copy.deepcopy(list(_BINDING_REPLAY)),
+        "thinking": {"type": "adaptive"},
+    }
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        with pytest.raises(BaseLLMException) as raised:
+            await _post_binding_replay(client, AnthropicMessagesConfig(), request_body, {})
+
+    assert raised.value.status_code == 400
+    assert "again" in raised.value.message
+    assert client.post.await_count == 2
+    assert _posted_json(client, 1)["messages"] == list(_BINDING_REPLAY)
+    assert len(_binding_warnings(caplog)) == 1
+
+
+@pytest.mark.asyncio
+async def test_other_invalid_thinking_errors_keep_the_strip_retry_without_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    client: Final = _binding_http_client(
+        (400, "messages.1.content.0: Invalid `signature` in `thinking` block"), (200, "{}")
+    )
+    request_body: Final[dict[str, object]] = {
+        "messages": copy.deepcopy(list(_BINDING_REPLAY)),
+        "thinking": {"type": "adaptive"},
+    }
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        await _post_binding_replay(client, AnthropicMessagesConfig(), request_body, {"anthropic-beta": "zeta-beta"})
+
+    retried: Final = _posted_json(client, 1)
+    assert "thinking" not in retried
+    assert retried["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "user", "content": "again"},
+    ]
+    assert client.post.await_args_list[1].kwargs["headers"] == {"anthropic-beta": "zeta-beta"}
+    assert _binding_warnings(caplog) == ()
+
+
+@pytest.mark.asyncio
+async def test_a_native_output_rebuild_replays_the_binding_recovery_and_warns_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client: Final = _binding_http_client((400, _BOUND_THINKING_ERROR), (400, _NATIVE_OUTPUT_REJECTED), (200, "{}"))
+    original: Final[dict[str, object]] = {
+        "messages": list(_BINDING_REPLAY),
+        "thinking": {"type": "adaptive"},
+        "anthropic_beta": ["zeta-beta"],
+    }
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        await _post_binding_replay(
+            client,
+            _UnsignedBedrockInvokeConfig(),
+            copy.deepcopy(original),
+            {},
+            rebuild=lambda: copy.deepcopy(original),
+        )
+
+    assert client.post.await_count == 3
+    expected: Final = {
+        **original,
+        "thinking": {"type": "adaptive", "block_binding": _DROP_BLOCK},
+        "anthropic_beta": [_BINDING_BETA, "zeta-beta"],
+    }
+    assert _posted_json(client, 1) == expected
+    assert _posted_json(client, 2) == expected
+    assert all("anthropic-beta" not in call.kwargs["headers"] for call in client.post.await_args_list)
+    assert len(_binding_warnings(caplog)) == 1
 
 
 def test_base_responses_config_sign_request_is_noop_by_default():

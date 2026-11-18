@@ -80,6 +80,7 @@ fn retry_reason(reason: &RetryReason) -> Value {
         RetryReason::StrictTools { dropped } => {
             serde_json::json!({"kind": "strict_tools", "dropped": dropped})
         }
+        RetryReason::ThinkingBinding => serde_json::json!({"kind": "thinking_binding"}),
     }
 }
 
@@ -790,9 +791,20 @@ impl LegacyLogging {
             // response, and logging replays it through `AnthropicConfig.transform_response`.
             self.close_api_window(py, epoch_seconds())?;
             if let Some(head) = &raw.head {
+                let retry_headers = head
+                    .retry_headers
+                    .as_ref()
+                    .map(|headers| {
+                        let retried = PyDict::new(py);
+                        headers
+                            .iter()
+                            .try_for_each(|(name, value)| retried.set_item(name, value))?;
+                        PyResult::Ok(retried.unbind())
+                    })
+                    .transpose()?;
                 let sent = self.request.as_ref().map(|request| SentRequest {
                     url: &request.url,
-                    headers: &request.headers,
+                    headers: retry_headers.as_ref().unwrap_or(&request.headers),
                     body: &head.sent_body,
                 });
                 self.logger()?.record_response(
@@ -1627,6 +1639,7 @@ assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, 
                 reasons: vec![
                     RetryReason::ThinkingSignature,
                     RetryReason::StrictTools { dropped: 2 },
+                    RetryReason::ThinkingBinding,
                 ],
                 body: json!({"messages": [{"role": "user", "content": "hi"}]}),
             };
@@ -1648,7 +1661,11 @@ assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, 
 [(logged, body, reasons)] = [value for name, value in logger.calls if name == 'retried_request']
 assert logged is logger.pre['complete_input_dict'], logged
 assert body == {'messages': [{'role': 'user', 'content': 'hi'}]}, body
-assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dropped': 2}], reasons
+assert reasons == [
+    {'kind': 'thinking_signature'},
+    {'kind': 'strict_tools', 'dropped': 2},
+    {'kind': 'thinking_binding'},
+], reasons
 ",
             );
         });

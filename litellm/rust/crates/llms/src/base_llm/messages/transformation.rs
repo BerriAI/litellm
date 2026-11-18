@@ -1,4 +1,4 @@
-use litellm_host::interceptors::RetriedRequest;
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -195,6 +195,12 @@ pub trait BaseMessagesConfig: Sync {
         _context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
         None
+    }
+
+    /// The headers a retried body goes out with, for a retry that needs a beta the first
+    /// attempt did not.
+    fn headers_for_retry(&self, headers: Headers, _reasons: &[RetryReason]) -> Headers {
+        headers
     }
 }
 

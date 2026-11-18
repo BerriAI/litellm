@@ -1160,6 +1160,32 @@ pub fn anthropic_request_errors_on_thinking_binding_mismatch(request_body: &Valu
         == Some("error")
 }
 
+/// The `thinking` that lets Claude drop blocks bound to another conversation, keeping the
+/// history as sent. `None` when the error is another one, or the caller's `thinking` is not
+/// adaptive or already chose a binding.
+pub fn anthropic_thinking_binding_retry(error_text: &str, request_body: &Value) -> Option<Value> {
+    if !is_anthropic_thinking_binding_mismatch_error(error_text) {
+        return None;
+    }
+    let mut thinking = match request_body.as_object()?.get("thinking") {
+        None | Some(Value::Null) => {
+            serde_json::Map::from_iter([("type".to_owned(), Value::from("adaptive"))])
+        }
+        Some(Value::Object(thinking))
+            if thinking.get("type").and_then(Value::as_str) == Some("adaptive")
+                && !thinking.contains_key("block_binding") =>
+        {
+            thinking.clone()
+        }
+        Some(_) => return None,
+    };
+    thinking.insert(
+        "block_binding".to_owned(),
+        serde_json::json!({"prefix_mismatch_behavior": "drop_block"}),
+    );
+    Some(Value::Object(thinking))
+}
+
 fn is_thinking_value_block(block: &Value) -> bool {
     matches!(
         block.get("type").and_then(Value::as_str),

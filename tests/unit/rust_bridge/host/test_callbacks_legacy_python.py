@@ -451,6 +451,27 @@ async def test_a_retry_that_dropped_strict_tools_warns_with_the_dropped_count(
     assert warnings == warned
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reasons", "warned"),
+    [
+        pytest.param(({"kind": "thinking_signature"},), 0, id="thinking_signature"),
+        pytest.param(({"kind": "thinking_binding"},), 1, id="thinking_binding"),
+    ],
+)
+async def test_a_binding_retry_warns_the_operator(
+    monkeypatch: pytest.MonkeyPatch, reasons: tuple[Mapping[str, object], ...], warned: int
+) -> None:
+    from litellm.llms.anthropic import common_utils
+
+    warnings: Final[list[None]] = []
+    monkeypatch.setattr(common_utils, "warn_thinking_binding_mismatch_recovered", lambda: warnings.append(None))
+
+    await legacy.retried_request(_messages_logger(), {"messages": []}, {"messages": []}, reasons)
+
+    assert len(warnings) == warned
+
+
 def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
     logger: Final = _messages_logger()
     head: Final[dict[str, object]] = {"additional_headers": {"request-id": "req_native"}}

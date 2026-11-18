@@ -2566,7 +2566,7 @@ class BaseLLMHTTPHandler:
                     request_body.update(rebuild_body())
                     for recovered_error in recovered_errors:
                         provider_config.transform_anthropic_messages_request_on_http_error(
-                            e=recovered_error, request_data=request_body
+                            e=recovered_error, request_data=request_body, replaying=True
                         )
                 else:
                     verbose_logger.debug(
@@ -2576,6 +2576,10 @@ class BaseLLMHTTPHandler:
                     )
                     provider_config.transform_anthropic_messages_request_on_http_error(e=e, request_data=request_body)
                     recovered_errors = (*recovered_errors, e)
+                    if retry_betas := provider_config.anthropic_messages_retry_header_betas(request_body):
+                        headers = dict(  # rebind-ok: every later attempt keeps the betas this body needs
+                            _merge_messages_header_sources(headers, {"anthropic-beta": ",".join(retry_betas)})
+                        )
                 headers, signed_json_body = await run_off_loop_if_aws(
                     provider_config,
                     provider_config.sign_request,

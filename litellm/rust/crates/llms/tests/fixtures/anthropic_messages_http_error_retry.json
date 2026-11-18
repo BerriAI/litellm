@@ -154,7 +154,7 @@
           "budget_tokens": 2048
         },
         "retried": true,
-        "stripped": true
+        "outcome": "strip"
       },
       {
         "name": "missing_signature",
@@ -165,7 +165,7 @@
           "budget_tokens": 2048
         },
         "retried": true,
-        "stripped": true
+        "outcome": "strip"
       },
       {
         "name": "empty_thinking",
@@ -176,7 +176,7 @@
           "budget_tokens": 2048
         },
         "retried": true,
-        "stripped": true
+        "outcome": "strip"
       },
       {
         "name": "unpinned_binding_mismatch",
@@ -186,7 +186,125 @@
           "type": "adaptive"
         },
         "retried": true,
-        "stripped": true
+        "outcome": "drop_block",
+        "retry_thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        },
+        "other_hosts_retried": true,
+        "other_hosts_outcome": "strip"
+      },
+      {
+        "name": "binding_mismatch_without_thinking",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "retried": true,
+        "outcome": "drop_block",
+        "retry_thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        },
+        "other_hosts_retried": true,
+        "other_hosts_outcome": "strip"
+      },
+      {
+        "name": "binding_mismatch_keeps_the_callers_adaptive_keys",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "adaptive",
+          "display": "summarized",
+          "effort": "high"
+        },
+        "retried": true,
+        "outcome": "drop_block",
+        "retry_thinking": {
+          "type": "adaptive",
+          "display": "summarized",
+          "effort": "high",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        },
+        "other_hosts_retried": true,
+        "other_hosts_outcome": "strip"
+      },
+      {
+        "name": "binding_text_without_a_signature_verdict",
+        "status": 400,
+        "error_text": "The block is bound to a different conversation.",
+        "thinking": {
+          "type": "adaptive"
+        },
+        "retried": true,
+        "outcome": "drop_block",
+        "retry_thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        },
+        "other_hosts_retried": false,
+        "other_hosts_outcome": "unchanged"
+      },
+      {
+        "name": "binding_mismatch_with_enabled_thinking",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": true,
+        "outcome": "strip"
+      },
+      {
+        "name": "binding_mismatch_with_disabled_thinking",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "disabled"
+        },
+        "retried": true,
+        "outcome": "strip"
+      },
+      {
+        "name": "binding_mismatch_with_an_unknown_thinking_type",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "future"
+        },
+        "retried": true,
+        "outcome": "strip"
+      },
+      {
+        "name": "binding_mismatch_with_a_caller_drop_block",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        },
+        "retried": true,
+        "outcome": "strip"
+      },
+      {
+        "name": "binding_mismatch_with_an_empty_caller_binding",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {}
+        },
+        "retried": true,
+        "outcome": "strip"
       },
       {
         "name": "caller_pinned_binding",
@@ -199,7 +317,7 @@
           }
         },
         "retried": false,
-        "stripped": true
+        "outcome": "strip"
       },
       {
         "name": "caller_pinned_binding_other_signature_error",
@@ -212,7 +330,7 @@
           }
         },
         "retried": true,
-        "stripped": true
+        "outcome": "strip"
       },
       {
         "name": "not_a_400",
@@ -223,7 +341,7 @@
           "budget_tokens": 2048
         },
         "retried": false,
-        "stripped": false
+        "outcome": "unchanged"
       },
       {
         "name": "unrelated_400",
@@ -234,7 +352,7 @@
           "budget_tokens": 2048
         },
         "retried": false,
-        "stripped": false
+        "outcome": "unchanged"
       },
       {
         "name": "signature_without_thinking",
@@ -245,9 +363,10 @@
           "budget_tokens": 2048
         },
         "retried": false,
-        "stripped": false
+        "outcome": "unchanged"
       }
-    ]
+    ],
+    "binding_beta": "thinking-binding-controls-2026-08-01"
   },
   "claude_strict_tools_rejection": [
     {
