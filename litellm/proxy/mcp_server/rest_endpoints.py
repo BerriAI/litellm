@@ -1337,7 +1337,7 @@ if MCP_AVAILABLE:
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         processor: Final = ProxyBaseLLMRequestProcessing(data={})
 
-        async def callback_headers(result: object) -> dict[str, str]:
+        async def callback_headers(result: object) -> Mapping[str, str]:
             return await proxy_logging_obj.post_call_response_headers_hook(
                 data=processor.data,  # pyright: ignore[reportUnknownMemberType]  # the processor holds a bare dict
                 user_api_key_dict=user_api_key_dict,
