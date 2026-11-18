@@ -144,6 +144,7 @@ class ImageDocument(TypedDict):
     images: ReadOnly[int]
     pixels: ReadOnly[int]
     input_images: ReadOnly[int]
+    vertex_location: ReadOnly[NotRequired[str | None]]
 
 
 class WritesByTtl(TypedDict):
@@ -868,6 +869,34 @@ def price_units(
     """A per-unit call priced from ``document``'s facts, or why no row prices it. ``tables`` are the deployment's own
     price tables, read in order ahead of ``catalog``, the row ``get_model_info`` found for the call."""
     return model_cost_inputs.price_units(document, tables, catalog)
+
+
+def per_image_cost(
+    model: str,
+    provider: str,
+    images: int,
+    row: Mapping[str, object] | None,
+    vertex_location: str | None = None,
+) -> float:
+    """``row``'s ``output_cost_per_image`` for each image, with its Vertex AI regional endpoint uplift at a non-global
+    ``vertex_location``, 0.0 when no row or no per-image price prices the call."""
+    if row is None:
+        return 0.0
+    return total_or_zero(
+        price_units(
+            ImageDocument(
+                kind="image",
+                model=model,
+                provider=provider,
+                calculator="per_image",
+                images=images,
+                pixels=0,
+                input_images=0,
+                vertex_location=vertex_location,
+            ),
+            catalog=row,
+        )
+    )
 
 
 def batch_usage(usage: Usage) -> BatchUsage:

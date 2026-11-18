@@ -16,9 +16,13 @@ pub(crate) use session::price_session;
 
 use std::time::Duration;
 
-use litellm_cost::price::ServiceTier;
+use litellm_cost::price::{Adjustments, ServiceTier};
+use litellm_model_catalog::wire::EntryWire;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyMapping;
+
+use crate::model_cost::row_fields;
 
 /// The service tier a call bills, from the tier it asked for and the tier the provider reports serving it at
 #[pyfunction]
@@ -28,6 +32,20 @@ pub(crate) fn billable_service_tier(
     served: Option<&str>,
 ) -> Option<String> {
     litellm_inference_messages::billable_tier(requested, served)
+}
+
+/// The Vertex AI regional endpoint uplift `row` bills a call served at `vertex_location` at, 1.0 at the global endpoint
+/// or when the row lists none it can read, so a price shown for a deployment carries what billing charges there
+#[pyfunction]
+#[pyo3(signature = (row, vertex_location))]
+pub(crate) fn regional_endpoint_uplift(
+    row: &Bound<'_, PyMapping>,
+    vertex_location: Option<&str>,
+) -> PyResult<f64> {
+    let adjustments = Adjustments::from(&EntryWire::read(&row_fields(row)?));
+    Ok(adjustments
+        .regional_endpoint(vertex_location)
+        .map_or(1.0, |uplift| uplift.get()))
 }
 
 fn service_tier_named(name: Option<&str>) -> ServiceTier {

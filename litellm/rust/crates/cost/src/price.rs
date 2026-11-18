@@ -171,6 +171,11 @@ pub enum Residency {
     Us,
 }
 
+/// Whether a Vertex AI call served at `location` reaches a regional or multi-region endpoint: any location but `global`
+pub fn regional_endpoint(location: Option<&str>) -> bool {
+    location.is_some_and(|location| !location.eq_ignore_ascii_case("global"))
+}
+
 impl Band {
     pub fn over_prompt_tokens(tokens: u64) -> Self {
         NonZeroU64::new(tokens).map_or(Self::Base, Self::OverPromptTokens)
@@ -266,6 +271,14 @@ impl Adjustments {
 
     pub fn get(&self, uplift: &Uplift) -> Option<Multiplier> {
         self.0.get(uplift).copied()
+    }
+
+    /// The regional endpoint multiplier the row bills a Vertex AI call served at `location` at, `None` at the global
+    /// endpoint or when the row lists none (`get_vertex_regional_endpoint_uplift`)
+    pub fn regional_endpoint(&self, location: Option<&str>) -> Option<Multiplier> {
+        regional_endpoint(location)
+            .then(|| self.get(&Uplift::NonGlobalEndpoint))
+            .flatten()
     }
 
     /// The multipliers `call` picks out of the ones the row carries, in the order main applies them
