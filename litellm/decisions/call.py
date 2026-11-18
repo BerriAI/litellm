@@ -36,6 +36,9 @@ from litellm.llms.base_llm.decisions.transformation import (
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
+    with_readable_raw_prompt_cache_breakpoints,
+    without_prompt_cache_breakpoints,
+    without_raw_prompt_cache_breakpoints,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
@@ -60,6 +63,9 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsVideo,
     OpenAIDecisionInput,
+    OpenAIDecisionInputMessage,
+    OpenAIDecisionPromptCacheOptions,
+    OpenAIDecisionPromptCacheOptionsFields,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
@@ -75,6 +81,7 @@ DecisionsImages: TypeAlias = Sequence[str | DecisionsBase64Image | Mapping[str, 
 DecisionsAssetEntries: TypeAlias = Mapping[str, DecisionsAsset | Mapping[str, object]]
 DecisionsAudioClips: TypeAlias = Sequence[DecisionsAudio | Mapping[str, object]]
 DecisionsVideoClips: TypeAlias = Sequence[DecisionsVideo | Mapping[str, object]]
+DecisionsPromptCacheOptions: TypeAlias = OpenAIDecisionPromptCacheOptions | Mapping[str, object]
 DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
@@ -82,6 +89,13 @@ _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAda
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
+_OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH: Final = 64
+_OpenAIPromptCacheKey: TypeAlias = Annotated[str, Field(max_length=_OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)]
+_PROMPT_CACHE_KEY_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(_OpenAIPromptCacheKey | None)
+_PROMPT_CACHE_OPTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheOptionsFields]] = TypeAdapter(
+    OpenAIDecisionPromptCacheOptionsFields
+)
+_PROMPT_CACHE_OPTION_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
@@ -126,6 +140,38 @@ def _valid_image(image: object) -> DecisionsImage | None:
         return None
 
 
+def _valid_prompt_cache_key(prompt_cache_key: object) -> str | None:
+    try:
+        return _PROMPT_CACHE_KEY_ADAPTER.validate_python(prompt_cache_key)
+    except ValidationError:
+        return None
+
+
+def _prompt_cache_option_entries(prompt_cache_options: object) -> Mapping[str, object]:
+    if isinstance(prompt_cache_options, OpenAIDecisionPromptCacheOptions):
+        return prompt_cache_options.model_dump(exclude_none=True)
+    try:
+        return _PROMPT_CACHE_OPTION_ENTRIES_ADAPTER.validate_python(prompt_cache_options)
+    except ValidationError:
+        return {}
+
+
+def _is_valid_prompt_cache_option(name: str, value: object) -> bool:
+    try:
+        return name in _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python({name: value})
+    except ValidationError:
+        return False
+
+
+def _valid_prompt_cache_options(prompt_cache_options: object) -> OpenAIDecisionPromptCacheOptionsFields | None:
+    valid: Final = {
+        name: value
+        for name, value in _prompt_cache_option_entries(prompt_cache_options).items()
+        if _is_valid_prompt_cache_option(name, value)
+    }
+    return _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python(valid) if valid else None
+
+
 def _image_entries(images: object) -> tuple[object, ...]:
     try:
         return _IMAGE_ENTRIES_ADAPTER.validate_python(images)
@@ -164,6 +210,14 @@ def _request_assets(assets: object, drops_params: bool) -> Mapping[str, Decision
     return valid or None
 
 
+def _request_input(decision_input: object, *, keeps_breakpoints: bool, drops_params: bool) -> object:
+    if not keeps_breakpoints:
+        return without_raw_prompt_cache_breakpoints(decision_input)
+    if drops_params:
+        return with_readable_raw_prompt_cache_breakpoints(decision_input)
+    return decision_input
+
+
 def _request_images(images: object, drops_params: bool) -> tuple[DecisionsImage, ...]:
     if not drops_params:
         return _IMAGES_ADAPTER.validate_python(images) or ()
@@ -198,15 +252,28 @@ class OpenAIDecisionRequestFields:
     questions: OpenAIDecisionQuestions | None
     audio: DecisionsAudioClips | None = None
     videos: DecisionsVideoClips | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None
+    keeps_prompt_cache_breakpoints: bool = True
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
             {
-                "input": self.input,
+                "input": _request_input(
+                    self.input, keeps_breakpoints=self.keeps_prompt_cache_breakpoints, drops_params=drops_params
+                ),
                 "questions": self.questions,
                 "safety_identifier": safety_identifier,
                 "audio": self.audio,
                 "videos": self.videos,
+                "prompt_cache_key": (
+                    _valid_prompt_cache_key(self.prompt_cache_key) if drops_params else self.prompt_cache_key
+                ),
+                "prompt_cache_options": (
+                    _valid_prompt_cache_options(self.prompt_cache_options)
+                    if drops_params
+                    else self.prompt_cache_options
+                ),
             }
         )
 
@@ -392,6 +459,24 @@ def _fields_without_unsupported_media(
     )
 
 
+def _fields_without_unsupported_breakpoints(
+    fields: RequestFields, provider_config: BaseDecisionsConfig
+) -> RequestFields:
+    match fields:
+        case OpenAIDecisionRequestFields() if not provider_config.supports_prompt_cache:
+            return replace(fields, keeps_prompt_cache_breakpoints=False)
+        case _:
+            return fields
+
+
+def _without_unsupported_breakpoints(
+    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig
+) -> DecisionsIRRequest:
+    if provider_config.supports_prompt_cache:
+        return ir_request
+    return replace(ir_request, input=without_prompt_cache_breakpoints(ir_request.input))
+
+
 @dataclass(frozen=True, slots=True)
 class _UnsupportedParams:
     names: tuple[str, ...]
@@ -424,6 +509,16 @@ def _unsupported_params(
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not support.box_questions
     refuses_audio: Final = bool(ir_request.audio) and not support.audio
     refuses_videos: Final = bool(ir_request.videos) and not support.videos
+    refuses_developer_and_system_messages: Final = (
+        _has_developer_or_system_message(ir_request.input)
+        and not provider_config.supports_developer_and_system_messages
+    )
+    refuses_prompt_cache_key: Final = (
+        ir_request.prompt_cache_key is not None and not provider_config.supports_prompt_cache
+    )
+    refuses_prompt_cache_options: Final = (
+        ir_request.prompt_cache_options is not None and not provider_config.supports_prompt_cache
+    )
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -431,6 +526,9 @@ def _unsupported_params(
         *(("box questions",) if refuses_box_questions else ()),
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
+        *(("developer and system messages",) if refuses_developer_and_system_messages else ()),
+        *(("prompt_cache_key",) if refuses_prompt_cache_key else ()),
+        *(("prompt_cache_options",) if refuses_prompt_cache_options else ()),
     )
 
 
@@ -442,20 +540,39 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
     return not isinstance(question, DecisionsIRBoxQuestion)
 
 
+def _is_user_message(message: OpenAIDecisionInputMessage) -> bool:
+    return message.role == "user"
+
+
+def _has_developer_or_system_message(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return isinstance(decision_input, DecisionsIRMessages) and not all(map(_is_user_message, decision_input.messages))
+
+
+def _supported_messages(
+    decision_input: DecisionsIRState | DecisionsIRMessages, provider_config: BaseDecisionsConfig
+) -> DecisionsIRState | DecisionsIRMessages:
+    if provider_config.supports_developer_and_system_messages or isinstance(decision_input, DecisionsIRState):
+        return decision_input
+    return DecisionsIRMessages(messages=tuple(filter(_is_user_message, decision_input.messages)))
+
+
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
     headers: Mapping[str, str],
     support: _ResolvedSupport,
 ) -> DecisionsIRRequest:
+    supported_input: Final = _supported_messages(ir_request.input, provider_config)
     return replace(
         ir_request,
         input=(
-            ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
-            else with_images_where(ir_request.input, _no_image)
+            supported_input
+            if provider_config.supports_images_in(supported_input, headers)
+            else with_images_where(supported_input, _no_image)
         ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
+        prompt_cache_key=ir_request.prompt_cache_key if provider_config.supports_prompt_cache else None,
+        prompt_cache_options=ir_request.prompt_cache_options if provider_config.supports_prompt_cache else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions if support.box_questions else tuple(filter(_is_not_box_question, ir_request.questions))
@@ -623,9 +740,9 @@ def prepare_call(
         headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
         support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
-        request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
-            safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)
-        )
+        request: Final = _fields_without_unsupported_breakpoints(
+            _fields_without_unsupported_media(fields, support, kwargs), provider_config
+        ).validate(safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs))
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -654,7 +771,8 @@ def prepare_call(
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier), _drops_params(kwargs)
+        _without_unsupported_breakpoints(_ir_request(request, request_safety_identifier), provider_config),
+        _drops_params(kwargs),
     )
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(

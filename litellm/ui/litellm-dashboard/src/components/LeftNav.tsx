@@ -36,6 +36,7 @@ import {
   Bell,
   Blocks,
   Bot,
+  AppWindow,
   Building2,
   Boxes,
   ChevronRight,
@@ -98,7 +99,6 @@ const ICON = { strokeWidth: 1.75 } as const;
 
 interface SidebarProps {
   enabledPagesInternalUsers?: string[] | null;
-  enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
@@ -128,7 +128,6 @@ export interface MenuVisibilityContext {
   isOrgAdmin: boolean;
   isTeamAdmin: boolean;
   enabledPagesInternalUsers?: string[] | null;
-  enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
@@ -147,7 +146,6 @@ const adminPageVisibility = (item: MenuItem, context: MenuVisibilityContext, isA
 
 const projectPageIsVisible = (item: MenuItem, context: MenuVisibilityContext): boolean => {
   if (item.key !== "projects") return true;
-  if (!context.enableProjectsUI) return false;
   return canViewProjectsPage({
     userRole: context.userRole,
     isOrgAdmin: context.isOrgAdmin,
@@ -214,6 +212,20 @@ const customerPortalGroups: MenuGroup[] = [
         page: "customers",
         label: "shell.nav.items.customers",
         icon: <Building2 {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
+        key: "apps",
+        page: "apps",
+        label: "apps.title",
+        icon: <AppWindow {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
+        key: "customer-settings",
+        page: "customers/settings",
+        label: "customerPortal.hierarchy.settings",
+        icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
     ],
@@ -368,11 +380,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "projects",
         page: "projects",
-        label: (
-          <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.projects" /> <BetaBadge />
-          </span>
-        ),
+        label: "shell.nav.items.projects",
         icon: <Folder {...ICON} />,
         roles: [...projectReaderRoles],
       },
@@ -516,7 +524,10 @@ const HOME_ROUTE = "home";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
-const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
+const routeForPathname = (pathname: string): string =>
+  pathname.replace(/\/$/, "").endsWith("/customers/settings")
+    ? "customers/settings"
+    : routeSegmentForPathname(pathname) || HOME_ROUTE;
 
 const findParentKey = (route: string): string | null => {
   for (const group of menuGroups) {
@@ -593,7 +604,6 @@ const groupsOpenFor = (route: string) => {
 
 const Sidebar_: React.FC<SidebarProps> = ({
   enabledPagesInternalUsers,
-  enableProjectsUI,
   disableAgentsForInternalUsers,
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
@@ -639,7 +649,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
       isOrgAdmin,
       isTeamAdmin,
       enabledPagesInternalUsers,
-      enableProjectsUI,
       disableAgentsForInternalUsers,
       allowAgentsForTeamAdmins,
       disableVectorStoresForInternalUsers,
@@ -652,7 +661,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
     allowVectorStoresForTeamAdmins,
     disableAgentsForInternalUsers,
     disableVectorStoresForInternalUsers,
-    enableProjectsUI,
     enabledPagesInternalUsers,
     isOrgAdmin,
     isTeamAdmin,

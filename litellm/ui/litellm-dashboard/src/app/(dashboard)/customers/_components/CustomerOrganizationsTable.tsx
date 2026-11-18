@@ -52,7 +52,7 @@ export default function CustomerOrganizationsTable({
               <TableHead
                 key={id}
                 aria-sort={active ? direction : "none"}
-                className={cn("px-4", id === "spend" && "min-w-80", id === "status" && "text-right")}
+                className={cn("px-4", id === "spend" && "min-w-60", id === "status" && "text-right")}
               >
                 <Button
                   variant="ghost"
@@ -105,7 +105,8 @@ export default function CustomerOrganizationsTable({
                     </span>
                     <div className="min-w-0">
                       <a
-                        className="font-medium hover:text-primary hover:underline"
+                        className="block max-w-52 truncate font-medium hover:text-primary hover:underline"
+                        title={label}
                         href={usageHref(uiHref("customers/usage"), {
                           org: organization.customer_org_id,
                           from: startDate,
@@ -114,7 +115,20 @@ export default function CustomerOrganizationsTable({
                       >
                         {label}
                       </a>
-                      <p className="font-mono text-[11px] text-muted-foreground">{organization.customer_org_id}</p>
+                      {label !== organization.customer_org_id && (
+                        <p
+                          className="max-w-52 truncate font-mono text-[11px] text-muted-foreground"
+                          title={organization.customer_org_id}
+                        >
+                          {organization.customer_org_id}
+                        </p>
+                      )}
+                      <a
+                        className="mt-1 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        href={`${usageHref(uiHref("customers/usage"), { org: organization.customer_org_id, from: startDate, to: endDate })}#app-budgets`}
+                      >
+                        {t("apps.organizationTitle")}
+                      </a>
                     </div>
                   </div>
                 </TableCell>
@@ -137,7 +151,7 @@ export default function CustomerOrganizationsTable({
                     )}
                   </div>
                 </TableCell>
-                <CustomerBudgetLimitCell limit={budgetLimit} />
+                <CustomerBudgetLimitCell limit={budgetLimit} rateLimits={organization.budget} />
                 <TableCell className="px-4">
                   <div className="flex items-center gap-3">
                     <div

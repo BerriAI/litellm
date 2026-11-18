@@ -3148,6 +3148,8 @@ class AdapterCompletionStreamWrapper:
 
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
     user_api_key_spend: float | None
@@ -3878,6 +3880,8 @@ class CostBreakdown(TypedDict, total=False):
     from ``optional_params``, which no log record carries.
     """
 
+    customer_margin_percent: ReadOnly[float]
+    customer_margin_amount: ReadOnly[float]
     service_tier: str | None
     data_residency: str | None
     vertex_location: ReadOnly[str | None]
@@ -3960,7 +3964,8 @@ class StandardBatchLineItem(TypedDict):
 
 class StandardBatchLineItemsPayload(TypedDict):
     """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
-    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines.
+    """
 
     batch_id: ReadOnly[str]
     finished_at: ReadOnly[int]
@@ -4866,6 +4871,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
