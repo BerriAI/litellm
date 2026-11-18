@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -39,6 +40,7 @@ from litellm.llms.vertex_ai.gemini.thought_signature_store import (
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.llms.vertex_ai import HttpxPartType
 
@@ -349,6 +351,8 @@ def test_intact_signature_in_tool_call_id_is_replayed_byte_for_byte(model: str):
 
 
 GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
+VERTEX_URL_PATTERN: Final = r"https://aiplatform\.googleapis\.com/v1[a-z0-9]*/projects/p/locations/global/publishers/google/models/gemini-3\.5-flash:.*"
+UPSTREAM_URL_PATTERN: Final = f"{GEMINI_URL_PATTERN}|{VERTEX_URL_PATTERN}"
 BOUNDED_TOOL_CALL_ID: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 LONG_SIGNATURE: Final = "Ab+/" * 200
 WEATHER_FUNCTION: Final = {
@@ -567,7 +571,7 @@ async def _first_turn_tool_call(
         **request_params,
     }
     with respx.mock:
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(NATIVE_ID, stream, args))
+        respx.post(url__regex=UPSTREAM_URL_PATTERN).mock(return_value=_gemini_response(NATIVE_ID, stream, args))
         response: Final = await litellm.acompletion(**request) if use_async else litellm.completion(**request)
         if not isinstance(response, CustomStreamWrapper):
             return response.choices[0].message.tool_calls[0].model_dump()
@@ -606,7 +610,7 @@ async def _signatures_sent_for(
         **request_params,
     }
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer(stream))
+        route: Final = respx.post(url__regex=UPSTREAM_URL_PATTERN).mock(return_value=_gemini_answer(stream))
         answer: Final = await litellm.acompletion(**request) if use_async else litellm.completion(**request)
         if isinstance(answer, CustomStreamWrapper):
             chunks: Final = [chunk async for chunk in answer] if use_async else list(answer)
@@ -676,6 +680,29 @@ async def test_tool_call_that_differs_from_the_returned_one_gets_no_stored_signa
     )
 
     assert await _signatures_sent_for(False, replayed_call) == [PLACEHOLDER_SIGNATURE]
+
+
+ON_VERTEX: Final = MappingProxyType(
+    {**SHORT_IDS, "model": "vertex_ai/gemini-3.5-flash", "vertex_project": "p", "vertex_location": "global"}
+)
+
+
+@pytest.mark.parametrize(
+    ("first_turn", "second_turn", "replayed"),
+    [
+        (SHORT_IDS, ON_VERTEX, PLACEHOLDER_SIGNATURE),
+        (ON_VERTEX, SHORT_IDS, PLACEHOLDER_SIGNATURE),
+        (ON_VERTEX, ON_VERTEX, LONG_SIGNATURE),
+    ],
+    ids=["ai-studio-then-vertex", "vertex-then-ai-studio", "vertex-then-vertex"],
+)
+async def test_stored_signature_is_replayed_only_to_the_backend_that_returned_it(
+    first_turn: Mapping[str, object], second_turn: Mapping[str, object], replayed: str
+):
+    with patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "p")):
+        returned_call: Final = await _first_turn_tool_call(False, False, request_params=first_turn)
+
+        assert await _signatures_sent_for(False, _bare_replay(returned_call), request_params=second_turn) == [replayed]
 
 
 async def test_parallel_tool_calls_replay_only_the_signature_gemini_gave_the_first():
@@ -770,9 +797,9 @@ async def test_restoring_leaves_every_message_it_does_not_sign_the_same_object()
     known_call: Final = _bare_replay(returned_call)
     one_stored: Final = [*nothing_stored, {"role": "assistant", "content": None, "tool_calls": [known_call]}]
 
-    restored: Final = restore_thought_signatures(one_stored)
+    restored: Final = restore_thought_signatures("gemini", one_stored)
 
-    assert restore_thought_signatures(nothing_stored) is nothing_stored
+    assert restore_thought_signatures("gemini", nothing_stored) is nothing_stored
     assert restored[0] is one_stored[0] and restored[1] is one_stored[1]
     assert get_thought_signature_from_tool(restored[2]["tool_calls"][0]) == LONG_SIGNATURE
 
@@ -975,8 +1002,8 @@ async def _complete(use_async: bool, **request_params: object) -> litellm.ModelR
 
 @pytest.mark.parametrize("use_async", [False, True])
 async def test_request_setting_that_is_not_a_boolean_answers_400(use_async: bool):
-    with respx.mock(assert_all_called=False):
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+    with respx.mock(assert_all_called=False) as mocked:
+        mocked.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
         with pytest.raises(litellm.BadRequestError, match="thought_signature_in_tool_call_id") as raised:
             await _complete(use_async, thought_signature_in_tool_call_id="maybe")
 

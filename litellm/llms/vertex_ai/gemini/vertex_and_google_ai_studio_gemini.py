@@ -3526,6 +3526,7 @@ async def make_call(
     request_body: RequestBody,
     hop_headers: Callable[[], Awaitable[Mapping[str, str]]],
     timeout: float | httpx.Timeout | None = None,
+    thought_signature_backend: str | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -3580,6 +3581,7 @@ async def make_call(
         response_headers=response.headers,
         response=response,
         resume=AsyncStreamResume(request_body=request_body, open_hop=open_hop),
+        thought_signature_backend=thought_signature_backend,
     )
     # LOGGING
     logging_obj.post_call(
@@ -3604,6 +3606,7 @@ def make_sync_call(
     request_body: RequestBody,
     hop_headers: Callable[[], Mapping[str, str]],
     timeout: float | httpx.Timeout | None = None,
+    thought_signature_backend: str | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -3651,6 +3654,7 @@ def make_sync_call(
         response_headers=response.headers,
         response=response,
         resume=SyncStreamResume(request_body=request_body, open_hop=open_hop),
+        thought_signature_backend=thought_signature_backend,
     )
 
     # LOGGING
@@ -3765,7 +3769,7 @@ class VertexLLM(VertexBase):
             if embeds_thought_signature_in_tool_call_id(
                 litellm_params  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is an untyped dict
             )
-            else await arestore_thought_signatures(messages)
+            else await arestore_thought_signatures(custom_llm_provider, messages)
         )
         transform: Final = partial(
             async_transform_request_body,
@@ -3791,6 +3795,7 @@ class VertexLLM(VertexBase):
             model=model,
             messages=sent_messages,
             logging_obj=logging_obj,
+            thought_signature_backend=custom_llm_provider,
             hop_headers=partial(
                 self._fresh_headers_async,
                 headers,
@@ -3883,7 +3888,9 @@ class VertexLLM(VertexBase):
         signature_in_id: Final = embeds_thought_signature_in_tool_call_id(
             litellm_params  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is an untyped dict
         )
-        sent_messages: Final = messages if signature_in_id else await arestore_thought_signatures(messages)
+        sent_messages: Final = (
+            messages if signature_in_id else await arestore_thought_signatures(custom_llm_provider, messages)
+        )
         transform: Final = partial(
             async_transform_request_body,
             **{**data, "messages": sent_messages},
@@ -3953,7 +3960,7 @@ class VertexLLM(VertexBase):
             messages=sent_messages,
         )
         if not signature_in_id:
-            await aremember_thought_signatures(response)
+            await aremember_thought_signatures(custom_llm_provider, response)
         return response
 
     def completion(
@@ -4085,7 +4092,9 @@ class VertexLLM(VertexBase):
         signature_in_id: Final = embeds_thought_signature_in_tool_call_id(
             litellm_params  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is an untyped dict
         )
-        sent_messages: Final = messages if signature_in_id else restore_thought_signatures(messages)
+        sent_messages: Final = (
+            messages if signature_in_id else restore_thought_signatures(custom_llm_provider, messages)
+        )
         transform: Final = partial(
             sync_transform_request_body,
             **{**transform_request_params, "messages": sent_messages},
@@ -4115,6 +4124,7 @@ class VertexLLM(VertexBase):
                 model=model,
                 messages=sent_messages,
                 logging_obj=logging_obj,
+                thought_signature_backend=custom_llm_provider,
                 headers=headers,
                 hop_headers=fresh_headers,
                 timeout=timeout,
@@ -4193,7 +4203,7 @@ class VertexLLM(VertexBase):
             messages=sent_messages,
         )
         if not signature_in_id:
-            remember_thought_signatures(response)
+            remember_thought_signatures(custom_llm_provider, response)
         return response
 
 
@@ -4254,6 +4264,7 @@ class ModelResponseIterator:
         response_headers: dict[str, str] | None = None,
         response: httpx.Response | None = None,
         resume: StreamResume | None = None,
+        thought_signature_backend: str | None = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
@@ -4269,6 +4280,9 @@ class ModelResponseIterator:
         self.is_function_call = check_is_function_call(logging_obj)
         self.thought_signature_in_tool_call_id: Final = embeds_thought_signature_in_tool_call_id(
             logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
+        self._thought_signature_store_backend: Final = (
+            None if self.thought_signature_in_tool_call_id else thought_signature_backend
         )
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
@@ -4686,8 +4700,8 @@ class ModelResponseIterator:
                 raise
             self.close()
             return unanswered_end
-        if parsed is not None and not self.thought_signature_in_tool_call_id:
-            remember_thought_signatures(parsed)
+        if parsed is not None and self._thought_signature_store_backend is not None:
+            remember_thought_signatures(self._thought_signature_store_backend, parsed)
         return parsed
 
     def _next_chunk(self) -> Optional["ModelResponseStream"]:
@@ -4730,8 +4744,8 @@ class ModelResponseIterator:
                 raise
             await self.aclose()
             return unanswered_end
-        if parsed is not None and not self.thought_signature_in_tool_call_id:
-            await aremember_thought_signatures(parsed)
+        if parsed is not None and self._thought_signature_store_backend is not None:
+            await aremember_thought_signatures(self._thought_signature_store_backend, parsed)
         return parsed
 
     async def _anext_chunk(self) -> Optional["ModelResponseStream"]:

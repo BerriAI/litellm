@@ -70,14 +70,14 @@ def _canonical_arguments(arguments: str) -> str:
     return json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _key(call: _ToolCall | _SignedToolCall) -> str:
-    material: Final = json.dumps([call.id, call.function.name, _canonical_arguments(call.function.arguments)])
+def _key(backend: str, call: _ToolCall | _SignedToolCall) -> str:
+    material: Final = json.dumps([backend, call.id, call.function.name, _canonical_arguments(call.function.arguments)])
     return _KEY_PREFIX + hashlib.sha256(material.encode()).hexdigest()
 
 
-def _replayed_key(call: ChatCompletionAssistantToolCall) -> str | None:
+def _replayed_key(backend: str, call: ChatCompletionAssistantToolCall) -> str | None:
     try:
-        return _key(_ToolCall.model_validate(call))
+        return _key(backend, _ToolCall.model_validate(call))
     except ValidationError:
         return None
 
@@ -94,23 +94,25 @@ def _carried_tool_calls(choice: Choices | StreamingChoices) -> Sequence[object]:
     return carrier.tool_calls or ()
 
 
-def _signature_entries(response: ModelResponse | ModelResponseStream) -> tuple[tuple[str, _StoredSignature], ...]:
+def _signature_entries(
+    backend: str, response: ModelResponse | ModelResponseStream
+) -> tuple[tuple[str, _StoredSignature], ...]:
     calls: Final = chain.from_iterable(map(_carried_tool_calls, response.choices))
     signed: Final = (call for call in map(_signed, calls) if call is not None)
     return tuple(
-        (_key(call), {"thought_signature": call.provider_specific_fields.thought_signature}) for call in signed
+        (_key(backend, call), {"thought_signature": call.provider_specific_fields.thought_signature}) for call in signed
     )
 
 
-def remember_thought_signatures(response: ModelResponse | ModelResponseStream) -> None:
-    for key, value in _signature_entries(response):
+def remember_thought_signatures(backend: str, response: ModelResponse | ModelResponseStream) -> None:
+    for key, value in _signature_entries(backend, response):
         thought_signature_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # DualCache is untyped
             key, value, ttl=GEMINI_THOUGHT_SIGNATURE_STORE_TTL_SECONDS
         )
 
 
-async def aremember_thought_signatures(response: ModelResponse | ModelResponseStream) -> None:
-    entries: Final = _signature_entries(response)
+async def aremember_thought_signatures(backend: str, response: ModelResponse | ModelResponseStream) -> None:
+    entries: Final = _signature_entries(backend, response)
     if not entries:
         return
     await thought_signature_cache.async_set_cache_pipeline(  # pyright: ignore[reportUnknownMemberType]  # DualCache is untyped
@@ -129,8 +131,9 @@ def _unsigned_tool_calls(messages: Sequence[AllMessageValues]) -> Iterator[ChatC
     return (call for call in calls if get_thought_signature_from_tool(call) is None)
 
 
-def _lookup_keys(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
-    keys: Final = (key for key in map(_replayed_key, _unsigned_tool_calls(messages)) if key is not None)
+def _lookup_keys(backend: str, messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
+    replayed_keys: Final = (_replayed_key(backend, call) for call in _unsigned_tool_calls(messages))
+    keys: Final = (key for key in replayed_keys if key is not None)
     return tuple(dict.fromkeys(keys))
 
 
@@ -147,50 +150,52 @@ def _found_signatures(keys: Sequence[str], values: Sequence[object] | None) -> M
 
 
 def _restored_tool_call(
-    call: ChatCompletionAssistantToolCall, signatures: Mapping[str, str]
+    backend: str, call: ChatCompletionAssistantToolCall, signatures: Mapping[str, str]
 ) -> ChatCompletionAssistantToolCall:
-    key: Final = _replayed_key(call)
+    key: Final = _replayed_key(backend, call)
     signature: Final = signatures.get(key) if key is not None else None
     if signature is None:
         return call
     return {**call, "function": {**call["function"], "provider_specific_fields": {"thought_signature": signature}}}
 
 
-def _restored_message(message: AllMessageValues, signatures: Mapping[str, str]) -> AllMessageValues:
+def _restored_message(backend: str, message: AllMessageValues, signatures: Mapping[str, str]) -> AllMessageValues:
     if message["role"] != "assistant":
         return message
     calls: Final = message.get("tool_calls") or ()
-    restored: Final = [_restored_tool_call(call, signatures) for call in calls]
+    restored: Final = [_restored_tool_call(backend, call, signatures) for call in calls]
     if all(new is old for new, old in zip(restored, calls)):
         return message
     return {**message, "tool_calls": restored}
 
 
 def _restored_messages(
-    messages: Sequence[AllMessageValues], signatures: Mapping[str, str]
+    backend: str, messages: Sequence[AllMessageValues], signatures: Mapping[str, str]
 ) -> tuple[AllMessageValues, ...] | None:
     if not signatures:
         return None
-    return tuple(_restored_message(message, signatures) for message in messages)
+    return tuple(_restored_message(backend, message, signatures) for message in messages)
 
 
 def restore_thought_signatures(
+    backend: str,
     messages: list[AllMessageValues],  # mutable-ok: the request transform pops and appends on the list it is given
 ) -> list[AllMessageValues]:  # mutable-ok: the request transform pops and appends on the list it is given
-    keys: Final = _lookup_keys(messages)
+    keys: Final = _lookup_keys(backend, messages)
     stored: Final = thought_signature_cache.batch_get_cache(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache is untyped
         list(keys), throttle_redis=False
     )
-    restored: Final = _restored_messages(messages, _found_signatures(keys, stored))  # pyright: ignore[reportUnknownArgumentType]  # DualCache is untyped
+    restored: Final = _restored_messages(backend, messages, _found_signatures(keys, stored))  # pyright: ignore[reportUnknownArgumentType]  # DualCache is untyped
     return messages if restored is None else list(restored)
 
 
 async def arestore_thought_signatures(
+    backend: str,
     messages: list[AllMessageValues],  # mutable-ok: the request transform pops and appends on the list it is given
 ) -> list[AllMessageValues]:  # mutable-ok: the request transform pops and appends on the list it is given
-    keys: Final = _lookup_keys(messages)
+    keys: Final = _lookup_keys(backend, messages)
     stored: Final = await thought_signature_cache.async_batch_get_cache(  # pyright: ignore[reportUnknownMemberType]  # DualCache is untyped
         list(keys), throttle_redis=False
     )
-    restored: Final = _restored_messages(messages, _found_signatures(keys, stored))
+    restored: Final = _restored_messages(backend, messages, _found_signatures(keys, stored))
     return messages if restored is None else list(restored)
