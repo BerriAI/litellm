@@ -91,6 +91,7 @@ def test_files_api_reference_in_gemini_tool_result(version: str) -> None:
 
 
 @pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-2.5-flash"])
 @pytest.mark.parametrize(
     ("mime_type", "selection", "expected_selection"),
     [
@@ -106,7 +107,7 @@ def test_files_api_reference_in_gemini_tool_result(version: str) -> None:
         ),
     ],
 )
-def test_chat_tool_file_inspection_preserves_nested_selection(source, mime_type, selection, expected_selection):
+def test_chat_tool_file_inspection_preserves_selection(source, model, mime_type, selection, expected_selection):
     if source == "inline":
         file = {"file_data": f"data:{mime_type};base64,cGRm"}
         expected_part = {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
@@ -132,19 +133,22 @@ def test_chat_tool_file_inspection_preserves_nested_selection(source, mime_type,
             ],
         },
     ]
-    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
-    assert result[-1]["parts"] == [
-        {
-            "function_response": {
-                "id": "call_media",
-                "name": "get_media",
-                "response": {"content": ""},
-                "parts": [
-                    {**expected_part, **expected_selection, "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"}}
-                ],
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    function_response: Final = {"name": "get_media", "response": {"content": ""}}
+    selected_part: Final = {**expected_part, **expected_selection}
+    if model == "gemini-4-argon":
+        expected = [
+            {
+                "function_response": {
+                    **function_response,
+                    "id": "call_media",
+                    "parts": [{**selected_part, "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"}}],
+                }
             }
-        }
-    ]
+        ]
+    else:
+        expected = [{"function_response": function_response}, selected_part]
+    assert result[-1]["parts"] == expected
 
 
 def test_check_if_part_exists_in_parts():
