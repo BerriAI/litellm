@@ -2018,7 +2018,7 @@ def raw_name_router_groups(llm_router: Router | None) -> frozenset[str]:
         return frozenset()
     return frozenset(
         model_group
-        for model_group, tagged_routers in llm_router.complexity_routers.items()
+        for model_group, tagged_routers in llm_router.registry().plugins("complexity").items()
         if any(tagged.strategy.config.return_raw_model_name for tagged in tagged_routers)
     )
 

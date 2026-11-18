@@ -370,7 +370,7 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
                 "object": "response",
                 "created_at": 1.0,
                 "status": "completed",
-                "model": _MODEL,
+                "model": model,
                 "output": [],
             }, retrieved_response.text
             stream_result: Final = _stream_response_events(client, stream_created.id)
@@ -406,7 +406,7 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
                     "object": "response",
                     "created_at": 1.0,
                     "status": "completed",
-                    "model": _MODEL,
+                    "model": model,
                     "output": [],
                 },
             }, stream_events

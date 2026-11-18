@@ -25,7 +25,7 @@ from httpx import Response
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.constants import EMPTY_MAPPING
+from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -1358,6 +1358,54 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data, reported_model",
+    [
+        ({}, "oai-alias"),
+        ({"metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}, "gpt-5.4-mini-2026-03-17"),
+    ],
+)
+async def test_a_streamed_read_reports_the_deployment_model_name_on_every_event(
+    request_data: dict[str, object], reported_model: str
+):
+    from litellm.proxy.response_api_endpoints.endpoints import _streamed_retrieval_data_generator
+
+    response_id: Final = _one_pending_background_response().response_id
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "oai-alias",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "deployment-read"},
+            }
+        ]
+    )
+    provider_response: Final = {"id": response_id, "status": "completed", "model": "gpt-5.4-mini-2026-03-17"}
+    provider_events: Final = (
+        {"type": "response.created", "response": provider_response},
+        {"type": "response.output_text.delta", "delta": "ok"},
+        {"type": "response.completed", "response": provider_response},
+    )
+
+    async def replayed_frames(**_: object) -> AsyncIterator[str]:
+        for event in provider_events:
+            yield f"data: {json.dumps(event)}\n\n"
+
+    frames: Final = [
+        frame
+        async for frame in _streamed_retrieval_data_generator(
+            replayed_frames, response_id, True, router, object(), UserAPIKeyAuth(api_key="sk-reader"), request_data
+        )
+    ]
+
+    events: Final = tuple(json.loads(str(frame).removeprefix("data: ")) for frame in frames)
+    assert events == tuple(
+        {**event, "response": {**provider_response, "model": reported_model}} if "response" in event else event
+        for event in provider_events
+    )
+
+
+@pytest.mark.asyncio
 async def test_deleting_a_finished_unbilled_background_response_bills_it_before_the_provider_forgets_it(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1627,7 +1675,7 @@ async def test_a_streamed_read_bills_the_finished_job_once_before_the_client_see
     status_before_each_event: Final[list[str]] = []
     with _proxy_over(stored.prisma_client, stored.proxy_logging, _configured_deployment_router(finished)):
         async for _ in _streamed_retrieval_data_generator(
-            replayed_events, stored.response_id, True, stream, UserAPIKeyAuth(api_key="sk-reader"), {}
+            replayed_events, stored.response_id, True, None, stream, UserAPIKeyAuth(api_key="sk-reader"), {}
         ):
             status_before_each_event.extend(row.status for row in stored.table.rows)
         await _bill_finished_background_response(

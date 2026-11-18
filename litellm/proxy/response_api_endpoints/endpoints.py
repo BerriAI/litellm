@@ -51,7 +51,11 @@ from litellm.integrations.custom_guardrail import (
     guardrail_request_data_with_streaming,
     without_server_streaming_classification,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    get_metadata_variable_name_from_kwargs,
+    should_return_raw_model_name,
+)
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -934,6 +938,7 @@ async def get_response(
                 partial(select_data_generator, responses_stream_errors=True),
                 response_id,
                 read_settles_billing,
+                llm_router,
             ),
             sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
@@ -964,20 +969,39 @@ async def get_response(
 def _with_deployment_model_name(
     response: object, response_id: str, llm_router: Router | None, return_raw_model_name: bool
 ) -> object:
-    if return_raw_model_name or llm_router is None or not isinstance(response, ResponsesAPIResponse):
+    if return_raw_model_name or not isinstance(response, ResponsesAPIResponse):
         return response
+    model_name: Final = _deployment_model_name(response_id, llm_router)
+    return response if model_name is None else response.model_copy(update={"model": model_name})
+
+
+async def _with_streamed_model_name(chunks: AsyncIterator[str | bytes], model_name: str) -> AsyncIterator[str | bytes]:
+    from litellm.proxy.proxy_server import restamp_nested_response_model_in_sse_frame
+
+    async for chunk in chunks:
+        yield (
+            restamp_nested_response_model_in_sse_frame(chunk, model_name)
+            if isinstance(chunk, bytes)
+            else restamp_nested_response_model_in_sse_frame(chunk.encode(), model_name).decode()
+        )
+
+
+def _deployment_model_name(response_id: str, llm_router: Router | None) -> str | None:
+    if llm_router is None:
+        return None
     model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(decrypted_response_id(response_id))
-    deployment: Final = None if model_id is None else llm_router.get_deployment(model_id=model_id)
+    deployment: Final = None if model_id is None else llm_router.registry().deployment(model_id)
     if deployment is None or "*" in deployment.model_name:
-        return response
+        return None
     if deployment.model_name in _model_groups_routed_with_raw_names(llm_router):
-        return response
-    return response.model_copy(update={"model": deployment.model_info.team_public_model_name or deployment.model_name})
+        return None
+    return deployment.model_info.team_public_model_name or deployment.model_name
 
 
 def _model_groups_routed_with_raw_names(llm_router: Router) -> frozenset[str]:
     configs: Final = (
-        tagged.strategy.config for tagged in itertools.chain.from_iterable(llm_router.complexity_routers.values())
+        tagged.strategy.config
+        for tagged in itertools.chain.from_iterable(llm_router.registry().plugins("complexity").values())
     )
     return frozenset(
         itertools.chain.from_iterable(
@@ -1232,6 +1256,7 @@ def _streamed_retrieval_data_generator(
     select_data_generator: Callable[..., AsyncIterator[str | bytes]],
     response_id: str,
     read_settles_billing: bool,
+    llm_router: Router | None,
     response: object,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: Mapping[str, object],
@@ -1240,9 +1265,12 @@ def _streamed_retrieval_data_generator(
     chunks: Final = select_data_generator(
         response=response, user_api_key_dict=user_api_key_dict, request_data=request_data, request=request
     )
+    model_name: Final = (
+        None if should_return_raw_model_name(request_data) else _deployment_model_name(response_id, llm_router)
+    )
     return _bill_streamed_background_response(
         response,
-        chunks,
+        chunks if model_name is None else _with_streamed_model_name(chunks, model_name),
         partial(
             _settle_finished_background_read,
             response_id=response_id,

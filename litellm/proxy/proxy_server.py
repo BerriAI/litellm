@@ -10545,7 +10545,7 @@ def _restamp_streaming_chunk_model(
     if isinstance(chunk, bytes):
         if request_data.get("_litellm_raw_sse_stream"):
             return chunk, model_mismatch_logged
-        return _restamp_nested_response_model_in_sse_frame(chunk, target_model), model_mismatch_logged
+        return restamp_nested_response_model_in_sse_frame(chunk, target_model), model_mismatch_logged
 
     typed_chunk: Final[BaseModel | Mapping[str, object]] = chunk
     restamped_chunk: Final = _restamp_nested_response_model(typed_chunk, target_model)
@@ -10641,7 +10641,7 @@ _JSON_OBJECT: Final = TypeAdapter(dict[object, object])
 _JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
-def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
+def restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
     if _SSE_NESTED_RESPONSE_MARKER not in frame:
         return frame
     return b"".join(
