@@ -104,19 +104,19 @@ impl IntoResponse for Error {
     }
 }
 
-/// The error a request ended on, with the deployment the router says raised it, which the proxy
-/// names in `x-litellm-model-id`.
+/// The error a request ended on, with what the router did for the call it ended: the deployment
+/// the router says raised it, or everything it did for a stream the provider failed before any
+/// content and no other attempt answered for.
 #[derive(Debug)]
 pub struct Ended {
     pub error: Box<Error>,
-    pub deployment_id: Option<String>,
+    pub routing: Option<Routing>,
 }
 
 impl Ended {
-    /// What the router did for the call, which the routing headers layer reads off the response.
+    /// What the routing headers layer reads off the response.
     pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
-        let deployment_id = self.deployment_id.as_deref()?;
-        Some(Extension(Routing::failed_on(deployment_id)))
+        self.routing.clone().map(Extension)
     }
 }
 
@@ -124,7 +124,7 @@ impl<E: Into<Error>> From<E> for Ended {
     fn from(error: E) -> Self {
         Self {
             error: Box::new(error.into()),
-            deployment_id: None,
+            routing: None,
         }
     }
 }
@@ -266,6 +266,24 @@ fn ocr_status(error: &OcrError) -> StatusCode {
         .http_status_code()
         .and_then(|status| StatusCode::from_u16(status).ok())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// The status Anthropic answers a request with when it fails with an error of `error_type`,
+/// which an error event of that type in a stream stands for: the inverse of [`error_type`],
+/// with `timeout_error` as `ANTHROPIC_ERROR_STATUS_CODE_MAP` in
+/// `litellm/llms/anthropic/common_utils.py` has it, and 500 for any other type.
+pub(crate) fn anthropic_error_status(error_type: &str) -> u16 {
+    match error_type {
+        "invalid_request_error" => 400,
+        "authentication_error" => 401,
+        "permission_error" => 403,
+        "not_found_error" => 404,
+        "request_too_large" => 413,
+        "rate_limit_error" => 429,
+        "timeout_error" => 504,
+        "overloaded_error" => 529,
+        _ => 500,
+    }
 }
 
 fn error_type(status: StatusCode) -> &'static str {
@@ -454,6 +472,15 @@ mod tests {
             error.body(None),
             json!({"type": "error", "error": {"type": "rate_limit_error", "message": message}})
         );
+    }
+
+    #[rstest]
+    fn an_error_events_status_is_the_one_its_type_is_answered_with(
+        #[values(400, 401, 403, 404, 413, 429, 529)] status: u16,
+    ) {
+        let answered_as = error_type(StatusCode::from_u16(status).unwrap());
+
+        assert_eq!(anthropic_error_status(answered_as), status);
     }
 
     #[rstest]

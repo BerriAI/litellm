@@ -1346,6 +1346,80 @@ async fn a_stream_retry_leaves_the_deployment_the_stream_failed_on(config: Route
     assert_eq!(host.selected(), vec!["a2".to_owned()]);
 }
 
+#[rstest]
+#[tokio::test]
+async fn a_stream_fallback_that_serves_nothing_hands_back_no_error_of_another_attempt(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![server_error(), server_error()]),
+    ]));
+    let hosted = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let earlier = hosted
+        .router
+        .call(&*host, Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    let carried = earlier.error.attempt().cloned().unwrap();
+
+    let ended = hosted
+        .router
+        .fallback_stream(
+            &*host,
+            Op::from("acompletion"),
+            request(),
+            stream_origin(),
+            carried,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        (
+            earlier.raised.is_some(),
+            ended.raised,
+            host.selected().len()
+        ),
+        (true, None, 3)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_fallback_looks_its_targets_up_by_the_group_a_hook_routed_the_stream_to(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let hosted = router(
+        config,
+        json!({"fallbacks": [{"tier": ["backup"]}]}),
+        host.clone(),
+    );
+    let origin = StreamOrigin {
+        routed: Some("tier".to_owned()),
+        ..stream_origin()
+    };
+
+    let served = hosted
+        .router
+        .fallback_stream(
+            &*host,
+            Op::from("acompletion"),
+            request(),
+            origin,
+            server_error(),
+        )
+        .await
+        .map(|response| response.output.response);
+
+    assert_eq!(served.ok(), Some("b1".to_owned()));
+}
+
 fn pinned_to_a1() -> Arc<ScriptedHost> {
     Arc::new(ScriptedHost {
         pinned: Some("a1"),
