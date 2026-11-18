@@ -2960,6 +2960,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: list[UserHeaderMapping] | None = None
+    customer_org_alias_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
+    customer_member_id_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
     supported_db_objects: list[SupportedDBObjectType] | None = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
@@ -5448,6 +5464,7 @@ class BaseDailySpendTransaction(TypedDict):
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

@@ -49,6 +49,7 @@ export const EMPTY_DAILY_ACTIVITY_METADATA: DailyActivityMetadata = {
   total_prompt_caching_savings_spend: 0,
   total_gateway_injected_caching_savings_spend: 0,
   total_autorouter_savings_spend: 0,
+  total_customer_margin_spend: 0,
   total_response_time_ms: 0,
   total_timed_requests: 0,
 };

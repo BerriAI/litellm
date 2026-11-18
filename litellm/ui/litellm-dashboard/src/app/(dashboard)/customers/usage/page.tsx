@@ -9,6 +9,7 @@ import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
 import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
+import CustomerSurchargeBreakdown from "../_components/CustomerSurchargeBreakdown";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
@@ -98,8 +99,15 @@ export default function CustomerHierarchyUsagePage() {
             budget={null}
             showBudgetHint={false}
             spendDetails={
-              budgetEntity &&
-              budgetSettingsHref && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+              <>
+                <CustomerSurchargeBreakdown
+                  spend={totals.spend}
+                  surcharge={data?.metadata.total_customer_margin_spend}
+                />
+                {budgetEntity && budgetSettingsHref && (
+                  <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+                )}
+              </>
             }
           />
           {!scope.team && !scope.member && (

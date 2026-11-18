@@ -687,6 +687,18 @@ async def get_logging_payload_async(
     return build()
 
 
+SNAPSHOTLESS_COST_BREAKDOWN_KEY: Final = "snapshotless_cost_breakdown"
+_OPTIONAL_COST_BREAKDOWN: Final[TypeAdapter[CostBreakdown | None]] = TypeAdapter(CostBreakdown | None)
+
+
+def _snapshotless_cost_breakdown(row_kwargs: Mapping[object, object]) -> CostBreakdown | None:
+    """The breakdown of a billed row that has no logging payload to carry it."""
+    try:
+        return _OPTIONAL_COST_BREAKDOWN.validate_python(row_kwargs.get(SNAPSHOTLESS_COST_BREAKDOWN_KEY))
+    except ValidationError:
+        return None
+
+
 def get_logging_payload(
     kwargs: dict | None,
     response_obj: object,
@@ -697,6 +709,7 @@ def get_logging_payload(
     if kwargs is None:
         kwargs = {}
 
+    row_kwargs: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(kwargs)
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
     failure_exception: Final = response_obj if isinstance(response_obj, BaseException) else None
     response_served_from_cache: Final = served_from_cache(response_obj)
@@ -928,7 +941,9 @@ def get_logging_payload(
         litellm_overhead_time_ms=litellm_overhead_time_ms,
         upstream_provider=upstream_provider,
         cost_breakdown=(
-            standard_logging_payload.get("cost_breakdown", None) if standard_logging_payload is not None else None
+            standard_logging_payload.get("cost_breakdown", None)
+            if standard_logging_payload is not None
+            else _snapshotless_cost_breakdown(row_kwargs)
         ),
         autorouter_savings=(
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None

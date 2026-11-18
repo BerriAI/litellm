@@ -3880,6 +3880,8 @@ class CostBreakdown(TypedDict, total=False):
     from ``optional_params``, which no log record carries.
     """
 
+    customer_margin_percent: ReadOnly[float]
+    customer_margin_amount: ReadOnly[float]
     service_tier: str | None
     data_residency: str | None
     vertex_location: ReadOnly[str | None]
@@ -4869,6 +4871,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

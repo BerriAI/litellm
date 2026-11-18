@@ -4017,6 +4017,12 @@
               "title": "Total Compression Savings Spend",
               "type": "number"
             },
+            "total_customer_margin_spend": {
+              "default": 0.0,
+              "description": "Surcharge in USD added to requests made for a customer, already included in total_spend",
+              "title": "Total Customer Margin Spend",
+              "type": "number"
+            },
             "total_failed_requests": {
               "default": 0,
               "title": "Total Failed Requests",
@@ -4909,6 +4915,12 @@
             "compression_savings_spend": {
               "default": 0.0,
               "title": "Compression Savings Spend",
+              "type": "number"
+            },
+            "customer_margin_spend": {
+              "default": 0.0,
+              "description": "Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend",
+              "title": "Customer Margin Spend",
               "type": "number"
             },
             "failed_requests": {
