@@ -361,8 +361,8 @@ fn fixture_price(key: &str) -> Option<(Meter, ServiceTier, Band)> {
 
 /// A catalog-priced token query for one candidate, with discount and margin keyed on its provider
 pub(crate) fn tokens_query(provider: Provider, model: &str, usage: TokenUsage) -> TokensQuery {
-    TokensQuery {
-        header: Header {
+    TokensQuery::new(
+        Header {
             adjustments: AdjustmentPolicy::Apply {
                 provider: Some(provider.to_string().into()),
                 model: None,
@@ -374,8 +374,7 @@ pub(crate) fn tokens_query(provider: Provider, model: &str, usage: TokenUsage) -
             reported: None,
         },
         usage,
-        requested_model: None,
-    }
+    )
 }
 
 /// A row of a per-unit parity fixture, lowered by hand for the flat keys those fixtures hold

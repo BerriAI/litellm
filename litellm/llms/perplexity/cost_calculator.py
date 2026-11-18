@@ -7,16 +7,38 @@ from datetime import datetime
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import finite_reported_cost
-from litellm.litellm_core_utils.llm_cost_calc.utils import call_context
-from litellm.rust_bridge._native import NativePrices
-from litellm.types.utils import Usage
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import BranchFacts, ReportedCost, branch_cost
+from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
+
+
+def stated_cost(usage: Usage) -> ReportedCost | None:
+    """The cost Perplexity reports on ``usage.cost``, a number or a breakdown under ``total_cost``.
+    ``ResponseAPIUsage.parse_cost`` may already have flattened the breakdown to a float, so both shapes count."""
+    cost_info: Final[object] = getattr(usage, "cost", None)
+    total: Final[object] = (
+        cost_info.get("total_cost")
+        if isinstance(cost_info, dict)
+        else cost_info
+        if isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool)
+        else None
+    )
+    reported: Final = None if total is None else finite_reported_cost(total)
+    return None if reported is None else ReportedCost(source="usage.cost", usd=reported)
+
+
+def pricing_row(model: str, usage: Usage) -> ModelInfo | None:
+    """The row Perplexity's own math reads, ``None`` when it bills the reported cost and reads no row."""
+    if stated_cost(usage) is not None:
+        return None
+    return get_model_info(model=model, custom_llm_provider="perplexity")
 
 
 def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
     """
-    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
-    The manual fallback swaps in the model's off_peak_pricing rates while one of its windows is open.
+    Calculates the cost per token for a given model, prompt tokens, and completion tokens: the cost Perplexity
+    reported when it did, else citation tokens, reasoning tokens and search queries on top of the token rates, at the
+    model's off_peak_pricing rates while one of its windows is open.
 
     Input:
         - model: str, the model name without provider prefix
@@ -26,94 +48,11 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## USE PRE-CALCULATED COST FROM PERPLEXITY IF AVAILABLE
-    ## Perplexity returns accurate cost in usage.cost.total_cost including request fees.
-    ## By the time it reaches here, ResponseAPIUsage.parse_cost has already flattened
-    ## that dict down to a float, so both shapes must be accepted.
-    cost_info: Final = getattr(usage, "cost", None)
-    total_cost: float | None = None
-    if isinstance(cost_info, dict):
-        total_cost = cost_info.get("total_cost")
-    elif isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool):
-        total_cost = float(cost_info)
-    reported_cost: Final = None if total_cost is None else finite_reported_cost(float(total_cost))
-    if reported_cost is not None:
-        return (0.0, reported_cost)
-
-    ## FALLBACK: Calculate cost manually if Perplexity doesn't provide it
-    ## GET MODEL INFO
-    model_info: Final = get_model_info(model=model, custom_llm_provider="perplexity")
-
-    def _safe_float_cast(value: str | float | None | object, default: float = 0.0) -> float:
-        """Safely cast a value to float with proper type handling for mypy."""
-        if value is None:
-            return default
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return default
-
-    quote: Final = NativePrices(model_info, "perplexity").quote(0, call_context(None, None, None, current_time))
-    input_cost_per_token: Final = quote.input
-    output_cost_per_token: Final = quote.output
-
-    ## CALCULATE INPUT COST
-    prompt_tokens: Final = usage.prompt_tokens or 0
-    reported_cached_tokens: Final = (
-        usage.prompt_tokens_details.cached_tokens or 0 if usage.prompt_tokens_details is not None else 0
+    return branch_cost(
+        model,
+        "perplexity",
+        usage,
+        pricing_row(model, usage),
+        branch=BranchFacts(reported=stated_cost(usage)),
+        current_time=current_time,
     )
-    cached_tokens: Final = min(prompt_tokens, reported_cached_tokens)
-    cache_read_cost_per_token: Final = quote.cache_read
-    prompt_cost: float = (
-        prompt_tokens - cached_tokens
-    ) * input_cost_per_token + cached_tokens * cache_read_cost_per_token
-
-    ## ADD CITATION TOKENS COST (if present)
-    citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0
-    citation_cost_value: Final = model_info.get("citation_cost_per_token")
-    if citation_tokens > 0 and citation_cost_value is not None:
-        citation_cost_per_token: Final = _safe_float_cast(citation_cost_value)
-        prompt_cost += citation_tokens * citation_cost_per_token
-
-    ## CALCULATE OUTPUT COST
-    reasoning_tokens = getattr(usage, "reasoning_tokens", 0) or 0
-    if reasoning_tokens == 0 and hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
-        reasoning_tokens = getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
-
-    reasoning_cost_value: Final = model_info.get("output_cost_per_reasoning_token")
-
-    # `completion_tokens` includes `reasoning_tokens` per the OpenAI/Perplexity usage
-    # convention (codified for the central path in PR #18607). When a reasoning rate is
-    # configured we subtract before the output-rate multiplication so the reasoning
-    # tokens are not billed twice.
-    if reasoning_tokens > 0 and reasoning_cost_value is not None:
-        non_reasoning_completion_tokens: Final = max(0, (usage.completion_tokens or 0) - reasoning_tokens)
-        completion_cost: float = non_reasoning_completion_tokens * output_cost_per_token
-        completion_cost += reasoning_tokens * _safe_float_cast(reasoning_cost_value)
-    else:
-        completion_cost = (usage.completion_tokens or 0) * output_cost_per_token
-
-    ## ADD SEARCH QUERIES COST (if present)
-    num_search_queries = 0
-    if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-        num_search_queries = getattr(usage.prompt_tokens_details, "web_search_requests", 0) or 0
-
-    # Check both possible keys for search cost (legacy and current)
-    legacy_search_cost: Final = model_info.get("search_queries_cost_per_query")
-    search_cost_value: Final = (
-        model_info.get("search_context_cost_per_query") if legacy_search_cost is None else legacy_search_cost
-    )
-    if num_search_queries > 0 and search_cost_value is not None:
-        # Handle both dict and float formats
-        if isinstance(search_cost_value, dict):
-            # search_context_cost_per_query stores the per-request price in USD
-            # (e.g. sonar low = $0.005/request). Use it directly, matching the
-            # gemini cost calculator which reads the same field per request.
-            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
-        else:
-            search_cost_per_query = _safe_float_cast(search_cost_value)
-        search_cost: Final = num_search_queries * search_cost_per_query
-        # Add search cost to completion cost (similar to how other providers handle it)
-        completion_cost += search_cost
-
-    return prompt_cost, completion_cost

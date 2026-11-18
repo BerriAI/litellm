@@ -11,7 +11,7 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -55,6 +55,11 @@ def get_base_model_for_pricing(model_name: str) -> str:
     return "fireworks-ai-default"
 
 
+def pricing_row(model: str) -> ModelInfo:
+    """The row a Fireworks AI call prices with: the provider's key, a key under any provider, then the size bucket."""
+    return _resolve_model_info(model)
+
+
 def _resolve_model_info(model: str) -> ModelInfo:
     try:
         return get_model_info(model=model, custom_llm_provider="fireworks_ai")
@@ -83,11 +88,12 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    model_info: Final = _resolve_model_info(model)
-    return generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=model_info["litellm_provider"],
-        model_info=model_info,
+    model_info: Final = pricing_row(model)
+    return branch_cost(
+        model,
+        "fireworks_ai",
+        usage,
+        model_info,
+        row_provider=model_info["litellm_provider"],
         current_time=current_time,
     )

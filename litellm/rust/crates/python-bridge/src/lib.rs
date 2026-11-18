@@ -55,8 +55,7 @@ mod _native {
     use crate::cost::billable_service_tier;
     #[pymodule_export]
     use crate::cost::{
-        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeRateCard,
-        NativeTokenUsage, NativeUnpriced,
+        NativeCallContext, NativePrices, NativeQuote, NativeRateCard, NativeUnpriced,
     };
     #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
@@ -258,9 +257,7 @@ mod tests {
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
                 "NativePrices",
-                "NativeTokenUsage",
                 "NativeCallContext",
-                "NativePriced",
                 "NativeQuote",
                 "NativeReceipt",
                 "NativeBilledRates",

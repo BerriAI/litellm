@@ -14,7 +14,7 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
-from litellm.rust_bridge._native import NativeCallContext, NativePrices, NativeQuote, NativeTokenUsage
+from litellm.rust_bridge._native import NativeCallContext, NativePrices, NativeQuote
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -871,10 +871,6 @@ def billed_usage(usage: Usage) -> BilledUsage:
     )
 
 
-def billed_quantities(usage: Usage) -> NativeTokenUsage:
-    return NativeTokenUsage(billed_usage(usage))
-
-
 def call_context(
     service_tier: str | None,
     data_residency: str | None,
@@ -925,14 +921,22 @@ def generic_cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import BranchFacts, branch_cost
+
     row: Final = (
         get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info
     )
-    priced: Final = NativePrices(row, custom_llm_provider).calculate(
-        billed_quantities(usage),
-        call_context(service_tier, data_residency, vertex_location, current_time),
+    return branch_cost(
+        model,
+        custom_llm_provider,
+        usage,
+        row,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        branch=BranchFacts(rules="generic"),
+        current_time=current_time,
     )
-    return priced.prompt_cost, priced.completion_cost
 
 
 def _coerce_token_count(value: object) -> int:
