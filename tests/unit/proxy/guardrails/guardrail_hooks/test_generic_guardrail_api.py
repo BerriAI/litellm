@@ -21,6 +21,7 @@ from mcp.types import CallToolResult, TextContent
 import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
+from litellm.caching.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
@@ -35,7 +36,9 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guar
 )
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message
 
 
@@ -2776,3 +2779,75 @@ async def test_during_mcp_call_blocked_raises() -> None:
             )
 
     assert exc_info.value.message == "credential detected in tool input"
+
+
+
+@pytest.mark.asyncio
+async def test_pre_mcp_call_sends_the_server_tool_arguments_and_caller() -> None:
+    sent_bodies: Final[SimpleQueue[bytes]] = SimpleQueue()
+
+    async def answer(request: httpx.Request) -> httpx.Response:
+        sent_bodies.put(request.content)
+        return httpx.Response(200, json={"action": "NONE"}, request=request)
+
+    guardrail: Final = _mcp_guardrail("pre_mcp_call")
+    arguments: Final = {"repo": "octo/hello", "options": {"force": True, "depth": 2}}
+    caller: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        key_alias="ci-bot",
+        user_id="u-1",
+        user_email="dev@example.com",
+        team_id="t-1",
+        team_alias="platform",
+        org_id="o-1",
+        end_user_id="e-1",
+        agent_id="agent-1",
+    ).model_copy(update={"invoked_agent_id": "agent-2"})
+    pre_hook_kwargs: Final = {
+        "name": "delete_repo",
+        "arguments": arguments,
+        "server_name": "github",
+        "mcp_rate_limit_server_name": "github",
+        "mcp_server_id": "srv-1",
+        "mcp_server_url": "https://mcp.example.com",
+        "mcp_server_transport": MCPTransport.http,
+        "mcp_server_auth_type": MCPAuth.oauth2,
+        "mcp_server_is_byok": True,
+        "client_ip": "203.0.113.7",
+        "tool_description": "Delete a repository",
+        "user_api_key_auth": caller,
+    }
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    data: Final = proxy_logging_obj._convert_mcp_to_llm_format(
+        proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs), pre_hook_kwargs
+    )
+
+    with patch.object(guardrail, "async_handler", AsyncHTTPHandler(transport=httpx.MockTransport(answer))):
+        await MCPGuardrailTranslationHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    body: Final = json.loads(sent_bodies.get_nowait())
+    assert body["mcp_tool_call"] == {
+        "mcp_server_id": "srv-1",
+        "mcp_server_name": "github",
+        "mcp_server_url": "https://mcp.example.com",
+        "mcp_server_transport": "http",
+        "mcp_server_auth_type": "oauth2",
+        "mcp_server_is_byok": True,
+        "tool_name": "delete_repo",
+        "tool_description": "Delete a repository",
+        "arguments": arguments,
+    }
+    assert body["request_data"] == {
+        "user_api_key_hash": "hashed-key",
+        "user_api_key_alias": "ci-bot",
+        "user_api_key_user_id": "u-1",
+        "user_api_key_user_email": "dev@example.com",
+        "user_api_key_team_id": "t-1",
+        "user_api_key_team_alias": "platform",
+        "user_api_key_end_user_id": "e-1",
+        "user_api_key_org_id": "o-1",
+        "requester_ip_address": "203.0.113.7",
+        "actor_agent_id": "agent-1",
+        "target_agent_id": "agent-2",
+    }
+    assert body["texts"] == ["Delete a repository", "octo/hello"]

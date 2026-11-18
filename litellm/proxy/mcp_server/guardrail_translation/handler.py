@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
 from mcp.types import Tool as MCPTool
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -43,13 +44,36 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, GenericGuardrailAPIMCPToolCall
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+_MCP_ARGUMENTS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
+
+
+def _optional_text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _mcp_tool_call(
+    tool_name: str, description: object, arguments: object, data: Mapping[str, object]
+) -> GenericGuardrailAPIMCPToolCall:
+    return GenericGuardrailAPIMCPToolCall(
+        mcp_server_id=_optional_text(data.get("mcp_server_id")),
+        mcp_server_name=_optional_text(data.get("mcp_server_name")),
+        mcp_server_url=_optional_text(data.get("mcp_server_url")),
+        mcp_server_transport=_optional_text(data.get("mcp_server_transport")),
+        mcp_server_auth_type=_optional_text(data.get("mcp_server_auth_type")),
+        mcp_server_is_byok=is_byok if isinstance(is_byok := data.get("mcp_server_is_byok"), bool) else None,
+        tool_name=tool_name,
+        tool_description=_optional_text(description),
+        arguments=_MCP_ARGUMENTS.validate_python(arguments) if isinstance(arguments, Mapping) else {},
+    )
 
 
 def _blocked(reason: str) -> HTTPException:
@@ -190,6 +214,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         inputs: Final[GenericGuardrailAPIInputs] = GenericGuardrailAPIInputs(
             tools=[tool_def],
             texts=list(scanned_texts),
+            mcp_tool_call=_mcp_tool_call(str(mcp_tool_name), mcp_tool_description, mcp_arguments, data),
         )
 
         guarded: Final = await guardrail_to_apply.apply_guardrail(

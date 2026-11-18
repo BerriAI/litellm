@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
 from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.guardrails import GuardrailNumRetries
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -11,7 +11,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import ChatCompletionMessageToolCall
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIMCPToolCall
 
 
 class GuardrailToolParam(LiteLLMBaseModel):
@@ -43,6 +43,9 @@ class GenericGuardrailAPIMetadata(TypedDict, total=False):
     user_api_key_team_alias: str | None
     user_api_key_end_user_id: str | None
     user_api_key_org_id: str | None
+    requester_ip_address: ReadOnly[str | None]
+    actor_agent_id: ReadOnly[str | None]
+    target_agent_id: ReadOnly[str | None]
 
 
 class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
@@ -164,6 +167,10 @@ class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     additional_provider_specific_params: dict[str, object] | None = None
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None
     model: str | None = None  # the model being used for the LLM call
+    mcp_tool_call: GenericGuardrailAPIMCPToolCall | None = Field(
+        default=None,
+        description="The MCP server, tool, and named arguments of the MCP tool call being checked.",
+    )
 
 
 def coerce_stream_holdback_value(value: Any) -> int:
