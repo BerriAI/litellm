@@ -7,6 +7,7 @@
 mod branch;
 mod breakdown;
 mod custom;
+mod decisions;
 mod rule;
 
 use crate::adjust::{Discount, Margin};
@@ -188,14 +189,24 @@ fn attempt<S: RowSource>(
     row: &S::Row,
     lookup: Lookup,
 ) -> Option<PriceOutcome> {
-    let rule = match Rule::new(candidate, at, row, lookup, query) {
-        Ok(rule) => rule,
-        Err(kind) => return Some(Unpriced::NotPorted(kind).into()),
+    let usage = query.usage.billed();
+    let listed = row.prices().for_prompt(usage.prompt_tokens);
+    let request = query
+        .decisions
+        .then(|| decisions::request_price(row, listed))
+        .flatten();
+    let decided =
+        (query.decisions && decisions::prices_decisions(listed)).then(|| listed.decisions_view());
+    let rule = match (request, &decided) {
+        (Some(_), _) | (None, Some(_)) => Rule::decisions(),
+        (None, None) => match Rule::new(candidate, at, row, lookup, query) {
+            Ok(rule) => rule,
+            Err(kind) => return Some(Unpriced::NotPorted(kind).into()),
+        },
     };
     let basis = &query.header.basis;
     let call = rule.call(basis, &query.usage, &row.facts().provider_entry)?;
-    let usage = query.usage.billed();
-    let prices = row.prices().for_prompt(usage.prompt_tokens);
+    let prices = decided.as_ref().unwrap_or(listed);
     let quote = prices.quote(&call, usage.prompt_tokens);
     let calculated = || match calculate(prices, row.adjustments(), &usage, &call) {
         Outcome::Priced(priced) => Sides {
@@ -209,9 +220,10 @@ fn attempt<S: RowSource>(
             ..Sides::default()
         },
     };
-    let sides = match rule {
-        Rule::Formula(formula) => branch::sides(formula, row, query, &call, calculated),
-        _ => calculated(),
+    let sides = match (request, rule) {
+        (Some(rate), _) => decisions::request(rate),
+        (None, Rule::Formula(formula)) => branch::sides(formula, row, query, &call, calculated),
+        (None, _) => calculated(),
     };
     let named = source
         .resolve(candidate)

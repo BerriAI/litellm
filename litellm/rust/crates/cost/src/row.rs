@@ -79,6 +79,8 @@ pub struct RowFacts {
     pub guardrail_units: bool,
     /// `search_queries_cost_per_query`, the flat search price Perplexity reads ahead of `search_context_cost_per_query`
     pub legacy_search_query_rate: Option<crate::money::UnitPrice>,
+    /// `litellm_provider` as the row wrote it, which picks the providers whose Decisions calls bill per request
+    pub provider: Option<Box<str>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

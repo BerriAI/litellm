@@ -14,7 +14,6 @@ from typing_extensions import assert_never
 import litellm
 from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
-from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_PROVIDERS
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -90,6 +89,7 @@ _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
 _OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH: Final = 64
+_PER_REQUEST_PRICED_PROVIDERS: Final = frozenset({"parallel_ai"})
 _OpenAIPromptCacheKey: TypeAlias = Annotated[str, Field(max_length=_OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)]
 _PROMPT_CACHE_KEY_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(_OpenAIPromptCacheKey | None)
 _PROMPT_CACHE_OPTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheOptionsFields]] = TypeAdapter(
@@ -814,7 +814,7 @@ def prepare_call(
                 "litellm_call_id": kwargs.get("litellm_call_id"),
                 "api_base": provider_config.get_complete_url(resolved_api_base, canonical_model),
                 "input_cost_per_query": (
-                    kwargs.get("input_cost_per_query") if provider in QUERY_PRICED_DECISIONS_PROVIDERS else None
+                    kwargs.get("input_cost_per_query") if provider in _PER_REQUEST_PRICED_PROVIDERS else None
                 ),
             },
             custom_llm_provider=provider,
