@@ -30,6 +30,7 @@ from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import KeywordArguments, decoded_json_object, has_attributes
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -1521,7 +1522,7 @@ async def exchange_token_with_server(
     # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
     if resolved_server.token_validation and isinstance(resolved_server.token_validation, dict):
         _validate_token_response(
-            token_response=token_response,
+            token_response=decoded_json_object(_DECODED_JSON.validate_python(token_response)),
             validation_rules=resolved_server.token_validation,
             server_id=resolved_server.server_id,
         )
@@ -1878,6 +1879,12 @@ _UPSTREAM_REGISTRATION: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(M
 
 def _without_upstream_client_management(registration: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in registration.items() if key not in _UPSTREAM_CLIENT_MANAGEMENT_KEYS}
+
+
+def _unpackable_registration(registration: object) -> KeywordArguments:
+    if has_attributes(registration, KeywordArguments, "keys"):
+        return registration
+    raise TypeError(f"'{type(registration).__name__}' object is not a mapping")
 
 
 async def _persist_dcr_client_registration(
@@ -2336,7 +2343,7 @@ async def register_client_with_server(
         server_id=resolved_server.server_id,
     )
 
-    token_response: Final = response.json()
+    token_response: Final = _DECODED_JSON.validate_python(response.json())
     persistence_result: Final = (
         await _persist_dcr_client_registration(
             resolved_server, token_response, current_redirect_uri, replace_stale_client=replace_stale_client
@@ -2348,12 +2355,12 @@ async def register_client_with_server(
         return dummy_return
     if persistence_result == "failed":
         raise HTTPException(status_code=503, detail="OAuth client registration could not be saved; retry authorization")
-    shared_client_response: Final[Mapping[str, object]] = (
+    shared_client_response: Final[object] = (
         _without_upstream_client_management(_UPSTREAM_REGISTRATION.validate_python(token_response))
         if persistence_result == "persisted" and not replace_stale_client and isinstance(token_response, dict)
         else token_response
     )
-    bound_response: Final[Mapping[str, object]] = (
+    bound_response: Final[object] = (
         {
             **_UPSTREAM_REGISTRATION.validate_python(token_response),
             "dcr_issuer": resolved_server.issuer,
@@ -2363,8 +2370,8 @@ async def register_client_with_server(
         if persistence_result == "persisted" and replace_stale_client
         else shared_client_response
     )
-    client_response: Final[Mapping[str, object]] = (
-        {**bound_response, "redirect_uris": client_facing_redirect_uris}
+    client_response: Final[object] = (
+        {**_unpackable_registration(bound_response), "redirect_uris": client_facing_redirect_uris}
         if client_redirect_uris and not bridge_relay
         else bound_response
     )

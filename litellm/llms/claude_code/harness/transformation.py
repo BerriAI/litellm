@@ -169,6 +169,10 @@ def _message_blocks(event: Mapping[str, object]) -> Sequence[object]:
     return content if isinstance(content, list) else ()
 
 
+def _str_field(block: Mapping[str, object], key: str) -> str:
+    return str(block.get(key, ""))
+
+
 def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamState) -> tuple[Event, ...]:
     kind = block.get("type")
     if kind == "text" and block.get("text"):
@@ -177,10 +181,10 @@ def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamSta
     if kind == "thinking" and block.get("thinking"):
         return (Reasoning(delta=block["thinking"]),)
     if kind == "tool_use":
-        native = str(block.get("name", ""))
+        native: Final = _str_field(block, "name")
         return (
             ToolCall(
-                id=str(block.get("id", "")),
+                id=_str_field(block, "id"),
                 name=normalize_tool_name(native, NATIVE_TO_NORMALIZED),
                 native_name=native,
                 input=block.get("input")

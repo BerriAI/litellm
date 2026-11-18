@@ -41,7 +41,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     load_cli_token_left_in_keychain,
     save_cli_token,
 )
-from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
@@ -148,6 +148,7 @@ class CliAuthResult(TypedDict):
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 3
 _PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403})
@@ -694,7 +695,7 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
         )
 
     try:
-        data: Final[CliSsoStartData] = response.json()
+        decoded: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError:
         content_type: Final = response.headers.get("content-type", "unknown")
         raise ValueError(
@@ -703,14 +704,26 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
             f"Response starts with: {response.text[:200]!r}"
         )
 
+    data: Final = decoded_json_object(decoded)
+    login_id: Final = data.get("login_id")
+    poll_secret: Final = data.get("poll_secret")
+    user_code: Final = data.get("user_code")
+    if isinstance(login_id, str) and isinstance(poll_secret, str) and isinstance(user_code, str):
+        verification_uri_complete: Final = data.get("verification_uri_complete")
+        if isinstance(verification_uri_complete, str):
+            return {
+                "login_id": login_id,
+                "poll_secret": poll_secret,
+                "user_code": user_code,
+                "verification_uri_complete": verification_uri_complete,
+            }
+        return {"login_id": login_id, "poll_secret": poll_secret, "user_code": user_code}
     required_fields: Final[tuple[str, ...]] = ("login_id", "poll_secret", "user_code")
     missing_fields: Final = tuple(field for field in required_fields if not isinstance(data.get(field), str))
-    if missing_fields:
-        raise ValueError(
-            f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
-            "The proxy version may not match this CLI; upgrade whichever is older."
-        )
-    return data
+    raise ValueError(
+        f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
+        "The proxy version may not match this CLI; upgrade whichever is older."
+    )
 
 
 def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:

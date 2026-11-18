@@ -22,7 +22,7 @@ from litellm.containers.utils import decode_managed_container_id_for_request
 from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
-from litellm.llms.custom_httpx.container_handler import generic_container_handler
+from litellm.llms.custom_httpx.container_handler import EndpointConfig, generic_container_handler
 from litellm.types.containers.main import (
     ContainerFileListResponse,
     ContainerFileObject,
@@ -54,7 +54,7 @@ def _load_endpoints_config() -> dict:
         return _ENDPOINTS_DOCUMENT.validate_python(json.load(f))
 
 
-def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
+def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable:
     """
     Create a sync SDK function from endpoint config.
 

@@ -400,7 +400,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict[str, Any],
+        data: dict[str, object],
         call_type: "CallTypesLiteral",
     ) -> dict[str, object] | None:
         """Check user prompt against Purview DLP policies before LLM call."""
@@ -434,7 +434,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 )
             prompt_text = self.completion_prompt_to_str(raw_prompt)
         else:
-            messages: Final[list | None] = data.get("messages")
+            messages: Final = data.get("messages")
             if messages:
                 prompt_text = self.get_prompt_text_for_dlp(cast(list["AllMessageValues"], messages))
 

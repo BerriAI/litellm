@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, TracebackType
 from typing import (
@@ -51,7 +51,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
-from litellm.litellm_core_utils.core_helpers import as_object_list
+from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
@@ -1977,31 +1977,45 @@ async def _common_key_generation_helper(
     return response
 
 
+class _ModelLimits(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
+
+
+class _AddsToAllocation(Protocol):
+    def __radd__(self, other: int, /) -> float: ...
+
+
+def _allocation_total(allocated: int, requested: object) -> float:
+    if has_attributes(requested, _AddsToAllocation, "__radd__"):
+        return allocated + requested
+    raise TypeError(f"unsupported operand type(s) for +: '{type(allocated).__name__}' and '{type(requested).__name__}'")
+
+
 def _check_key_model_specific_limits(
     keys: Sequence[LiteLLM_VerificationToken],
     data: GenerateKeyRequest | UpdateKeyRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
-    entity_model_rpm_limit_dict: dict[str, int],
-    entity_model_tpm_limit_dict: dict[str, int],
+    entity_model_rpm_limit_dict: Mapping[object, int],
+    entity_model_tpm_limit_dict: Mapping[object, int],
     entity_type: str,  # "team" or "organization"
 ) -> None:
     """
     Generic function to check if a key is allocating model specific limits.
     Raises an error if we're overallocating.
     """
-    model_rpm_limit: Final = getattr(data, "model_rpm_limit", None) or (
-        data.metadata.get("model_rpm_limit", None) if data.metadata else None
+    model_rpm_limit: Final = data.model_rpm_limit or (
+        _DECODED_JSON.validate_python(data.metadata.get("model_rpm_limit", None)) if data.metadata else None
     )
-    model_tpm_limit: Final = getattr(data, "model_tpm_limit", None) or (
-        data.metadata.get("model_tpm_limit", None) if data.metadata else None
+    model_tpm_limit: Final = data.model_tpm_limit or (
+        _DECODED_JSON.validate_python(data.metadata.get("model_tpm_limit", None)) if data.metadata else None
     )
     if model_rpm_limit is None and model_tpm_limit is None:
         return
 
     # get total model specific tpm/rpm limit
-    model_specific_rpm_limit: Final[dict[str, int]] = {}
-    model_specific_tpm_limit: Final[dict[str, int]] = {}
+    model_specific_rpm_limit: Final[dict[object, int]] = {}
+    model_specific_tpm_limit: Final[dict[object, int]] = {}
 
     for key in keys:
         if key.metadata.get("model_rpm_limit", None) is not None:
@@ -2012,8 +2026,11 @@ def _check_key_model_specific_limits(
                 model_specific_tpm_limit[model] = model_specific_tpm_limit.get(model, 0) + tpm_limit
 
     if model_rpm_limit is not None:
-        for model, rpm_limit in model_rpm_limit.items():
-            if entity_rpm_limit is not None and model_specific_rpm_limit.get(model, 0) + rpm_limit > entity_rpm_limit:
+        for model, rpm_limit in require_attributes(model_rpm_limit, _ModelLimits, "items").items():
+            if (
+                entity_rpm_limit is not None
+                and _allocation_total(model_specific_rpm_limit.get(model, 0), rpm_limit) > entity_rpm_limit
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
@@ -2022,7 +2039,8 @@ def _check_key_model_specific_limits(
                 entity_model_specific_rpm_limit = entity_model_rpm_limit_dict.get(model)
                 if (
                     entity_model_specific_rpm_limit
-                    and model_specific_rpm_limit.get(model, 0) + rpm_limit > entity_model_specific_rpm_limit
+                    and _allocation_total(model_specific_rpm_limit.get(model, 0), rpm_limit)
+                    > entity_model_specific_rpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
@@ -2030,8 +2048,11 @@ def _check_key_model_specific_limits(
                     )
 
     if model_tpm_limit is not None:
-        for model, tpm_limit in model_tpm_limit.items():
-            if entity_tpm_limit is not None and model_specific_tpm_limit.get(model, 0) + tpm_limit > entity_tpm_limit:
+        for model, tpm_limit in require_attributes(model_tpm_limit, _ModelLimits, "items").items():
+            if (
+                entity_tpm_limit is not None
+                and _allocation_total(model_specific_tpm_limit.get(model, 0), tpm_limit) > entity_tpm_limit
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
@@ -2040,7 +2061,8 @@ def _check_key_model_specific_limits(
                 entity_model_specific_tpm_limit = entity_model_tpm_limit_dict.get(model)
                 if (
                     entity_model_specific_tpm_limit
-                    and model_specific_tpm_limit.get(model, 0) + tpm_limit > entity_model_specific_tpm_limit
+                    and _allocation_total(model_specific_tpm_limit.get(model, 0), tpm_limit)
+                    > entity_model_specific_tpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
@@ -5333,7 +5355,8 @@ async def info_key_fn(
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         key_info_dict: Final = key_info.model_dump()
-        key_token_hash: Final[str | None] = key_info_dict.pop("token")
+        popped_token: Final = _DECODED_JSON.validate_python(key_info_dict.pop("token"))
+        key_token_hash: Final = popped_token if isinstance(popped_token, str) else None
         key_info_dict["status"] = (
             "deleted" if live_key_info is None else _derive_key_status(key_info_dict, now=datetime.now(timezone.utc))
         )

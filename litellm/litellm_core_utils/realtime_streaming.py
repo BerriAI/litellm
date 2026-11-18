@@ -26,7 +26,12 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, json_contains
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    json_contains,
+    require_attributes,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import (
@@ -148,10 +153,13 @@ def client_websocket_scope(websocket: object) -> MutableMapping[str, object] | N
     return websocket.scope if isinstance(websocket, _ReplayScopeWebSocket) else None
 
 
-class _ClientWebSocket(ScopedWebSocket, Protocol):
+class _ClientWebSocket(Protocol):
     async def send_text(self, data: str) -> None: ...
-    async def receive_text(self) -> str: ...
     async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
+
+
+class _ReceivingClientWebSocket(Protocol):
+    async def receive_text(self) -> str: ...
 
 
 class _LoggingWorker(Protocol):
@@ -489,7 +497,7 @@ def realtime_guardrails_apply(request_data: Mapping[str, object], callbacks: Seq
 class RealTimeStreaming:
     def __init__(
         self,
-        websocket: Any,
+        websocket: _ClientWebSocket,
         backend_ws: CLIENT_CONNECTION_CLASS | RealtimeBackend,
         logging_obj: LiteLLMLogging,
         provider_config: BaseRealtimeConfig | None = None,
@@ -2000,14 +2008,14 @@ class RealTimeStreaming:
         self.logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
     @staticmethod
-    def detect_beta_header(websocket: ScopedWebSocket) -> bool:
+    def detect_beta_header(websocket: object) -> bool:
         """Return True if the client sent 'OpenAI-Beta: realtime=v1'.
 
         Checks the raw ASGI scope headers so it works for both FastAPI WebSocket
         objects and any test doubles that expose a .scope dict.
         """
         try:
-            headers: Final = websocket.scope.get("headers", [])
+            headers: Final = require_attributes(websocket, ScopedWebSocket, "scope").scope.get("headers", [])
             for name, value in headers:
                 if isinstance(name, bytes):
                     name = name.decode("latin-1")
@@ -2228,7 +2236,7 @@ class RealTimeStreaming:
         if isinstance(refused_opening_message, str):
             return refused_opening_message
         try:
-            return await self.websocket.receive_text()
+            return await require_attributes(self.websocket, _ReceivingClientWebSocket, "receive_text").receive_text()
         except Exception as e:  # noqa: BLE001  # whatever the client socket raises, the client is gone
             verbose_logger.debug("Client disconnected: %s", e)
             return None

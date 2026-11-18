@@ -4,8 +4,11 @@ Generic competitor intent checker: two entity sets and overridable disambiguatio
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from re import Pattern
-from typing import Any, Final, cast
+from typing import Any, Final, SupportsFloat, SupportsIndex, cast
+
+from typing_extensions import Buffer
 
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     CompetitorActionHint,
@@ -66,6 +69,13 @@ def text_for_entity_matching(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _float_setting(config: Mapping[str, object], key: str, default: float) -> float:
+    value: Final = config.get(key, default)
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+
+
 class BaseCompetitorIntentChecker:
     """
     Generic competitor intent checker with two entity sets. Ambiguous tokens
@@ -93,9 +103,9 @@ class BaseCompetitorIntentChecker:
         self._ambiguous: set[str] = self._competitor_tokens & self._other_meaning_tokens
 
         self.policy: dict[str, str] = config.get("policy") or {}
-        self.threshold_high = float(config.get("threshold_high", 0.70))
-        self.threshold_medium = float(config.get("threshold_medium", 0.45))
-        self.threshold_low = float(config.get("threshold_low", 0.30))
+        self.threshold_high = _float_setting(config, "threshold_high", 0.70)
+        self.threshold_medium = _float_setting(config, "threshold_medium", 0.45)
+        self.threshold_low = _float_setting(config, "threshold_low", 0.30)
         self.reframe_message_template: str | None = config.get("reframe_message_template")
         self.refuse_message_template: str | None = config.get("refuse_message_template")
         self._comparison_words: list[str] = list(

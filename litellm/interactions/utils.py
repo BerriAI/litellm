@@ -2,6 +2,7 @@
 Utility functions for Interactions API.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
@@ -77,7 +78,7 @@ class InteractionsAPIRequestUtils:
         from litellm.utils import PreProcessNonDefaultParams
 
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
-        special_params: Final = params.pop("kwargs", {})
+        special_params: Final[Mapping[str, object]] = params.pop("kwargs", {})
         additional_drop_params: Final = params.pop("additional_drop_params", None)
 
         non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(

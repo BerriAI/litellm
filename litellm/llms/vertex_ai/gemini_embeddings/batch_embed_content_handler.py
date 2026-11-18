@@ -378,18 +378,17 @@ class GoogleBatchEmbeddings(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        _json_response: Final = response.json()
-
         if use_embed_content:
             return process_embed_content_response(
                 input=input,
                 model_response=model_response,
                 model=model,
-                response_json=_json_response,
+                response_json=response.json(),
                 resolved_files=resolved_files,
             )
         else:
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
+            _predictions_json: Final[VertexAIBatchEmbeddingsResponseObject] = response.json()
+            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_predictions_json)
             return process_response(
                 model=model,
                 model_response=model_response,

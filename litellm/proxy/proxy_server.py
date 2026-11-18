@@ -17473,6 +17473,12 @@ def _lowered(value: object) -> object:
     return require_attributes(value, _SupportsLower, "lower").lower()
 
 
+def _without_openai_path(api_base: object) -> object:
+    if json_contains(api_base, "/openai/"):
+        return _split_once(api_base, "/openai/")[0]
+    return api_base
+
+
 def _byok_row_outside_caller_teams(model_info_dict: object, allowed_team_ids: AbstractSet[str] | None) -> bool:
     """Whether a team BYOK row belongs to a team the caller is not a member of.
 
@@ -18787,7 +18793,8 @@ ORDER BY
     slow_count DESC;
     """
 
-    db_response: Final = await prisma_client.db.query_raw(
+    db_response: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_rows(
+        prisma_client,
         sql_query,
         alerting_threshold,
         _selected_model_group,
@@ -18797,13 +18804,9 @@ ORDER BY
         customer,
     )
 
-    if db_response is not None:
-        for row in db_response:
-            _api_base = row.get("api_base") or ""
-            if "/openai/" in _api_base:
-                _api_base = _api_base.split("/openai/")[0]
-            row["api_base"] = _api_base
-    return db_response
+    if db_response is None:
+        return None
+    return [{**row, "api_base": _without_openai_path(row.get("api_base") or "")} for row in db_response]
 
 
 @router.get(

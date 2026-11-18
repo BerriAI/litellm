@@ -2,7 +2,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -10,7 +10,13 @@ from pydantic import TypeAdapter
 from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, decoded_json_object, iter_items, json_contains
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    attribute_or_none,
+    decoded_json_object,
+    iter_items,
+    json_contains,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -392,7 +398,7 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def is_token_id_prompt(prompt: str | Sequence[object] | None) -> bool:
+    def is_token_id_prompt(prompt: object) -> bool:
         """Return True if ``prompt`` carries OpenAI completions token ids.
 
         Covers every list shape that ``completion_prompt_to_str`` cannot decode
@@ -400,9 +406,10 @@ class PurviewGuardrailBase:
         ``list[list[int]]`` (multi-prompt token-id batches), and mixed lists
         that include any token-id sub-array.
         """
-        if not isinstance(prompt, list) or not prompt:
+        prompt_items: Final = as_object_list(prompt)
+        if not prompt_items:
             return False
-        for x in prompt:
+        for x in prompt_items:
             if isinstance(x, int):
                 return True
             if isinstance(x, list) and x and any(isinstance(y, int) for y in x):
@@ -410,7 +417,7 @@ class PurviewGuardrailBase:
         return False
 
     @staticmethod
-    def completion_prompt_to_str(prompt: str | Sequence[object] | None) -> str | None:
+    def completion_prompt_to_str(prompt: object) -> str | None:
         """Normalize OpenAI ``/v1/completions`` ``prompt`` for text DLP.
 
         Supports string prompts and list-of-string prompts. List-of-token-id prompts
@@ -421,14 +428,15 @@ class PurviewGuardrailBase:
         if isinstance(prompt, str):
             stripped: Final = prompt.strip()
             return stripped or None
-        if isinstance(prompt, list) and prompt:
-            if all(isinstance(x, str) for x in prompt):
-                joined = "\n".join(s.strip() for s in prompt if isinstance(s, str))
+        prompt_items: Final = as_object_list(prompt)
+        if prompt_items:
+            if all(isinstance(x, str) for x in prompt_items):
+                joined = "\n".join(s.strip() for s in prompt_items if isinstance(s, str))
                 return joined.strip() or None
-            if all(isinstance(x, int) for x in prompt):
+            if all(isinstance(x, int) for x in prompt_items):
                 verbose_proxy_logger.debug("Purview DLP: completions prompt is token ids only; skipping text scan")
                 return None
-            str_parts: Final = [x for x in prompt if isinstance(x, str)]
+            str_parts: Final = [x for x in prompt_items if isinstance(x, str)]
             if str_parts:
                 joined = "\n".join(s.strip() for s in str_parts)
                 return joined.strip() or None

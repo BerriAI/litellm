@@ -1,7 +1,7 @@
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence, Sized
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints, runtime_checkable
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -344,6 +344,38 @@ def _delete_response_body(response: _DeleteResponse) -> _DeleteResponseBody:
 def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
     """Decode a Responses API response body into its JSON object form."""
     return response.json()
+
+
+@runtime_checkable
+class _Sliceable(Protocol):
+    def __getitem__(self, key: slice, /) -> object: ...
+
+
+@runtime_checkable
+class _ConcatenatesStr(Protocol):
+    def __add__(self, other: str, /) -> object: ...
+
+
+def _sized_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _head(value: object, stop: int) -> object:
+    if isinstance(value, _Sliceable):
+        return value[:stop]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def _with_ellipsis(value: object) -> object:
+    if isinstance(value, _ConcatenatesStr):
+        return value + "..."
+    raise TypeError(f"unsupported operand type(s) for +: '{type(value).__name__}' and 'str'")
+
+
+def _reasoning_summary(reasoning_content: object) -> object:
+    return _with_ellipsis(_head(reasoning_content, 100)) if _sized_len(reasoning_content) > 100 else reasoning_content
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -986,7 +1018,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
+    def _handle_reasoning_item(self, item: dict[str, object]) -> Mapping[str, object]:
         """
         Handle reasoning items specifically to filter out status=None using OpenAI's model.
         Issue: https://github.com/BerriAI/litellm/issues/13484
@@ -1000,11 +1032,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data: Final = dict(item)
                 if "summary" not in item_data:
-                    item_data["summary"] = (
-                        item_data.get("reasoning_content", "")[:100] + "..."
-                        if len(item_data.get("reasoning_content", "")) > 100
-                        else item_data.get("reasoning_content", "")
-                    )
+                    item_data["summary"] = _reasoning_summary(item_data.get("reasoning_content", ""))
 
                 # Create ResponseReasoningItem object from the item data
                 reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)

@@ -944,7 +944,7 @@ class VertexPassthroughLoggingHandler:
                 kwargs["batch_job_state"] = "JOB_STATE_PENDING"
 
                 logging_obj.model = model_name
-                logging_obj.model_call_details["model"] = logging_obj.model
+                logging_obj.model_call_details["model"] = model_name
                 logging_obj.model_call_details["response_cost"] = response_cost
                 logging_obj.model_call_details["batch_id"] = batch_id
 

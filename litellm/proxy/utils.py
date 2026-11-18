@@ -25,6 +25,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from collections.abc import Set as AbstractSet
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -197,6 +198,8 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    iter_items,
+    json_contains,
     require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
@@ -392,11 +395,6 @@ else:
     Span = Any
 
 _T: Final = TypeVar("_T")
-
-
-class _ViewCountRow(TypedDict):
-    view_count: ReadOnly[int]
-    view_names: ReadOnly[Sequence[str] | None]
 
 
 class _RelTuplesRow(TypedDict):
@@ -6364,7 +6362,9 @@ class PrismaClient:
             required_view: Final = "LiteLLM_VerificationTokenView"
             expected_views_str: Final = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
-            ret: Final[Sequence[_ViewCountRow]] = await self.db.query_raw(f"""
+            ret: Final = await query_raw_rows(
+                self.db,
+                f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -6376,14 +6376,15 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """)
+                """,
+            )
             expected_total_views: Final = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
                 return
             else:
                 ## check if required view exists ##
-                if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
+                if ret[0]["view_names"] and not json_contains(ret[0]["view_names"], required_view):
                     await self.health_check()  # make sure we can connect to db
                     await create_view_tolerating_race(
                         self.db,
@@ -6409,10 +6410,12 @@ class PrismaClient:
                     else:
                         # don't block execution if these views are missing
                         # Convert lists to sets for efficient difference calculation
-                        ret_view_names_set: Final = set(ret[0]["view_names"]) if ret[0]["view_names"] else set()
+                        ret_view_names_set: Final[AbstractSet[object]] = (
+                            set(iter_items(ret[0]["view_names"])) if ret[0]["view_names"] else set()
+                        )
                         expected_views_set: Final = set(expected_views)
                         # Find missing views
-                        missing_views: Final = expected_views_set - ret_view_names_set
+                        missing_views: Final = expected_views_set.difference(ret_view_names_set)
 
                         verbose_proxy_logger.warning(
                             "\n\n\x1b[93mNot all views exist in db, needed for UI 'Usage' tab. Missing=%s.\nRun 'create_views.py' from https://github.com/BerriAI/litellm/tree/main/scripts/db to create missing views.\x1b[0m\n",

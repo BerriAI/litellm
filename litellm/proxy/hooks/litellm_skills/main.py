@@ -98,6 +98,18 @@ class _HasGet(Protocol):
     def get(self, key: str, default: str, /) -> object: ...
 
 
+class _ExtraFields(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _HasModelExtra(Protocol):
+    model_extra: _ExtraFields | None
+
+
+class _AttributeTarget(Protocol):
+    def __setattr__(self, name: str, value: object, /) -> None: ...
+
+
 @with_config(ConfigDict(extra="allow", strict=True))
 class _CodeExecutionToolArgs(TypedDict, total=False):
     code: ReadOnly[str]
@@ -127,6 +139,25 @@ def _sized_len(value: object) -> int:
     if isinstance(value, Sized):
         return len(value)
     raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _record_generated_files(response: _AttributeTarget, generated_files: Sequence[Mapping[str, object]]) -> None:
+    if isinstance(response, dict):
+        response["_litellm_generated_files"] = generated_files
+        verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to dict response", len(generated_files))
+        return
+
+    try:
+        response._litellm_generated_files = generated_files
+    except AttributeError:
+        pass
+
+    if has_attributes(response, _HasModelExtra, "model_extra"):
+        if response.model_extra is None:
+            response.model_extra = {}
+        response.model_extra["_litellm_generated_files"] = generated_files
+
+    verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to response", len(generated_files))
 
 
 class SkillsInjectionHook(CustomLogger):
@@ -933,29 +964,6 @@ print('No executable skill module found')
         Files are added to response._litellm_generated_files for easy access.
         For dict responses, files are added as a key.
         """
-        if not generated_files:
-            return response
-
-        raw_response: Final = response
-
-        # Handle dict response (Anthropic/messages API format)
-        if isinstance(response, dict):
-            response["_litellm_generated_files"] = generated_files
-            verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to dict response", len(generated_files))
-            return raw_response
-
-        # Handle object response (OpenAI format)
-        try:
-            response._litellm_generated_files = generated_files
-        except AttributeError:
-            pass
-
-        # Also add to model_extra if available (for serialization)
-        if hasattr(response, "model_extra"):
-            if response.model_extra is None:
-                response.model_extra = {}
-            response.model_extra["_litellm_generated_files"] = generated_files
-
-        verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to response", len(generated_files))
-
+        if generated_files:
+            _record_generated_files(response, generated_files)
         return response

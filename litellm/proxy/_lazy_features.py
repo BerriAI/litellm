@@ -18,12 +18,13 @@ from dataclasses import dataclass, field
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from starlette.routing import BaseRoute, Match
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.proxy.route_priority import (
     builtin_pass_through_routes_first,
     configured_pass_through_routes_first,
@@ -409,12 +410,24 @@ def _scope_value(scope: Mapping[str, object], key: str) -> object:
     return scope.get(key, "")
 
 
+class _LazySlotsState(Protocol):
+    @property
+    def lazy_slots(self) -> Mapping[str, BaseRoute | None]: ...
+
+
+class _LazyRoutesState(Protocol):
+    @property
+    def lazy_routes(self) -> Mapping[str, tuple[BaseRoute, ...]]: ...
+
+
 def _lazy_slots(app: "FastAPI") -> Mapping[str, BaseRoute | None]:
-    return app.state.lazy_slots if hasattr(app.state, "lazy_slots") else MappingProxyType({})
+    state: Final = app.state
+    return state.lazy_slots if has_attributes(state, _LazySlotsState, "lazy_slots") else MappingProxyType({})
 
 
 def _lazy_routes(app: "FastAPI") -> Mapping[str, tuple[BaseRoute, ...]]:
-    return app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
+    state: Final = app.state
+    return state.lazy_routes if has_attributes(state, _LazyRoutesState, "lazy_routes") else MappingProxyType({})
 
 
 def reserve_lazy_slot(app: "FastAPI", name: str, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:

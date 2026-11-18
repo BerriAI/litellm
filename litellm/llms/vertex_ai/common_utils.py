@@ -1824,12 +1824,14 @@ class VertexAITokenCounter(BaseTokenCounter):
                 return provider_error_response(error, request_model, model_to_use)
 
             if "totalTokens" in result:
-                return TokenCountResponse(
-                    total_tokens=result["totalTokens"],
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type=result.get("tokenizer_used", "gemini"),
-                    original_response=result,
+                return TokenCountResponse.model_validate(
+                    {
+                        "total_tokens": result["totalTokens"],
+                        "request_model": request_model,
+                        "model_used": model_to_use,
+                        "tokenizer_type": result.get("tokenizer_used", "gemini"),
+                        "original_response": result,
+                    }
                 )
 
         return None

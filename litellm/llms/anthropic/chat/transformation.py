@@ -3101,9 +3101,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         web_search_requests: int | None = None
         tool_search_requests: int | None = None
-        inference_geo: str | None = None
-        if "inference_geo" in _usage and _usage["inference_geo"] is not None:
-            inference_geo = _usage["inference_geo"]
+        usage_fields: Final[Mapping[str, object]] = usage_object
+        inference_geo: Final = usage_fields.get("inference_geo")
         service_tier: Final = cast(
             str | None,
             _usage.get("service_tier"),
