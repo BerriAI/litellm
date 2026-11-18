@@ -355,6 +355,63 @@ async fn a_binding_mismatch_keeps_the_history_and_adds_the_beta_header(
 
 #[rstest]
 #[tokio::test]
+async fn a_bad_signature_after_a_binding_retry_recovers_without_thinking(
+    call: MessagesCall,
+    #[values("anthropic", "azure_ai")] provider: &str,
+) {
+    let upstream = upstream([
+        rejection(400, BOUND_ELSEWHERE),
+        rejection(400, INVALID_SIGNATURE),
+        message_response(),
+    ])
+    .await;
+    let host =
+        RecordingCall::<Messages>::new(binding_replay(call, upstream.uri(), provider, false));
+
+    execute(&host).await.expect("the third attempt succeeds");
+
+    let [first, dropping, stripped] = <[_; 3]>::try_from(received(&upstream).await).unwrap();
+    assert_only_thinking_changed(&first.json(), &dropping.json());
+    assert!(stripped.json().get("thinking").is_none());
+    assert!(
+        !stripped.json()["messages"]
+            .to_string()
+            .contains("\"thinking\"")
+    );
+    assert_eq!(
+        host.retried
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|retried| retried.reasons.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            vec![RetryReason::ThinkingBinding],
+            vec![RetryReason::ThinkingSignature]
+        ]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_bad_signature_after_a_binding_retry_stops_at_the_third_attempt(call: MessagesCall) {
+    let upstream = upstream([
+        rejection(400, BOUND_ELSEWHERE),
+        rejection(400, INVALID_SIGNATURE),
+        rejection(400, INVALID_SIGNATURE),
+        message_response(),
+    ])
+    .await;
+    let host =
+        RecordingCall::<Messages>::new(binding_replay(call, upstream.uri(), "anthropic", false));
+
+    assert!(execute(&host).await.is_err());
+
+    assert_eq!(received(&upstream).await.len(), 3);
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_binding_mismatch_on_bedrock_invoke_names_the_beta_in_the_body(call: MessagesCall) {
     let upstream = upstream([rejection(400, BOUND_ELSEWHERE), message_response()]).await;
     let host = RecordingCall::<Messages>::new(MessagesCall {

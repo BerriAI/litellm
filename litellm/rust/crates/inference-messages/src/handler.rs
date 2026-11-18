@@ -804,6 +804,7 @@ async fn send_recovering(
     let mut headers = request.wire.headers.clone();
     let mut attempt = 1;
     let mut recovered: Vec<(u16, String)> = Vec::new();
+    let mut last_reasons = Vec::new();
     let finished = |upstream, sent_body, headers: Vec<(String, String)>| Recovered {
         upstream,
         sent_body,
@@ -903,7 +904,9 @@ async fn send_recovering(
             context.provider_request_retried(replayed).await?;
             continue;
         }
-        let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
+        let retried = if attempt >= MESSAGES_HTTP_ERROR_ATTEMPTS
+            && !config.retries_past_attempt_limit(&last_reasons, failure.status, &failure.text)
+        {
             None
         } else {
             config.retry_after_http_error(
@@ -919,9 +922,10 @@ async fn send_recovering(
         attempt += 1;
         recovered.push((failure.status, failure.text.clone()));
         tracing::debug!(
-            "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt}/{MESSAGES_HTTP_ERROR_ATTEMPTS})."
+            "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt})."
         );
         headers = config.headers_for_retry(headers, &retried.reasons);
+        last_reasons.clone_from(&retried.reasons);
         body = std::borrow::Cow::Owned(retried.body.clone());
         context.provider_request_retried(retried).await?;
     }

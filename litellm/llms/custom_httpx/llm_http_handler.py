@@ -2553,9 +2553,14 @@ class BaseLLMHTTPHandler:
                     )
                     else None
                 )
-                hit_max_attempt = len(recovered_errors) + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
                     e=e, litellm_params=litellm_params_dict, request_body=request_body
+                )
+                hit_max_attempt = len(recovered_errors) + 1 >= max_attempts and not (
+                    recovered_errors
+                    and provider_config.retries_anthropic_messages_past_attempt_limit(
+                        recovered_errors[-1], e, request_body
+                    )
                 )
                 if rebuild_body is None and (hit_max_attempt or not should_retry):
                     raise self._handle_error(e=e, provider_config=provider_config)
@@ -2570,9 +2575,8 @@ class BaseLLMHTTPHandler:
                         )
                 else:
                     verbose_logger.debug(
-                        "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt %s/%s).",
+                        "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt %s).",
                         len(recovered_errors) + 2,
-                        max_attempts,
                     )
                     if retry_beta := provider_config.anthropic_messages_retry_header_beta(e, request_body):
                         headers = dict(  # rebind-ok: every later attempt keeps the beta this body needs

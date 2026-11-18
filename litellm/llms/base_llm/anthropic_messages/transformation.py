@@ -210,6 +210,20 @@ class BaseAnthropicMessagesConfig(ABC):
             return None
         return anthropic_thinking_binding_retry(e.response.text, request_body)
 
+    def retries_anthropic_messages_past_attempt_limit(
+        self, previous_error: httpx.HTTPStatusError, e: httpx.HTTPStatusError, request_body: object
+    ) -> bool:
+        """A signature rejected after a binding retry still needs the strip that retry displaced."""
+        from litellm.llms.anthropic.common_utils import is_anthropic_signature_rejection_after_binding_retry
+
+        return (
+            e.response.status_code == 400
+            and self.recovers_thinking_binding_mismatch()
+            and is_anthropic_signature_rejection_after_binding_retry(
+                previous_error.response.text, e.response.text, request_body
+            )
+        )
+
     def anthropic_messages_retry_header_beta(self, e: httpx.HTTPStatusError, request_body: object) -> str | None:
         if self.carries_anthropic_betas_in_body() or self._thinking_binding_retry(e, request_body) is None:
             return None

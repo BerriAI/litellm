@@ -167,6 +167,15 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         claude_retry_headers(headers, reasons)
     }
 
+    fn retries_past_attempt_limit(
+        &self,
+        last_reasons: &[RetryReason],
+        status: u16,
+        error_text: &str,
+    ) -> bool {
+        claude_retries_past_attempt_limit(last_reasons, status, error_text)
+    }
+
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
         if !is_foundry_url(url) {
             return headers;
@@ -313,6 +322,18 @@ pub fn retry_claude_messages_after_http_error(
         vec![RetryReason::ThinkingBinding],
         body,
     ))
+}
+
+/// A signature rejected after a binding retry still needs the strip that retry displaced.
+pub fn claude_retries_past_attempt_limit(
+    last_reasons: &[RetryReason],
+    status: u16,
+    error_text: &str,
+) -> bool {
+    last_reasons.contains(&RetryReason::ThinkingBinding)
+        && status == 400
+        && is_anthropic_invalid_thinking_block_error(error_text)
+        && !is_anthropic_thinking_binding_mismatch_error(error_text)
 }
 
 pub fn claude_retry_headers(headers: Headers, reasons: &[RetryReason]) -> Headers {

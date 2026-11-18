@@ -1,5 +1,5 @@
 use crate::anthropic::messages::transformation::{
-    claude_retry_headers, retry_claude_messages_after_http_error,
+    claude_retries_past_attempt_limit, claude_retry_headers, retry_claude_messages_after_http_error,
 };
 use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use std::sync::LazyLock;
@@ -73,6 +73,15 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
 
     fn headers_for_retry(&self, headers: Headers, reasons: &[RetryReason]) -> Headers {
         claude_retry_headers(headers, reasons)
+    }
+
+    fn retries_past_attempt_limit(
+        &self,
+        last_reasons: &[RetryReason],
+        status: u16,
+        error_text: &str,
+    ) -> bool {
+        claude_retries_past_attempt_limit(last_reasons, status, error_text)
     }
 
     fn validate_environment(

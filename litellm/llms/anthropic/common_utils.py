@@ -2096,6 +2096,21 @@ def anthropic_thinking_binding_retry(error_text: str, request_body: object) -> M
     return {**thinking, "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
 
 
+def is_anthropic_signature_rejection_after_binding_retry(
+    previous_error_text: str, error_text: str, request_body: object
+) -> bool:
+    body: Final = validated_object_mapping(request_body)
+    thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
+    binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
+    return (
+        binding is not None
+        and binding.get("prefix_mismatch_behavior") == "drop_block"
+        and is_anthropic_thinking_binding_mismatch_error(previous_error_text)
+        and is_anthropic_invalid_thinking_block_error(error_text)
+        and not is_anthropic_thinking_binding_mismatch_error(error_text)
+    )
+
+
 def with_anthropic_beta(betas: object, beta: str) -> tuple[str, ...]:
     existing: Final = tuple(entry for entry in validated_object_list(betas) or () if isinstance(entry, str))
     return tuple(merge_anthropic_beta_headers(existing, beta).split(","))

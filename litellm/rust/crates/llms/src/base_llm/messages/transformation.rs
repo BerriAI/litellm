@@ -202,6 +202,16 @@ pub trait BaseMessagesConfig: Sync {
     fn headers_for_retry(&self, headers: Headers, _reasons: &[RetryReason]) -> Headers {
         headers
     }
+
+    /// Whether this failure still gets a retry once the attempt limit is used up.
+    fn retries_past_attempt_limit(
+        &self,
+        _last_reasons: &[RetryReason],
+        _status: u16,
+        _error_text: &str,
+    ) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

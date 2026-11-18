@@ -2372,6 +2372,7 @@ async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_
 _BINDING_BETA: Final = "thinking-binding-controls-2026-08-01"
 _DROP_BLOCK: Final = {"prefix_mismatch_behavior": "drop_block"}
 _NATIVE_OUTPUT_REJECTED: Final = "output_config.format: Extra inputs are not permitted"
+_SIGNATURE_AFTER_BINDING_RETRY: Final = "messages.3.content.0: Invalid `signature` in `thinking` block"
 _BINDING_REPLAY: Final = (
     {"role": "user", "content": "hi"},
     {
@@ -2549,6 +2550,52 @@ async def test_a_callers_own_drop_block_adds_no_beta_to_a_strict_tools_retry(cap
     assert retried["thinking"] == thinking
     assert client.post.await_args_list[1].kwargs["headers"] == {"Anthropic-Beta": "zeta-beta"}
     assert _binding_warnings(caplog) == ()
+
+
+@pytest.mark.asyncio
+async def test_a_bad_signature_after_a_binding_retry_recovers_without_thinking() -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    client: Final = _binding_http_client(
+        (400, _BOUND_THINKING_ERROR), (400, _SIGNATURE_AFTER_BINDING_RETRY), (200, "{}")
+    )
+
+    response: Final = await _post_binding_replay(
+        client,
+        AnthropicMessagesConfig(),
+        {"messages": copy.deepcopy(list(_BINDING_REPLAY)), "thinking": {"type": "adaptive"}},
+        {"x-api-key": "k"},
+    )
+
+    assert response.status_code == 200
+    assert client.post.await_count == 3
+    assert _posted_json(client, 1)["thinking"] == {"type": "adaptive", "block_binding": _DROP_BLOCK}
+    stripped: Final = _posted_json(client, 2)
+    assert "thinking" not in stripped
+    assert '"thinking"' not in json.dumps(stripped["messages"])
+
+
+@pytest.mark.asyncio
+async def test_a_bad_signature_after_a_binding_retry_stops_at_the_third_attempt() -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    client: Final = _binding_http_client(
+        (400, _BOUND_THINKING_ERROR),
+        (400, _SIGNATURE_AFTER_BINDING_RETRY),
+        (400, _SIGNATURE_AFTER_BINDING_RETRY),
+        (200, "{}"),
+    )
+
+    with pytest.raises(BaseLLMException) as raised:
+        await _post_binding_replay(
+            client,
+            AnthropicMessagesConfig(),
+            {"messages": copy.deepcopy(list(_BINDING_REPLAY)), "thinking": {"type": "adaptive"}},
+            {"x-api-key": "k"},
+        )
+
+    assert raised.value.status_code == 400
+    assert client.post.await_count == 3
 
 
 @pytest.mark.asyncio
