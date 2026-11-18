@@ -5,7 +5,8 @@ from typing import Final
 
 import pytest
 
-from litellm.tracing.ledger_record import lens_export
+import litellm
+from litellm.tracing.ledger_record import lens_export, safe_lens_export
 from litellm.tracing.types import LedgerCapabilities, LensExport
 
 START: Final = datetime(2026, 11, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -108,7 +109,9 @@ def test_large_body_without_an_upload_becomes_a_marked_preview_within_the_inline
     capabilities: LedgerCapabilities, payload_limit: int
 ) -> None:
     body = json.dumps([{"role": "user", "content": "雪" * 2000}], ensure_ascii=False)
-    export = _export(_kwargs(messages=[{"role": "user", "content": "雪" * 2000}]), capabilities, payload_limit=payload_limit)
+    export = _export(
+        _kwargs(messages=[{"role": "user", "content": "雪" * 2000}]), capabilities, payload_limit=payload_limit
+    )
 
     stored = str(export["record"]["messages"])
     assert export["payloads"] == ()
@@ -133,3 +136,64 @@ def test_trace_ingest_requests_fall_back_to_the_accounting_row() -> None:
     assert record["request_id"] == "accounting-request"
     assert record["messages"] == ""
     assert "litellm_call_id" not in record
+
+
+def test_disabled_logging_also_drops_error_strings() -> None:
+    kwargs = _kwargs()
+    kwargs["standard_logging_object"] = {**dict(kwargs["standard_logging_object"]), "error_str": "input: secret"}  # pyright: ignore[reportArgumentType]  # test-built mapping
+
+    record = _export(kwargs, keep_content=False)["record"]
+
+    assert record["error_str"] == ""
+
+
+def test_message_logging_off_redacts_echoed_input_from_error_strings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    leaked = "Invalid request: [{'type': 'missing', 'input': [{'role': 'user', 'content': 'secret prompt'}]}]"
+    kwargs = _kwargs()
+    kwargs["standard_logging_object"] = {**dict(kwargs["standard_logging_object"]), "error_str": leaked}  # pyright: ignore[reportArgumentType]  # test-built mapping
+
+    record = _export(kwargs)["record"]
+
+    assert record["messages"] == ""
+    assert "secret prompt" not in str(record["error_str"])
+
+
+def test_oversized_metadata_is_bounded_to_a_marked_preview() -> None:
+    kwargs = _kwargs()
+    metadata = {**dict(dict(kwargs["standard_logging_object"])["metadata"]), "huge": "x" * 10_000}  # pyright: ignore[reportArgumentType]  # test-built mapping
+    kwargs["standard_logging_object"] = {**dict(kwargs["standard_logging_object"]), "metadata": metadata}  # pyright: ignore[reportArgumentType]  # test-built mapping
+
+    record = _export(kwargs, STORE)["record"]
+
+    assert len(str(record["metadata"]).encode()) <= STORE.inline_bytes
+    assert "bytes omitted]" in str(record["metadata"])
+
+
+def test_upload_limit_counts_json_escaping_not_raw_bytes() -> None:
+    body = '"' * 2000
+    raw_and_escaped = (len(body.encode()), len(json.dumps(body, ensure_ascii=False).encode()))
+
+    export = _export(_kwargs(messages=body), STORE, payload_limit=3000)
+
+    assert raw_and_escaped[0] < 3000 < raw_and_escaped[1]
+    assert export["payloads"] == ()
+    assert "bytes omitted]" in str(export["record"]["messages"])
+
+
+def test_a_request_the_row_builder_cannot_read_still_exports_its_cost() -> None:
+    kwargs = {**_kwargs(), "litellm_params": 5}
+
+    export = safe_lens_export(
+        _accounting(),  # pyright: ignore[reportArgumentType]  # minimal accounting payload for the fields used
+        kwargs,
+        start_time=START,
+        end_time=END,
+        keep_content=True,
+        capabilities=STORE,
+    )
+
+    assert export["record"]["spend"] == 0.25
+    assert export["record"]["request_id"] == "accounting-request"
+    assert export["record"]["messages"] == ""
+    assert export["payloads"] == ()

@@ -99,7 +99,9 @@ async def test_raw_bodies_never_reach_the_local_spend_log_row() -> None:
         write_spend_logs=True,
     )
 
-    local_inserts: Final = [args for query, args in transaction.queried if "LiteLLM_SpendLogs" in query and "Delivery" not in query]
+    local_inserts: Final = [
+        args for query, args in transaction.queried if "LiteLLM_SpendLogs" in query and "Delivery" not in query
+    ]
     assert local_inserts
     assert RAW_BODY not in repr(local_inserts)
     assert "lens_export" not in repr(local_inserts)

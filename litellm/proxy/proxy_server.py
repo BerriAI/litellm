@@ -3369,6 +3369,8 @@ lens_ledger_capabilities: "LedgerCapabilities | None" = None
 def _publish_lens_ledger(capabilities: "LedgerCapabilities | None") -> None:
     global lens_ledger_capabilities  # noqa: PLW0603  # update_database reads the active Lens ledger contract per request
     lens_ledger_capabilities = capabilities  # rebind-ok: published by the tracing lifespan
+
+
 litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()
 jwt_http_handler: Final = JwksHTTPHandler()
 ui_login_enabled: bool = True

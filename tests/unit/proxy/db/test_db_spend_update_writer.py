@@ -6271,3 +6271,65 @@ async def test_a_row_without_a_caller_session_or_cost_adds_nothing(litellm_param
 
     assert await totals.read("hashed-key", "cc-session-1") is None
     assert await totals.read("hashed-key", "minted-1") is None
+
+
+@pytest.mark.parametrize("spend_logs_disabled", [False, True], ids=["logging_on", "logging_disabled"])
+@pytest.mark.asyncio
+async def test_lens_ledger_record_carries_the_accepted_delivery_amount_for_each_billed_attempt(
+    monkeypatch: pytest.MonkeyPatch, spend_logs_disabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.tracing.types import LedgerCapabilities
+
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = "success"
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", spend_logs_disabled)
+    monkeypatch.setattr(
+        proxy_server,
+        "lens_ledger_capabilities",
+        LedgerCapabilities(versions=(1,), payload_store=True, inline_bytes=1024, preview_bytes=256),
+    )
+    now: Final = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+    writer: Final = DBSpendUpdateWriter()
+    for attempt, cost in ((1, 0.1), (2, 0.2)):
+        await writer.update_database(
+            token="key",
+            user_id="user",
+            team_id="team",
+            org_id=None,
+            end_user_id=None,
+            kwargs={
+                "model": "ledger-test",
+                "call_type": "acompletion",
+                "litellm_call_id": "retried-call",
+                "litellm_params": {
+                    "metadata": {"user_api_key": "key", "user_api_key_user_id": "user", "billed_retry_attempt": attempt}
+                },
+                "standard_logging_object": {
+                    "id": "chatcmpl-retried",
+                    "litellm_call_id": "retried-call",
+                    "call_type": "acompletion",
+                    "response_cost": 9.0,
+                    "status": "success",
+                    "messages": "secret prompt",
+                    "metadata": {"user_api_key_team_id": "team"},
+                },
+            },
+            completion_response=None,
+            start_time=now,
+            end_time=now,
+            response_cost=cost,
+        )
+    await drain_logging_tasks()
+
+    rows: Final = prisma.spend_log_transactions
+    records: Final = [row["lens_export"]["record"] for row in rows]
+    assert len(rows) == 2
+    assert len({row["accounting_delivery_id"] for row in rows}) == 2
+    assert [record["spend"] for record in records] == [pytest.approx(0.1), pytest.approx(0.2)]
+    assert [record["spend"] for record in records] == [row["accounting_payload"]["spend"] for row in rows]
+    assert [record["request_id"] for record in records] == [row["request_id"] for row in rows]
+    assert [record["messages"] for record in records] == (["", ""] if spend_logs_disabled else ["secret prompt"] * 2)
+    assert all(row.get("accounting_log_disabled", False) is spend_logs_disabled for row in rows)

@@ -1,12 +1,15 @@
-"""Drains the durable Lens ledger outbox: cost events and payload bodies are acknowledged independently."""
+"""Drains the durable Lens ledger outbox.
+
+Cost events and payload bodies run in separate loops, so a slow payload store never delays accounting
+export. A row leaves the outbox only when Lens acknowledges it.
+"""
 
 import asyncio
 import json
 import os
 import socket
-import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Final, Protocol
@@ -21,26 +24,36 @@ from litellm.tracing.types import LedgerCapabilities, LedgerResults, LensStatus
 LEDGER_VERSION: Final = 1
 _STATUS_BYTES: Final = 64 * 1024
 _RESULT_BYTES: Final = 16 * 1024 * 1024
+_PERMANENT_BATCH: Final = frozenset({400, 413})
+_REJECTED_UPLOAD: Final = frozenset({400, 413, 422})
+_JSON_HEADERS: Final = {"Content-Type": "application/json"}
+UNREACHABLE_CAPABILITIES: Final = LedgerCapabilities(
+    versions=(LEDGER_VERSION,), payload_store=True, inline_bytes=1024 * 1024, preview_bytes=1024 * 1024
+)
 
 
-class LensExportStore(Protocol):
+class CostStore(Protocol):
     async def claim_events(self, limit: int, lease_seconds: int) -> tuple[ClaimedEvent, ...]: ...
 
     async def acknowledge_events(self, event_ids: Sequence[str]) -> int: ...
 
-    async def retry_events(self, event_ids: Sequence[str], error: str, max_attempts: int) -> int: ...
+    async def retry_events(self, event_ids: Sequence[str], error: str) -> int: ...
 
     async def park_events(self, event_ids: Sequence[str], error: str) -> int: ...
 
-    async def claim_payloads(self, limit: int, lease_seconds: int) -> tuple[ClaimedPayload, ...]: ...
+    async def release(self) -> int: ...
+
+
+class PayloadStore(Protocol):
+    async def claim_payloads(self, limit: int, lease_seconds: int, max_bytes: int) -> tuple[ClaimedPayload, ...]: ...
 
     async def acknowledge_payloads(self, payloads: Sequence[ClaimedPayload]) -> int: ...
 
-    async def retry_payloads(self, payloads: Sequence[ClaimedPayload], error: str, max_attempts: int) -> int: ...
+    async def retry_payloads(self, payloads: Sequence[ClaimedPayload], error: str) -> int: ...
 
     async def park_payloads(self, payloads: Sequence[ClaimedPayload], error: str) -> int: ...
 
-    async def cleanup(self, retention_days: int) -> int: ...
+    async def release(self) -> int: ...
 
 
 def _positive(environ: Mapping[str, str], name: str, default: int) -> int:
@@ -52,37 +65,90 @@ def _positive(environ: Mapping[str, str], name: str, default: int) -> int:
 class ExportSettings:
     batch_size: int = 100
     lease_seconds: int = 120
-    max_attempts: int = 12
-    retention_days: int = 7
-    idle_seconds: float = 2.0
-    cleanup_seconds: float = 3600.0
+    cost_idle_seconds: float = 0.25
+    upload_idle_seconds: float = 2.0
+    cost_batch_bytes: int = 8 * 1024 * 1024
+    upload_batch_bytes: int = 32 * 1024 * 1024
+    probe_seconds: float = 30.0
+    stop_seconds: float = 5.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> "ExportSettings":
         return cls(
             batch_size=min(_positive(environ, "LITELLM_LENS_EXPORT_BATCH_SIZE", 100), 1000),
             lease_seconds=_positive(environ, "LITELLM_LENS_EXPORT_LEASE_SECONDS", 120),
-            max_attempts=_positive(environ, "LITELLM_LENS_EXPORT_MAX_ATTEMPTS", 12),
-            retention_days=_positive(environ, "LITELLM_LENS_EXPORT_RETENTION_DAYS", 7),
+            cost_idle_seconds=max(_positive(environ, "LITELLM_LENS_EXPORT_IDLE_MS", 250), 50) / 1000,
+            upload_batch_bytes=_positive(environ, "LITELLM_LENS_UPLOAD_BATCH_BYTES", 32 * 1024 * 1024),
         )
 
 
-def exporter_owner() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+def exporter_owner(role: str) -> str:
+    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}:{role}"
 
 
-async def ledger_capabilities(client: httpx.AsyncClient) -> LedgerCapabilities | None:
+@dataclass(frozen=True, slots=True)
+class Supported:
+    capabilities: LedgerCapabilities
+
+
+@dataclass(frozen=True, slots=True)
+class Unsupported:
+    """Lens answered its status endpoint without ledger version 1: an older server, not an outage."""
+
+
+@dataclass(frozen=True, slots=True)
+class Unreachable:
+    reason: str
+
+
+Probe = Supported | Unsupported | Unreachable
+
+
+async def probe_lens(client: httpx.AsyncClient) -> Probe:
     try:
-        response: Final = await client.get("/internal/status", timeout=5)
-    except httpx.HTTPError:
-        return None
-    if response.status_code != 200 or len(response.content) > _STATUS_BYTES:
-        return None
+        response: Final = await client.get("internal/status", timeout=5)
+    except httpx.HTTPError as error:
+        return Unreachable(type(error).__name__)
+    if response.status_code != 200:
+        return Unreachable(f"HTTP {response.status_code}")
+    if len(response.content) > _STATUS_BYTES:
+        return Unreachable("StatusTooLarge")
     try:
         ledger: Final = LensStatus.model_validate_json(response.content).ledger
     except ValidationError:
+        return Unreachable("InvalidStatus")
+    if ledger is None or LEDGER_VERSION not in ledger.versions:
+        return Unsupported()
+    return Supported(ledger)
+
+
+def _encode(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+
+
+def _decoded(event: ClaimedEvent) -> Mapping[str, object] | None:
+    try:
+        record: Final = json.loads(event.event)
+    except ValueError:
         return None
-    return ledger if ledger is not None and LEDGER_VERSION in ledger.versions else None
+    return record if isinstance(record, dict) else None
+
+
+def _batches(
+    events: Sequence[tuple[ClaimedEvent, Mapping[str, object]]], max_bytes: int
+) -> Iterator[tuple[tuple[ClaimedEvent, Mapping[str, object]], ...]]:
+    batch: list[tuple[ClaimedEvent, Mapping[str, object]]] = []  # mutable-ok: greedy byte-bounded batching
+    size = 0  # rebind-ok: bytes in the open batch
+    for item in events:
+        length = len(item[0].event.encode())  # rebind-ok: per-item size
+        if batch and size + length > max_bytes:
+            yield tuple(batch)
+            batch = []  # rebind-ok: start the next batch
+            size = 0  # rebind-ok: start the next batch
+        batch.append(item)
+        size += length
+    if batch:
+        yield tuple(batch)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,27 +162,11 @@ class _Failed:
     permanent: bool
 
 
-def _decoded(event: ClaimedEvent) -> Mapping[str, object] | None:
-    try:
-        record: Final = json.loads(event.event)
-    except ValueError:
-        return None
-    return record if isinstance(record, dict) else None
-
-
-class LensLedgerExporter:
-    def __init__(
-        self,
-        store: LensExportStore,
-        client: httpx.AsyncClient,
-        settings: ExportSettings,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
+class CostRunner:
+    def __init__(self, store: CostStore, client: httpx.AsyncClient, settings: ExportSettings) -> None:
         self._store: Final = store
         self._client: Final = client
         self._settings: Final = settings
-        self._clock: Final = clock
-        self._next_cleanup = clock()  # rebind-ok: periodic cleanup deadline
 
     async def _post(self, events: Sequence[tuple[ClaimedEvent, Mapping[str, object]]]) -> _Results | _Failed:
         body: Final = {
@@ -124,11 +174,13 @@ class LensLedgerExporter:
             "events": [{"event_id": event.event_id, "record": record} for event, record in events],
         }
         try:
-            response: Final = await self._client.post("/internal/ledger", json=body, timeout=30)
+            response: Final = await self._client.post(
+                "internal/ledger", content=_encode(body), headers=_JSON_HEADERS, timeout=30
+            )
         except httpx.HTTPError as error:
             return _Failed(type(error).__name__, permanent=False)
         if response.status_code != 200:
-            return _Failed(f"HTTP {response.status_code}", permanent=response.status_code in (400, 413))
+            return _Failed(f"HTTP {response.status_code}", permanent=response.status_code in _PERMANENT_BATCH)
         if len(response.content) > _RESULT_BYTES:
             return _Failed("ResponseTooLarge", permanent=False)
         try:
@@ -142,78 +194,113 @@ class LensLedgerExporter:
         match outcome:
             case _Failed(error=error, permanent=True) if len(events) == 1:
                 await self._store.park_events(ids, error)
+                verbose_proxy_logger.error("Lens refused ledger event %s (%s); it is parked", ids[0], error)
                 return 0
             case _Failed(permanent=True):
                 return sum([await self._settle((event,)) for event in events])
             case _Failed(error=error):
-                await self._store.retry_events(ids, error, self._settings.max_attempts)
+                await self._store.retry_events(ids, error)
                 return 0
             case _Results(results=results):
-                statuses: Final = {result.event_id: result for result in results.results}
-                stored: Final = tuple(i for i in ids if i in statuses and statuses[i].status == "stored")
-                rejected: Final = tuple(i for i in ids if i in statuses and statuses[i].status == "rejected")
-                missing: Final = tuple(i for i in ids if i not in statuses)
+                statuses: Final = {result.event_id: result.status for result in results.results}
+                stored: Final = tuple(event_id for event_id in ids if statuses.get(event_id) == "stored")
+                rejected: Final = tuple(event_id for event_id in ids if statuses.get(event_id) == "rejected")
+                missing: Final = tuple(event_id for event_id in ids if event_id not in statuses)
                 await self._store.acknowledge_events(stored)
                 await self._store.park_events(rejected, "Rejected")
-                await self._store.retry_events(missing, "MissingResult", self._settings.max_attempts)
+                await self._store.retry_events(missing, "MissingResult")
                 if rejected:
                     verbose_proxy_logger.error("Lens rejected %d ledger events; they are parked", len(rejected))
                 return len(stored)
 
-    async def export_events(self) -> int:
+    async def step(self) -> int:
         claimed: Final = await self._store.claim_events(self._settings.batch_size, self._settings.lease_seconds)
         decoded: Final = tuple((event, _decoded(event)) for event in claimed)
-        undecodable: Final = tuple(event.event_id for event, record in decoded if record is None)
-        await self._store.park_events(undecodable, "UndecodableEvent")
+        await self._store.park_events(
+            tuple(event.event_id for event, record in decoded if record is None), "UndecodableEvent"
+        )
         readable: Final = tuple((event, record) for event, record in decoded if record is not None)
-        return await self._settle(readable) if readable else 0
+        return sum([await self._settle(batch) for batch in _batches(readable, self._settings.cost_batch_bytes)])
 
-    async def _upload(self, payload: ClaimedPayload) -> str | None:
+
+class UploadRunner:
+    def __init__(self, store: PayloadStore, client: httpx.AsyncClient, settings: ExportSettings) -> None:
+        self._store: Final = store
+        self._client: Final = client
+        self._settings: Final = settings
+
+    async def _upload(self, payload: ClaimedPayload) -> int | str:
         try:
             response: Final = await self._client.post(
-                "/internal/ledger/payloads",
-                json={"version": LEDGER_VERSION, **payload.model_dump(exclude={"attempts"})},
+                "internal/ledger/payloads",
+                content=_encode({"version": LEDGER_VERSION, **payload.model_dump(exclude={"attempts"})}),
+                headers=_JSON_HEADERS,
                 timeout=60,
             )
         except httpx.HTTPError as error:
             return type(error).__name__
-        return None if response.status_code == 204 else f"HTTP {response.status_code}"
+        return response.status_code
 
-    async def export_payloads(self) -> int:
-        claimed: Final = await self._store.claim_payloads(self._settings.batch_size, self._settings.lease_seconds)
-        outcomes: Final = tuple([(payload, await self._upload(payload)) for payload in claimed])
-        uploaded: Final = tuple(payload for payload, error in outcomes if error is None)
-        disabled: Final = tuple(payload for payload, error in outcomes if error == "HTTP 409")
-        permanent: Final = tuple(payload for payload, error in outcomes if error in ("HTTP 400", "HTTP 422"))
-        failed: Final = tuple(
-            (payload, error)
-            for payload, error in outcomes
-            if error is not None and error not in ("HTTP 409", "HTTP 400", "HTTP 422")
+    async def step(self) -> int:
+        claimed: Final = await self._store.claim_payloads(
+            self._settings.batch_size, self._settings.lease_seconds, self._settings.upload_batch_bytes
         )
-        await self._store.acknowledge_payloads(uploaded + disabled)
-        await self._store.park_payloads(permanent, "Rejected")
-        for payload, error in failed:
-            await self._store.retry_payloads((payload,), error, self._settings.max_attempts)
+        outcomes: Final = tuple([(payload, await self._upload(payload)) for payload in claimed])
+        uploaded: Final = tuple(payload for payload, outcome in outcomes if outcome == 204)
+        disabled: Final = tuple(payload for payload, outcome in outcomes if outcome == 409)
+        rejected: Final = tuple(
+            (payload, outcome)
+            for payload, outcome in outcomes
+            if isinstance(outcome, int) and outcome in _REJECTED_UPLOAD
+        )
+        failed: Final = tuple(
+            (payload, outcome)
+            for payload, outcome in outcomes
+            if outcome not in (204, 409) and not (isinstance(outcome, int) and outcome in _REJECTED_UPLOAD)
+        )
+        await self._store.acknowledge_payloads(uploaded)
+        await self._store.park_payloads(disabled, "PayloadStoreDisabled")
+        for payload, outcome in rejected:
+            await self._store.park_payloads((payload,), f"HTTP {outcome}")
+        for payload, outcome in failed:
+            await self._store.retry_payloads((payload,), outcome if isinstance(outcome, str) else f"HTTP {outcome}")
+        if disabled or rejected:
+            verbose_proxy_logger.error(
+                "Lens did not store %d payload bodies (%d with no payload store); they are parked for requeue",
+                len(disabled) + len(rejected),
+                len(disabled),
+            )
         return len(uploaded)
 
-    async def cleanup_due(self) -> int:
-        if self._clock() < self._next_cleanup:
-            return 0
-        self._next_cleanup = self._clock() + self._settings.cleanup_seconds
-        return await self._store.cleanup(self._settings.retention_days)
 
-    async def run_once(self) -> int:
-        moved: Final = await self.export_events() + await self.export_payloads()
-        await self.cleanup_due()
-        return moved
+async def _idle(stop: asyncio.Event, seconds: float) -> None:
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
 
-    async def run(self, stop: asyncio.Event) -> None:
+
+async def run_loop(
+    step: Callable[[], Awaitable[int]],
+    release: Callable[[], Awaitable[int]],
+    *,
+    stop: asyncio.Event,
+    active: Callable[[], bool],
+    idle_seconds: float,
+) -> None:
+    """Runs `step` until stopped; on stop or cancellation it releases this runner's leases."""
+    try:
         while not stop.is_set():
+            if not active():
+                await _idle(stop, idle_seconds)
+                continue
             try:
-                moved = await self.run_once()  # rebind-ok: loop progress
+                moved = await step()  # rebind-ok: loop progress
+            except asyncio.CancelledError:
+                raise
             except Exception as error:  # noqa: BLE001  # the outbox is durable; a failed pass retries next tick
                 verbose_proxy_logger.warning("Lens ledger export pass failed, retrying: %s", type(error).__name__)
                 moved = 0  # rebind-ok: loop progress
             if moved == 0:
-                with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(stop.wait(), timeout=self._settings.idle_seconds)
+                await _idle(stop, idle_seconds)
+    finally:
+        with suppress(Exception, asyncio.CancelledError):
+            await asyncio.wait_for(release(), timeout=2)

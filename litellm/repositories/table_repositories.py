@@ -199,7 +199,9 @@ async def _insert_lens_exports(transaction: LedgerTransaction, rows: Sequence[Ma
             non_finite_as_null=True,
         ),
     )
-    payloads: Final = tuple(chain.from_iterable(_lens_payload_rows(event_id, export) for event_id, _, export in exports))
+    payloads: Final = tuple(
+        chain.from_iterable(_lens_payload_rows(event_id, export) for event_id, _, export in exports)
+    )
     if payloads:
         await transaction.execute_raw(
             'INSERT INTO "LiteLLM_LensLedgerPayload" '

@@ -921,16 +921,15 @@ class DBSpendUpdateWriter:
                 and proxy_settings.get("disable_error_logs") is True
             )
             if use_ledger and lens_ledger_capabilities is not None:
-                from litellm.tracing.ledger_record import LENS_EXPORT_KEY, lens_export, max_payload_bytes
+                from litellm.tracing.ledger_record import LENS_EXPORT_KEY, safe_lens_export
 
-                payload[LENS_EXPORT_KEY] = lens_export(
+                payload[LENS_EXPORT_KEY] = safe_lens_export(
                     payload,
                     kwargs or {},
                     start_time=start_time,
                     end_time=end_time,
                     keep_content=keep_spend_logs,
                     capabilities=lens_ledger_capabilities,
-                    payload_limit=max_payload_bytes(),
                 )
             if not await self._record_spend_log(
                 payload=payload,

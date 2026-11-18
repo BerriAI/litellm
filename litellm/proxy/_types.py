@@ -2597,7 +2597,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
 
     lens_ledger_export: bool = Field(
         False,
-        description="Commit each accepted spend delivery to a durable Lens outbox and export it from there instead of the in-memory Lens callback. Needs the spend ledger, a database and a Lens service that supports ledger export. Set to false to return to the callback; records already committed keep draining.",
+        description="Commit each accepted spend delivery to a durable Lens outbox and export it from there instead of the in-memory Lens callback. Needs the spend ledger, a database and a Lens service that supports ledger export. Set to false to return to the callback; records already committed keep draining. A body above LITELLM_LENS_PAYLOAD_MAX_BYTES (default 16 MiB, at most 30 MiB once JSON-encoded) is not uploaded: Lens keeps a marked preview and the proxy logs a warning.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
