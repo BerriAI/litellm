@@ -1088,6 +1088,7 @@ def test_a_valid_partitioned_parent_index_under_another_name_is_renamed_with_its
         "Renaming the equivalent index call_id_parent_by_hand on LiteLLM_SpendLogs "
         f"to {CALL_ID_INDEX} instead of building a second one",
         "Building index LiteLLM_DailyUserSpend_api_key_date_idx on LiteLLM_DailyUserSpend concurrently",
+        "Building index LiteLLM_EndUserTable_restricted_idx on LiteLLM_EndUserTable concurrently",
         "Request-log indexes are all in place",
     ]
     oids: Final = _index_oids(partitioned_database)
