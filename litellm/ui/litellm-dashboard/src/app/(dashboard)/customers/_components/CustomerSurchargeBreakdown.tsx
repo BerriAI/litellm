@@ -24,11 +24,15 @@ export default function CustomerSurchargeBreakdown({
     >
       <div className="flex gap-1">
         <dt>{t("customerPortal.analytics.baseCost")}</dt>
-        <dd className="tabular-nums text-foreground">{t("format.usd", { val: breakdown.baseCost, ...BREAKDOWN_DIGITS })}</dd>
+        <dd className="tabular-nums text-foreground">
+          {t("format.usd", { val: breakdown.baseCost, ...BREAKDOWN_DIGITS })}
+        </dd>
       </div>
       <div className="flex gap-1">
         <dt>{t("customerPortal.analytics.surcharge")}</dt>
-        <dd className="tabular-nums text-foreground">{t("format.usd", { val: breakdown.surcharge, ...BREAKDOWN_DIGITS })}</dd>
+        <dd className="tabular-nums text-foreground">
+          {t("format.usd", { val: breakdown.surcharge, ...BREAKDOWN_DIGITS })}
+        </dd>
       </div>
     </dl>
   );
