@@ -954,7 +954,7 @@ class TestTransformResponseGeminiThoughtSignatures:
         from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
         from litellm.types.utils import ModelResponse
 
-        raw_response = MagicMock()
+        raw_response: Final = MagicMock()
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
@@ -981,7 +981,7 @@ class TestTransformResponseGeminiThoughtSignatures:
         )
 
     def test_list_shaped_reasoning_content_is_flattened_and_signatures_kept(self):
-        result = self._transform(
+        result: Final = self._transform(
             {
                 "role": "assistant",
                 "content": "Ticket ABC-123 is open.",
@@ -992,7 +992,7 @@ class TestTransformResponseGeminiThoughtSignatures:
             }
         )
 
-        message = result.choices[0].message
+        message: Final = result.choices[0].message
         assert message.content == "Ticket ABC-123 is open."
         assert message.reasoning_content == "Checking the ticket. It is open."
         assert [block["signature"] for block in message.thinking_blocks] == [
@@ -1006,7 +1006,7 @@ class TestTransformResponseGeminiThoughtSignatures:
         assert all(block["type"] == "thinking" for block in message.thinking_blocks)
 
     def test_signature_only_block_with_empty_text(self):
-        result = self._transform(
+        result: Final = self._transform(
             {
                 "role": "assistant",
                 "content": None,
@@ -1024,13 +1024,13 @@ class TestTransformResponseGeminiThoughtSignatures:
             }
         )
 
-        message = result.choices[0].message
+        message: Final = result.choices[0].message
         assert getattr(message, "reasoning_content", None) is None
         assert message.thinking_blocks[0]["signature"] == "CtMHAdHtim920NjKZTfLS9W/gDXBihg="
         assert message.tool_calls[0].function.name == "get_ticket_status"
 
     def test_string_reasoning_content_is_untouched(self):
-        result = self._transform(
+        result: Final = self._transform(
             {
                 "role": "assistant",
                 "content": "hi",
@@ -1038,20 +1038,20 @@ class TestTransformResponseGeminiThoughtSignatures:
             }
         )
 
-        message = result.choices[0].message
+        message: Final = result.choices[0].message
         assert message.reasoning_content == "plain gemini 2.5 style reasoning"
         assert getattr(message, "thinking_blocks", None) is None
 
 
 def _stream_event(shape: str, delta: dict[str, object]) -> str:
-    chunk = {
+    chunk: Final = {
         "id": "chatcmpl-1",
         "object": "chat.completion.chunk",
         "created": 1,
         "model": "gemini-3.5-flash",
         "choices": [{"index": 0, "delta": delta}],
     }
-    events = {
+    events: Final = {
         "final_result": {"request_id": "r1", "final_result": chunk},
         "orchestration_result": {"request_id": "r1", "orchestration_result": chunk},
         "openai_chunk": chunk,
@@ -1061,10 +1061,10 @@ def _stream_event(shape: str, delta: dict[str, object]) -> str:
 
 class TestStreamGeminiThoughtSignatures:
     @pytest.mark.parametrize("shape", ["final_result", "orchestration_result", "openai_chunk"])
-    def test_list_shaped_reasoning_content_in_stream_delta(self, shape):
+    def test_list_shaped_reasoning_content_in_stream_delta(self, shape: str):
         from litellm.llms.sap.chat.handler import SAPStreamIterator
 
-        lines = [
+        lines: Final = [
             _stream_event(
                 shape,
                 {
@@ -1079,10 +1079,10 @@ class TestStreamGeminiThoughtSignatures:
             "data: [DONE]",
         ]
 
-        chunks = list(SAPStreamIterator(response=iter(lines)))
+        chunks: Final = list(SAPStreamIterator(response=iter(lines)))
 
         assert len(chunks) == 1
-        delta = chunks[0].choices[0].delta
+        delta: Final = chunks[0].choices[0].delta
         assert delta.content == "OPEN"
         assert delta.reasoning_content == "Checking the ticket. It is open."
         assert delta.thinking_blocks == [
@@ -1093,7 +1093,7 @@ class TestStreamGeminiThoughtSignatures:
     def test_signature_only_block_in_stream_delta(self):
         from litellm.llms.sap.chat.handler import SAPStreamIterator
 
-        lines = [
+        lines: Final = [
             _stream_event(
                 "final_result",
                 {
@@ -1103,7 +1103,7 @@ class TestStreamGeminiThoughtSignatures:
             )
         ]
 
-        delta = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
+        delta: Final = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
 
         assert delta.reasoning_content is None
         assert delta.thinking_blocks == [
@@ -1113,9 +1113,9 @@ class TestStreamGeminiThoughtSignatures:
     def test_string_reasoning_content_in_stream_delta_is_untouched(self):
         from litellm.llms.sap.chat.handler import SAPStreamIterator
 
-        lines = [_stream_event("final_result", {"content": "OPEN", "reasoning_content": "plain reasoning"})]
+        lines: Final = [_stream_event("final_result", {"content": "OPEN", "reasoning_content": "plain reasoning"})]
 
-        delta = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
+        delta: Final = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
 
         assert delta.reasoning_content == "plain reasoning"
         assert getattr(delta, "thinking_blocks", None) is None
@@ -1123,9 +1123,9 @@ class TestStreamGeminiThoughtSignatures:
     def test_non_object_stream_line_is_skipped(self):
         from litellm.llms.sap.chat.handler import SAPStreamIterator
 
-        lines = ["data: [1, 2]", _stream_event("final_result", {"content": "OPEN"})]
+        lines: Final = ["data: [1, 2]", _stream_event("final_result", {"content": "OPEN"})]
 
-        chunks = list(SAPStreamIterator(response=iter(lines)))
+        chunks: Final = list(SAPStreamIterator(response=iter(lines)))
 
         assert [chunk.choices[0].delta.content for chunk in chunks] == ["OPEN"]
 
@@ -1139,9 +1139,9 @@ class TestStreamGeminiThoughtSignatures:
                 {"content": "OPEN", "reasoning_content": [{"content": "It is open.", "signature": "sig-one"}]},
             )
 
-        chunks = [chunk async for chunk in AsyncSAPStreamIterator(response=lines())]
+        chunks: Final = [chunk async for chunk in AsyncSAPStreamIterator(response=lines())]
 
-        delta = chunks[0].choices[0].delta
+        delta: Final = chunks[0].choices[0].delta
         assert delta.reasoning_content == "It is open."
         assert delta.thinking_blocks == [{"type": "thinking", "thinking": "It is open.", "signature": "sig-one"}]
 
@@ -1155,7 +1155,7 @@ class TestStreamGeminiThoughtSignatures:
             {"choices": [{"delta": "not a delta"}]},
         ],
     )
-    def test_results_without_reasoning_blocks_pass_through(self, result):
+    def test_results_without_reasoning_blocks_pass_through(self, result: object):
         from litellm.llms.sap.chat.reasoning import normalize_reasoning_blocks
 
         assert normalize_reasoning_blocks(result, "delta") == result
