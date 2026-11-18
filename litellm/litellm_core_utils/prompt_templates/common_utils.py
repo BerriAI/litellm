@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data as extract_file_data,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -793,6 +794,51 @@ def detect_first_expected_role(
     return None
 
 
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+
+
+def _is_blank_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and not fields.get("text")
+
+
+def is_blank_content(content: object) -> bool:
+    if content is None or content == "":
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_blank_text_block, blocks))
+
+
+def is_empty_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and is_blank_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and is_blank_content(getattr(message, "content", None))
+
+
+def _is_whitespace_text(text: object) -> bool:
+    return not text or (isinstance(text, str) and not text.strip())
+
+
+def _is_whitespace_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and _is_whitespace_text(fields.get("text"))
+
+
+def _is_whitespace_content(content: object) -> bool:
+    if content is None or isinstance(content, str):
+        return _is_whitespace_text(content)
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_whitespace_text_block, blocks))
+
+
+def is_whitespace_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_whitespace_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_whitespace_content(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
@@ -826,7 +872,7 @@ def _insert_user_continue_message(
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
-        result_messages.insert(0, continue_message)
+        result_messages.insert(0, continue_message.copy())
 
     # Handle consecutive assistant messages in the counted sequence
     i = 1
@@ -837,7 +883,7 @@ def _insert_user_continue_message(
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
-                result_messages.insert(i, continue_message)
+                result_messages.insert(i, continue_message.copy())
                 i += 2
                 inserted_continue_message = True
             else:
@@ -846,7 +892,7 @@ def _insert_user_continue_message(
                     previous_message = result_messages[j]
                     if _counts_for_alternation(previous_message):
                         if previous_message["role"] == "assistant":
-                            result_messages.insert(i, continue_message)
+                            result_messages.insert(i, continue_message.copy())
                             i += 2
                             inserted_continue_message = True
                         break
@@ -857,7 +903,7 @@ def _insert_user_continue_message(
     # Handle final message — append user_continue after any trailing assistant,
     # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
-        result_messages.append(continue_message)
+        result_messages.append(continue_message.copy())
 
     return result_messages
 
@@ -897,7 +943,7 @@ def _insert_assistant_continue_message(
     modified_messages: Final[list[AllMessageValues]] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
-            modified_messages.append(continue_message)
+            modified_messages.append(continue_message.copy())
         modified_messages.append(message)
 
     return modified_messages
