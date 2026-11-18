@@ -2850,6 +2850,9 @@ class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     text_tokens: int
     """The number of text tokens in the input prompt."""
 
+    cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
+
 
 class ImageUsage(BaseLiteLLMOpenAIResponseObject):
     input_tokens: int
