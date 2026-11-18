@@ -150,12 +150,16 @@ def test_fable_5_2_fast_mode_doubles_every_token_price_on_the_anthropic_api(loca
     """Anthropic bills fast mode at 2x the standard rate on every token type
     (platform.claude.com/docs/en/about-claude/pricing, read 2026-11-09), and the
     Anthropic cost path is the one that reads the row's `fast` multiplier."""
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_provider_specific_speed_multiplier
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
-    info: Final = litellm.get_model_info("claude-fable-5-2")
-    assert get_provider_specific_speed_multiplier(info, Usage(speed="fast")) == 2.0
-    assert get_provider_specific_speed_multiplier(info, Usage()) == 1.0
+    def billed(speed: str | None) -> float:
+        prompt_cost, completion_cost = cost_per_token(
+            "claude-fable-5-2", Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100, speed=speed)
+        )
+        return prompt_cost + completion_cost
+
+    assert billed("fast") == pytest.approx(2 * billed(None))
 
 
 def test_fable_5_2_vertex_rows_do_not_advertise_fast_mode(local_model_cost_map) -> None:
