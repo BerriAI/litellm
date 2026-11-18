@@ -65,6 +65,9 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
         "customer_org": Litellm_EntityType.CUSTOMER_ORG.value,
         "customer_team": Litellm_EntityType.CUSTOMER_TEAM.value,
         "customer_member": Litellm_EntityType.CUSTOMER_MEMBER.value,
+        "app": Litellm_EntityType.APP.value,
+        "app_customer_org": Litellm_EntityType.APP_CUSTOMER_ORG.value,
+        "app_customer_member": Litellm_EntityType.APP_CUSTOMER_MEMBER.value,
     }
 )
 
@@ -82,18 +85,20 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def recorded_window_spend(
-    row: "LiteLLM_BudgetWindowSpend | None", entity_type: str, expected_window_start: datetime | None
+    row: "LiteLLM_BudgetWindowSpend | None",
+    entity_type: str,
+    expected_window_start: datetime | None,
 ) -> float | None:
     if expected_window_start is None:
         return None
     if row is None or _as_utc(row.window_start) < _as_utc(expected_window_start):
-        return 0.0 if entity_type.startswith("customer_") else None
+        return 0.0 if entity_type.startswith(("customer_", "app")) else None
     return float(row.spend or 0.0)
 
 
 _CUSTOMER_OVERRIDE_INCLUDE: Final = MappingProxyType({"budget": True, "budget_override": True})
 _CUSTOMER_COUNTER: Final = re.compile(
-    r"spend:(customer_org|customer_team|customer_member):(.+):"
+    r"spend:(customer_org|customer_team|customer_member|app|app_customer_org|app_customer_member):(.+):"
     r"(lifetime|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
 )
 
@@ -202,13 +207,42 @@ class SpendCounterReseed:
             customer: Final = _CUSTOMER_COUNTER.fullmatch(counter_key)
             if customer is not None:
                 family, entity_id, _ = customer.groups()
+                if family == "app" or family.startswith("app_"):
+                    from litellm.proxy.management_helpers.apps import (
+                        AppCustomerMemberRepository,
+                        AppCustomerOrganizationRepository,
+                        AppRepository,
+                        app_scope_identity,
+                    )
+
+                    if family == "app":
+                        return await AppRepository(prisma_client).table.find_unique(where={"app_id": entity_id})
+                    app_id, customer_id = app_scope_identity(entity_id)
+                    if family == "app_customer_org":
+                        return await AppCustomerOrganizationRepository(prisma_client).table.find_unique(
+                            where={
+                                "app_id_customer_org_id": {
+                                    "app_id": app_id,
+                                    "customer_org_id": customer_id,
+                                },
+                            }
+                        )
+                    return await AppCustomerMemberRepository(prisma_client).table.find_unique(
+                        where={
+                            "app_id_customer_member_id": {
+                                "app_id": app_id,
+                                "customer_member_id": customer_id,
+                            },
+                        }
+                    )
                 if family == "customer_org":
                     return await CustomerOrganizationRepository(prisma_client).table.find_unique(
                         where={"customer_org_id": entity_id}, include={"budget": True}
                     )
                 if family == "customer_team":
                     return await CustomerTeamRepository(prisma_client).table.find_unique(
-                        where={"customer_team_id": entity_id}, include=_CUSTOMER_OVERRIDE_INCLUDE
+                        where={"customer_team_id": entity_id},
+                        include=_CUSTOMER_OVERRIDE_INCLUDE,
                     )
                 return await CustomerMemberRepository(prisma_client).table.find_unique(
                     where={"customer_member_id": entity_id}, include=_CUSTOMER_OVERRIDE_INCLUDE

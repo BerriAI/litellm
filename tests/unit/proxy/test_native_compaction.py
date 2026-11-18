@@ -22,6 +22,7 @@ from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.router import Router
 from litellm.router_strategy.complexity_router.context_compaction import compaction_executor, reject_recursive_compactor
 from litellm.types.utils import ModelResponse
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 _HEADERS: Final = (
     (b"authorization", b"Bearer sk-compaction-fixture"), (b"cookie", b"session=fixture"),
@@ -117,7 +118,7 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch.setattr(proxy_server.app, "dependency_overrides", {})
     monkeypatch.setattr(proxy_server, "master_key", "sk-master-fixture")
     monkeypatch.setattr(litellm, "max_budget", 0.0)
-    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})

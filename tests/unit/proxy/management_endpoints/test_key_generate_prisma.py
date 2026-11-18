@@ -99,6 +99,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
@@ -2212,6 +2213,8 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch, rust_auth_stores: R
 
     # Mock dependencies
     class MockPrismaClient:
+        db = prisma_with_empty_config().db
+
         async def get_data(self, *args, **kwargs):
             print("MockPrismaClient.get_data() called")
             raise httpx.ConnectError("Failed to connect to DB")
@@ -2276,6 +2279,8 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch, rust_au
 
     # Mock dependencies
     class MockPrismaClient:
+        db = prisma_with_empty_config().db
+
         async def get_data(self, *args, **kwargs):
             print("MockPrismaClient.get_data() called")
             raise httpx.ConnectError("Failed to connect to DB")
