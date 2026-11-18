@@ -678,14 +678,18 @@ CASES: Final = (
     ),
     pytest.param(
         Call(claims={**MEMBER, "roles": ["team-pt"]}, path="/v1/solver/solution/job-1", method="GET", body=None),
+        NEW_MEMBER_OF_GRANTING_TEAM,
+        id="jwt_pass_through_subpath",
+    ),
+    pytest.param(
+        Call(claims={**MEMBER, "roles": ["team-a"]}, path="/v1/solver/solution/job-1", method="GET", body=None),
         Refused(
             "403",
             "auth_error",
             "HTTPException",
-            "Key/team not allowed to access passthrough route /v1/solver/solution/job-1. Configure `allowed_passthrough_routes` on the team or key.",
-            created=("new-oid",),
+            "Team not allowed to access passthrough route /v1/solver/solution/job-1. Configure `allowed_passthrough_routes` on the team.",
         ),
-        id="jwt_pass_through_subpath",
+        id="jwt_pass_through_subpath_team_without_grant",
     ),
     pytest.param(
         Call(
@@ -915,7 +919,7 @@ CASES: Final = (
     pytest.param(Call(claims={**MEMBER, "roles": ["team-a"]}, database="down"), OUTAGE_FALLBACK, id="db_down_jwt"),
     pytest.param(
         Call(claims={**MEMBER, "roles": ["team-a"]}, database="down_teams_uncached"),
-        Refused("403", "auth_error", "HTTPException", "No team has access to the requested model: model-a."),
+        OUTAGE_FALLBACK,
         id="db_down_jwt_teams_uncached",
     ),
     pytest.param(
@@ -933,7 +937,7 @@ CASES: Final = (
             settings={"allow_requests_on_db_unavailable": False},
             database="down_teams_uncached",
         ),
-        Refused("403", "auth_error", "HTTPException", "No team has access to the requested model: model-a."),
+        Refused("503", "no_db_connection", "ConnectError", DATABASE_UNREACHABLE),
         id="db_down_jwt_teams_uncached_not_allowed",
     ),
     pytest.param(

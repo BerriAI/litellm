@@ -98,6 +98,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
@@ -553,7 +554,10 @@ class PythonAuthHost:
             )
         except TeamNotFoundError:
             return TeamMissing.ABSENT
-        except HTTPException:
+        except HTTPException as error:
+            cause: Final = error.__cause__
+            if isinstance(cause, Exception) and PrismaDBExceptionHandler.is_database_connection_error(cause):
+                raise cause from None
             return TeamMissing.UNREADABLE
         return team_facts(team)
 

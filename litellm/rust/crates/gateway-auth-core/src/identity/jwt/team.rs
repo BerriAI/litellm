@@ -103,7 +103,7 @@ pub struct HeaderTeam {
 
 /// What one of the token's teams contributes to `find_team_with_model_access`.
 enum Verdict<R> {
-    /// The team did not load.
+    /// The proxy has no such team, or could not hand it back.
     Unresolved,
     /// Loaded, but it neither qualifies nor explains a denial.
     NoAccess,
@@ -119,13 +119,16 @@ async fn check_team<H: AuthHost>(
     team_id: &str,
     model: Option<&str>,
     eligibility: &TeamEligibility<'_>,
-) -> Verdict<TeamRow<H>> {
-    let read = host.team(team_id, false).await.ok();
+) -> Result<Verdict<TeamRow<H>>, Error> {
+    let read = match host.team(team_id, false).await {
+        Err(error) if error.is_host_failure() => return Err(error),
+        read => read.ok(),
+    };
     let Some(team) = read.and_then(TeamRead::found) else {
-        return Verdict::Unresolved;
+        return Ok(Verdict::Unresolved);
     };
     if team.models.is_none() {
-        return Verdict::NoAccess;
+        return Ok(Verdict::NoAccess);
     }
     let has_model = match model {
         None => true,
@@ -134,28 +137,29 @@ async fn check_team<H: AuthHost>(
             Ok(ModelAccess::Allowed)
         ),
     };
-    match eligibility.verdict(&team.passthrough, has_model) {
+    Ok(match eligibility.verdict(&team.passthrough, has_model) {
         Eligibility::Selected => Verdict::Selected(team),
         Eligibility::Fallback => Verdict::Fallback(team),
         Eligibility::RouteDenied => Verdict::RouteDenied,
         Eligibility::PassthroughDenied(denied_route) => Verdict::PassthroughDenied(denied_route),
         Eligibility::NoAccess => Verdict::NoAccess,
-    }
+    })
 }
 
-/// `find_team_with_model_access`
+/// `find_team_with_model_access`. A team the host fails to read ends the selection as that host
+/// failure, so an unreachable database is never reported as a team without access.
 pub(crate) async fn select_team<H: AuthHost>(
     host: &H,
     team_ids: &BTreeSet<String>,
     model: Option<&str>,
     eligibility: &TeamEligibility<'_>,
     settings: TeamSettings,
-) -> Result<Option<HostTeam<H>>, TeamDenial> {
+) -> Result<Option<HostTeam<H>>, Error> {
     let model = model.filter(|text| !text.is_empty());
     let route = eligibility.route();
     if team_ids.is_empty() {
         if settings.enforce_team_based_model_access && !settings.fallback_to_db_teams {
-            return Err(TeamDenial::NoTeamsInToken);
+            return Err(TeamDenial::NoTeamsInToken.into());
         }
         return Ok(None);
     }
@@ -164,7 +168,7 @@ pub(crate) async fn select_team<H: AuthHost>(
     let mut route_denied = None;
     let mut passthrough_denied = None;
     for team_id in team_ids {
-        let verdict = check_team(host, team_id, model, eligibility).await;
+        let verdict = check_team(host, team_id, model, eligibility).await?;
         any_resolved |= !matches!(verdict, Verdict::Unresolved);
         match verdict {
             Verdict::Selected(team) => return Ok(Some(team)),
@@ -181,7 +185,8 @@ pub(crate) async fn select_team<H: AuthHost>(
         return Err(TeamDenial::PassthroughRouteDenied {
             route: route.to_owned(),
             denied_route,
-        });
+        }
+        .into());
     }
     match model {
         Some(model) if any_resolved || !settings.team_claim_fallback => Err(match route_denied {
@@ -194,7 +199,8 @@ pub(crate) async fn select_team<H: AuthHost>(
                 model: model.to_owned(),
                 team_ids: team_ids.clone(),
             },
-        }),
+        }
+        .into()),
         _ => Ok(None),
     }
 }
@@ -583,25 +589,17 @@ mod tests {
     }
 
     /// `ROUTE` as an `auth: true` pass-through endpoint that forwards it unchanged.
-    fn enforced_route(forwarded: &[String]) -> PassthroughRequest<'_> {
-        PassthroughRequest {
-            route: ROUTE,
-            auth_enforced: true,
-            forwarded_routes: ForwardedRoutes(forwarded),
-            jwt_team_allowed_routes: None,
-        }
-    }
-
-    /// Team eligibility on `ROUTE`, which `team_allowed_routes` lists or not.
-    fn eligibility(
-        forwarded: &[String],
-        route_listed: bool,
-        route_allowed: bool,
-    ) -> TeamEligibility<'_> {
+    /// Team eligibility on `ROUTE`: an `auth: true` pass-through route, which every team may use
+    /// and its own grants gate, or a route `team_allowed_routes` does not list.
+    fn eligibility(forwarded: &[String], pass_through: bool) -> TeamEligibility<'_> {
         TeamEligibility {
-            route_listed,
-            route_allowed,
-            passthrough: enforced_route(forwarded),
+            route_allowed: pass_through,
+            passthrough: PassthroughRequest {
+                route: ROUTE,
+                auth_enforced: pass_through,
+                forwarded_routes: ForwardedRoutes(forwarded),
+                jwt_team_allowed_routes: None,
+            },
         }
     }
 
@@ -637,15 +635,15 @@ mod tests {
         host: &ScriptedHost,
         team_ids: &[&str],
         model: Option<&str>,
-        route_allowed: bool,
+        pass_through: bool,
         settings: TeamSettings,
-    ) -> Result<Option<String>, TeamDenial> {
+    ) -> Result<Option<String>, Error> {
         let forwarded = forwarded();
         select_team(
             host,
             &ids(team_ids),
             model,
-            &eligibility(&forwarded, route_allowed, false),
+            &eligibility(&forwarded, pass_through),
             settings,
         )
         .await
@@ -653,14 +651,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::enforced(true, false, Err(TeamDenial::NoTeamsInToken))]
+    #[case::enforced(true, false, Err(TeamDenial::NoTeamsInToken.into()))]
     #[case::db_fallback(true, true, Ok(None))]
     #[case::not_enforced(false, false, Ok(None))]
     #[tokio::test]
     async fn token_without_teams(
         #[case] enforce_team_based_model_access: bool,
         #[case] fallback_to_db_teams: bool,
-        #[case] expected: Result<Option<String>, TeamDenial>,
+        #[case] expected: Result<Option<String>, Error>,
     ) {
         let settings = TeamSettings {
             enforce_team_based_model_access,
@@ -725,7 +723,8 @@ mod tests {
             Err(TeamDenial::PassthroughRouteDenied {
                 route: ROUTE.to_owned(),
                 denied_route: denied_route.map(str::to_owned),
-            })
+            }
+            .into())
         );
     }
 
@@ -743,27 +742,33 @@ mod tests {
                 team_id: "a".to_owned(),
                 model: "gpt".to_owned(),
                 route: ROUTE.to_owned(),
-            })
+            }
+            .into())
         );
     }
 
     #[rstest]
     #[case::resolved_team(
         found("a"), true,
-        Err(TeamDenial::NoModelAccess { model: "gpt".to_owned(), team_ids: ids(&["a"]) })
+        Err(TeamDenial::NoModelAccess { model: "gpt".to_owned(), team_ids: ids(&["a"]) }.into())
     )]
     #[case::unresolved_without_claim_fallback(
         Ok(TeamRead::Absent), false,
-        Err(TeamDenial::NoModelAccess { model: "gpt".to_owned(), team_ids: ids(&["a"]) })
+        Err(TeamDenial::NoModelAccess { model: "gpt".to_owned(), team_ids: ids(&["a"]) }.into())
     )]
     #[case::unresolved_with_claim_fallback(Ok(TeamRead::Absent), true, Ok(None))]
     #[case::unreadable_with_claim_fallback(Ok(TeamRead::Unreadable), true, Ok(None))]
-    #[case::lookup_failure_with_claim_fallback(Err(Error::HostFailed), true, Ok(None))]
+    #[case::host_failure_with_claim_fallback(Err(Error::HostFailed), true, Err(Error::HostFailed))]
+    #[case::host_failure_without_claim_fallback(
+        Err(Error::HostFailed),
+        false,
+        Err(Error::HostFailed)
+    )]
     #[tokio::test]
     async fn no_team_has_the_model(
         #[case] team: Result<TeamRead<String>, Error>,
         #[case] team_claim_fallback: bool,
-        #[case] expected: Result<Option<String>, TeamDenial>,
+        #[case] expected: Result<Option<String>, Error>,
     ) {
         let host = ScriptedHost {
             teams: HashMap::from([("a", team)]),
@@ -778,6 +783,23 @@ mod tests {
             select(&host, &["a"], Some("gpt"), false, settings).await,
             expected
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_team_the_host_fails_to_read_ends_the_selection_before_a_later_team_is_tried(
+        enforced: TeamSettings,
+    ) {
+        let host = ScriptedHost {
+            teams: HashMap::from([("a", Err(Error::HostFailed)), ("b", granted("b"))]),
+            model_access: HashSet::from(["b"]),
+            ..ScriptedHost::default()
+        };
+        assert_eq!(
+            select(&host, &["a", "b"], Some("gpt"), true, enforced).await,
+            Err(Error::HostFailed)
+        );
+        assert_eq!(host.calls(), ["team a"]);
     }
 
     #[rstest]
@@ -1162,7 +1184,7 @@ mod tests {
                 &owned(user_team_ids),
                 Some("u"),
                 model,
-                &eligibility(&forwarded, false, team_route_allowed),
+                &eligibility(&forwarded, team_route_allowed),
                 false,
                 enforced
             )
@@ -1183,7 +1205,7 @@ mod tests {
                 &owned(&["b"]),
                 None,
                 Some("gpt"),
-                &eligibility(&forwarded, false, false),
+                &eligibility(&forwarded, false),
                 true,
                 TeamSettings::default()
             )

@@ -4017,11 +4017,11 @@ async def get_team_object(
         )
     except TeamNotFoundError:
         raise
-    except Exception:
+    except Exception as error:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
-        )
+        ) from error
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)

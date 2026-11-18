@@ -508,7 +508,7 @@ mod tests {
     use super::*;
     use crate::{
         AgentIdentityFailure, BudgetExceeded, ErrorType, KeyHash, PublicDenial, RbacDenial,
-        TeamDenial, VerifyDenial,
+        RouteGroups, TeamDenial, VerifyDenial,
         authn::{
             jwt::{MappedKey, NO_MAPPING_SENTINEL, PROXY_ADMIN_SENTINEL},
             key::{KeyRecord, KeySettings, Keyed},
@@ -517,7 +517,7 @@ mod tests {
             AliasRead, ManagedAgent, Org, RegisteredAgent, TeamRead, TeamSync, User, team_sync,
         },
         routes::passthrough::{ForwardedRoutes, PassthroughGrants},
-        test_support::route_groups,
+        test_support::{route_groups, route_table},
         testing::{Labels, ScriptedHost},
     };
 
@@ -1250,6 +1250,100 @@ mod tests {
                 .map(|identity| identity.team_id.as_deref()),
             expected.as_ref().map(|team| *team)
         );
+    }
+
+    const SOLVER: &str = "/solver/solution";
+
+    /// The table once the proxy registers an `auth: true` pass-through endpoint at `SOLVER` with
+    /// `include_subpath`: it lists the path and `path/*` under `openai_routes`.
+    fn groups_with_the_solver_endpoint() -> RouteGroups {
+        let table = route_table().into_iter().map(|(name, routes)| {
+            let registered = [SOLVER.to_owned(), format!("{SOLVER}/*")];
+            let extra: &[String] = if name == "openai_routes" {
+                &registered
+            } else {
+                &[]
+            };
+            (name, [routes.as_slice(), extra].concat())
+        });
+        RouteGroups::new(table).expect("the stand-in table holds every group the core reads")
+    }
+
+    #[rstest]
+    #[case::the_endpoint_itself("/solver/solution", None, true, Ok(Some("t1")))]
+    #[case::a_path_under_it("/solver/solution/job-1", None, true, Ok(Some("t1")))]
+    #[case::a_path_under_it_with_a_model(
+        "/solver/solution/job-1",
+        Some("gpt"),
+        true,
+        Ok(Some("t1"))
+    )]
+    #[case::a_path_under_it_the_team_does_not_grant(
+        "/solver/solution/job-1",
+        None,
+        false,
+        Err(JwtDenial::Team(TeamDenial::PassthroughRouteDenied {
+            route: "/solver/solution/job-1".to_owned(),
+            denied_route: None,
+        }).into())
+    )]
+    #[tokio::test]
+    async fn a_claimed_team_is_selected_by_its_grant_for_every_path_of_a_pass_through_endpoint(
+        #[case] route: &'static str,
+        #[case] model: Option<&'static str>,
+        #[case] granted: bool,
+        #[case] expected: Result<Option<&str>, Error>,
+    ) {
+        let grants = PassthroughGrants {
+            allowed: granted.then(|| RouteList::Valid([SOLVER.to_owned()].into())),
+            denied: None,
+        };
+        let host = ScriptedHost {
+            teams: HashMap::from([("t1", team_with("t1", grants))]),
+            users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
+            model_access: ["t1"].into(),
+            ..host(json!({"sub": "u1", "groups": ["t1"]}))
+        };
+        let settings = JwtSettings {
+            route_groups: groups_with_the_solver_endpoint(),
+            ..settings(JwtAuthSettings {
+                team_ids_jwt_field: Some("groups".into()),
+                team_allowed_routes: Box::new(["openai_routes".to_owned()]),
+                ..config()
+            })
+        };
+        let forwarded = [route.to_owned()];
+        let request = JwtRequest {
+            model,
+            auth_enforced_pass_through: true,
+            forwarded_routes: ForwardedRoutes(&forwarded),
+            ..request(route)
+        };
+
+        let identity = authorize_with(&host, request, &settings, None).await;
+
+        assert_eq!(team_id_of(&identity), expected.as_ref().map(|team| *team));
+    }
+
+    #[tokio::test]
+    async fn a_claimed_team_the_host_fails_to_read_is_left_to_the_host() {
+        let host = ScriptedHost {
+            teams: HashMap::from([("t1", Err(Error::HostFailed))]),
+            users: HashMap::from([("u1", user("u1", "internal_user", &["t1"]))]),
+            ..host(json!({"sub": "u1", "groups": ["t1"]}))
+        };
+        let settings = settings(JwtAuthSettings {
+            team_ids_jwt_field: Some("groups".into()),
+            ..config()
+        });
+        let request = JwtRequest {
+            model: Some("gpt"),
+            ..request(CHAT)
+        };
+
+        let identity = authorize_with(&host, request, &settings, None).await;
+
+        assert_eq!(team_id_of(&identity), Err(&Error::HostFailed));
     }
 
     #[tokio::test]
