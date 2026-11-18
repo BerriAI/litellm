@@ -1,12 +1,6 @@
 #!/bin/sh
-# Build-time gate for the FIPS image. Allowlist logic: every ELF in the final
-# layers must be accounted for, either present in fips_elf_inventory.txt
-# (reviewed as crypto-free or linked against the validated system
-# libcrypto.so.3 or .4) or waived below when it bundles its own crypto
-# implementation. A binary that is neither fails the build, so a new native
-# dependency cannot ship without review, whatever crypto it embeds.
-#
-# SCAN_EMIT_INVENTORY=1 prints normalized ELF paths instead of gating.
+# Fails the FIPS image build unless every ELF under the given roots is either crypto-free and listed in
+# fips_elf_inventory.txt, linked to the system libcrypto, or a waived binary that bundles its own crypto.
 # Regenerate the inventory after a reviewed dependency change with:
 #   docker run --rm -v "$PWD/litellm/deploy/docker:/scan" --entrypoint sh <image> -c \
 #     'SCAN_EMIT_INVENTORY=1 /scan/scan_bundled_crypto.sh /app/.venv /opt/prisma /usr/local/bin' \
@@ -52,18 +46,18 @@ crypto_markers() {
 
 is_waived() {
   case "$1" in
-    */cryptography/hazmat/bindings/_rust.abi3.so) ;;
-    */grpc/_cython/cygrpc*.so) ;;
-    */hf_xet/hf_xet.abi3.so) ;;
-    */_awscrt.abi3.so) ;;
-    */pyroscope/_native__lib*.so) ;;
-    */psycopg_binary.libs/libcrypto-*) ;;
-    */nacl/_sodium*.so|*/libsodium*) ;;
-    */litellm/rust_bridge/*|*/granian*) ;;
-    */xmlsec*|*xmlsec.libs*) ;;
-    */_polars_runtime_32/_polars_runtime.abi3.so) ;;
-    */ddtrace/internal/native/_native*.so) ;;
-    /opt/prisma/*query-engine*|/opt/prisma/*schema-engine*) ;;
+    */site-packages/cryptography/hazmat/bindings/_rust.abi3.so) ;;
+    */site-packages/grpc/_cython/cygrpc.cpython-*.so) ;;
+    */site-packages/hf_xet/hf_xet.abi3.so) ;;
+    */site-packages/_awscrt.abi3.so) ;;
+    */site-packages/pyroscope/_native__lib.cpython-*.so) ;;
+    */site-packages/psycopg_binary.libs/libcrypto-*.so.*) ;;
+    */site-packages/nacl/_sodium.abi3.so) ;;
+    */site-packages/litellm/rust_bridge/_native.abi3.so) ;;
+    */site-packages/granian/_granian.cpython-*.so) ;;
+    */site-packages/_polars_runtime_32/_polars_runtime.abi3.so) ;;
+    */site-packages/ddtrace/internal/native/_native.cpython-*.so) ;;
+    /opt/prisma/*/query-engine*|/opt/prisma/*/schema-engine*) ;;
     *) return 1 ;;
   esac
 }
@@ -78,7 +72,7 @@ for root in "$@"; do
     exit 1
   fi
 done
-# find writes to a file rather than a pipe, so set -e stops the scan on any traversal error.
+# Not piped, so set -e stops the scan when find cannot read a directory
 find "$@" -type f > "$files"
 
 if [ "${SCAN_EMIT_INVENTORY:-}" = "1" ]; then
