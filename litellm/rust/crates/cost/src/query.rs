@@ -476,11 +476,8 @@ impl Basis {
         self.data_residency == Some(DataResidency::Fedramp)
     }
 
-    /// `get_vertex_regional_endpoint_uplift`: any location but `global`
     pub fn non_global_endpoint(&self) -> bool {
-        self.vertex_location
-            .as_deref()
-            .is_some_and(|location| !location.eq_ignore_ascii_case("global"))
+        crate::price::regional_endpoint(self.vertex_location.as_deref())
     }
 }
 

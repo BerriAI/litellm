@@ -1930,6 +1930,7 @@ class NativeBudgets:
     ) -> Future[JsonValue]: ...
 
 def billable_service_tier(requested: str | None, served: str | None) -> str | None: ...
+def regional_endpoint_uplift(row: Mapping[str, object], vertex_location: str | None) -> float: ...
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
 
 @final
@@ -2426,6 +2427,7 @@ __all__ = [
     "ocr_health_check_document",
     "ocr_passthrough_response",
     "process_state_started",
+    "regional_endpoint_uplift",
     "reserve_process_for_forking",
     "responses",
     "trace_encode_error",
