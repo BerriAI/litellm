@@ -163,6 +163,11 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     resolve_customer_request_usage,
     strip_client_guardrail_information,
 )
+from litellm.proxy.pass_through_endpoints.vector_store_passthrough import (
+    PASSTHROUGH_FALLBACK_STATE,
+    VectorStorePassthroughPlan,
+    send_with_vector_store_fallbacks,
+)
 from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
@@ -469,6 +474,7 @@ async def chat_completion_pass_through_endpoint(
 
 
 _PASS_THROUGH_REQUEST_STATE_KEYS: Final = (
+    PASSTHROUGH_FALLBACK_STATE,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
@@ -588,6 +594,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         requested_query_params: dict | None = None,
         _parsed_body: Mapping[str, object] | None = None,
         forward_multipart: bool = False,
+        raw_body: str | bytes | None = None,
+        raw_response: bool = False,
     ) -> httpx.Response:
         """
         Handle non-SSE HTTP requests
@@ -599,6 +607,30 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         logging/guardrails) or relay it to the client without materializing it in memory
         (LIT-4009: large batch results files must not be buffered in proxy RSS).
         """
+        fallback_plan: Final[object] = getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None)
+        if isinstance(fallback_plan, VectorStorePassthroughPlan):
+            fallback_request: Final = async_client.build_request(
+                request.method,
+                url,
+                headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # legacy shared sender accepts untyped headers
+                params=requested_query_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy shared sender accepts untyped query parameters
+                content=raw_body,
+                json=_parsed_body if raw_body is None and request.method != "GET" else None,
+            )
+            return await send_with_vector_store_fallbacks(async_client, fallback_request, fallback_plan)
+        if raw_body is not None:
+            raw_request: Final = async_client.build_request(
+                request.method,
+                url,
+                headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # legacy shared sender accepts untyped headers
+                params=requested_query_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy shared sender accepts untyped query parameters
+                content=raw_body,
+            )
+            return await async_client.send(
+                raw_request,
+                stream=True,
+                follow_redirects=False if raw_response else httpx.USE_CLIENT_DEFAULT,
+            )
         if request.method == "GET":
             get_request: Final = async_client.build_request(
                 request.method,
@@ -2091,29 +2123,20 @@ async def pass_through_request(
                 status_code=relay_response.status_code,
             )
 
-        if state_raw_body is not None:
-            # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
-            # to be forwarded so the signature/Content-Length stay valid.
-            raw_body_request: Final = async_client.build_request(
-                request.method,
-                url,
-                headers=outbound_headers,
-                params=requested_query_params,
-                content=state_raw_body,
-            )
-            response = await async_client.send(
-                raw_body_request, stream=True, follow_redirects=False if raw_response else httpx.USE_CLIENT_DEFAULT
-            )
-        else:
-            response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
-                request=request,
-                async_client=async_client,
-                url=url,
-                headers=outbound_headers,
-                requested_query_params=requested_query_params,
-                _parsed_body=upstream_body,
-                forward_multipart=is_multipart,
-            )
+        response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+            request=request,
+            async_client=async_client,
+            url=url,
+            headers=outbound_headers,
+            requested_query_params=requested_query_params,
+            _parsed_body=upstream_body,
+            forward_multipart=is_multipart,
+            raw_body=state_raw_body,
+            raw_response=raw_response,
+        )
+        fallback_plan: Final[object] = getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None)
+        if isinstance(fallback_plan, VectorStorePassthroughPlan):
+            url = response.request.url
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         upstream_usage = apply_upstream_reported_usage(
