@@ -2,6 +2,7 @@ import { apiClient } from "@/components/networking";
 import { type DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
+import type { CustomerRateLimits } from "./CustomerRateLimits";
 import {
   resolveCustomerHierarchy,
   type CustomerHierarchyScope as CustomerUsageScope,
@@ -31,6 +32,7 @@ export interface CustomerUsageEntity {
   budgetLimits: components["schemas"]["BudgetLimit"][];
   budgetResetAt: string | null;
   budgetUsage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+  rateLimits?: CustomerRateLimits;
 }
 
 export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerActivityPages> {
@@ -234,6 +236,9 @@ export const customerUsageEntity = (id: string, record: Organization | Team | Me
     budgetLimits: budget?.budget_limits ?? [],
     budgetResetAt: record.budget_reset_at ?? null,
     budgetUsage: record.budget_usage,
+    ...(budget?.tpm_limit != null || budget?.rpm_limit != null
+      ? { rateLimits: { tpm_limit: budget.tpm_limit, rpm_limit: budget.rpm_limit } }
+      : {}),
   };
 };
 

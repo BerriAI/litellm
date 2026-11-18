@@ -21749,6 +21749,10 @@ def _redact_callback_env_vars(env_vars: dict[str, str | None]) -> dict[str, str 
     }
 
 
+def _configured_callback_row(row: Mapping[str, object], list_key: str) -> Mapping[str, object]:
+    return dict(row, source="config") if proxy_config.litellm_settings.owned_by_config(list_key) else row
+
+
 def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     if is_full_admin:
         return entries
@@ -22512,13 +22516,25 @@ async def get_config(
         """
 
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success", environment_variables), "success_callback"
+                )
+            )
 
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "failure", environment_variables), "failure_callback"
+                )
+            )
 
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success_and_failure", environment_variables), "callbacks"
+                )
+            )
 
         configured_callback_names: Final = frozenset(
             _normalize_callback_alias(callback)

@@ -9013,6 +9013,7 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
+            custom_llm_provider=custom_llm_provider,
         )
     elif custom_llm_provider == "nvidia_riva":
         # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
