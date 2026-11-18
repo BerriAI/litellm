@@ -10,7 +10,7 @@ import traceback
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast, runtime_checkable
 
 import anyio
 import httpx
@@ -100,6 +100,7 @@ _STREAMING_CHOICE_KEYS: Final = frozenset({"finish_reason", "index", "delta", "l
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = GChunk.__required_keys__
 _GCHUNK_VALUE_FIELDS: Final[frozenset[str]] = _GCHUNK_REQUIRED_FIELDS | {"tool_use", "provider_specific_fields"}
+_ABSENT_FIELD: Final = object()
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
     {LlmProviders.OPENROUTER.value, LlmProviders.OPENCODE_GO.value}
@@ -361,6 +362,11 @@ class _ProviderChunkEarlyReturn:
 
 
 _ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
+
+
+@runtime_checkable
+class _ChunkGetter(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
 
 
 class _Replaceable(Protocol):
@@ -1659,8 +1665,7 @@ class CustomStreamWrapper:
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             generic_finish_reason: Final = anthropic_response_obj.get("finish_reason", "")
             completion_obj["content"] = anthropic_response_obj.get("text", "")
-            finish_reason_is_null: Final = chunk_fields is not None and chunk_fields.get("finish_reason", "") is None
-            if anthropic_response_obj.get("is_finished", False) and not finish_reason_is_null:
+            if anthropic_response_obj.get("is_finished", False) and not _has_null_finish_reason(chunk):
                 self.received_finish_reason = generic_finish_reason or self.intermittent_finish_reason or "stop"
 
             if generic_finish_reason:
@@ -3285,13 +3290,24 @@ def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
 def generic_chunk_shape_error(chunk: object) -> str | None:
     fields: Final = as_str_mapping(chunk)
     if fields is None:
-        return None if hasattr(chunk, "get") else f"expected a dict, got {type(chunk).__name__}"
+        return _chunk_object_shape_error(chunk)
     unexpected: Final = sorted(key for key in fields if key not in _GCHUNK_FIELDS)
     missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))
     has_text: Final = isinstance(fields.get("text"), str)
     if not unexpected or not missing or has_text or any(fields.get(key) for key in _GCHUNK_VALUE_FIELDS):
         return None
     return f"missing {missing}, unexpected {unexpected}"
+
+
+def _has_null_finish_reason(chunk: object) -> bool:
+    return isinstance(chunk, _ChunkGetter) and chunk.get("finish_reason", "") is None
+
+
+def _chunk_object_shape_error(chunk: object) -> str | None:
+    if not isinstance(chunk, _ChunkGetter):
+        return f"expected a dict, got {type(chunk).__name__}"
+    missing: Final = sorted(key for key in _GCHUNK_REQUIRED_FIELDS if chunk.get(key, _ABSENT_FIELD) is _ABSENT_FIELD)
+    return f"{type(chunk).__name__} is missing {missing}" if missing else None
 
 
 def convert_generic_chunk_to_model_response_stream(

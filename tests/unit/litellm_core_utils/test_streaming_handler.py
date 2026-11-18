@@ -4622,6 +4622,11 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             id="placeholder-flag-with-foreign-key",
         ),
         pytest.param("hello", "expected a dict, got str", id="not-a-dict"),
+        pytest.param(
+            litellm.ModelResponse(),
+            "ModelResponse is missing ['finish_reason', 'is_finished', 'text', 'usage']",
+            id="litellm-response-object",
+        ),
     ],
 )
 def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
@@ -4729,7 +4734,7 @@ class _DictLikeChunk(BaseModel):
 
     text: str = ""
     is_finished: bool = False
-    finish_reason: str = ""
+    finish_reason: str | None = ""
     usage: dict[str, int] | None = None
 
     def get(self, key: str, default: object = None) -> object:
@@ -4756,10 +4761,10 @@ def test_custom_provider_stream_reads_dict_like_chunk_objects(monkeypatch: pytes
     assert assembled.choices[0].finish_reason == "length"
 
 
-@pytest.mark.parametrize("as_chunk", [dict, MappingProxyType])
+@pytest.mark.parametrize("as_chunk", [dict, MappingProxyType, _DictLikeChunk.model_validate])
 def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_finish_reason(
     monkeypatch: pytest.MonkeyPatch,
-    as_chunk: Callable[[dict[str, object]], Mapping[str, object]],
+    as_chunk: Callable[[dict[str, object]], object],
 ):
     monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
     chunks: Final = (
