@@ -376,19 +376,17 @@ class AzureAIStudioConfig(OpenAIConfig):
             level_check_waived=bool(declared_reasoning_efforts) or _REASONING_EFFORT in allowed_openai_params,
             drop_params=drop_params or litellm.drop_params is True,
         )
-        mapped_params: Final[dict[str, object]] = {
-            **super().map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model=model,
-                drop_params=drop_params,
-            ),
-            **foundry_effort,
-        }
+        mapped_params: Final[Mapping[str, object]] = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
         if "gpt-5-chat" not in model.rsplit("/", 1)[-1] or "max_tokens" not in mapped_params:
-            return mapped_params
+            return {**mapped_params, **foundry_effort}
         return {
             **{param: value for param, value in mapped_params.items() if param != "max_tokens"},
+            **foundry_effort,
             "max_completion_tokens": mapped_params.get("max_completion_tokens", mapped_params["max_tokens"]),
         }
 
