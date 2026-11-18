@@ -89,7 +89,6 @@ if [ -z "$UV_BIN" ] || [ "${CURRENT_UV_VERSION:-}" != "$UV_VERSION" ]; then
   if [ -n "${CURRENT_UV_VERSION:-}" ]; then
     info "Upgrading uv from ${CURRENT_UV_VERSION} to ${UV_VERSION}"
   fi
-  # SHA-256 of each uv ${UV_VERSION} release archive, from its .sha256 file on the GitHub release. Update with UV_VERSION
   case "$OS-$ARCH" in
     Darwin-arm64)              UV_TARGET=aarch64-apple-darwin           UV_SHA256=a92f61e9ac9b0f29668c15f56152e4a60143fca148ff5bfadb86718472c3f376 ;;
     Darwin-x86_64)             UV_TARGET=x86_64-apple-darwin            UV_SHA256=9cc2de7d195fa157f98b306a8a1cb151ded93f488939b93363cebc8b9d598c28 ;;
