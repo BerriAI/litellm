@@ -4,11 +4,14 @@ from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # in-memory adapt
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.customer_hierarchy_auth import CustomerBudgetExceededError
 from litellm.proxy.auth.customer_provisioning import (
     gated_registrars,
     refuse_unknown_customer,
     registration_refusal,
+    resolve_registered_customer,
     unknown_customer_header,
 )
 from litellm.proxy.management_helpers.apps import AppStore
@@ -219,3 +222,28 @@ async def test_an_apps_surcharge_is_stored_survives_an_unrelated_patch_and_clear
 def test_an_apps_surcharge_outside_zero_to_ten_is_rejected(value: float) -> None:
     with pytest.raises(ValidationError):
         AppPatch(customer_margin=value)
+
+
+@pytest.mark.asyncio
+async def test_an_over_budget_organization_does_not_hide_that_its_new_member_may_not_register() -> None:
+    identity: Final = CustomerRequestIdentity(customer_org_alias="org", customer_member_id="new-member")
+
+    async def over_budget(register: object, register_organization: object) -> CustomerHierarchyAuth | None:
+        raise CustomerBudgetExceededError(ORG_ONLY, litellm.BudgetExceededError(current_cost=2, max_budget=1))
+
+    with pytest.raises(ProxyException) as refused:
+        await resolve_registered_customer(identity, _refused, over_budget)
+    assert (refused.value.code, refused.value.param) == ("403", "x-litellm-customer-member-id")
+
+    with pytest.raises(CustomerBudgetExceededError):
+        await resolve_registered_customer(identity, _allowed, over_budget)
+
+
+@pytest.mark.asyncio
+async def test_a_known_customer_resolves_to_its_hierarchy_when_registration_is_off() -> None:
+    identity: Final = CustomerRequestIdentity(customer_org_alias="org", customer_member_id="member")
+
+    async def known(register: object, register_organization: object) -> CustomerHierarchyAuth | None:
+        return KNOWN
+
+    assert await resolve_registered_customer(identity, _refused, known) is KNOWN

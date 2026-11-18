@@ -14,6 +14,7 @@ from litellm.proxy.auth.app_auth import authenticated_resource_id
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
     CUSTOMER_ORG_ALIAS_HEADER,
+    CustomerBudgetExceededError,
     MemberRegistrar,
     OrganizationRegistrar,
 )
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 RegistrationRefusal: TypeAlias = Callable[[], Awaitable[str | None]]
+HierarchyResolver: TypeAlias = Callable[
+    [MemberRegistrar, OrganizationRegistrar], Awaitable[CustomerHierarchyAuth | None]
+]
 
 
 async def registration_refusal(prisma_client: "PrismaClient | None", authenticated: UserAPIKeyAuth) -> str | None:
@@ -96,3 +100,17 @@ async def refuse_unknown_customer(
         param=header,
         code=status.HTTP_403_FORBIDDEN,
     )
+
+
+async def resolve_registered_customer(
+    identity: CustomerRequestIdentity, refusal: RegistrationRefusal, resolve: HierarchyResolver
+) -> CustomerHierarchyAuth | None:
+    """The hierarchy ``resolve`` loads, refusing a customer this request names but may not register."""
+    register_member, register_organization = gated_registrars(refusal)
+    try:
+        hierarchy: Final = await resolve(register_member, register_organization)
+    except CustomerBudgetExceededError as error:
+        await refuse_unknown_customer(identity, error.customer_hierarchy, refusal)
+        raise
+    await refuse_unknown_customer(identity, hierarchy, refusal)
+    return hierarchy
