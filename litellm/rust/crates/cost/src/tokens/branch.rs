@@ -281,7 +281,7 @@ fn characters(row: &impl LoweredRow, query: &TokensQuery, by_token: Sides) -> Si
     prompt_side.joined(completion_side)
 }
 
-/// The rate a quote bills `meter` at, 0.0 for one the row cannot price, as `NativeQuote` reads it
+/// The rate a quote bills `meter` at, 0.0 for one the row cannot price
 fn quoted(quote: &crate::quote::Quote<'_>, meter: &Meter) -> UnitPrice {
     quote
         .rate(meter)
