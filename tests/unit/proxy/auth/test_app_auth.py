@@ -4,6 +4,7 @@ from typing import (
     Final,
     cast,
 )  # noqa: TID251  # in-memory adapters implement the external Prisma edge
+from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +15,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import CustomerBudgetExceededErr
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+from litellm.proxy.spend_tracking.customer_cost_margin import key_customer_cost_margin, request_customer_cost_margin
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerScopeAuth,
@@ -382,3 +384,57 @@ async def test_virtual_key_app_identity_survives_rotation_and_ignores_app_alias_
     )
     assert before is not None and after is not None
     assert before.app_id == after.app_id == app.app_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("customer_margin", "expected"), [(0.05, 0.05), (0, 0.0), (None, 0.02)])
+async def test_a_key_bound_to_a_customer_gets_its_apps_surcharge_without_customer_headers(
+    customer_margin: float | None, expected: float
+) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(cast("Prisma", database), NOW)  # cast-ok: in-memory Prisma edge
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    app: Final = await store.create(AppCreate(resource_id="chat", customer_margin=customer_margin), "admin")
+    assert not isinstance(app, AppFailure)
+    bound_key: Final = UserAPIKeyAuth(token="bound", team_id="chat", metadata={"customer_org_id": "org"})
+    connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
+
+    resolved: Final = await resolve_app_hierarchy(
+        None, {}, {}, connection, None, "request-model", "/v1/chat/completions", bound_key
+    )
+
+    assert resolved is not None and resolved.app_id == app.app_id
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        assert key_customer_cost_margin(bound_key, resolved) == expected
+        settled: Final = {
+            "user_api_key_customer_usage": '{"customer_org_id": "org"}',
+            "user_api_key_customer_hierarchy": resolved.model_dump(mode="json"),
+        }
+        assert request_customer_cost_margin(settled) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_key_with_no_customer_resolves_its_app_but_reserves_no_surcharge() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(cast("Prisma", database), NOW)  # cast-ok: in-memory Prisma edge
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    await store.create(AppCreate(resource_id="chat", customer_margin=0.05), "admin")
+    connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
+
+    resolved: Final = await resolve_app_hierarchy(
+        None,
+        {},
+        {},
+        connection,
+        None,
+        "request-model",
+        "/v1/chat/completions",
+        UserAPIKeyAuth(token="plain", team_id="chat"),
+    )
+
+    assert resolved is not None
+    assert (resolved.app_alias, resolved.customer_org_id, resolved.app_customer_margin) == ("Chat", None, 0.05)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        assert key_customer_cost_margin(UserAPIKeyAuth(token="plain", team_id="chat"), resolved) is None

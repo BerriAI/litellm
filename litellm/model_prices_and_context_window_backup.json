@@ -34837,7 +34837,7 @@
     "chatgpt/gpt-5.6-luna": {
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.6-luna",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -34857,7 +34857,7 @@
     "chatgpt/gpt-5.6-sol": {
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.6-sol",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -34877,7 +34877,7 @@
     "chatgpt/gpt-5.6-terra": {
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.6-terra",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [

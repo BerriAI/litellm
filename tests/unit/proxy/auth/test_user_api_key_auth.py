@@ -1453,6 +1453,90 @@ def test_get_user_role(user_obj, expected_role):
     assert get_user_role(user_obj) == expected_role
 
 
+def _user_with_role(user_role: str | None) -> LiteLLM_UserTable:
+    return LiteLLM_UserTable(
+        user_role=user_role,
+        user_id="1234",
+        user_email="test@test.com",
+        max_budget=None,
+        spend=0.0,
+    )
+
+
+@pytest.mark.parametrize(
+    "stored_role, default_params, expected_role",
+    [
+        (None, None, LitellmUserRoles.INTERNAL_USER),
+        (None, {}, LitellmUserRoles.INTERNAL_USER),
+        (None, {"user_role": "internal_user_viewer"}, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+        (None, {"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY}, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+        (None, {"user_role": "internal_user"}, LitellmUserRoles.INTERNAL_USER),
+        (None, {"user_role": "proxy_admin"}, LitellmUserRoles.INTERNAL_USER),
+        (None, {"user_role": "proxy_admin_viewer"}, LitellmUserRoles.INTERNAL_USER),
+        ("OTHER_ROLE", None, LitellmUserRoles.INTERNAL_USER),
+        ("OTHER_ROLE", {"user_role": "internal_user_viewer"}, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+        ("internal_user", {"user_role": "internal_user_viewer"}, LitellmUserRoles.INTERNAL_USER),
+        ("proxy_admin", {"user_role": "internal_user_viewer"}, LitellmUserRoles.PROXY_ADMIN),
+    ],
+    ids=[
+        "null_role_no_default_stays_internal_user",
+        "null_role_empty_default_stays_internal_user",
+        "null_role_viewer_default_is_view_only",
+        "null_role_viewer_enum_default_is_view_only",
+        "null_role_internal_default_is_internal_user",
+        "null_role_admin_default_is_not_promoted",
+        "null_role_admin_viewer_default_is_not_promoted",
+        "invalid_role_no_default_stays_internal_user",
+        "invalid_role_viewer_default_is_view_only",
+        "explicit_internal_user_ignores_viewer_default",
+        "explicit_proxy_admin_ignores_viewer_default",
+    ],
+)
+def test_get_user_role_for_unset_or_invalid_stored_role(
+    monkeypatch: pytest.MonkeyPatch,
+    stored_role: str | None,
+    default_params: dict[str, object] | None,
+    expected_role: LitellmUserRoles,
+) -> None:
+    from litellm.proxy.auth.auth_checks import get_user_role
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+
+    assert get_user_role(_user_with_role(stored_role)) == expected_role
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default_params, expected_role",
+    [
+        (None, LitellmUserRoles.INTERNAL_USER),
+        ({"user_role": "internal_user_viewer"}, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+    ],
+    ids=["no_default_configured", "viewer_default_configured"],
+)
+async def test_auth_object_role_for_user_with_null_stored_role(
+    monkeypatch: pytest.MonkeyPatch,
+    default_params: dict[str, object] | None,
+    expected_role: LitellmUserRoles,
+) -> None:
+    from datetime import datetime
+
+    from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+
+    auth_obj: Final = await return_user_api_key_auth_obj(
+        user_obj=_user_with_role(None),
+        api_key="test-api-key",
+        parent_otel_span=None,
+        valid_token_dict={"token": "hash"},
+        route="/key/generate",
+        start_time=datetime.now(),
+    )
+
+    assert auth_obj.user_role == expected_role
+
+
 @pytest.mark.asyncio
 async def test_user_api_key_auth_websocket():
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
