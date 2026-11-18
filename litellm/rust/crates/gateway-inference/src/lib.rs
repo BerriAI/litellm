@@ -8,6 +8,7 @@ mod caching;
 mod error;
 mod headers;
 pub mod messages;
+mod model_restamp;
 mod ocr;
 mod request;
 pub mod routing;
