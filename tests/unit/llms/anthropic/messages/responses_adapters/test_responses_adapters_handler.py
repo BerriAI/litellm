@@ -29,6 +29,74 @@ from litellm.router import Router
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 
 MESSAGES = [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.parametrize(
+    ("forwarded", "wire_store", "cacheable"),
+    [
+        ({}, {}, False),
+        ({"store": True}, {"store": True}, False),
+        ({"store": False}, {"store": False}, True),
+        ({"extra_body": {"store": True}}, {"store": True}, False),
+        ({"extra_body": {"store": False}}, {"store": False}, True),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, True),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
+        ({"store": False, "extra_body": {"store": None}}, {"store": None}, False),
+        ({"store": None}, {}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"store": False, "additional_drop_params": ["extra_body.store"]}, {"store": False}, True),
+        ({"store": False, "additional_drop_params": ["extra_body"]}, {"store": False}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, True),
+    ],
+)
+def test_only_forwarded_store_false_puts_messages_system_in_input(
+    forwarded: dict[str, object], wire_store: dict[str, object], cacheable: bool
+) -> None:
+    response_body: Final = {
+        "id": "resp_store",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_store",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "QA_OK", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").respond(200, json=response_body)
+        litellm.anthropic.messages.create(
+            model="openai/gpt-6.2-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            system="Be brief.",
+            max_tokens=32,
+            api_key="sk-test",
+            **forwarded,
+        )
+    system_item: Final = {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Be brief."}],
+    }
+    user_item: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6.2-sol",
+        "input": [system_item, user_item] if cacheable else [user_item],
+        "max_output_tokens": 32,
+        "include": ["reasoning.encrypted_content"],
+        **({} if cacheable else {"instructions": "Be brief."}),
+        **wire_store,
+    }
+
+
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
 
 RESPONSES_SSE_BODY = (
@@ -53,7 +121,7 @@ def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, s
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
-        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded},
     )
     assert kwargs["instructions"] == "Be brief."
     assert kwargs["input"] == [
@@ -70,7 +138,7 @@ def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> No
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
-        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded},
     )
     assert kwargs.get("instructions") == "Be brief."
     assert kwargs["input"] == [
@@ -93,7 +161,7 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
-        extra_kwargs={"custom_llm_provider": "openai", **forwarded, **request_params},
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
     )
     instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
     assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
