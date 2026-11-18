@@ -211,8 +211,8 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         );
         let safeguards: BetaSet = request
             .params
-            .extra
-            .contains_key("safeguards")
+            .safeguards
+            .is_some()
             .then_some(AnthropicBeta::DangerousToolUse20260903)
             .into_iter()
             .collect();

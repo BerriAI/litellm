@@ -121,7 +121,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
     #[pymodule_export]
-    use crate::routes::messages::{amessages, messages};
+    use crate::routes::messages::{amessages, messages, messages_optional_params};
     #[pymodule_export]
     use crate::routes::ocr::{aocr, ocr, ocr_health_check_document, ocr_passthrough_response};
     #[pymodule_export]
@@ -184,6 +184,7 @@ mod tests {
                 "atranscription",
                 "messages",
                 "amessages",
+                "messages_optional_params",
                 "completion",
                 "acompletion",
                 "responses",

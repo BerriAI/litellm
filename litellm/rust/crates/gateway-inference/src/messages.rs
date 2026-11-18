@@ -16,6 +16,7 @@ use litellm_host_http::Sse;
 use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
 };
+use litellm_llms_types::formats::messages::MessagesOptionalParams;
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use litellm_router_core::{Attempt, Deployment, Op, Served};
 use serde_json::{Map, Value};
@@ -38,31 +39,7 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
-const DEPLOYMENT_DEFAULT_PARAMS: [&str; 23] = [
-    "max_tokens",
-    "metadata",
-    "stop_sequences",
-    "stream",
-    "system",
-    "temperature",
-    "thinking",
-    "tool_choice",
-    "top_k",
-    "inference_geo",
-    "top_p",
-    "mcp_servers",
-    "context_management",
-    "compaction",
-    "container",
-    "output_format",
-    "speed",
-    "output_config",
-    "cache_control",
-    "reasoning_effort",
-    "safeguards",
-    "service_tier",
-    "thread",
-];
+const TOOLS: &str = "tools";
 
 pub async fn create<H: Host>(
     State(gateway): State<Arc<Gateway<H>>>,
@@ -203,8 +180,7 @@ fn project(
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
-    let tools =
-        merged_tools(deployment, body.get("tools")).map(|tools| ("tools".to_owned(), tools));
+    let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
     let params = &deployment.params;
     let client_params = body.into_iter().map(|(name, value)| match name.as_str() {
         "model" => (name, Value::from(params.model.as_str())),
@@ -230,14 +206,16 @@ fn project(
 fn deployment_default_params(
     deployment: &Deployment,
 ) -> impl Iterator<Item = (String, Value)> + '_ {
-    DEPLOYMENT_DEFAULT_PARAMS.iter().filter_map(|name| {
-        let value = deployment.params.extra.get(*name)?;
-        Some(((*name).to_owned(), value.clone()))
-    })
+    MessagesOptionalParams::fields()
+        .filter(|name| *name != TOOLS)
+        .filter_map(|name| {
+            let value = deployment.params.extra.get(name)?;
+            Some((name.to_owned(), value.clone()))
+        })
 }
 
 fn merged_tools(deployment: &Deployment, client_tools: Option<&Value>) -> Option<Value> {
-    let deployment_tools = deployment.params.extra.get("tools")?.as_array()?;
+    let deployment_tools = deployment.params.extra.get(TOOLS)?.as_array()?;
     let client_tools: &[Value] = match client_tools.unwrap_or(&Value::Null) {
         Value::Null => &[],
         Value::Array(tools) => tools,

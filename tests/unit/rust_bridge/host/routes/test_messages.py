@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.llms.anthropic.messages.native import interceptors, mcp_handler
 from litellm.llms.anthropic.messages.native.interceptors.base import MessagesInterceptor
+from litellm.llms.anthropic.messages.native.utils import anthropic_messages_optional_param_keys
 from litellm.llms.azure.common_utils import AzureOpenAIError, EntraRejectionError
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -40,6 +41,7 @@ from litellm.llms.custom_httpx.http_handler import (
     exclude_rsa_key_exchange_and_chacha20,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params dict is untyped
 )
+from litellm.rust_bridge import _native
 from litellm.rust_bridge.host import callbacks_legacy_python
 from litellm.rust_bridge.host.routes import messages as messages_host
 from litellm.rust_bridge.host.routes.messages import response
@@ -479,6 +481,28 @@ def test_body_params_forward_only_the_metadata_anthropic_accepts(metadata: objec
     }
 
     assert messages_host.body_params(request, asynchronous=True)["metadata"] == expected
+
+
+def test_body_params_keep_a_call_param_and_an_unknown_key_out_of_the_body() -> None:
+    request: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "messages": [],
+        "max_tokens": 8,
+        "cache_control": {"type": "ephemeral"},
+        "user": "end-user-1",
+        "tags": ["a"],
+        "num_retries": 2,
+        "not_a_param": 1,
+    }
+
+    assert messages_host.body_params(request, asynchronous=True) == {
+        "max_tokens": 8,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_the_rust_route_reads_the_params_the_python_handler_keeps() -> None:
+    assert frozenset(_native.messages_optional_params()) == anthropic_messages_optional_param_keys()
 
 
 def _marked(phase: str | None = None, *args: object) -> ValueError:
