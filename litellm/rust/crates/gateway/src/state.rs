@@ -15,9 +15,13 @@ pub struct AppState {
 
 impl AppState {
     pub async fn build(config: &Config) -> Result<Self, Error> {
-        let resources = Resources::build(config)?;
-        let inference = crate::build_inference(config, &resources).await?;
-        let redis = crate::redis::connect(config, &resources).await?;
+        Self::over(config, &Resources::build(config)?).await
+    }
+
+    /// The state `config` describes, built from the `resources` made for it.
+    pub async fn over(config: &Config, resources: &Resources) -> Result<Self, Error> {
+        let inference = crate::build_inference(config, resources).await?;
+        let redis = crate::redis::connect(config, resources).await?;
         let database = db::connect(config, &resources.secrets).await?;
         Ok(Self {
             inference,

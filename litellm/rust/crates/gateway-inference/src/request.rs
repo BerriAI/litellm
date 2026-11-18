@@ -9,7 +9,8 @@ use serde_json::{Map, Value};
 use crate::{BodyError, Error};
 
 pub(crate) const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
-pub(crate) const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
+/// The largest request body an inference route reads.
+pub const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
 
 pub(crate) struct Upload {
     pub bytes: Bytes,

@@ -8,7 +8,7 @@ use std::{
 
 use axum::{ServiceExt, extract::Request, response::Response};
 use litellm_config::{Config, Environment};
-use litellm_gateway::{Admit, AppState, Gateway};
+use litellm_gateway::{Admit, AppState, Gateway, Resources};
 use litellm_license::Entitlements;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
@@ -111,11 +111,8 @@ async fn native_state(
     loaded: Option<Config>,
 ) -> Result<(Config, AppState, Admit), litellm_gateway::Error> {
     if let Some(config) = loaded {
-        match AppState::build(&config).await {
-            Ok(state) => {
-                let admit = Admit::new(&config);
-                return Ok((config, state, admit));
-            }
+        match admitted_state(&config).await {
+            Ok((state, admit)) => return Ok((config, state, admit)),
             Err(error) => tracing::error!(
                 error = %litellm_error::Report::new(&error),
                 "could not build the native app from the config python runs with, so python answers every request"
@@ -125,6 +122,13 @@ async fn native_state(
     let config = Config::default();
     let state = AppState::build(&config).await?;
     Ok((config, state, Admit::unconfigured()))
+}
+
+async fn admitted_state(config: &Config) -> Result<(AppState, Admit), litellm_gateway::Error> {
+    let resources = Resources::build(config)?;
+    let state = AppState::over(config, &resources).await?;
+    let admit = Admit::new(config, &resources, &state).await;
+    Ok((state, admit))
 }
 
 /// Serves natively the requests the gateway admits, in front of the Python proxy, which answers
@@ -290,17 +294,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::a_setting_the_native_app_does_not_honor(
+        "litellm_settings:\n  cache: true\n",
+        "settings"
+    )]
+    #[case::a_router_the_native_app_cannot_build(
+        "router_settings:\n  routing_strategy: usage-based-routing-v2\n",
+        "configuration"
+    )]
     #[tokio::test]
-    async fn python_answers_every_request_of_a_config_the_native_app_cannot_be_built_from() {
+    async fn python_answers_every_request_of_a_config_the_native_app_does_not_run(
+        #[case] settings: &str,
+        #[case] expected: &str,
+    ) {
         litellm_gateway::install_crypto_provider();
-        let config = Config::from_yaml(
-            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\ngeneral_settings:\n  master_key: gateway-key\n  coordination_redis:\n    host: coord\n    port: not-a-port\n",
-        )
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\ngeneral_settings:\n  master_key: gateway-key\n{settings}"
+        ))
         .unwrap();
 
         let (_, state, admit) = native_state(Some(config)).await.unwrap();
 
-        assert_eq!(refused(admit).await, Some("configuration"));
+        assert_eq!(refused(admit).await, Some(expected));
         state.close().await;
     }
 
