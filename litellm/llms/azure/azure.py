@@ -1058,7 +1058,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 stringified_response: Final = response
                 ## LOGGING
                 logging_obj.post_call(
-                    input=input,
+                    input=data.get("prompt", ""),
                     api_key=api_key,
                     additional_args={"complete_input_dict": data},
                     original_response=stringified_response,
@@ -1071,7 +1071,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
-                input=input,
+                input=data.get("prompt", ""),
                 api_key=api_key,
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),

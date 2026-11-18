@@ -140,6 +140,34 @@ class TestJinaAIEmbeddingTransform:
         }
         assert result == expected_result
 
+    def test_transform_embedding_response_logging_input_not_builtin(self):
+        """Test that logging_obj.post_call receives request input rather than builtins.input (#52551)"""
+        import builtins
+
+        request_input = ["test prompt"]
+        mock_response = httpx.Response(
+            200,
+            json={
+                "model": self.model,
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+        self.config.transform_embedding_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=self.logging_obj,
+            api_key="test-key",
+            request_data={"input": request_input},
+            optional_params={},
+            litellm_params={},
+        )
+        self.logging_obj.post_call.assert_called_once()
+        called_kwargs = self.logging_obj.post_call.call_args.kwargs
+        assert called_kwargs["input"] == request_input
+        assert called_kwargs["input"] is not builtins.input
+
 
 @pytest.mark.respx(assert_all_called=True)
 def test_jina_ai_embedding_forwards_task_and_dimensions_and_parses_values(

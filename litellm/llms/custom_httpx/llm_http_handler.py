@@ -3547,7 +3547,7 @@ class BaseLLMHTTPHandler:
 
         ## LOGGING
         logging_obj.pre_call(
-            input=input,
+            input="",
             api_key="",
             additional_args={
                 "complete_input_dict": data,
@@ -3634,7 +3634,7 @@ class BaseLLMHTTPHandler:
 
         ## LOGGING
         logging_obj.pre_call(
-            input=input,
+            input="",
             api_key="",
             additional_args={
                 "complete_input_dict": data,
