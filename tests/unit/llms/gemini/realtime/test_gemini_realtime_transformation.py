@@ -1995,7 +1995,7 @@ def _events_per_frame(
     return (frame_events, *_events_per_frame(config, frames[1:], next_state))
 
 
-def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_response_done():
+def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_response_done() -> None:
     opened, interrupted, turn_complete, next_turn, next_turn_complete = _events_per_frame(
         GeminiRealtimeConfig(),
         [
@@ -2006,8 +2006,8 @@ def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_re
             {"serverContent": {"turnComplete": True}},
         ],
     )
-    response_id = opened[0]["response"]["id"]
-    item_id = opened[1]["item"]["id"]
+    response_id: Final = opened[0]["response"]["id"]
+    item_id: Final = opened[1]["item"]["id"]
 
     audio_done, part_done, item_done = interrupted
     assert [
@@ -2021,21 +2021,21 @@ def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_re
     ], interrupted
 
     assert [event["type"] for event in turn_complete] == ["response.done"], turn_complete
-    done = turn_complete[0]["response"]
+    done: Final = turn_complete[0]["response"]
     assert (done["id"], done["status"], done["status_details"]) == (
         response_id,
         "cancelled",
         {"type": "cancelled", "reason": "turn_detected"},
     ), done
-    usage = done["usage"]
+    usage: Final = done["usage"]
     assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (30, 12, 42), usage
 
-    next_done = next_turn_complete[-1]["response"]
+    next_done: Final = next_turn_complete[-1]["response"]
     assert next_turn[0]["response"]["id"] != response_id
     assert (next_done["status"], next_done["status_details"]) == ("completed", None), next_done
 
 
-def test_gemini_interruption_and_turn_complete_in_one_frame_reports_cancelled():
+def test_gemini_interruption_and_turn_complete_in_one_frame_reports_cancelled() -> None:
     opened, closing = _events_per_frame(
         GeminiRealtimeConfig(),
         [
@@ -2051,7 +2051,7 @@ def test_gemini_interruption_and_turn_complete_in_one_frame_reports_cancelled():
         "response.done",
     ], closing
     assert closing[2]["item"]["status"] == "incomplete"
-    done = closing[3]["response"]
+    done: Final = closing[3]["response"]
     assert (done["id"], done["status"], done["status_details"], done["usage"]["total_tokens"]) == (
         opened[0]["response"]["id"],
         "cancelled",
@@ -2060,7 +2060,7 @@ def test_gemini_interruption_and_turn_complete_in_one_frame_reports_cancelled():
     ), done
 
 
-def test_gemini_interruption_after_generation_complete_does_not_close_the_item_twice():
+def test_gemini_interruption_after_generation_complete_does_not_close_the_item_twice() -> None:
     _, generation_complete, interrupted, turn_complete = _events_per_frame(
         GeminiRealtimeConfig(),
         [
@@ -2073,11 +2073,11 @@ def test_gemini_interruption_after_generation_complete_does_not_close_the_item_t
 
     assert generation_complete[-1]["item"]["status"] == "completed", generation_complete
     assert interrupted == []
-    statuses = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
     assert statuses == [("response.done", "cancelled")], turn_complete
 
 
-def test_gemini_usage_on_the_interrupted_frame_is_billed_on_the_cancelled_response_done():
+def test_gemini_usage_on_the_interrupted_frame_is_billed_on_the_cancelled_response_done() -> None:
     _, _, turn_complete = _events_per_frame(
         GeminiRealtimeConfig(),
         [
@@ -2087,11 +2087,11 @@ def test_gemini_usage_on_the_interrupted_frame_is_billed_on_the_cancelled_respon
         ],
     )
 
-    done = turn_complete[-1]["response"]
+    done: Final = turn_complete[-1]["response"]
     assert (done["status"], done["usage"]["total_tokens"]) == ("cancelled", 42), done
 
 
-def test_gemini_repeated_interruption_closes_the_item_once():
+def test_gemini_repeated_interruption_closes_the_item_once() -> None:
     _, first, second, turn_complete = _events_per_frame(
         GeminiRealtimeConfig(),
         [
@@ -2108,14 +2108,14 @@ def test_gemini_repeated_interruption_closes_the_item_once():
         "response.output_item.done",
     ], first
     assert second == []
-    statuses = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
     assert statuses == [("response.done", "cancelled")], turn_complete
 
 
 _TRANSCRIPT_TURN: Final = {"serverContent": {"outputTranscription": {"text": "Once upon"}}}
 
 
-def test_gemini_interruption_before_audio_closes_a_transcript_first_item():
+def test_gemini_interruption_before_audio_closes_a_transcript_first_item() -> None:
     opened, interrupted, turn_complete = _events_per_frame(
         GeminiRealtimeConfig(),
         [
@@ -2124,37 +2124,43 @@ def test_gemini_interruption_before_audio_closes_a_transcript_first_item():
             {"serverContent": {"turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
         ],
     )
-    item_id = opened[1]["item"]["id"]
+    item_id: Final = opened[1]["item"]["id"]
 
-    closes = [(event["type"], event.get("item_id") or event["item"]["id"]) for event in interrupted]
+    closes: Final = [(event["type"], event.get("item_id") or event["item"]["id"]) for event in interrupted]
     assert closes == [
         ("response.output_audio.done", item_id),
         ("response.content_part.done", item_id),
         ("response.output_item.done", item_id),
     ], interrupted
     assert interrupted[2]["item"]["status"] == "incomplete", interrupted[2]
-    statuses = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
     assert statuses == [("response.done", "cancelled")], turn_complete
 
 
-def test_gemini_transcript_first_turn_closes_its_item_on_generation_complete():
+def test_gemini_transcript_first_turn_closes_its_item_on_generation_complete() -> None:
     opened, generation_complete, turn_complete = _events_per_frame(
         GeminiRealtimeConfig(),
         [_TRANSCRIPT_TURN, {"serverContent": {"generationComplete": True}}, {"serverContent": {"turnComplete": True}}],
     )
 
-    item_done = generation_complete[-1]
+    item_done: Final = generation_complete[-1]
     assert (item_done["type"], item_done["item"]["id"], item_done["item"]["status"]) == (
         "response.output_item.done",
         opened[1]["item"]["id"],
         "completed",
     ), generation_complete
-    statuses = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
     assert statuses == [("response.done", "completed")], turn_complete
 
 
-@pytest.mark.parametrize("opening_frame", [_AUDIO_MODEL_TURN, _TRANSCRIPT_TURN], ids=["audio-first", "transcript-first"])
-def test_gemini_generation_and_turn_complete_in_one_frame_close_the_item_and_the_response(opening_frame):
+@pytest.mark.parametrize(
+    "opening_frame",
+    [_AUDIO_MODEL_TURN, _TRANSCRIPT_TURN],
+    ids=["audio-first", "transcript-first"],
+)
+def test_gemini_generation_and_turn_complete_in_one_frame_close_the_item_and_the_response(
+    opening_frame: Mapping[str, object],
+) -> None:
     opened, closing = _events_per_frame(
         GeminiRealtimeConfig(),
         [
@@ -2162,8 +2168,8 @@ def test_gemini_generation_and_turn_complete_in_one_frame_close_the_item_and_the
             {"serverContent": {"generationComplete": True, "turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
         ],
     )
-    response_id = opened[0]["response"]["id"]
-    item_id = opened[1]["item"]["id"]
+    response_id: Final = opened[0]["response"]["id"]
+    item_id: Final = opened[1]["item"]["id"]
 
     audio_done, part_done, item_done, response_done = closing
     assert [
@@ -2180,7 +2186,7 @@ def test_gemini_generation_and_turn_complete_in_one_frame_close_the_item_and_the
     assert response_done["response"]["usage"]["total_tokens"] == 42, response_done
 
 
-def test_gemini_interruption_with_no_open_response_emits_nothing():
+def test_gemini_interruption_with_no_open_response_emits_nothing() -> None:
     (interrupted,) = _events_per_frame(GeminiRealtimeConfig(), [{"serverContent": {"interrupted": True}}])
 
     assert interrupted == []
