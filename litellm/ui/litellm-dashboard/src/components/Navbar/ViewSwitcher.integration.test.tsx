@@ -245,6 +245,7 @@ describe("ViewSwitcher", () => {
     expect(trigger).toHaveTextContent("Lens");
     await user.click(trigger);
     await user.click(await screen.findByRole("menuitem", { name: "AI Gateway" }));
+    expect(pushMock).toHaveBeenCalledWith("/ui/");
     expect(assignSpy).not.toHaveBeenCalled();
   });
 

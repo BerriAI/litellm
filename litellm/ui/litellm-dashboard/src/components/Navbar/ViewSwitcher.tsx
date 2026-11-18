@@ -93,7 +93,9 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
     setMode(key);
     if (isStandaloneRoute) {
       window.location.assign(uiHref(""));
+      return;
     }
+    if (isLensRoute) router.push(uiHref(""));
   };
 
   const openLens = () => {
