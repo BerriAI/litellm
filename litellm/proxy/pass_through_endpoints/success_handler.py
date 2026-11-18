@@ -500,6 +500,17 @@ class PassThroughEndpointLogging:
             kwargs = fal_ai_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         return_dict["standard_logging_response_object"] = standard_logging_response_object
 
+        # A provider handler counts usage from the provider response body and returns
+        # it in the logging kwargs. Cost finalization runs after this normalization
+        # but reads model_call_details, not the kwargs, so adopt the handler's usage
+        # and payload here; otherwise finalization recomputes usage from the opaque
+        # pass-through response and zeroes the spend row's token columns.
+        _handler_usage: Final = kwargs.get("combined_usage_object")
+        if isinstance(_handler_usage, Usage):
+            logging_obj.model_call_details["combined_usage_object"] = _handler_usage
+        _handler_payload: Final = kwargs.get("standard_logging_object")
+        if isinstance(_handler_payload, dict):
+            logging_obj.model_call_details["standard_logging_object"] = _handler_payload
         return_dict["kwargs"] = kwargs
         return return_dict
 

@@ -486,3 +486,102 @@ def test_success_handler_dispatches_eu_jev_to_the_shared_handler():
 
     assert normalized["kwargs"]["custom_llm_provider"] == "eu_jev"
     assert normalized["kwargs"]["model"] == "eu_jev/eu-jeff-1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The spend row's token columns must carry the usage the typesafe handler read
+    from the provider body, not zeros recomputed from the opaque pass-through response.
+
+    Mirrors the proxy call site: the caller passes its init kwargs (no usage yet);
+    pass_through_async_success_handler normalizes with the provider handler and then
+    finalizes cost before dispatching the success callbacks.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import StandardPassThroughResponseObject
+
+    model_key: Final = "typesafe/jev-1.13.0"
+    pricing: Final = litellm.model_cost[model_key]
+    start: Final = datetime.now()
+    logging_obj: Final = Logging(
+        model="jev-1.13.0",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="typesafe-finalize-usage",
+        function_id="typesafe-finalize-usage",
+        kwargs={},
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/typesafe/v1/systemone",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+    auth: Final = UserAPIKeyAuth(api_key="typesafe-finalize-key", token="typesafe-finalize-key")
+    request_body: Final = {"model": "jev-1.13.0"}
+    caller_kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=auth,
+        logging_obj=logging_obj,
+        passthrough_logging_payload={"url": "https://api.typesafe.ai/v1/systemone"},
+        _parsed_body=dict(request_body),
+    )
+    logging_obj.update_environment_variables(
+        model="jev-1.13.0",
+        user="unknown",
+        optional_params={},
+        litellm_params=caller_kwargs["litellm_params"],
+        call_type="pass_through_endpoint",
+    )
+    body: Final = {"model": "jev-1.13.0", "usage": {"input_tokens": 12, "output_tokens": 1}}
+    expected_cost: Final = 12 * pricing["input_cost_per_token"] + 1 * pricing["output_cost_per_token"]
+
+    captured: dict = {}
+
+    async def capture_dispatch(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+        captured["kwargs"] = kwargs
+        captured["details"] = dict(self.model_call_details)
+
+    monkeypatch.setattr(Logging, "dispatch_success_handlers", capture_dispatch)
+    await PassThroughEndpointLogging().pass_through_async_success_handler(
+        httpx_response=httpx.Response(
+            200, request=httpx.Request("POST", "https://api.typesafe.ai/v1/systemone"), json=body
+        ),
+        response_body=body,
+        logging_obj=logging_obj,
+        url_route="https://api.typesafe.ai/v1/systemone",
+        result="{}",
+        start_time=start,
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body=request_body,
+        custom_llm_provider="typesafe",
+        finalize_before_dispatch=True,
+        **caller_kwargs,
+    )
+    await asyncio.sleep(0.1)
+
+    assert captured, "finalize-before-dispatch never reached the success dispatch"
+    dispatched_usage = captured["details"].get("combined_usage_object")
+    assert dispatched_usage is not None and dispatched_usage.total_tokens == 13, (
+        f"finalization dropped the handler usage: {dispatched_usage}"
+    )
+    row: Final = get_logging_payload(
+        kwargs=captured["details"],
+        response_obj=StandardPassThroughResponseObject(response="{}"),
+        start_time=start,
+        end_time=datetime.now(),
+    )
+    assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (12, 1, 13)
+    assert row["spend"] == pytest.approx(expected_cost)
