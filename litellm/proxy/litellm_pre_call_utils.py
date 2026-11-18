@@ -428,6 +428,7 @@ from litellm.types.litellm_params import (
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_API_HEADERS,
+    ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_USER_PROFILE_ID_HEADER,
     ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
 )
@@ -5051,7 +5052,7 @@ def add_provider_specific_headers_to_request(
     request_fields: Final = _REQUEST_FIELDS.validate_python(data)
     caller_api_key: Final = request_fields.get("api_key")
     sends_anthropic_oauth: Final = sends_anthropic_bearer_oauth or (
-        isinstance(caller_api_key, str) and is_anthropic_oauth_key(caller_api_key)
+        isinstance(caller_api_key, str) and caller_api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
     )
     caller_oauth_providers: Final = ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_oauth else frozenset[str]()
     caller_api_key_providers: Final = _providers_on_caller_credentials(request_fields)
