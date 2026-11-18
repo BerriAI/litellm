@@ -41,6 +41,8 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     CallFacts,
     OcrDocument,
     RerankDocument,
+    SpeechDocument,
+    TranscriptionDocument,
     VectorStoreSearchDocument,
     adjusted_cost,
     billed_token_rates,
@@ -61,7 +63,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
-    generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
     get_billable_input_tokens,
@@ -74,7 +75,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_vertex_regional_endpoint_uplift,
     get_web_search_requests_from_usage,
     parse_prompt_tokens_details,
-    select_cost_metric_for_model,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -385,32 +385,98 @@ _TRANSCRIPTION_SECOND_RATE_KEYS: Final[tuple[_TranscriptionRateKey, ...]] = (
 )
 
 
-def _transcription_uses_token_pricing(
-    model: str,
-    custom_llm_provider: str | None,
-    usage_block: Usage | None,
-) -> bool:
-    if usage_block is None:
+def _usage_reports_tokens(usage: Usage | None) -> bool:
+    if usage is None:
         return False
-
-    model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-    if (
-        _declared_transcription_rate(model_info, _TRANSCRIPTION_TOKEN_RATE_KEYS) is None
-        and _declared_transcription_rate(model_info, _TRANSCRIPTION_SECOND_RATE_KEYS) is not None
+    prompt_details: Final[PromptTokensDetailsWrapper | None] = getattr(usage, "prompt_tokens_details", None)
+    if prompt_details is not None and (
+        (getattr(prompt_details, "audio_tokens", 0) or 0) > 0 or (getattr(prompt_details, "text_tokens", 0) or 0) > 0
     ):
-        return False
+        return True
+    return (getattr(usage, "prompt_tokens", 0) or 0) > 0 or (getattr(usage, "completion_tokens", 0) or 0) > 0
 
-    prompt_tokens_val: Final = getattr(usage_block, "prompt_tokens", 0) or 0
-    completion_tokens_val: Final = getattr(usage_block, "completion_tokens", 0) or 0
-    prompt_details: Final[PromptTokensDetailsWrapper | None] = getattr(usage_block, "prompt_tokens_details", None)
 
-    if prompt_details is not None:
-        audio_token_count: Final = getattr(prompt_details, "audio_tokens", 0) or 0
-        text_token_count: Final = getattr(prompt_details, "text_tokens", 0) or 0
-        if audio_token_count > 0 or text_token_count > 0:
-            return True
+def _transcription_cost(
+    model: str,
+    model_without_prefix: str,
+    custom_llm_provider: str,
+    duration: float,
+    usage: Usage,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> tuple[float, float]:
+    if not _usage_reports_tokens(usage):
+        return openai_cost_per_second(
+            model=model_without_prefix, custom_llm_provider=custom_llm_provider, duration=duration
+        )
+    model_info: Final = cached_get_model_info_helper(
+        model=model_without_prefix, custom_llm_provider=custom_llm_provider
+    )
+    declared: Final[Mapping[str, object] | None] = litellm.model_cost.get(model_info.get("key"))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # model cost map is dynamically loaded
+    outcome: Final = price_units(
+        TranscriptionDocument(
+            kind="transcription",
+            model=model_without_prefix,
+            provider=custom_llm_provider,
+            seconds=duration,
+            tokens=True,
+        ),
+        catalog=declared if declared is not None else model_info,
+    )
+    if isinstance(outcome, NativeUnpriced) and outcome.reason == "not_ported":
+        return generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+            service_tier=service_tier,
+            data_residency=data_residency,
+        )
+    return prompt_and_completion(outcome)
 
-    return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+def _speech_cost(
+    model: str,
+    custom_llm_provider: str,
+    prompt_characters: int | None,
+    usage: Usage,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> tuple[float, float]:
+    lyria_generation_cost: Final = (
+        get_vertex_ai_lyria_generation_cost(model=model)
+        if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+        else None
+    )
+    if lyria_generation_cost is not None:
+        return 0.0, lyria_generation_cost
+    outcome: Final = price_units(
+        SpeechDocument(
+            kind="speech",
+            model=model,
+            provider=custom_llm_provider,
+            characters=prompt_characters,
+            generations=None,
+        ),
+        catalog=cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, preserve_unset_costs=True
+        ),
+    )
+    if isinstance(outcome, NativeReceipt):
+        return outcome.prompt_cost, outcome.completion_cost
+    if outcome.reason == "not_ported":
+        return generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+            service_tier=service_tier,
+            data_residency=data_residency,
+        )
+    if outcome.reason == "missing_usage":
+        raise ValueError(
+            f"prompt_characters must be provided for tts calls. prompt_characters={prompt_characters}, "
+            f"model={model}, custom_llm_provider={custom_llm_provider}"
+        )
+    raise ValueError(f"Model {model} does not have 'input_cost_per_character' or 'input_cost_per_token'")
 
 
 def _transcription_duration_for_cost(completion_response: object) -> float:
@@ -724,50 +790,14 @@ def cost_per_token(
                 ),
             )
     if call_type == "speech" or call_type == "aspeech":
-        lyria_generation_cost: Final = (
-            get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
-            if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
-            else None
-        )
-        if lyria_generation_cost is not None:
-            return 0.0, lyria_generation_cost
-        speech_model_info: Final = cached_get_model_info_helper(
+        return _speech_cost(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
-            preserve_unset_costs=True,
+            prompt_characters=prompt_characters,
+            usage=usage_block,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
-        cost_metric: Final = select_cost_metric_for_model(speech_model_info)
-        prompt_cost: float = 0.0
-        completion_cost: float = 0.0
-        if cost_metric == "cost_per_character":
-            if prompt_characters is None:
-                raise ValueError(
-                    f"prompt_characters must be provided for tts calls. prompt_characters={prompt_characters}, model={model}, custom_llm_provider={custom_llm_provider}, call_type={call_type}"
-                )
-            _prompt_cost, _completion_cost = generic_cost_per_character(
-                model=model_without_prefix,
-                custom_llm_provider=custom_llm_provider,
-                prompt_characters=prompt_characters,
-                completion_characters=0,
-                custom_prompt_cost=None,
-                custom_completion_cost=0,
-            )
-            if _prompt_cost is None or _completion_cost is None:
-                raise ValueError(
-                    f"cost for tts call is None. prompt_cost={_prompt_cost}, completion_cost={_completion_cost}, model={model_without_prefix}, custom_llm_provider={custom_llm_provider}, prompt_characters={prompt_characters}, completion_characters={completion_characters}"
-                )
-            prompt_cost = _prompt_cost
-            completion_cost = _completion_cost
-        elif cost_metric == "cost_per_token":
-            prompt_cost, completion_cost = generic_cost_per_token(
-                model=model_without_prefix,
-                usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
-                service_tier=service_tier,
-                data_residency=data_residency,
-            )
-
-        return prompt_cost, completion_cost
     elif call_type == "arerank" or call_type == "rerank":
         return rerank_cost(
             model=model,
@@ -801,15 +831,6 @@ def cost_per_token(
             vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
-        if _transcription_uses_token_pricing(model_without_prefix, custom_llm_provider, usage_block):
-            return generic_cost_per_token(
-                model=model,
-                usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
-                service_tier=service_tier,
-                data_residency=data_residency,
-            )
-
         billed_duration: Final = (
             max(audio_transcription_file_duration, _GROQ_MINIMUM_TRANSCRIPTION_SECONDS)
             if (
@@ -819,10 +840,14 @@ def cost_per_token(
             )
             else audio_transcription_file_duration
         )
-        return openai_cost_per_second(
-            model=model_without_prefix,
+        return _transcription_cost(
+            model=model,
+            model_without_prefix=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             duration=billed_duration,
+            usage=usage_block,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing

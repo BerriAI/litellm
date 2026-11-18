@@ -6,7 +6,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - `engine.rs` hands each `PriceQuery` kind to its handler module. A kind or case without a handler answers `Unpriced::NotPorted`, and only then may the caller price it the old way
 - `tokens.rs` and `tokens/` port the token path of `completion_cost`: `rule.rs` for what each provider branch of `cost_per_token` adds, `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
-- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
+- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
   - Where main billed a call nothing on purpose (no row, no rate, no units) the core answers `Unpriced`, never 0.0, and the adapter maps it to each calculator's legacy return
 
 ## Parity fixtures
@@ -29,6 +29,8 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 
 - A rerank row priced only per token bills 0 unless its provider's config bills tokens (Jina AI, Scaleway, Voyage), as Cohere v5, Azure AI Cohere v5 and Together AI rows are billed by search units they have no rate for (`calculate_rerank_cost` of `BaseRerankConfig`)
 - An OCR annotation page with no annotation rate of its own bills at the page rate, also in a batch, where the page rate may come from the deployment while the catalog prices annotations (`ocr_cost`, `ocr_batch_cost`)
+- A Vertex AI Lyria generation bills the bundled cost map's rate when the live row has none, so a live table can never unprice it (`get_vertex_ai_lyria_generation_cost`, the adapter still passes both rows)
+- A speech or transcription call priced per token, and a transcription whose usage reports tokens on a row that declares token rates, are `NotPorted` and bill through main's generic token path, which bills a row's synthesized zero token rates
 
 ## Not copied from main
 

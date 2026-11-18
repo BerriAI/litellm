@@ -15,9 +15,11 @@ pub mod receipt;
 mod rerank;
 pub mod row;
 pub mod schedule;
+mod speech;
 #[cfg(test)]
 mod testing;
 mod tokens;
+mod transcription;
 mod units;
 pub mod usage;
 mod vector_store;
