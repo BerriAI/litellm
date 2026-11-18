@@ -2474,10 +2474,18 @@ def client(original_function):
             end_time = datetime.datetime.now()
             if _returns_requested_stream(kwargs, call_type, result) or _is_converted_stream_result(result):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
+                    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    assembly_chunks: Final = (
+                        result.chunks
+                        if isinstance(result, CustomStreamWrapper)
+                        and result.custom_llm_provider == LlmProviders.BEDROCK.value
+                        else chunks
+                    )
+                    return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
                 else:
                     logging_obj.stream = True
                     logging_obj.model_call_details["stream"] = True

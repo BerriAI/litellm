@@ -1444,6 +1444,38 @@ async def test_converse_stream_bills_the_tier_reported_in_metadata(
     assert chunks[-1].model_dump().get("service_tier") == served_tier
 
 
+def test_converse_stream_assembled_response_keeps_served_tier(_aws_test_credentials: None) -> None:
+    model: Final = "bedrock/converse/qwen.qwen3-coder-next"
+    usage: Final = {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5}
+    metadata: Final = _converse_event_frame(
+        "metadata", {"usage": usage, "metrics": {"latencyMs": 1}, "serviceTier": {"type": "flex"}}
+    )
+
+    def handle_request(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"".join((*_CONVERSE_CONTENT_FRAMES, metadata)), headers=_event_stream_headers()
+        )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        aws_region_name="us-east-1",
+        stream=True,
+        complete_response=True,
+        service_tier="priority",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle_request))),
+    )
+    rates: Final = litellm.get_model_info("bedrock/us-east-1/qwen.qwen3-coder-next")
+    input_rate, output_rate = rates["input_cost_per_token_flex"], rates["output_cost_per_token_flex"]
+    assert input_rate is not None and output_rate is not None
+    assert response.choices[0].message.content == "hi"
+    assert response.model_dump()["service_tier"] == "flex"
+    assert response.usage.total_tokens == usage["totalTokens"]
+    assert litellm.completion_cost(completion_response=response, model=model, region_name="us-east-1") == pytest.approx(
+        usage["inputTokens"] * input_rate + usage["outputTokens"] * output_rate
+    )
+
+
 def _unknown_event_frame() -> bytes:
     return _converse_event_frame("somethingBedrockAddedLater", {"message": _UPSTREAM_REJECTION})
 
