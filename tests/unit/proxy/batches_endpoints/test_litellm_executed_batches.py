@@ -13,6 +13,7 @@ import pytest
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
+import litellm
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.batches_endpoints import litellm_executed_batches
@@ -924,6 +925,35 @@ async def test_create_forwards_row_credentials_when_the_admin_opted_in() -> None
     }
     assert by_content["hi 2"]["api_base"] == "https://evil.example"
     assert "api_base" not in by_content["hi 1"]
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "dispatched"),
+    [
+        pytest.param({}, None, id="not-granted-drops-the-opt-out"),
+        pytest.param({"allow_client_message_redaction_opt_out": True}, False, id="granted-keeps-the-opt-out"),
+    ],
+)
+async def test_create_keeps_a_row_message_redaction_opt_out_only_when_the_key_allows_it(
+    monkeypatch: pytest.MonkeyPatch, key_metadata: dict[str, object], dispatched: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    harness: Final = make_runner(
+        content=jsonl(
+            chat_row(
+                "row-1",
+                "hi 1",
+                turn_off_message_logging=False,
+                litellm_metadata={"turn_off_message_logging": False},
+            )
+        ),
+        user=UserAPIKeyAuth(api_key="sk-batch-key", metadata=key_metadata),
+    )
+    await harness.create_and_finish()
+
+    (call,) = harness.router.acompletion.await_args_list
+    assert call.kwargs.get("turn_off_message_logging") is dispatched
+    assert call.kwargs["litellm_metadata"].get("turn_off_message_logging") is dispatched
 
 
 async def test_running_batch_touches_its_row_until_it_finishes() -> None:

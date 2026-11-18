@@ -27,7 +27,10 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    strip_unapproved_client_message_redaction_opt_out,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import LITELLM_EXECUTED_BATCH_ID_PREFIX
 from litellm.proxy.openai_files_endpoints.storage_backend_service import StorageBackendFileService
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -645,8 +648,10 @@ class LiteLLMExecutedBatchRunner:
         return RowOutcome(custom_id=line.custom_id, status_code=200, body=body, succeeded=True)
 
     async def _dispatch(self, run: _BatchRun, line: BatchInputLine) -> Mapping[str, object]:
+        body: Final = dict(line.body)
+        strip_unapproved_client_message_redaction_opt_out(body, run.user_api_key_dict)
         params: Final = MappingProxyType(
-            {**line.body, "model": run.model, "metadata": self._row_metadata(run), "disable_fallbacks": True}
+            {**body, "model": run.model, "metadata": self._row_metadata(run), "disable_fallbacks": True}
         )
         return _dump(await self._router_call(run.endpoint)(**params))
 

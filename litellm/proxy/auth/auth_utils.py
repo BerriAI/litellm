@@ -447,6 +447,7 @@ _SAFE_CLIENT_CALLBACK_PARAMS: Final[frozenset[str]] = frozenset(
     {
         "langfuse_prompt_version",
         "langsmith_sampling_rate",
+        "turn_off_message_logging",
     }
 )
 

