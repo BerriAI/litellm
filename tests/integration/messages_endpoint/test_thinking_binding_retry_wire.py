@@ -228,6 +228,33 @@ def test_regression_binding_mismatch_on_both_attempts_returns_the_provider_error
 
 
 @_every_route
+def test_regression_invalid_signature_after_binding_retry_recovers_without_thinking(
+    gateway: Gateway, provider: Provider, stream: bool
+) -> None:
+    exchange: Final = _exchange(gateway, provider, stream, (_BINDING_ERROR, _SIGNATURE_ERROR, None), _ADAPTIVE)
+
+    assert exchange.response.status_code == 200, exchange.response.text
+    assert answer(exchange.marker) in exchange.response.text
+    assert len(exchange.requests) == 3, [request.target for request in exchange.requests]
+    _, dropping, stripped = exchange.bodies
+    assert dropping["thinking"] == {**_ADAPTIVE, "block_binding": _DROP_BLOCK}, dropping
+    assert _replayed_thinking(dropping) == _SIGNED_BLOCKS, dropping
+    assert _replayed_thinking(stripped) == (), stripped
+    assert "thinking" not in stripped, stripped
+
+
+@_every_route
+def test_regression_invalid_signature_after_binding_retry_stops_at_the_third_attempt(
+    gateway: Gateway, provider: Provider, stream: bool
+) -> None:
+    exchange: Final = _exchange(gateway, provider, stream, (_BINDING_ERROR, _SIGNATURE_ERROR), _ADAPTIVE)
+
+    assert exchange.response.status_code == 400, exchange.response.text
+    assert _SIGNATURE_ERROR in exchange.response.text
+    assert len(exchange.requests) == 3, [request.target for request in exchange.requests]
+
+
+@_every_route
 def test_guard_caller_pinned_binding_error_is_not_retried(gateway: Gateway, provider: Provider, stream: bool) -> None:
     exchange: Final = _exchange(gateway, provider, stream, (_BINDING_ERROR, None), _PINNED_ERROR)
 
