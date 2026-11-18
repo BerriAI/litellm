@@ -55,6 +55,7 @@ from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
     litellm_logging_obj_from_kwargs,
     local_model_name,
+    proxy_sub_call_forwarded_headers,
     proxy_sub_call_logging_kwargs,
     proxy_sub_call_trace_id,
 )
@@ -292,6 +293,7 @@ def request_safeguards_evaluator(
         llm_router=_router_or_proxy_fallback(_requested_router(kwargs)),
         logging_kwargs=proxy_sub_call_logging_kwargs(kwargs),
         parent_trace_id=proxy_sub_call_trace_id(kwargs),
+        forwarded_headers=proxy_sub_call_forwarded_headers(kwargs),
     )
 
 
@@ -938,6 +940,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             llm_router=litellm_router,
             logging_kwargs=sub_call_logging_kwargs,
             parent_trace_id=sub_call_trace_id,
+            forwarded_headers=proxy_sub_call_forwarded_headers(request_kwargs),
         )
 
         prepare: Final = partial(

@@ -198,6 +198,18 @@ def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxyS
     return {**dynamic_params, "litellm_trusted_callback_vars": trusted_vars}
 
 
+def proxy_sub_call_forwarded_headers(parent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
+    """The client headers the proxy forwards to the upstream for the parent request, so a sub-call to an
+    admin-configured model reaches that upstream under the same caller identity. Only the headers
+    ``forward_client_headers_to_llm_api`` resolved for the parent are carried, never the rest of the
+    request's headers."""
+    headers: Final = _object_mapping(parent_kwargs.get("headers"))
+    if headers is None:
+        return None
+    forwarded: Final = {name: value for name, value in headers.items() if isinstance(value, str)}
+    return forwarded or None
+
+
 def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
     """The trace id the parent call resolved, whether the caller sent it in the body or the proxy minted it, so a
     sub-call passes a team's ``require_trace_id`` check whenever the parent did."""
