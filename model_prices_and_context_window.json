@@ -67501,16 +67501,16 @@
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/routers/kimi-latest": {
-        "cache_read_input_token_cost": 3e-07,
-        "cache_read_input_token_cost_priority": 3.75e-07,
-        "input_cost_per_token": 3e-06,
-        "input_cost_per_token_priority": 3.75e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_priority": 3e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_priority": 3e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
-        "output_cost_per_token_priority": 1.875e-05,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_priority": 1.5e-05,
         "reasoning_effort_levels": [
             "low",
             "high",
@@ -67519,13 +67519,14 @@
         "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "fireworks_ai/kimi-latest": {
-        "alias_of": "fireworks_ai/accounts/fireworks/models/kimi-k3"
+        "alias_of": "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro"
     },
     "fireworks_ai/deepseek-v4-flash-0731": {
         "cache_read_input_token_cost": 7e-09,
