@@ -416,10 +416,8 @@ impl Core {
         let cooling = if resolution.kind.is_single() {
             Vec::new()
         } else {
-            // `async_get_cooldown_deployments` reads every deployment's, as one throttled batch.
-            self.health
-                .active_cooldowns(&snapshot.registry.ids())
-                .await?
+            let ids: Vec<String> = all.iter().map(|d| d.id.clone()).collect();
+            self.health.active_cooldowns(&ids).await?
         };
         // Health-check filtering runs before the cooldown filter, except for a deployment named
         // by its id and the healthy count a retry decision reads.

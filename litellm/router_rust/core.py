@@ -1763,7 +1763,9 @@ class RustCore(
 
         try:
             usage_selector: Final = self._prefetch_usage_selector(model, request_kwargs)
-            deployments: Final = self._hosted._core_get_model_list(model_name=model)  # pyright: ignore[reportPrivateUsage]  # see __init__
+            deployments: Final = self._hosted._core_get_model_list(  # pyright: ignore[reportPrivateUsage]  # see __init__
+                model_name=model, team_id=get_request_team_id(request_kwargs or {})
+            )
             if deployments:
                 RoutingPrefetch.arm(RoutingContext(self), usage_selector, deployments)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the prefetch reads registry() and health(); its deployments list is untyped
         except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request

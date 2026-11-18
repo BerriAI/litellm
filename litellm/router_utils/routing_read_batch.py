@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_router_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.redis.stores.router_usage import UsageCounter
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
@@ -23,20 +24,27 @@ def _selector_counters(selector: LowestTPMLoggingHandler_v2, deployments: Sequen
     return tpm_counters + rpm_counters
 
 
+def _deployment_ids(deployments: Sequence[object]) -> tuple[str, ...]:
+    records: Final = (as_str_mapping(deployment) or {} for deployment in deployments)
+    infos: Final = (as_str_mapping(record.get("model_info")) or {} for record in records)
+    return tuple(model_id for info in infos if isinstance(model_id := info.get("id"), str))
+
+
 class RoutingPrefetch:
     @staticmethod
     @renamed_router_param("litellm_router_instance")
     def arm(
         ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: Sequence[object]
     ) -> None:
-        RoutingPrefetch.arm_cooldowns(ctx)
+        RoutingPrefetch.arm_cooldowns(ctx, _deployment_ids(deployments))
         if usage_selector is not None:
             routing_prefetch.arm(usage_selector.usage, _selector_counters(usage_selector, deployments))
 
     @staticmethod
-    def arm_cooldowns(ctx: "RoutingContext") -> None:
-        """The cooldown read routing takes later, declared on the request's native pre-call batch now."""
-        routing_prefetch.arm_cooldowns(ctx.health().cooldowns.cooldown_store, ctx.registry().names(kind="ids"))
+    def arm_cooldowns(ctx: "RoutingContext", model_ids: Sequence[str] | None = None) -> None:
+        """Declare a scoped cooldown read; without known candidates, let routing read them later."""
+        if model_ids:
+            routing_prefetch.arm_cooldowns(ctx.health().cooldowns.cooldown_store, model_ids)
 
     @staticmethod
     def armed() -> bool:
@@ -78,7 +86,7 @@ class RoutingReadBatch:
     ) -> list[str]:
         cooldowns, _ = await asyncio.gather(
             routing_prefetch.read_cooldowns(
-                ctx.health().cooldowns.cooldown_store, ctx.registry().names(kind="ids"), parent_otel_span
+                ctx.health().cooldowns.cooldown_store, _deployment_ids(healthy_deployments), parent_otel_span
             ),
             self.read_usage(healthy_deployments, parent_otel_span),
         )

@@ -1,26 +1,101 @@
 //! A call through the router end to end: selection, retries, fallbacks and cooldowns against a
 //! scripted host.
 
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use litellm_router_core::{
-    Attempt, AttemptError, CallbackFiltered, Deployment, Error, FailureKind, FailureReport, Host,
-    InMemoryRouterCache, Op, Output, Payload, Router, RouterCache, RouterConfig,
-    RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext, SeededRandomness, SelectStage,
-    SuccessReport, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
-    host::UncountedRetries, select::PassThrough,
+    Attempt, AttemptError, CallbackFiltered, Deployment, Error, FailureKind, FailureReport,
+    HealthState, Host, InMemoryRouterCache, Op, Outcomes, Output, Payload, Router, RouterCache,
+    RouterConfig, RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext,
+    SeededRandomness, SelectStage, SuccessReport, UsageCounts, UsageWindow,
+    call::StreamOrigin,
+    fallback::Fallbacks,
+    health::{CooldownValue, current_minute},
+    host::UncountedRetries,
+    select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
+
+#[derive(Clone, Default)]
+struct RecordingCache {
+    inner: InMemoryRouterCache,
+    reads: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+impl std::ops::Deref for RecordingCache {
+    type Target = InMemoryRouterCache;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[async_trait]
+impl RouterCache for RecordingCache {
+    async fn cooldowns(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<Option<CooldownValue>>, litellm_cache::Error> {
+        self.reads.lock().push(ids.to_vec());
+        self.inner.cooldowns(ids).await
+    }
+    async fn put_cooldown(
+        &self,
+        id: &str,
+        value: &CooldownValue,
+        ttl: Duration,
+    ) -> Result<(), litellm_cache::Error> {
+        self.inner.put_cooldown(id, value, ttl).await
+    }
+    async fn increment_allowed_fails(
+        &self,
+        id: &str,
+        suffix: Option<&str>,
+        ttl: Duration,
+    ) -> Result<f64, litellm_cache::Error> {
+        self.inner.increment_allowed_fails(id, suffix, ttl).await
+    }
+    async fn add_usage(
+        &self,
+        window: &UsageWindow,
+        tokens: f64,
+        requests: f64,
+    ) -> Result<(), litellm_cache::Error> {
+        self.inner.add_usage(window, tokens, requests).await
+    }
+    async fn add_request(&self, window: &UsageWindow) -> Result<(), litellm_cache::Error> {
+        self.inner.add_request(window).await
+    }
+    async fn usage(&self, window: &UsageWindow) -> Result<UsageCounts, litellm_cache::Error> {
+        self.inner.usage(window).await
+    }
+    async fn health_states(&self) -> Result<HashMap<String, HealthState>, litellm_cache::Error> {
+        self.inner.health_states().await
+    }
+    async fn outcomes(&self, id: &str) -> Result<Outcomes, litellm_cache::Error> {
+        self.inner.outcomes(id).await
+    }
+    async fn count_success(&self, id: &str) -> Result<(), litellm_cache::Error> {
+        self.inner.count_success(id).await
+    }
+    async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
+        self.inner.count_failure(id).await
+    }
+}
 
 #[derive(Default)]
 struct ScriptedHost {
     /// Failures handed out in order, keyed by model group; a group with none left succeeds.
     script: Mutex<Vec<(String, VecDeque<AttemptError>)>>,
     events: Mutex<Vec<RouterEvent>>,
-    cache: InMemoryRouterCache,
+    cache: RecordingCache,
     /// Answer every success as a stream whose outcome the host reports when it ends.
     deferred: bool,
     /// [`Output::tracks_usage`] on every success.
@@ -184,6 +259,76 @@ fn request() -> RouterRequest {
         model: "primary".to_owned(),
         ..RouterRequest::default()
     }
+}
+
+#[rstest]
+#[case::ordinary("primary", json!({}))]
+#[case::alias("alias", json!({"model_group_alias": {"alias": "primary"}}))]
+#[tokio::test]
+async fn a_successful_request_reads_only_its_candidate_cooldowns(
+    config: RouterConfig,
+    #[case] model: &str,
+    #[case] dynamic: Value,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(config, dynamic, host.clone());
+    let response = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                model: model.to_owned(),
+                ..request()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.model_group, "primary");
+    assert_eq!(
+        *host.cache.reads.lock(),
+        vec![vec!["a1".to_owned(), "a2".to_owned()]]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn fallback_reads_its_own_cooldowns_and_never_calls_a_cooled_candidate(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing("backup", vec![server_error()]));
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"backup": ["primary"]}]}),
+        host.clone(),
+    );
+    host.cache
+        .put_cooldown(
+            "a1",
+            &CooldownValue {
+                exception_received: "rate limited".into(),
+                status_code: "429".into(),
+                timestamp: f64::MAX,
+                cooldown_time: 60.0,
+            },
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    let response = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                model: "backup".into(),
+                ..request()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.deployment_id, "a2");
+    assert_eq!(host.selected(), vec!["b1".to_owned(), "a2".to_owned()]);
+    let reads = host.cache.reads.lock();
+    assert_eq!(reads.first().unwrap(), &["b1".to_owned()]);
+    assert_eq!(reads.last().unwrap(), &["a1".to_owned(), "a2".to_owned()]);
 }
 
 /// `primary` at order 1, its second deployment at order 2 when `tiered`, and two other groups.
@@ -881,6 +1026,13 @@ async fn weighted_failover_serves_every_failure_but_a_context_window_error(
         .await
         .unwrap();
     assert_eq!(response.model_group, served_by);
+    let ids: std::collections::BTreeSet<String> =
+        host.cache.reads.lock().concat().into_iter().collect();
+    let expected = match served_by {
+        "primary" => vec!["a1".to_owned(), "a2".to_owned()],
+        _ => vec!["a1".to_owned(), "a2".to_owned(), "b1".to_owned()],
+    };
+    assert_eq!(ids, expected.into_iter().collect());
 }
 
 #[rstest]
@@ -1866,11 +2018,13 @@ async fn a_team_wildcard_public_name_routes_for_its_team() {
         team_id: Some("T1".to_owned()),
         ..RouterRequest::default()
     };
-    let response = router(config, json!({}), Arc::new(ScriptedHost::default()))
+    let host = Arc::new(ScriptedHost::default());
+    let response = router(config, json!({}), host.clone())
         .call(Op::from("acompletion"), request)
         .await
         .unwrap();
     assert_eq!(response.deployment_id, "tw1");
+    assert_eq!(*host.cache.reads.lock(), vec![vec!["tw1".to_owned()]]);
 }
 
 #[rstest]
