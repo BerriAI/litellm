@@ -1,6 +1,5 @@
 import { fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Plugin } from "@/components/claude_code_plugins/types";
@@ -32,15 +31,6 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("next/font/local", () => ({ default: () => ({ variable: "catalog-display-font" }) }));
-
-vi.mock("@/components/navbar", () => ({
-  default: ({ publicNavigation, publicActions }: { publicNavigation?: ReactNode; publicActions?: ReactNode }) => (
-    <nav aria-label="Top bar">
-      {publicNavigation}
-      {publicActions}
-    </nav>
-  ),
-}));
 
 vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn() }));
 
@@ -194,6 +184,24 @@ beforeEach(() => {
 });
 
 describe("PublicAiHub", () => {
+  it.each([
+    {
+      name: "a configured logo URL",
+      settings: { values: { logo_url: "https://assets.example.test/logo.svg" } },
+      expected: "https://assets.example.test/logo.svg",
+    },
+    {
+      name: "a logo served by the gateway",
+      settings: { values: { logo_url: null }, logo_url_via_proxy: true },
+      expected: "https://gateway.example.com/get_image",
+    },
+  ])("retains custom branding with $name", async ({ settings, expected }) => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(settings)));
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    await waitFor(() => expect(screen.getByAltText("LiteLLM Brand")).toHaveAttribute("src", expected));
+  });
+
   it.each([
     { name: "Clinical NER", path: "/clinical-ner", methods: null, method: "POST", body: true },
     { name: "LPR Catalog", path: "/lpr-catalog", methods: ["GET"], method: "GET", body: false },

@@ -3,13 +3,12 @@
 import localFont from "next/font/local";
 import { useTranslation } from "react-i18next";
 
-import Navbar from "@/components/navbar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 
 import { HubHeader, type HubStatus } from "./HubHeader";
-import { CatalogNavActions } from "./CatalogNavActions";
+import { CatalogNavbar } from "./CatalogNavbar";
 import { HubNotEnabled } from "./HubEmpty";
 import { ModelsPane } from "./ModelsPane";
 import { SkillsPane } from "./ResourcePanes";
@@ -30,7 +29,7 @@ const hubStatus = (hub: HubData): HubStatus => {
   return hub.models.error || hub.skills.isError ? "degraded" : "operational";
 };
 
-function PublicAiHubContent({ accessToken }: { accessToken: string | null }) {
+function PublicAiHubContent() {
   const { t } = useTranslation();
   useRequirePublicHubAuth();
   const hub = useHubData();
@@ -43,27 +42,13 @@ function PublicAiHubContent({ accessToken }: { accessToken: string | null }) {
       onValueChange={(next) => setTab(next as HubTab)}
       className={`${styles.catalog} ${displayFont.variable}`}
     >
-      <Navbar
-        accessToken={accessToken}
-        isPublicPage
-        publicActions={
-          <CatalogNavActions
-            search={hub.models.searchValue}
-            onSearchChange={(value) => {
-              if (tab !== "models") setTab("models");
-              hub.models.onSearchChange(value);
-            }}
-          />
-        }
-        publicNavigation={
-          <>
-            <span className={styles.brandLabel}>{hub.info.data?.docs_title || t("publicModelHub.header.title")}</span>
-            <TabsList variant="line" className={styles.navigation} aria-label={t("publicModelHub.header.title")}>
-              <TabsTrigger value="models">{t("publicModelHub.catalog.modelHub")}</TabsTrigger>
-              <TabsTrigger value="skills">{t("publicModelHub.catalog.skillsHub")}</TabsTrigger>
-            </TabsList>
-          </>
-        }
+      <CatalogNavbar
+        title={hub.info.data?.docs_title || t("publicModelHub.header.title")}
+        search={hub.models.searchValue}
+        onSearchChange={(value) => {
+          if (tab !== "models") setTab("models");
+          hub.models.onSearchChange(value);
+        }}
       />
       <main className={styles.main}>
         <HubHeader info={hub.info.data} status={status} tab={tab} />
@@ -94,7 +79,7 @@ export default function PublicAiHub({ accessToken }: { accessToken: string | nul
   return (
     <ThemeProvider accessToken={accessToken}>
       <TooltipProvider>
-        <PublicAiHubContent accessToken={accessToken} />
+        <PublicAiHubContent />
       </TooltipProvider>
     </ThemeProvider>
   );

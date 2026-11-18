@@ -30,62 +30,9 @@ interface NavbarProps {
   deploymentHealth?: React.ReactNode;
   deploymentHealthLink?: React.ReactNode;
   publicNavigation?: React.ReactNode;
-  publicActions?: React.ReactNode;
 }
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
-
-function DefaultNavbarActions({
-  accessToken,
-  isPublicPage,
-  deploymentHealth,
-  deploymentHealthLink,
-}: Pick<NavbarProps, "accessToken" | "isPublicPage" | "deploymentHealth" | "deploymentHealthLink">) {
-  const { t } = useTranslation();
-  const hideCommunityLinks = useDisableShowPrompts();
-  const { isControlPlane, selectedWorker } = useWorker();
-  const showWorkerSwitch = isControlPlane && selectedWorker !== null;
-  const handleLogout = useLogout(accessToken);
-  const handleWorkerSwitch = (workerId: string) => {
-    void revokeSessionAndClearClientState(accessToken).finally(() => {
-      window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
-    });
-  };
-
-  return (
-    <>
-      {showWorkerSwitch && (
-        <div className="flex shrink-0 items-center">
-          <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-        </div>
-      )}
-      <nav
-        aria-label={t("shell.navbar.productDocs")}
-        className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-border pl-4" : ""}`}
-      >
-        <DocsLink />
-        <BlogDropdown />
-      </nav>
-      {!hideCommunityLinks && (
-        <div className="hidden shrink-0 items-center border-l border-border pl-4 sm:flex">
-          <CommunityEngagementButtons />
-        </div>
-      )}
-      {!isPublicPage && (
-        <div className="flex shrink-0 items-center border-l border-border pl-4">
-          <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
-            <ThemeToggle />
-            <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
-            {deploymentHealth}
-            <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
-            <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
-            <UserDropdown onLogout={handleLogout} />
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
 
 const Navbar: React.FC<NavbarProps> = ({
   accessToken,
@@ -95,7 +42,6 @@ const Navbar: React.FC<NavbarProps> = ({
   deploymentHealth,
   deploymentHealthLink,
   publicNavigation,
-  publicActions,
 }) => {
   const { t } = useTranslation();
   const baseUrl = getProxyBaseUrl();
@@ -103,9 +49,20 @@ const Navbar: React.FC<NavbarProps> = ({
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
+  const hideCommunityLinks = useDisableShowPrompts();
+  const { isControlPlane, selectedWorker } = useWorker();
+  const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
   const darkImageUrl = logoUrlDark || logoUrl || `${baseUrl}/get_image?theme=dark`;
+
+  const handleLogout = useLogout(accessToken);
+
+  const handleWorkerSwitch = (workerId: string) => {
+    void revokeSessionAndClearClientState(accessToken).finally(() => {
+      window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
+    });
+  };
 
   return (
     <nav className="sticky top-0 z-chrome border-b border-border bg-card">
@@ -132,7 +89,6 @@ const Navbar: React.FC<NavbarProps> = ({
               <Link href={uiHref("")} className="flex items-center">
                 <div className="relative">
                   <div
-                    data-slot="navbar-logo"
                     className={cn(
                       "flex h-10 max-w-48 items-center justify-center overflow-hidden",
                       isPublicPage && "h-8 max-w-36 sm:h-10 sm:max-w-48",
@@ -186,14 +142,38 @@ const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
 
-          <div data-slot="navbar-actions" className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
-            {publicActions ?? (
-              <DefaultNavbarActions
-                accessToken={accessToken}
-                isPublicPage={isPublicPage}
-                deploymentHealth={deploymentHealth}
-                deploymentHealthLink={deploymentHealthLink}
-              />
+          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
+            {showWorkerSwitch && (
+              <div className="flex shrink-0 items-center">
+                <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+              </div>
+            )}
+
+            <nav
+              aria-label={t("shell.navbar.productDocs")}
+              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-border pl-4" : ""}`}
+            >
+              <DocsLink />
+              <BlogDropdown />
+            </nav>
+
+            {!hideCommunityLinks && (
+              <div className="hidden shrink-0 items-center border-l border-border pl-4 sm:flex">
+                <CommunityEngagementButtons />
+              </div>
+            )}
+
+            {!isPublicPage && (
+              <div className="flex shrink-0 items-center border-l border-border pl-4">
+                <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
+                  <ThemeToggle />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
+                  {deploymentHealth}
+                  <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
+                  <UserDropdown onLogout={handleLogout} />
+                </div>
+              </div>
             )}
           </div>
         </div>
