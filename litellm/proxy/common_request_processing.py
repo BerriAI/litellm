@@ -2786,6 +2786,9 @@ class _DetachedStreamFailureHook:
     user_api_key_dict: UserAPIKeyAuth
     proxy_logging_obj: ProxyLogging
 
+    def refresh_request_fields(self, request_data: Mapping[str, object]) -> None:
+        self.request_fields = without(request_data, "litellm_logging_obj")
+
     async def __call__(self, failed_logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
         if not failed_logging_obj.claim_stream_failure_report():
             return
@@ -2810,7 +2813,7 @@ async def _release_held_stream_failure(
     hook: Final = logging_obj.on_detached_stream_failure
     if isinstance(hook, _DetachedStreamFailureHook):
         # Hand off the latest request fields before the upstream drain can report on its own.
-        hook.request_fields = without(request_data, "litellm_logging_obj")
+        hook.refresh_request_fields(request_data)
     held: Final = logging_obj.release_held_stream_failure()
     if held is None:
         return
