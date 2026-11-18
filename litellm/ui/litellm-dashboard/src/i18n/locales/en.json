@@ -9,6 +9,8 @@
     "close": "Close",
     "save": "Save app settings",
     "saved": "App settings saved.",
+    "autoCreateCustomers": "This app may create new customers",
+    "autoCreateCustomersHint": "When off, a request from this app that names an unknown customer organization or member is refused with 403. Known customers keep working.",
     "saveFailed": "The app settings could not be saved.",
     "retry": "Retry",
     "spend": "Tracked spend (USD)",
@@ -88,6 +90,8 @@
       "virtual_key": "Virtual keys"
     },
     "definition": {
+      "autoCreateWithoutApp": "Requests with no app may create new customers",
+      "autoCreateWithoutAppHint": "When off, a request that belongs to no app and names an unknown customer organization or member is refused with 403. Known customers keep working.",
       "title": "Define apps for your Gateway",
       "hint": "Choose which existing Gateway resources represent your apps. This setting applies to every customer.",
       "label": "Apps are represented by",

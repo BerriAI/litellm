@@ -74,7 +74,10 @@ describe("Gateway app definition", () => {
     expect(screen.getByText("chat")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save app definition" }));
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({ resource_type: "team" });
+    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+      resource_type: "team",
+      auto_create_customers_without_app: true,
+    });
     expect(await screen.findByText("Current definition: Teams")).toBeInTheDocument();
   });
 
@@ -92,9 +95,36 @@ describe("Gateway app definition", () => {
       resource_type: "team",
       default_tier_budget_id: "standard",
       default_customer_member_budget: null,
+      auto_create_customers: true,
     };
     expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject(expectedSettings);
     expect(requests.some((request) => new URL(request.url).pathname.includes("/tiers"))).toBe(false);
+  });
+
+  it("should send the app's customer creation switch turned off when the admin unchecks it", async () => {
+    const user = userEvent.setup();
+    definition = { resource_type: "team" };
+    render(<AppsManager />);
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    await user.click(await screen.findByRole("checkbox", { name: "This app may create new customers" }));
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.some((request) => request.method === "POST")).toBe(true));
+    expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject({
+      resource_id: "team-chat",
+      auto_create_customers: false,
+    });
+  });
+
+  it("should save the no-app customer creation switch without changing the app definition", async () => {
+    const user = userEvent.setup();
+    definition = { resource_type: "team" };
+    render(<AppsManager />);
+    await user.click(await screen.findByRole("checkbox", { name: "Requests with no app may create new customers" }));
+    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
+    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+      resource_type: "team",
+      auto_create_customers_without_app: false,
+    });
   });
 
   it("should show definition failures without presenting an empty resource list", async () => {
