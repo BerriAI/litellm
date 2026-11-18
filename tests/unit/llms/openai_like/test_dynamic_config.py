@@ -173,3 +173,47 @@ class TestModelBaseUrls:
             )
             == "https://api.example.com/v0/chat/completions"
         )
+
+
+class TestModelSpecialHandling:
+    _TEXT_LIST: Final = ({"role": "user", "content": [{"type": "text", "text": "Say "}, {"type": "text", "text": "hi"}]},)
+
+    @pytest.mark.parametrize(
+        ("provider_flags", "model_flags", "model", "expected_content"),
+        [
+            pytest.param(
+                {}, {"legacy-model": {"convert_content_list_to_string": True}}, "legacy-model", "Say hi",
+                id="listed_model",
+            ),
+            pytest.param(
+                {}, {"legacy-model": {"convert_content_list_to_string": True}}, "msh/legacy-model", "Say hi",
+                id="listed_model_with_prefix",
+            ),
+            pytest.param(
+                {}, {"legacy-model": {"convert_content_list_to_string": True}}, "new-model", _TEXT_LIST[0]["content"],
+                id="unlisted_model_keeps_lists",
+            ),
+            pytest.param(
+                {"convert_content_list_to_string": True}, {"list-model": {"convert_content_list_to_string": False}},
+                "list-model", _TEXT_LIST[0]["content"], id="model_flag_overrides_provider_flag",
+            ),
+            pytest.param(
+                {"convert_content_list_to_string": True}, {"list-model": {"convert_content_list_to_string": False}},
+                "other-model", "Say hi", id="provider_flag_applies_to_unlisted_models",
+            ),
+        ],
+    )
+    def test_content_list_flattening_follows_the_model_flags(
+        self,
+        provider_flags: dict[str, bool],
+        model_flags: dict[str, dict[str, bool]],
+        model: str,
+        expected_content: object,
+    ) -> None:
+        config: Final = create_config_class(
+            _provider("msh", special_handling=provider_flags, model_special_handling=model_flags)
+        )()
+        body: Final = config.transform_request(
+            model=model, messages=list(self._TEXT_LIST), optional_params={}, litellm_params={}, headers={}
+        )
+        assert body["messages"][0]["content"] == expected_content

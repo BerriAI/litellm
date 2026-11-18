@@ -49,7 +49,7 @@ def create_config_class(provider: SimpleProviderConfig):
             """Transform messages based on special_handling config"""
 
             # Handle content list to string conversion if configured
-            if self._flattens_content_lists():
+            if provider.special_handling_for(model).get("convert_content_list_to_string"):
                 messages = handle_messages_with_content_list_to_str_conversion(messages)
 
             if is_async:

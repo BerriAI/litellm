@@ -142,6 +142,43 @@ def test_sarvam_chat_completion_request(model: str, url: str) -> None:
     assert response.choices[0].message.content == "Hello"
 
 
+@pytest.mark.parametrize("model", ["sarvam-105b", "sarvam-105b-conversations"])
+def test_sarvam_v1_models_receive_text_content_lists_as_strings(model: str) -> None:
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.sarvam.ai/v1/chat/completions").respond(200, json=_chat_response())
+        litellm.completion(
+            model=f"sarvam/{model}",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": [{"type": "text", "text": "Say "}, {"type": "text", "text": "hello"}]},
+            ],
+            api_key="sarvam-test-key",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "system", "content": "Be terse."},
+        {"role": "user", "content": "Say hello"},
+    ]
+
+
+def test_sarvam_v2_models_keep_content_lists() -> None:
+    image_part: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(200, json=_chat_response())
+        litellm.completion(
+            model="sarvam/gemma4",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Describe this"}, image_part]}],
+            api_key="sarvam-test-key",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "Describe this"}, image_part]}
+    ]
+
+
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_sarvam_forwards_reasoning_effort_without_allowed_openai_params() -> None:
     with respx.mock() as upstream:

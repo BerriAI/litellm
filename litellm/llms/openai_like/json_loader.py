@@ -5,6 +5,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 import json
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -12,6 +13,7 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_logger
 
 _MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
 _STR_ADAPTER: Final = TypeAdapter(str)
 
 
@@ -26,16 +28,29 @@ class SimpleProviderConfig:
         self.base_class = data.get("base_class", "openai_gpt")
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
-        self.special_handling = data.get("special_handling", {})
+        self.special_handling: Mapping[str, bool] = data.get("special_handling", {})
         self.supported_endpoints = data.get("supported_endpoints", [])
-        self.model_base_urls: Mapping[str, str] = _MODEL_BASE_URLS_ADAPTER.validate_python(
-            data.get("model_base_urls", {})
+        self.model_base_urls: Mapping[str, str] = (
+            _MODEL_BASE_URLS_ADAPTER.validate_python(data["model_base_urls"])
+            if "model_base_urls" in data
+            else MappingProxyType({})
+        )
+        self.model_special_handling: Mapping[str, Mapping[str, bool]] = (
+            _MODEL_SPECIAL_HANDLING_ADAPTER.validate_python(data["model_special_handling"])
+            if "model_special_handling" in data
+            else MappingProxyType({})
         )
 
     def default_base_url(self, model: str | None) -> str:
         if model is None:
             return self.base_url
         return self.model_base_urls.get(model.removeprefix(f"{self.slug}/"), self.base_url)
+
+    def special_handling_for(self, model: str) -> Mapping[str, bool]:
+        model_overrides: Final = self.model_special_handling.get(model.removeprefix(f"{self.slug}/"))
+        if model_overrides is None:
+            return self.special_handling
+        return MappingProxyType({**self.special_handling, **model_overrides})
 
 
 class JSONProviderRegistry:
