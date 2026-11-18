@@ -366,8 +366,8 @@ fn is_python_str(value: &Value) -> bool {
     value.as_str().is_some_and(is_python_str_text)
 }
 
-/// A user's text that is not a string is the caller's mistake, which the provider names, so it
-/// stays. Any other turn's goes with the blank ones.
+/// A user's text that is not a string is left for `drop_params` to drop. Any other turn's goes with
+/// the blank ones.
 fn is_empty_text_block(block: &ContentBlock, from_user: bool) -> bool {
     block.is_type(ContentBlockType::Text)
         && match block.text.as_deref() {
@@ -424,38 +424,77 @@ fn is_non_string_text_block(block: &ContentBlock) -> bool {
             .is_some_and(|text| !is_python_str_text(text))
 }
 
-pub fn has_non_string_user_text(messages: &[Recognized<Message>]) -> bool {
-    messages.iter().any(|message| match message {
-        Recognized::Known(message) => {
-            message.role == USER
-                && matches!(&message.content, MessageContent::Blocks(blocks) if blocks.iter().any(has_non_string_text))
-        }
-        Recognized::Unrecognized(message) => {
-            is_raw_user_message(message)
-                && message
-                    .get(CONTENT)
-                    .and_then(Value::as_array)
-                    .is_some_and(|blocks| blocks.iter().any(has_non_string_raw_text))
-        }
+/// Python's `malformed_text_error`: the first user text that is not a string, as the field path
+/// its 400 names, counted over the blocks the caller sent.
+pub fn non_string_user_text_path(messages: &[Recognized<Message>]) -> Option<String> {
+    messages
+        .iter()
+        .enumerate()
+        .find_map(|(message_index, message)| match message {
+            Recognized::Known(message) if message.role == USER => match &message.content {
+                MessageContent::Blocks(blocks) => {
+                    blocks.iter().enumerate().find_map(|(block_index, block)| {
+                        non_string_text_path(message_index, block_index, block)
+                    })
+                }
+                MessageContent::Text(_) => None,
+            },
+            Recognized::Unrecognized(message) if is_raw_user_message(message) => message
+                .get(CONTENT)
+                .and_then(Value::as_array)?
+                .iter()
+                .enumerate()
+                .find_map(|(block_index, block)| {
+                    non_string_raw_text_path(message_index, block_index, block)
+                }),
+            Recognized::Known(_) | Recognized::Unrecognized(_) => None,
+        })
+}
+
+fn non_string_text_path(
+    message_index: usize,
+    block_index: usize,
+    block: &ContentBlock,
+) -> Option<String> {
+    if is_non_string_text_block(block) {
+        return Some(user_text_path(message_index, block_index));
+    }
+    if !block.is_type(ContentBlockType::ToolResult) {
+        return None;
+    }
+    tool_result_text_path(block.tool_use_id.as_deref(), block.content.as_ref()?)
+}
+
+fn non_string_raw_text_path(
+    message_index: usize,
+    block_index: usize,
+    block: &Value,
+) -> Option<String> {
+    if is_non_string_raw_text(block) {
+        return Some(user_text_path(message_index, block_index));
+    }
+    if raw_block_type(block) != Some("tool_result") {
+        return None;
+    }
+    tool_result_text_path(
+        block.get("tool_use_id").and_then(Value::as_str),
+        block.get(CONTENT)?,
+    )
+}
+
+fn user_text_path(message_index: usize, block_index: usize) -> String {
+    format!("messages.{message_index}.content.{block_index}.text")
+}
+
+fn tool_result_text_path(tool_use_id: Option<&str>, content: &Value) -> Option<String> {
+    let part_index = content
+        .as_array()?
+        .iter()
+        .position(is_non_string_raw_text)?;
+    Some(match tool_use_id {
+        Some(id) => format!("tool_result {id} content.{part_index}.text"),
+        None => format!("tool_result content.{part_index}.text"),
     })
-}
-
-fn has_non_string_text(block: &ContentBlock) -> bool {
-    is_non_string_text_block(block)
-        || (block.is_type(ContentBlockType::ToolResult)
-            && block.content.as_ref().is_some_and(has_non_string_text_part))
-}
-
-fn has_non_string_raw_text(block: &Value) -> bool {
-    is_non_string_raw_text(block)
-        || (raw_block_type(block) == Some("tool_result")
-            && block.get(CONTENT).is_some_and(has_non_string_text_part))
-}
-
-fn has_non_string_text_part(content: &Value) -> bool {
-    content
-        .as_array()
-        .is_some_and(|parts| parts.iter().any(is_non_string_raw_text))
 }
 
 fn without_non_string_tool_result_texts(block: ContentBlock) -> ContentBlock {

@@ -1149,25 +1149,6 @@ async def _native_body_sent(
     return json.loads(route.calls.last.request.read())
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
-async def test_native_anthropic_forwards_a_non_string_user_text_without_drop_params(
-    respx_mock: respx.MockRouter, text: object
-) -> None:
-    sent: Final = await _native_body_sent(respx_mock, _prompt_with_text(text), {})
-
-    assert sent["messages"] == _prompt_with_text(text)
-
-
-@pytest.mark.asyncio
-async def test_native_anthropic_keeps_a_blank_text_in_place_beside_a_non_string_user_text_without_drop_params(
-    respx_mock: respx.MockRouter,
-) -> None:
-    sent: Final = await _native_body_sent(respx_mock, _BLANK_BEFORE_NULL_PROMPT, {})
-
-    assert sent["messages"] == _BLANK_BEFORE_NULL_PROMPT
-
-
 _DROP_PARAMS_SOURCES: Final = (
     pytest.param({"drop_params": True}, {}, False, id="deployment"),
     pytest.param({}, {"drop_params": True}, False, id="request"),
@@ -1243,18 +1224,53 @@ async def test_native_anthropic_still_strips_empty_user_text_and_non_string_assi
 _EMPTIED_MESSAGES_ERROR: Final = (
     "litellm.BadRequestError: messages: no message has content left after dropping empty or non-string text blocks"
 )
-_EMPTIED_REQUESTS: Final = (
+
+
+def _non_string_text_error(field: str) -> str:
+    return f"litellm.BadRequestError: {field}: Input should be a valid string"
+
+
+_REJECTED_REQUESTS: Final = (
     pytest.param(
-        [{"role": "user", "content": [{"type": "text", "text": None}]}], {"drop_params": True}, id="only-null-dropped"
+        [{"role": "user", "content": [{"type": "text", "text": None}]}],
+        {"drop_params": True},
+        _EMPTIED_MESSAGES_ERROR,
+        id="only-null-dropped",
     ),
-    pytest.param([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, id="only-empty-string"),
+    pytest.param(
+        [{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, _EMPTIED_MESSAGES_ERROR, id="only-empty-string"
+    ),
     pytest.param(
         [
             {"role": "user", "content": [{"type": "text", "text": 5}]},
             {"role": "user", "content": [{"type": "text", "text": " "}, {"type": "text", "text": None}]},
         ],
         {"drop_params": True},
+        _EMPTIED_MESSAGES_ERROR,
         id="every-turn-emptied",
+    ),
+    pytest.param(
+        _prompt_with_text(None), {}, _non_string_text_error("messages.0.content.1.text"), id="null-beside-text"
+    ),
+    pytest.param(
+        _BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text"), id="blank-before-null"
+    ),
+    pytest.param(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": 5}],
+                    }
+                ],
+            }
+        ],
+        {},
+        _non_string_text_error("tool_result toolu_1 content.1.text"),
+        id="number-in-tool-result",
     ),
 )
 _EVERY_MESSAGES_PATH: Final = (
@@ -1266,13 +1282,14 @@ _EVERY_MESSAGES_PATH: Final = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
-@pytest.mark.parametrize(("messages", "request_params"), _EMPTIED_REQUESTS)
+@pytest.mark.parametrize(("messages", "request_params", "error"), _REJECTED_REQUESTS)
 @pytest.mark.parametrize("model", _EVERY_MESSAGES_PATH)
-async def test_a_request_left_with_no_message_after_text_cleanup_answers_400_before_any_provider_call(
+async def test_a_non_string_user_text_or_a_request_left_with_no_message_answers_400_before_any_provider_call(
     respx_mock: respx.MockRouter,
     model: str,
     messages: list[dict[str, object]],
     request_params: Mapping[str, object],
+    error: str,
     stream: bool,
 ) -> None:
     upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
@@ -1286,13 +1303,28 @@ async def test_a_request_left_with_no_message_after_text_cleanup_answers_400_bef
         )
 
     assert rejected.value.status_code == 400
-    assert rejected.value.message.partition("\n\n")[0] == _EMPTIED_MESSAGES_ERROR
+    assert rejected.value.message.partition("\n\n")[0] == error
     assert upstream.call_count == 0
 
 
-@pytest.mark.parametrize(("messages", "request_params"), _EMPTIED_REQUESTS)
-def test_sync_messages_create_answers_the_same_400_when_text_cleanup_leaves_no_message(
-    respx_mock: respx.MockRouter, messages: list[dict[str, object]], request_params: Mapping[str, object]
+@pytest.mark.asyncio
+async def test_a_non_string_user_text_answers_its_own_400_when_the_model_names_no_known_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await litellm.anthropic.messages.acreate(
+            model="unknown-provider-model", api_key="fake-key", max_tokens=64, messages=_prompt_with_text(None)
+        )
+
+    assert rejected.value.message.partition("\n\n")[0] == _non_string_text_error("messages.0.content.1.text")
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(("messages", "request_params", "error"), _REJECTED_REQUESTS)
+def test_sync_messages_create_answers_the_same_400_for_a_non_string_user_text_or_no_message_left(
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], request_params: Mapping[str, object], error: str
 ) -> None:
     upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
 
@@ -1301,5 +1333,5 @@ def test_sync_messages_create_answers_the_same_400_when_text_cleanup_leaves_no_m
             model="anthropic/claude-opus-5-5", api_key="fake-key", max_tokens=64, messages=messages, **request_params
         )
 
-    assert rejected.value.message.partition("\n\n")[0] == _EMPTIED_MESSAGES_ERROR
+    assert rejected.value.message.partition("\n\n")[0] == error
     assert upstream.call_count == 0

@@ -240,7 +240,10 @@ pub(crate) fn route_failure(
             }
             if matches!(
                 rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::EmptiedMessages)
+                Some(
+                    litellm_llms::ErrorDetail::EmptiedMessages
+                        | litellm_llms::ErrorDetail::NonStringText { .. }
+                )
             ) {
                 value.setattr(MESSAGES_UNRESOLVED_REJECTION, true)?;
             }
@@ -510,6 +513,12 @@ mod tests {
 
     #[rstest::rstest]
     #[case::emptied_messages(litellm_llms::ErrorDetail::EmptiedMessages, true)]
+    #[case::non_string_text(
+        litellm_llms::ErrorDetail::NonStringText {
+            path: "messages.0.content.1.text".into(),
+        },
+        true
+    )]
     #[case::other_request_error(
         litellm_llms::ErrorDetail::Expected {
             subject: "messages",

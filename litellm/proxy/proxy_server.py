@@ -15757,6 +15757,9 @@ def _counted_request_messages(
         return None
     if messages_format != "anthropic":
         return list(messages)
+    malformed_error: Final = malformed_text_count_error(messages, messages_format, deployment)
+    if malformed_error is not None:
+        raise ProxyException(message=malformed_error, type="invalid_request_error", param="messages", code=400)
     kept: Final = native_messages_to_send(messages, deployment_drops_params(deployment))
     emptied_error: Final = emptied_messages_error(messages, kept)
     if emptied_error is not None:
@@ -16653,20 +16656,12 @@ async def _count_request_tokens(
         prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
-    local_count_error: Final = malformed_text_count_error(request_messages, messages_format, count_deployment)
-    malformed_messages: Final = (
-        None
-        if local_count_error is None
-        else ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
-    )
     context_edits: Final = _count_context_management(context_management, request.model, request_litellm_params)
     route: Final = (
         _messages_route(deployment_view, request.model)
         if request_messages is not None and messages_format == "anthropic"
         else None
     )
-    if context_edits is not None and route in _GATEWAY_EDIT_ROUTES and malformed_messages is not None:
-        raise malformed_messages
     edited_request: Final = (
         None
         if route is None or request_messages is None
@@ -16764,9 +16759,6 @@ async def _count_request_tokens(
     )
     if isinstance(ladder, TokenCountResponse):
         return ladder
-
-    if malformed_messages is not None:
-        raise malformed_messages
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:

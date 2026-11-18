@@ -8,10 +8,10 @@ use litellm_llms_types::{
 use serde_json::{Value, json};
 
 use crate::{
-    Error,
+    Error, ErrorDetail,
     anthropic::common_utils::{
         flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
-        has_non_string_user_text, map_messages, map_messages_rejecting_emptied,
+        map_messages, map_messages_rejecting_emptied, non_string_user_text_path,
         sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
         strip_empty_raw_content_blocks, strip_provider_specific_fields,
         strip_raw_provider_specific_fields,
@@ -23,17 +23,16 @@ pub fn shape_anthropic_messages_request(
     request: MessagesRequest,
     options: MessagesShapeOptions,
 ) -> Result<MessagesRequest, Error> {
+    if !options.drops_unsupported_params
+        && let Some(path) = non_string_user_text_path(&request.messages)
+    {
+        return Err(Error::InvalidRequest(ErrorDetail::NonStringText { path }));
+    }
     let messages = if options.presanitized {
         map_messages(
             request.messages,
             strip_provider_specific_fields,
             strip_raw_provider_specific_fields,
-        )
-    } else if !options.drops_unsupported_params && has_non_string_user_text(&request.messages) {
-        map_messages(
-            request.messages,
-            sanitize_anthropic_message_blocks,
-            sanitize_raw_anthropic_message_blocks,
         )
     } else {
         map_messages_rejecting_emptied(
@@ -62,21 +61,14 @@ pub fn shape_anthropic_messages_request(
 }
 
 fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
-    sanitize_anthropic_message_blocks(strip_empty_content_blocks(messages))
-}
-
-fn sanitize_anthropic_message_blocks(messages: Vec<Message>) -> Vec<Message> {
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(
-        sanitize_tool_use_ids(messages),
+        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
     ))
 }
 
 fn sanitize_raw_anthropic_message(message: Value) -> Option<Value> {
-    strip_empty_raw_content_blocks(message).and_then(sanitize_raw_anthropic_message_blocks)
-}
-
-fn sanitize_raw_anthropic_message_blocks(message: Value) -> Option<Value> {
-    sanitize_raw_tool_use_ids(message)
+    strip_empty_raw_content_blocks(message)
+        .and_then(sanitize_raw_tool_use_ids)
         .and_then(flatten_unencrypted_raw_web_search_results)
         .and_then(strip_raw_provider_specific_fields)
 }
@@ -428,32 +420,41 @@ mod tests {
     }
 
     #[rstest]
-    #[case::text_block(json!({"type": "text", "text": null}))]
-    #[case::tool_result_part(json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": [
-        {"type": "text", "text": 5}
-    ]}))]
-    fn a_user_s_non_string_text_keeps_every_block_in_place_without_drop_params(
+    #[case::text_block(
+        json!({"type": "text", "text": null}),
+        "messages.1.content.1.text: Input should be a valid string"
+    )]
+    #[case::tool_result_part(
+        json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            {"type": "text", "text": "ok"}, {"type": "text", "text": 5}
+        ]}),
+        "tool_result toolu_1 content.1.text: Input should be a valid string"
+    )]
+    fn a_user_s_non_string_text_is_a_request_error_naming_the_sent_index_without_drop_params(
         #[case] malformed: Value,
+        #[case] message: &str,
+        #[values(false, true)] presanitized: bool,
     ) {
         let content =
             json!([{"type": "text", "text": ""}, malformed, {"type": "text", "text": "hi"}]);
         let shape = |drops_unsupported_params| {
-            let shaped = shape_anthropic_messages_request(
-                request(json!({"model": "m", "messages": [{"role": "user", "content": content}]})),
+            shape_anthropic_messages_request(
+                request(json!({"model": "m", "messages": [
+                    {"role": "assistant", "content": [{"type": "text", "text": null}]},
+                    {"role": "user", "content": content}
+                ]})),
                 MessagesShapeOptions {
                     reasoning_auto_summary: false,
-                    presanitized: false,
+                    presanitized,
                     drops_unsupported_params,
                 },
             )
-            .unwrap();
-            serde_json::to_value(shaped).unwrap()["messages"][0]["content"].clone()
         };
-        assert_eq!(shape(false), content);
-        assert_eq!(
-            shape(true),
-            json!([malformed, {"type": "text", "text": "hi"}])
-        );
+        let Err(Error::InvalidRequest(detail)) = shape(false) else {
+            panic!("a non-string user text must be a request error without drop_params");
+        };
+        assert_eq!(detail.to_string(), message);
+        assert!(shape(true).is_ok());
     }
 
     #[test]

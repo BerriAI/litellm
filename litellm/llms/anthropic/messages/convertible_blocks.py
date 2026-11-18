@@ -444,12 +444,18 @@ def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
 def reject_malformed_text(
     messages: Iterable[Mapping[str, object]], model: str, forwarded_kwargs: Mapping[str, object]
 ) -> None:
-    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
+    reject_non_string_text(
+        messages, forwarded_kwargs.get("drop_params"), model, forwarded_kwargs.get("custom_llm_provider")
+    )
+
+
+def reject_non_string_text(messages: Iterable[object], drop_params: object, model: str, provider: object) -> None:
+    if drops_unsupported_params(drop_params):
         return
     error: Final = malformed_text_error(messages)
     if error is None:
         return
-    _raise_bad_request(error, model, forwarded_kwargs.get("custom_llm_provider"))
+    _raise_bad_request(error, model, provider)
 
 
 def reject_emptied_messages(sent: Sequence[object], kept: Sequence[object], model: str, provider: str | None) -> None:
@@ -460,6 +466,13 @@ def reject_emptied_messages(sent: Sequence[object], kept: Sequence[object], mode
 
 
 def _raise_bad_request(error: str, model: str, provider: object) -> NoReturn:
-    raise litellm.BadRequestError(
-        message=error, model=model, llm_provider=provider if isinstance(provider, str) else ""
-    )
+    raise litellm.BadRequestError(message=error, model=model, llm_provider=_provider_name(model, provider))
+
+
+def _provider_name(model: str, provider: object) -> str:
+    if isinstance(provider, str) and provider:
+        return provider
+    try:
+        return litellm.get_llm_provider(model=model)[1]
+    except litellm.BadRequestError:
+        return ""

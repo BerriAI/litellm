@@ -1776,46 +1776,6 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "messages",
-    (_prompt_beside({"type": "text", "text": None}), _BLANK_BEFORE_NULL_PROMPT),
-    ids=("null-beside-text", "blank-before-null"),
-)
-async def test_anthropic_count_tokens_on_a_claude_deployment_forwards_a_non_string_user_text_without_drop_params(
-    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, JsonValue]]
-) -> None:
-    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": messages}, {})
-
-    assert sent == messages
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("messages", "field"),
-    (
-        (_prompt_beside({"type": "text", "text": None}), "messages.0.content.1.text"),
-        (_prompt_beside({"type": "text", "text": 5}), "messages.0.content.1.text"),
-        ([{"role": "user", "content": [{"type": "text", "text": None}]}], "messages.0.content.0.text"),
-        (_BLANK_BEFORE_NULL_PROMPT, "messages.0.content.1.text"),
-    ),
-    ids=("null-beside-text", "number-beside-text", "only-null", "blank-before-null"),
-)
-async def test_count_tokens_without_a_count_api_rejects_a_non_string_user_text(
-    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, JsonValue]], field: str
-) -> None:
-    response: Final = await _count_on_a_model_without_a_count_api(
-        monkeypatch, {"model": "mistral-tool-result", "messages": messages}
-    )
-
-    assert isinstance(response, JSONResponse)
-    assert response.status_code == 400
-    assert json.loads(bytes(response.body))["error"] == {
-        "type": "invalid_request_error",
-        "message": f"{field}: Input should be a valid string",
-    }
-
-
-@pytest.mark.asyncio
 async def test_count_tokens_without_a_count_api_counts_a_non_string_user_text_as_dropped_under_drop_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1832,14 +1792,42 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_user_text_as
 
 
 
+_EMPTIED_MESSAGES_ERROR: Final = "messages: no message has content left after dropping empty or non-string text blocks"
+
+
+def _non_string_text_error(field: str) -> str:
+    return f"{field}: Input should be a valid string"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("messages", "request_params"),
+    ("messages", "request_params", "error"),
     (
-        ([{"role": "user", "content": [{"type": "text", "text": None}]}], {"drop_params": True}),
-        ([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}),
+        (
+            [{"role": "user", "content": [{"type": "text", "text": None}]}],
+            {"drop_params": True},
+            _EMPTIED_MESSAGES_ERROR,
+        ),
+        ([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, _EMPTIED_MESSAGES_ERROR),
+        (
+            _prompt_beside({"type": "text", "text": None}),
+            {},
+            _non_string_text_error("messages.0.content.1.text"),
+        ),
+        (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
+        (
+            _prompt_beside(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": 5}],
+                }
+            ),
+            {},
+            _non_string_text_error("tool_result toolu_1 content.1.text"),
+        ),
     ),
-    ids=("only-null-dropped", "only-empty-string"),
+    ids=("only-null-dropped", "only-empty-string", "null-beside-text", "blank-before-null", "number-in-tool-result"),
 )
 @pytest.mark.parametrize(
     "model",
@@ -1850,11 +1838,12 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_user_text_as
         "mistral/mistral-small-latest",
     ),
 )
-async def test_anthropic_count_tokens_answers_the_inference_400_when_text_cleanup_leaves_no_message(
+async def test_anthropic_count_tokens_answers_the_inference_400_before_any_provider_call(
     monkeypatch: pytest.MonkeyPatch,
     model: str,
     messages: list[dict[str, JsonValue]],
     request_params: Mapping[str, JsonValue],
+    error: str,
 ) -> None:
     import litellm.proxy.proxy_server as proxy_server
 
@@ -1877,10 +1866,7 @@ async def test_anthropic_count_tokens_answers_the_inference_400_when_text_cleanu
 
     assert isinstance(response, JSONResponse)
     assert response.status_code == 400
-    assert json.loads(bytes(response.body))["error"] == {
-        "type": "invalid_request_error",
-        "message": "messages: no message has content left after dropping empty or non-string text blocks",
-    }
+    assert json.loads(bytes(response.body))["error"] == {"type": "invalid_request_error", "message": error}
     assert upstream.call_count == 0
 
 
