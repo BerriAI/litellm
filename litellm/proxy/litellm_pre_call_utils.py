@@ -3830,6 +3830,10 @@ async def _resolve_user_provider_credentials_for_request(
 
     from .credential_endpoints.user_provider_credentials import aget_user_provider_credentials
 
+    secret_fields: Final = data.get("secret_fields")
+    if not isinstance(secret_fields, dict):
+        return
+    secret_fields["user_provider_credentials_user_id"] = user_id
     if prisma_client is None:
         return
     try:
@@ -3844,12 +3848,7 @@ async def _resolve_user_provider_credentials_for_request(
             "_resolve_user_provider_credentials_for_request: failed to load user provider credentials"
         )
         return
-
-    secret_fields: Final = data.get("secret_fields")
-    if not isinstance(secret_fields, dict):
-        return
     secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
-    secret_fields["user_provider_credentials_user_id"] = user_id
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:
