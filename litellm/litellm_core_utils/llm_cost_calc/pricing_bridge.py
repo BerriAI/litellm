@@ -220,6 +220,148 @@ class CustomPricing(TypedDict):
 
 BreakdownFrom = Literal["priced", "named", "row", "absent"]
 
+
+class SearchCounts(TypedDict):
+    """The web search counts a usage reports, ``None`` where it reports no such count."""
+
+    prompt_requests: ReadOnly[int | None]
+    server_requests: ReadOnly[int | None]
+    browser_opens: ReadOnly[int | None]
+    search_calls: ReadOnly[int]
+    stated_cost: ReadOnly[bool]
+
+
+class WebSearchDispatch(TypedDict):
+    """The provider calculator ``get_cost_for_web_search_request`` dispatches to and the rows it reads, by index."""
+
+    provider: ReadOnly[str]
+    row: ReadOnly[int | None]
+    served_row: ReadOnly[int | None]
+    model_key: ReadOnly[str]
+    response_model: ReadOnly[str | None]
+    counts: ReadOnly[SearchCounts]
+
+
+class WebSearchPerCall(TypedDict):
+    row: ReadOnly[int | None]
+    context: ReadOnly[SearchContextSize | None]
+    calls: ReadOnly[int]
+
+
+class WebSearchTool(TypedDict):
+    dispatch: ReadOnly[WebSearchDispatch | None]
+    per_call: ReadOnly[WebSearchPerCall | None]
+
+
+class MapsGroundingTool(TypedDict):
+    provider: ReadOnly[str | None]
+    row: ReadOnly[int | None]
+    requests: ReadOnly[int]
+
+
+class ImageTokens(TypedDict):
+    text_input: ReadOnly[int]
+    image_input: ReadOnly[int]
+    image_output: ReadOnly[int]
+    text_output: ReadOnly[int]
+
+
+class ImageItem(TypedDict):
+    row: ReadOnly[int]
+    pixels: ReadOnly[int]
+
+
+class ImageGenerationTool(TypedDict):
+    row: ReadOnly[int | None]
+    tokens: ReadOnly[ImageTokens | None]
+    items: ReadOnly[Sequence[ImageItem | None]]
+
+
+class FileSearchTool(TypedDict):
+    requested: ReadOnly[bool]
+    provider: ReadOnly[str | None]
+    row: ReadOnly[int | None]
+    storage_gb: ReadOnly[float | None]
+    days: ReadOnly[float | None]
+    per_call: ReadOnly[float]
+    azure_gigabyte_day: ReadOnly[float]
+
+
+class VectorStoreTool(TypedDict):
+    provider: ReadOnly[str | None]
+    row: ReadOnly[int | None]
+    storage_gb: ReadOnly[float]
+    days: ReadOnly[float]
+    azure_gigabyte_day: ReadOnly[float]
+
+
+class ComputerUseTool(TypedDict):
+    provider: ReadOnly[str | None]
+    row: ReadOnly[int | None]
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+    azure_input: ReadOnly[float]
+    azure_output: ReadOnly[float]
+
+
+class CodeInterpreterTool(TypedDict):
+    row: ReadOnly[int | None]
+    container_row: ReadOnly[int | None]
+    sessions: ReadOnly[int]
+
+
+class ToolUse(TypedDict):
+    """The built-in tools a finished call used, each naming its rows by index among the rows passed beside it."""
+
+    provider: ReadOnly[str | None]
+    maps_grounding: ReadOnly[MapsGroundingTool | None]
+    image_generation: ReadOnly[ImageGenerationTool | None]
+    web_search: ReadOnly[WebSearchTool | None]
+    file_search: ReadOnly[FileSearchTool | None]
+    vector_store: ReadOnly[VectorStoreTool | None]
+    computer_use: ReadOnly[ComputerUseTool | None]
+    code_interpreter: ReadOnly[CodeInterpreterTool | None]
+
+
+class OneWebSearch(WebSearchTool):
+    tool: ReadOnly[Literal["web_search"]]
+
+
+class OneMapsGrounding(MapsGroundingTool):
+    tool: ReadOnly[Literal["maps_grounding"]]
+
+
+class OneFileSearch(FileSearchTool):
+    tool: ReadOnly[Literal["file_search"]]
+
+
+class OneVectorStore(VectorStoreTool):
+    tool: ReadOnly[Literal["vector_store"]]
+
+
+class OneComputerUse(ComputerUseTool):
+    tool: ReadOnly[Literal["computer_use"]]
+
+
+class OneCodeInterpreter(CodeInterpreterTool):
+    tool: ReadOnly[Literal["code_interpreter"]]
+
+
+OneTool: TypeAlias = (
+    OneWebSearch | OneMapsGrounding | OneFileSearch | OneVectorStore | OneComputerUse | OneCodeInterpreter
+)
+
+
+class ToolsOfCall(TypedDict):
+    call: ReadOnly[ToolUse]
+
+
+class OneToolOnly(TypedDict):
+    one: ReadOnly[OneTool]
+
+
+ToolRows: TypeAlias = Sequence[Mapping[str, object]]
+
 FeeBilling = Literal["prompt", "additional"]
 
 
@@ -245,7 +387,7 @@ class _PriceDocument(TypedDict):
     custom: ReadOnly[CustomPricing | None]
     decisions: ReadOnly[bool]
     breakdown: ReadOnly[BreakdownFrom]
-    tool_fees: ReadOnly[float]
+    tools: ReadOnly[ToolUse | None]
     router_fee: ReadOnly[RouterFeeUse | None]
 
 
@@ -406,11 +548,12 @@ class BranchFacts:
 @dataclass(frozen=True, slots=True)
 class ReceiptFacts:
     """What ``completion_cost`` prices beside a token call's own tokens: the row its stored breakdown reads, the built-in
-    tool fees Python still prices and the Azure AI Model Router fee off ``fee_row``."""
+    tools the call used with the rows they name and the Azure AI Model Router fee off ``fee_row``."""
 
     breakdown: BreakdownFrom = "priced"
     breakdown_row: Mapping[str, object] | None = None
-    tool_fees: float = 0.0
+    tools: ToolUse | None = None
+    tool_rows: ToolRows = ()
     router_fee: FeeBilling | None = None
     fee_row: Mapping[str, object] | None = None
 
@@ -530,10 +673,10 @@ def price(
         custom=facts.custom,
         decisions=facts.decisions,
         breakdown=beside.breakdown,
-        tool_fees=beside.tool_fees,
+        tools=beside.tools,
         router_fee=None if beside.router_fee is None else RouterFeeUse(billed=beside.router_fee),
     )
-    return model_cost_inputs.price(document, row, beside.breakdown_row, beside.fee_row)
+    return model_cost_inputs.price(document, row, beside.breakdown_row, beside.fee_row, beside.tool_rows)
 
 
 def branch_receipt(
@@ -684,6 +827,12 @@ def custom_receipt(
     if priced is None:
         raise ValueError(f"Custom pricing left model={model} unpriced")
     return priced
+
+
+def price_tools(document: ToolsOfCall | OneToolOnly, rows: ToolRows) -> float | None:
+    """The built-in tool fees ``document`` names: every fee a call's tools bill, or one tool's calculator alone, ``None``
+    where main's calculator returned ``None``. ``rows`` are the rows the document names by index."""
+    return model_cost_inputs.price_tools(document, rows)
 
 
 def price_units(

@@ -80,50 +80,26 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     )
 
 
-def _web_search_cost_per_call_from_model_info(model_info: ModelInfo) -> float:
+def web_search_cost_per_call_from_model_info(model_info: ModelInfo) -> float:
     """
-    Per-invocation web_search price from model_info when configured.
+    The price per xAI web search call, priced in Rust: the first positive ``search_context_cost_per_query`` price of
+    medium, low and high, else xAI's list price.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import price_web_search_dispatch
 
-    Prefer ``search_context_cost_per_query`` (same shape as Gemini/Anthropic web
-    search pricing in the model cost map). Fall back to current xAI list pricing.
-    """
-    search_costs: Final = model_info.get("search_context_cost_per_query")
-    if not isinstance(search_costs, Mapping):
-        return _DEFAULT_WEB_SEARCH_COST_PER_CALL
-    for value in (
-        search_costs.get("search_context_size_medium"),
-        search_costs.get("search_context_size_low"),
-        search_costs.get("search_context_size_high"),
-    ):
-        if value is None:
-            continue
-        try:
-            cost = float(value)
-        except (TypeError, ValueError):
-            continue
-        if cost > 0:
-            return cost
-    return _DEFAULT_WEB_SEARCH_COST_PER_CALL
+    one_call: Final = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+    one_call.server_side_tool_usage_details = {"web_search_calls": 1}  # pyright: ignore[reportAttributeAccessIssue]  # extra
+    return price_web_search_dispatch("xai", one_call, model_info) or 0.0
 
 
 def cost_per_web_search_request(usage: Usage, model_info: ModelInfo) -> float:
     """
-    Calculate the cost of web search requests for X.AI models.
-
-    Counts invocations from usage.server_side_tool_usage_details.web_search_calls.
-    Per-call rate comes from model_info.search_context_cost_per_query when set,
-    otherwise the default xAI tools rate ($5 / 1k calls).
+    The cost of xAI web search calls, priced in Rust: each call in usage.server_side_tool_usage_details.web_search_calls
+    at the row's price per call or xAI's list price, nothing when xAI states the call's cost.
     """
-    if stated_cost(usage) is not None:
-        return 0.0
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import price_web_search_dispatch
 
-    details: Final = getattr(usage, "server_side_tool_usage_details", None)
-    if not isinstance(details, Mapping):
-        return 0.0
-    try:
-        web_search_calls: Final = int(details.get("web_search_calls") or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    if web_search_calls <= 0:
-        return 0.0
-    return _web_search_cost_per_call_from_model_info(model_info) * web_search_calls
+    return price_web_search_dispatch("xai", usage, model_info) or 0.0
+
+
+_web_search_cost_per_call_from_model_info: Final = web_search_cost_per_call_from_model_info
