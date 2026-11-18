@@ -63,7 +63,7 @@ describe("customer member apps", () => {
     expect(screen.queryByText("$100.00")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit member budget for Assistant" }));
     act(() => {
-      fireEvent.click(screen.getByRole("checkbox", { name: "Set a budget and limits" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Set custom limits" }));
     });
     act(() => {
       fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "5" } });
@@ -134,7 +134,7 @@ describe("customer member apps", () => {
     render(<CustomerMemberApps memberId="member-1" />);
     await user.click(await screen.findByRole("button", { name: "Edit member budget for Assistant" }));
     act(() => {
-      fireEvent.click(screen.getByRole("checkbox", { name: "Set a budget and limits" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Set custom limits" }));
     });
     await user.click(screen.getByRole("button", { name: "Save member app budget" }));
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));

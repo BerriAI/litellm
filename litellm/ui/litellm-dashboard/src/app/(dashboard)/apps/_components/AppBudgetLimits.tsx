@@ -5,6 +5,7 @@ import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overvi
 import { customerBudgetPeriod, type CustomerBudgetUsage } from "../../customers/_components/customerBudgetUsage";
 import { appBudgetReached, appBudgetWindows, appSpend } from "./appBudgetPresentation";
 import type { Budget } from "./appForms";
+import { CustomerRateLimitSummary } from "../../customers/_components/CustomerRateLimits";
 
 function BudgetDetails({
   windows,
@@ -72,7 +73,8 @@ export default function AppBudgetLimits({
   if (!primary)
     return (
       <div className="space-y-1 text-sm">
-        <span>{t("apps.unlimited")}</span>
+        <span>{t("customerPortal.rateLimits.noSpendLimit")}</span>
+        <CustomerRateLimitSummary limits={budget} />
         {cumulativeSpend !== undefined && (
           <p className="text-xs text-muted-foreground">
             <span>{appSpend(cumulativeSpend)}</span> {t("apps.lifetimeSpend")}
@@ -128,6 +130,7 @@ export default function AppBudgetLimits({
         </div>
       )}
       <p className={atLimit ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{caption}</p>
+      <CustomerRateLimitSummary limits={budget} />
     </div>
   );
 }

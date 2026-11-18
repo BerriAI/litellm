@@ -6869,6 +6869,7 @@
         "columns": {
           "name": "Callback Name",
           "mode": "Mode",
+          "source": "Source",
           "actions": "Actions"
         },
         "modes": {
@@ -6876,6 +6877,11 @@
           "failure": "Failure",
           "successAndFailure": "Success & Failure"
         },
+        "sources": {
+          "config": "Config",
+          "db": "DB"
+        },
+        "configOwnedHint": "Set in config.yaml. Remove it from the file to delete it.",
         "readOnly": "Read only",
         "readOnlyHint": "Active callback that was not added through the dashboard. Edit it where it was configured.",
         "actions": {
@@ -21007,7 +21013,7 @@
       "budgetTitle": "Budget and limits",
       "budgetHint": "Leave a limit blank for no limit. Zero is a valid limit.",
       "memberBudgetHint": "Blank limits inherit from the budget template. Without a template, blank means no limit.",
-      "budgetEnabled": "Set a budget and limits",
+      "budgetEnabled": "Set custom limits",
       "maxBudget": "Spend limit (USD)",
       "softBudget": "Soft budget (USD)",
       "budgetDuration": "Reset period",
@@ -21165,7 +21171,7 @@
       "noLimit": "No limit",
       "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
       "groups": "Member budget groups",
-      "groupsHelp": "Limits in USD per member. Blank means no limit.",
+      "groupsHelp": "Each member gets their own spend and rate limits. Blank means no limit.",
       "groupName": "Group name",
       "groupNameLabel": "Group {{index}} name",
       "monthly": "Monthly budget",
@@ -21183,12 +21189,18 @@
         "nameRequired": "Enter a customer name.",
         "groupNameRequired": "Give each budget group a name.",
         "duplicateGroups": "Use a unique name for each budget group.",
-        "groupLimitRequired": "Set at least one monthly or yearly limit for each budget group.",
+        "groupLimitRequired": "Set at least one spend or rate limit for each budget group.",
         "invalidBudget": "Enter budget amounts of zero or more.",
         "invalidRateLimit": "Rate limits must be whole numbers of zero or more.",
         "defaultRequired": "Choose a default budget group."
       },
       "submit": "Create customer"
+    },
+    "rateLimits": {
+      "title": "Rate limits",
+      "group": "Group {{index}} rate limits",
+      "hint": "Spend limits are optional. Other applicable limits still apply.",
+      "noSpendLimit": "No spend limit"
     },
     "editDialog": {
       "title": "Edit customer",

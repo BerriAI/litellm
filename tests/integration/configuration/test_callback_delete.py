@@ -206,6 +206,34 @@ def test_delete_of_a_callback_only_the_config_file_lists_is_refused_and_names_th
         _listed(file_owned.proxy, ((CALLBACK, "success_and_failure"),))
 
 
+def _sources(proxy: Gateway) -> tuple[tuple[str, str, JsonValue], ...]:
+    rows: Final = list_value(proxy.get("/get/config/callbacks")["callbacks"])
+    return tuple(
+        sorted(
+            (str(row["name"]), str(row["type"]), row.get("source"))
+            for row in (object_value(entry) for entry in rows)
+            if not row.get("read_only")
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("file_key", "database_key"),
+    (("success_callback", "failure_callback"), ("failure_callback", "callbacks"), ("callbacks", "success_callback")),
+)
+def test_listing_marks_the_rows_the_config_file_sets(
+    gateway: Gateway, tmp_path: Path, file_key: str, database_key: str
+) -> None:
+    expected: Final = tuple(
+        sorted(((CALLBACK, LIST_TYPES[file_key], "config"), (CALLBACK, LIST_TYPES[database_key], None)))
+    )
+    with _rig(gateway, tmp_path, {file_key: [CALLBACK]}) as file_owned:
+        _configure(file_owned.proxy, {database_key: [CALLBACK]})
+        _listed(file_owned.proxy, tuple((name, mode) for name, mode, _ in expected))
+
+        eventually(lambda: _sources(file_owned.proxy), lambda rows: rows == expected, seconds=WORKER_SYNC_SECONDS)
+
+
 def _completion(request: Request) -> Reply:
     message: Final = object_value(list_value(JSON_OBJECT.validate_json(request.body)["messages"])[0])
     if str(message["content"]).endswith("-failure"):
