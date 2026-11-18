@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.templates import MESSAGES_REQUEST, MESSAGES_RESPONSE
 from integration.translation.templates.gemini import GEMINI_GENERATE_CONTENT_REQUEST, GEMINI_GENERATE_CONTENT_RESPONSE
@@ -381,7 +382,14 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
         **GEMINI_GENERATE_CONTENT_REQUEST,
         "system_instruction": {"parts": [{"text": MESSAGES_REQUEST["system"]}]},
     },
-    mock_provider_response={**GEMINI_GENERATE_CONTENT_RESPONSE, **GEMINI_4_ARGON_RESPONSE_FIELDS},
+    mock_provider_response={
+        **GEMINI_GENERATE_CONTENT_RESPONSE,
+        **GEMINI_4_ARGON_RESPONSE_FIELDS,
+        "usageMetadata": {
+            **object_value(GEMINI_4_ARGON_RESPONSE_FIELDS["usageMetadata"]),
+            "serviceTier": "standard",
+        },
+    },
     expected_litellm_response={
         **GEMINI_MESSAGES_RESPONSE,
         "id": "8ibQavD9KaOO6dkPs7f0GQ",

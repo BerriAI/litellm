@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
 from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
 from integration.translation.templates.gemini import (
@@ -326,7 +327,14 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/models/gemini-4-argon:generateContent",
     expected_provider_headers={"content-type": "application/json", "x-goog-api-key": "synthetic-gemini-key"},
     expected_provider_request=GEMINI_GENERATE_CONTENT_REQUEST,
-    mock_provider_response={**GEMINI_GENERATE_CONTENT_RESPONSE, **GEMINI_4_ARGON_RESPONSE_FIELDS},
+    mock_provider_response={
+        **GEMINI_GENERATE_CONTENT_RESPONSE,
+        **GEMINI_4_ARGON_RESPONSE_FIELDS,
+        "usageMetadata": {
+            **object_value(GEMINI_4_ARGON_RESPONSE_FIELDS["usageMetadata"]),
+            "serviceTier": "standard",
+        },
+    },
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
         "model": "gemini/gemini-4-argon",

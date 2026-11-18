@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
 from integration.translation.responses.templates import RESPONSES_REQUEST, RESPONSES_RESPONSE
 from integration.translation.templates.gemini import GEMINI_GENERATE_CONTENT_REQUEST, GEMINI_GENERATE_CONTENT_RESPONSE
@@ -426,7 +427,14 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
         **GEMINI_GENERATE_CONTENT_REQUEST,
         "system_instruction": {"parts": [{"text": RESPONSES_REQUEST["instructions"]}]},
     },
-    mock_provider_response={**GEMINI_GENERATE_CONTENT_RESPONSE, **GEMINI_4_ARGON_RESPONSE_FIELDS},
+    mock_provider_response={
+        **GEMINI_GENERATE_CONTENT_RESPONSE,
+        **GEMINI_4_ARGON_RESPONSE_FIELDS,
+        "usageMetadata": {
+            **object_value(GEMINI_4_ARGON_RESPONSE_FIELDS["usageMetadata"]),
+            "serviceTier": "standard",
+        },
+    },
     expected_litellm_response={
         **GEMINI_RESPONSES_RESPONSE,
         "model": "gemini/gemini-4-argon",
