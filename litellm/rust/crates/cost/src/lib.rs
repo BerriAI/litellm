@@ -4,6 +4,7 @@ mod calculate;
 pub mod call;
 mod engine;
 mod error;
+mod image;
 pub mod money;
 mod ocr;
 pub mod price;

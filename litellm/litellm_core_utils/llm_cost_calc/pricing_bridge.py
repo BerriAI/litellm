@@ -140,8 +140,19 @@ class VideoDocument(TypedDict):
     requested_row: ReadOnly[bool]
 
 
+class ImageDocument(TypedDict):
+    kind: ReadOnly[Literal["image"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str | None]
+    calculator: ReadOnly[Literal["default", "per_image", "per_image_and_input"]]
+    images: ReadOnly[int]
+    pixels: ReadOnly[int]
+    input_images: ReadOnly[int]
+
+
 UnitsDocument = (
-    VideoDocument
+    ImageDocument
+    | VideoDocument
     | SearchDocument
     | RerankDocument
     | VectorStoreSearchDocument
