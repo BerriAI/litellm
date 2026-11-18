@@ -1,14 +1,14 @@
 //! The `speech` kind, a port of the speech branch of `cost_per_token` (`cost_calculator.py`): a Vertex AI Lyria call
 //! bills each generation at the first table's `output_cost_per_image`, any other call bills the prompt's characters
-//! at `input_cost_per_character`. A row priced per token instead is `NotPorted`, since main bills it through the
-//! generic token path
+//! at `input_cost_per_character`. A row priced per token instead bills the call's token usage through
+//! `generic_cost_per_token`, `NotPorted` when the caller sent none
 
 use crate::price::{Channel, InputUnit, Meter, OutputUnit};
 use crate::priced::{Quantity, Side};
 use crate::query::{Header, Kind};
 use crate::receipt::{PriceOutcome, Receipt, Unpriced};
 use crate::row::RowSource;
-use crate::units::{self, Billed};
+use crate::units::{self, Billed, TokenBilled};
 use crate::usage::{Characters, Usage};
 
 const CHARACTER: Meter = Meter::Input(InputUnit::Character);
@@ -26,6 +26,9 @@ pub struct SpeechQuery {
     /// Lyria generations, each billed whole. The header's `Rows` are the Lyria rows in the order main reads them
     #[cfg_attr(feature = "serde", serde(default))]
     pub generations: Option<u64>,
+    /// The token usage the response reported, billed when the row prices tokens rather than characters
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub tokens: Option<TokenBilled>,
 }
 
 pub(crate) fn price<S: RowSource>(source: &S, query: &SpeechQuery) -> PriceOutcome {
@@ -76,9 +79,10 @@ fn spoken<S: RowSource>(source: &S, query: &SpeechQuery) -> PriceOutcome {
     };
     let listed = |meter: &Meter| units::listed(named.row, meter, Channel::Online).is_some();
     if !listed(&CHARACTER) {
-        return match listed(&Meter::TEXT_INPUT) {
-            true => Unpriced::NotPorted(Kind::Speech).into(),
-            false => Unpriced::MissingRates {
+        return match (listed(&Meter::TEXT_INPUT), &query.tokens) {
+            (true, Some(tokens)) => units::generic_tokens(source, &query.header, tokens),
+            (true, None) => Unpriced::NotPorted(Kind::Speech).into(),
+            (false, _) => Unpriced::MissingRates {
                 row: named.at,
                 missing: vec![CHARACTER],
             }
@@ -145,6 +149,7 @@ mod parity {
                 header: base,
                 characters: case["characters"].as_u64(),
                 generations: None,
+                tokens: None,
             },
             false => SpeechQuery {
                 header: Header {
@@ -155,6 +160,7 @@ mod parity {
                 },
                 characters: None,
                 generations: Some(1),
+                tokens: None,
             },
         };
         let source = TestSource::with_row(model, units_row(&case["row"]))
@@ -174,7 +180,7 @@ mod tests {
     use super::*;
     use crate::price::ServiceTier;
     use crate::query::PriceSource;
-    use crate::testing::{BASE, TestRow, TestSource, header, priced, prices, row_ref};
+    use crate::testing::{BASE, TestRow, TestSource, header, priced, prices, row_ref, usage};
 
     fn row(rates: &[(Meter, f64)]) -> TestRow {
         TestRow {
@@ -193,6 +199,7 @@ mod tests {
             header: header("openai", "tts-1"),
             characters,
             generations,
+            tokens: None,
         }
     }
 
@@ -218,6 +225,26 @@ mod tests {
     ) {
         let source = TestSource::with_row("tts-1", speech_row);
         assert_eq!(price(&source, &query(Some(5), None)), expected.into());
+    }
+
+    #[rstest]
+    fn a_token_priced_row_bills_the_reported_tokens_on_the_row_main_read_for_them() {
+        let source = TestSource::with_row("tts-1", row(&[(Meter::TEXT_INPUT, 9.0)])).and_row(
+            "tokens-row",
+            row(&[(Meter::TEXT_INPUT, 2e-6), (Meter::TEXT_OUTPUT, 8e-6)]),
+        );
+        let spoken = SpeechQuery {
+            tokens: Some(TokenBilled {
+                row: row_ref("tokens-row"),
+                usage: usage(300, 50),
+            }),
+            ..query(Some(5), None)
+        };
+        let receipt = priced(price(&source, &spoken));
+        assert_eq!(
+            (receipt.prompt.get(), receipt.completion.get()),
+            (2e-6 * 300.0, 8e-6 * 50.0)
+        );
     }
 
     #[rstest]
@@ -253,6 +280,7 @@ mod tests {
             },
             characters: Some(10),
             generations: Some(3),
+            tokens: None,
         };
         let receipt = priced(price(&source, &lyria));
         assert_eq!(
