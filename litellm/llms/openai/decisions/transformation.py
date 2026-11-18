@@ -5,7 +5,11 @@ from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
+from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    DecisionsResponseValidationError,
+    decisions_text,
+)
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -261,13 +265,59 @@ def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | Non
             return DecisionsIRRefusal()
 
 
+def _answers_in_request_order(
+    questions: tuple[DecisionsIRQuestion, ...],
+    answers: tuple[OpenAIDecisionAnswer, ...],
+) -> tuple[OpenAIDecisionAnswer | None, ...]:
+    region: Final = answers[: len(questions)]
+    if all(answer.name is None or answer.name == question.name for answer, question in zip(region, questions)):
+        return tuple(region[index] if index < len(region) else None for index in range(len(questions)))
+    question_names: Final = tuple(question.name for question in questions)
+    named: Final = tuple(answer for answer in answers if answer.name is not None)
+    named_names: Final = tuple(answer.name for answer in named)
+    if len(set(named_names)) != len(named_names):
+        duplicate: Final = next(name for name in named_names if named_names.count(name) > 1)
+        raise DecisionsResponseValidationError(
+            status_code=500,
+            message=f"Decisions provider returned more than one answer named {duplicate!r}, "
+            "so the answers cannot be matched to the requested questions",
+        )
+    unknown: Final = tuple(name for name in named_names if name not in question_names)
+    if unknown:
+        raise DecisionsResponseValidationError(
+            status_code=500,
+            message=f"Decisions provider returned an answer named {unknown[0]!r} "
+            "that does not match any requested question name",
+        )
+    reused: Final = tuple(name for name in named_names if question_names.count(name) > 1)
+    if reused:
+        raise DecisionsResponseValidationError(
+            status_code=500,
+            message=f"Decisions provider returned its answers out of order and the request reuses "
+            f"the question name {reused[0]!r}, so the answers cannot be matched to the requested questions",
+        )
+    by_name: Final = {answer.name: answer for answer in named}
+    unnamed: Final = tuple(answer for answer in answers if answer.name is None)
+    unclaimed: Final = tuple(index for index, question in enumerate(questions) if question.name not in by_name)
+    if len(unnamed) > len(unclaimed):
+        raise DecisionsResponseValidationError(
+            status_code=500,
+            message="Decisions provider returned more answers than the requested questions can account for, "
+            "so the answers cannot be matched to the requested questions",
+        )
+    fill: Final = dict(zip(unclaimed, unnamed))
+    return tuple(
+        by_name[question.name] if question.name in by_name else fill.get(index)
+        for index, question in enumerate(questions)
+    )
+
+
 def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    answers: Final = response.answers
+    answers: Final = _answers_in_request_order(request.questions, response.answers)
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(
-            _ir_answer(question, answers[index] if index < len(answers) else None)
-            for index, question in enumerate(request.questions)
+            _ir_answer(question, answer) for question, answer in zip(request.questions, answers, strict=True)
         ),
         usage=DecisionsIRUsage(
             input_tokens=response.usage.input_tokens,
