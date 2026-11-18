@@ -51007,6 +51007,86 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0
     },
+    "together_ai/ByteDance/Seedream-5.0-lite": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen-Image-2.0": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen-Image-2.0-Pro": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.075,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Wan-AI/Wan2.6-image": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/black-forest-labs/FLUX.1-kontext-max": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "input_cost_per_pixel": 8e-8,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/black-forest-labs/FLUX.1-kontext-pro": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "input_cost_per_pixel": 4e-8,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/black-forest-labs/FLUX.1.1-pro": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "input_cost_per_pixel": 4e-8,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/black-forest-labs/FLUX.2-flex": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/black-forest-labs/FLUX.2-max": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "input_cost_per_pixel": 7e-8,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/black-forest-labs/FLUX.2-pro": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/google/flash-image-3.1-lite": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.069,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/nvidia/parakeet-tdt-0.6b-v3": {
+        "litellm_provider": "together_ai",
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.000025,
+        "output_cost_per_second": 0,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/openai/whisper-large-v3": {
+        "litellm_provider": "together_ai",
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.000025,
+        "output_cost_per_second": 0,
+        "source": "https://api.together.ai/v1/models"
+    },
     "together_ai/BAAI/bge-base-en-v1.5": {
         "input_cost_per_token": 8e-09,
         "litellm_provider": "together_ai",
@@ -71078,6 +71158,8 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/MiniMaxAI/MiniMax-M2.7": {
+        "deprecation_date": "2026-07-28",
+        "deprecation_source": "https://docs.together.ai/docs/changelog",
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "cache_read_input_token_cost": 6e-08,
