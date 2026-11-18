@@ -1,0 +1,1 @@
+Screenshots and captured results for LiteLLM PR #52477. Customer org X, Alex, and Sam are synthetic test identities. verification.json contains observed HTTP statuses, real provider usage, and database comparisons. The screenshots show the actual dashboard, including its local test-environment warning.
