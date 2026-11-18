@@ -124,7 +124,12 @@ fn every_messages_provider_retries_like_the_shared_cases(
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, true)]
 #[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG, true)]
 #[case::bedrock_invoke_reads_the_body(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG, false)]
-fn a_binding_retry_names_its_beta_in_the_header_unless_the_host_reads_the_body(
+#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG, false)]
+#[case::edenai(&EDENAI_MESSAGES_CONFIG, false)]
+#[case::minimax(&MINIMAX_MESSAGES_CONFIG, false)]
+#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG, false)]
+#[case::tencent(&TENCENT_MESSAGES_CONFIG, false)]
+fn only_claude_header_hosts_add_the_binding_beta_to_a_retry(
     #[case] config: &dyn BaseMessagesConfig,
     #[case] adds_the_beta: bool,
 ) {

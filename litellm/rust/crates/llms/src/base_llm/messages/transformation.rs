@@ -1,7 +1,6 @@
 use litellm_host::interceptors::{RetriedRequest, RetryReason};
-use litellm_llms_types::{
-    formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesResponse},
-    providers::anthropic::{AnthropicBeta, BetaSet},
+use litellm_llms_types::formats::messages::{
+    MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
@@ -13,10 +12,7 @@ use super::{
 };
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
-use crate::{
-    Error, anthropic::common_utils::merge_beta_headers,
-    base_llm::messages::streaming::StreamDecoder,
-};
+use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
 pub enum FederatedEnvironment {
     Validated(ValidatedEnvironment),
@@ -201,15 +197,10 @@ pub trait BaseMessagesConfig: Sync {
         None
     }
 
-    /// The headers a retried body goes out with. Only Claude hosts produce a binding retry.
-    fn headers_for_retry(&self, headers: Headers, reasons: &[RetryReason]) -> Headers {
-        if !reasons.contains(&RetryReason::ThinkingBinding) {
-            return headers;
-        }
-        merge_beta_headers(
-            headers,
-            BetaSet::from_iter([AnthropicBeta::ThinkingBindingControls20260801]),
-        )
+    /// The headers a retried body goes out with, for a retry that needs a beta the first
+    /// attempt did not.
+    fn headers_for_retry(&self, headers: Headers, _reasons: &[RetryReason]) -> Headers {
+        headers
     }
 }
 

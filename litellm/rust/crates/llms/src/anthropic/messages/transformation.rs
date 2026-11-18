@@ -163,6 +163,10 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         retry_claude_messages_after_http_error(status, error_text, request_body, context)
     }
 
+    fn headers_for_retry(&self, headers: Headers, reasons: &[RetryReason]) -> Headers {
+        claude_retry_headers(headers, reasons)
+    }
+
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
         if !is_foundry_url(url) {
             return headers;
@@ -309,6 +313,17 @@ pub fn retry_claude_messages_after_http_error(
         vec![RetryReason::ThinkingBinding],
         body,
     ))
+}
+
+/// The `anthropic-beta` header a retried Claude body needs.
+pub fn claude_retry_headers(headers: Headers, reasons: &[RetryReason]) -> Headers {
+    if !reasons.contains(&RetryReason::ThinkingBinding) {
+        return headers;
+    }
+    merge_beta_headers(
+        headers,
+        BetaSet::from_iter([AnthropicBeta::ThinkingBindingControls20260801]),
+    )
 }
 
 fn anthropic_environment(
