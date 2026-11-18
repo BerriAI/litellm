@@ -1,0 +1,118 @@
+{
+ "source": "Captured once from main's Python (532df6ef85, LITELLM_LOCAL_MODEL_COST_MAP=True) through the xAI and Azure AI image calculators. `deployment` is the deployment's own table, `row` the cost fields of the row the calculator resolved, `expected` what main returned",
+ "cases": [
+  {
+   "name": "xai_reported_ticks",
+   "reported_usd": 0.0712345678,
+   "deployment": null,
+   "row": {
+    "output_cost_per_image_1K": 0.02,
+    "output_cost_per_image_2K": 0.035
+   },
+   "images": 2,
+   "size": "1K",
+   "expected": 0.0712345678
+  },
+  {
+   "name": "xai_reported_ignored_for_deployment_price",
+   "reported_usd": null,
+   "deployment": {
+    "output_cost_per_image": 0.07
+   },
+   "row": {
+    "output_cost_per_image": 0.07,
+    "output_cost_per_image_1K": 0.02,
+    "output_cost_per_image_2K": 0.035
+   },
+   "images": 3,
+   "size": "1K",
+   "expected": 0.21000000000000002
+  },
+  {
+   "name": "xai_resolution_1k",
+   "reported_usd": null,
+   "deployment": null,
+   "row": {
+    "output_cost_per_image_1K": 0.02,
+    "output_cost_per_image_2K": 0.035
+   },
+   "images": 3,
+   "size": "1K",
+   "expected": 0.06
+  },
+  {
+   "name": "xai_resolution_2k",
+   "reported_usd": null,
+   "deployment": null,
+   "row": {
+    "output_cost_per_image_1K": 0.02,
+    "output_cost_per_image_2K": 0.035
+   },
+   "images": 2,
+   "size": "2K",
+   "expected": 0.07
+  },
+  {
+   "name": "xai_deployment_input_image_first",
+   "reported_usd": null,
+   "deployment": {
+    "input_cost_per_image": 0.011,
+    "output_cost_per_image": 0.05
+   },
+   "row": {
+    "input_cost_per_image": 0.011,
+    "output_cost_per_image": 0.05,
+    "output_cost_per_image_1K": 0.02,
+    "output_cost_per_image_2K": 0.035
+   },
+   "images": 4,
+   "size": "2K",
+   "expected": 0.044
+  },
+  {
+   "name": "xai_deployment_sized",
+   "reported_usd": null,
+   "deployment": {
+    "output_cost_per_image_2K": 0.041
+   },
+   "row": {
+    "output_cost_per_image_1K": 0.02,
+    "output_cost_per_image_2K": 0.041
+   },
+   "images": 2,
+   "size": "2K",
+   "expected": 0.082
+  },
+  {
+   "name": "azure_ai_per_image",
+   "deployment": null,
+   "row": {
+    "output_cost_per_image": 0.04
+   },
+   "images": 2,
+   "expected": 0.08
+  },
+  {
+   "name": "azure_ai_deployment_per_image",
+   "deployment": {
+    "output_cost_per_image": 0.09
+   },
+   "row": {
+    "output_cost_per_image": 0.09
+   },
+   "images": 3,
+   "expected": 0.27
+  },
+  {
+   "name": "azure_ai_zero_per_image_unpriced",
+   "deployment": {
+    "output_cost_per_image": 0.0
+   },
+   "row": {
+    "output_cost_per_image": 0.0
+   },
+   "images": 2,
+   "expected": 0.0
+  }
+ ]
+}
