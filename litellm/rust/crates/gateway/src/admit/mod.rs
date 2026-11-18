@@ -21,9 +21,6 @@ pub enum Refused {
     #[error("the gateway cannot check this caller's credential")]
     #[strum(serialize = "credential")]
     Credential,
-    #[error("the gateway does not read request bodies yet")]
-    #[strum(serialize = "body")]
-    Body,
 }
 
 /// Admits the requests the gateway serves the way the Python proxy would, and refuses every other
@@ -62,8 +59,8 @@ impl Admit {
         auth.authenticate_parts(request)
             .await
             .map_err(|_| Refused::Credential)?;
-        // TODO: judge which settings the native app honors, then admit, once it has the proxy's middleware and router
-        Err(Refused::Body)
+        // TODO: judge the config's settings and the request's headers and body before admitting, since a setting or parameter only Python honors is served natively until then
+        Ok(())
     }
 }
 
@@ -92,22 +89,19 @@ mod tests {
             .unwrap()
     }
 
-    async fn refusal(admit: Admit, request: Request) -> Refused {
-        admit.admit(request).await.unwrap_err().1
+    async fn refusal(admit: Admit, request: Request) -> Option<Refused> {
+        admit.admit(request).await.err().map(|(_, why)| why)
     }
 
     #[rstest]
     #[case::bearer(("authorization", "Bearer gateway-key"))]
     #[case::x_api_key(("x-api-key", "gateway-key"))]
     #[tokio::test]
-    async fn a_master_key_caller_of_messages_passes_every_check_but_the_body(
+    async fn a_master_key_caller_of_messages_is_admitted(
         admit: Admit,
         #[case] credential: (&str, &str),
     ) {
-        assert_eq!(
-            refusal(admit, messages(Some(credential))).await,
-            Refused::Body
-        );
+        assert_eq!(refusal(admit, messages(Some(credential))).await, None);
     }
 
     #[rstest]
@@ -120,7 +114,7 @@ mod tests {
     ) {
         assert_eq!(
             refusal(admit, messages(credential)).await,
-            Refused::Credential
+            Some(Refused::Credential)
         );
     }
 
@@ -141,7 +135,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        assert_eq!(refusal(admit, request).await, Refused::Route);
+        assert_eq!(refusal(admit, request).await, Some(Refused::Route));
     }
 
     #[rstest]
@@ -151,7 +145,7 @@ mod tests {
 
         assert_eq!(
             refusal(Admit::unconfigured(), request).await,
-            Refused::Configuration
+            Some(Refused::Configuration)
         );
     }
 
