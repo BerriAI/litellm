@@ -537,7 +537,7 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "morph", "nadir", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
     "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity", "petals",
     "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "sail",
-    "sambanova", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
+    "sambanova", "sarvam", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
     "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
     "vercel_ai_gateway", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai", "zerogpu",
 )  # fmt: skip
