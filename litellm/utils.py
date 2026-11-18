@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice_or_refuse,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
     unbind_budget_reservation_from_callbacks,
@@ -1526,9 +1527,10 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
     route: Final[object] = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
     resolved: Final = resolve_deployment_tool_fields(kwargs, route)
     if isinstance(resolved, MalformedField):
+        model: Final = kwargs.get("model")
         raise MalformedRequestFieldError(
             message=resolved.message,
-            model=kwargs.get("model"),
+            model=model if isinstance(model, str) else None,
             llm_provider=_deployment_provider(kwargs),
             body={"type": "invalid_request_error", "param": resolved.field},
         )
@@ -1899,6 +1901,8 @@ def client(original_function):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
+                    logging_obj.stream = True
+                    logging_obj.model_call_details["stream"] = True
                     # RETURN RESULT
                     update_response_metadata: _ResponseMetadataUpdater = litellm_utils.update_response_metadata
                     update_response_metadata(
@@ -3961,6 +3965,14 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: str | None) -> str:
     return size_to_aspect_ratio.get(size, "1:1")  # Default to square if size not recognized
 
 
+def _takes_openai_image_params_unmapped(custom_llm_provider: str | None) -> bool:
+    if custom_llm_provider in ("openai", "azure") or custom_llm_provider in litellm.openai_compatible_providers:
+        return True
+    return custom_llm_provider not in ("bedrock", "vertex_ai") and any(
+        item["provider"] == custom_llm_provider for item in litellm.custom_provider_map
+    )
+
+
 def get_optional_params_image_gen(
     model: str | None = None,
     n: int | None = None,
@@ -4049,11 +4061,7 @@ def get_optional_params_image_gen(
             model=model or "",
             drop_params=litellm.drop_params is True or drop_params is True,
         )
-    elif (
-        custom_llm_provider == "openai"
-        or custom_llm_provider == "azure"
-        or custom_llm_provider in litellm.openai_compatible_providers
-    ):
+    elif _takes_openai_image_params_unmapped(custom_llm_provider):
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
         config_class: Final = litellm.BedrockImageGeneration.get_config_class(model=model)
@@ -4115,7 +4123,6 @@ def get_optional_params_embeddings(
     drop_params = normalize_drop_params(drop_params)
     passed_params.pop("additional_drop_params", None)
     passed_params.pop("allowed_openai_params", None)
-    allowed_openai_params = allowed_openai_params or []
     # Remove function objects from passed_params to avoid JSON serialization errors
     passed_params.pop("get_supported_openai_params", None)
 
@@ -4179,7 +4186,7 @@ def get_optional_params_embeddings(
             model is not None
             and "text-embedding-3" not in model
             and "dimensions" in non_default_params
-            and "dimensions" not in (allowed_openai_params or [])
+            and "dimensions" not in allowed_openai_param_names(allowed_openai_params)
         ):
             # Honor drop_params (per-call) and litellm.drop_params (global) the same
             # way `_check_valid_arg` does above. The raised error message itself
@@ -4807,7 +4814,7 @@ def _map_params_with_provider_config(
     model: str,
     drop_params: bool,
     base_model: str | None,
-    allowed_openai_params: Collection[str],
+    allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
@@ -4816,7 +4823,7 @@ def _map_params_with_provider_config(
             model=model,
             drop_params=drop_params,
             base_model=base_model,
-            allowed_openai_params=allowed_openai_params,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     return provider_config.map_openai_params(
         non_default_params=non_default_params,
@@ -4952,8 +4959,7 @@ def get_optional_params(
         supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
 
     supported_params = supported_params or []
-    allowed_openai_params = allowed_openai_params or []
-    supported_params.extend(allowed_openai_params)
+    supported_params.extend(allowed_openai_param_names(allowed_openai_params))
 
     _check_valid_arg(
         supported_params=supported_params or [],
@@ -5516,7 +5522,7 @@ def add_provider_specific_params_to_optional_params(
 def apply_openai_param_overrides(
     optional_params: dict[str, object],
     non_default_params: dict[str, object],
-    allowed_openai_params: list[str],
+    allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:
     """
     If user passes in allowed_openai_params, apply them to optional_params
@@ -5530,13 +5536,12 @@ def apply_openai_param_overrides(
     `AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'`).
     See https://github.com/BerriAI/litellm/issues/25697
     """
-    if allowed_openai_params:
-        for param in allowed_openai_params:
-            if param in optional_params:
-                continue
-            if param not in non_default_params:
-                continue
-            optional_params[param] = non_default_params.pop(param)
+    for param in allowed_openai_param_names(allowed_openai_params):
+        if param in optional_params:
+            continue
+        if param not in non_default_params:
+            continue
+        optional_params[param] = non_default_params.pop(param)
     return optional_params
 
 
@@ -7823,6 +7828,16 @@ def register_prompt_template(
     return litellm.custom_prompt_dict
 
 
+def _text_choice(chat_choice: StreamingChoices) -> TextChoices:
+    text_choices: Final = TextChoices()
+    delta: Final = chat_choice["delta"]
+    text_choices["text"] = delta["content"]
+    text_choices["reasoning_content"] = delta.get("reasoning_content")
+    text_choices["index"] = chat_choice["index"]
+    text_choices["finish_reason"] = chat_choice["finish_reason"]
+    return text_choices
+
+
 class TextCompletionStreamWrapper:
     def __init__(
         self,
@@ -7849,15 +7864,9 @@ class TextCompletionStreamWrapper:
             response["object"] = "text_completion"
             response["created"] = chunk.get("created", None)
             response["model"] = chunk.get("model", None)
-            text_choices: Final = TextChoices()
             if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
                 raise Exception
-            delta: Final = chunk["choices"][0]["delta"]
-            text_choices["text"] = delta["content"]
-            text_choices["reasoning_content"] = delta.get("reasoning_content")
-            text_choices["index"] = chunk["choices"][0]["index"]
-            text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
-            response["choices"] = [text_choices]
+            response["choices"] = [_text_choice(chat_choice) for chat_choice in chunk["choices"]]
 
             # only pass usage when stream_options["include_usage"] is True
             if self.stream_options and self.stream_options.get("include_usage", False) is True:
