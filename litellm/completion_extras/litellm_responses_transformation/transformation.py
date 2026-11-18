@@ -809,7 +809,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         client: object | None = None,
     ) -> dict:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
-        preserve_system_instructions: Final = any(
+        store: Final = next(
+            (
+                params["store"]
+                for params in (
+                    as_str_mapping(request_params.get("extra_body")) or {},
+                    request_params,
+                    as_str_mapping(litellm_params.get("extra_body")) or {},
+                    litellm_params,
+                )
+                if "store" in params
+            ),
+            None,
+        )
+        preserve_system_instructions: Final = store is not False or any(
             params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
             for params in (
                 request_params,
