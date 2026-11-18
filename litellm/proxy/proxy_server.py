@@ -1229,12 +1229,13 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
-async def _flush_spend_after_agents_rows_drain_on_shutdown(
+async def _flush_spend_around_agents_rows_drain_on_shutdown(
     flush_spend: Callable[[], Awaitable[None]] = flush_spend_counters_on_shutdown,
     *,
     clock: Callable[[], float] = time.monotonic,
     drain_deferred_rows: Callable[[float], Awaitable[None]] = openai_agents_turn_biller.drain,
 ) -> None:
+    await flush_spend()
     remaining: Final = GracefulShutdownManager.remaining(clock=clock)
     await drain_deferred_rows(max(0.0, remaining - GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS))
     await flush_spend()
@@ -1835,7 +1836,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await _flush_spend_after_agents_rows_drain_on_shutdown()
+            await _flush_spend_around_agents_rows_drain_on_shutdown()
 
             await _flush_spend_logs_queue_on_shutdown()
 

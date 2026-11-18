@@ -248,11 +248,40 @@ async def test_shutdown_commits_spend_an_agents_row_logs_while_waiting_rows_drai
         await asyncio.sleep(0.01)
         queued.append("agents turn spend")
 
-    await litellm.proxy.proxy_server._flush_spend_after_agents_rows_drain_on_shutdown(
+    await litellm.proxy.proxy_server._flush_spend_around_agents_rows_drain_on_shutdown(
         flush_spend=commit_spend, drain_deferred_rows=drain_deferred_rows
     )
 
     assert committed == ["agents turn spend"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_commits_queued_spend_before_waiting_on_agents_rows_and_keeps_teardown_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    GracefulShutdownManager.start_shutdown()
+    started: Final = GracefulShutdownManager._shutdown_started_at
+    assert started is not None
+    queued: Final[list[str]] = ["key spend"]
+    committed: Final[list[str]] = []
+    seen_by_drain: Final[list[tuple[float, tuple[str, ...]]]] = []
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+
+    async def drain_deferred_rows(timeout: float) -> None:
+        seen_by_drain.append((timeout, tuple(committed)))
+
+    await litellm.proxy.proxy_server._flush_spend_around_agents_rows_drain_on_shutdown(
+        flush_spend=commit_spend, clock=lambda: started + 4, drain_deferred_rows=drain_deferred_rows
+    )
+
+    assert seen_by_drain == [(pytest.approx(26 - GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS), ("key spend",))]
 
 
 token = MASTER_KEY
