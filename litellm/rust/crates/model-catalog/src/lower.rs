@@ -713,6 +713,14 @@ mod tests {
         Prices::try_from(&wire(entry))
     }
 
+    /// The adjustments of a row that may hold a value the catalog checks reject, as pricing still lowers it
+    fn adjustments(entry: Value) -> Adjustments {
+        let Value::Object(fields) = entry else {
+            panic!("entry must be an object")
+        };
+        Adjustments::from(&EntryWire::read(&fields))
+    }
+
     fn online(meter: Meter, tier: ServiceTier, band: Band) -> Price {
         Price::online(meter, When { tier, band })
     }
@@ -1255,6 +1263,53 @@ mod tests {
             }
         );
         assert_eq!(prices.iter().count(), 0);
+    }
+
+    /// Ports `get_vertex_regional_endpoint_uplift`, `get_regional_uplift_multiplier` and
+    /// `get_fedramp_uplift_multiplier`: an unreadable or missing multiplier, or a residency main never names, bills
+    /// no uplift, and the regional endpoint uplift applies at any location but `global`
+    #[rstest]
+    #[case::regional(json!({"regional_endpoint_uplift_multiplier": 1.1}), Some("us-east5"), Some(1.1))]
+    #[case::numeric_text(json!({"regional_endpoint_uplift_multiplier": "1.25"}), Some("eu"), Some(1.25))]
+    #[case::global(json!({"regional_endpoint_uplift_multiplier": 1.1}), Some("global"), None)]
+    #[case::global_any_case(json!({"regional_endpoint_uplift_multiplier": 1.1}), Some("Global"), None)]
+    #[case::no_location(json!({"regional_endpoint_uplift_multiplier": 1.1}), None, None)]
+    #[case::unreadable(json!({"regional_endpoint_uplift_multiplier": "not-a-number"}), Some("us-east5"), None)]
+    #[case::unlisted(json!({}), Some("us-east5"), None)]
+    fn a_regional_endpoint_bills_the_row_uplift_main_could_read(
+        #[case] entry: Value,
+        #[case] location: Option<&str>,
+        #[case] expected: Option<f64>,
+    ) {
+        assert_eq!(
+            adjustments(entry)
+                .regional_endpoint(location)
+                .map(Multiplier::get),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::fedramp_unreadable(json!({"fedramp_uplift_multiplier": "not-a-number"}), Uplift::FedrampEndpoint)]
+    #[case::fedramp_unlisted(json!({}), Uplift::FedrampEndpoint)]
+    #[case::residency_unreadable(
+        json!({"regional_processing_uplift_multiplier_eu": "not-a-number"}),
+        Uplift::Residency(Residency::Eu)
+    )]
+    #[case::residency_list(
+        json!({"regional_processing_uplift_multiplier_eu": [1.25]}),
+        Uplift::Residency(Residency::Eu)
+    )]
+    fn an_uplift_main_could_not_read_bills_none(#[case] entry: Value, #[case] uplift: Uplift) {
+        assert_eq!(adjustments(entry).get(&uplift), None);
+    }
+
+    #[rstest]
+    fn a_residency_main_never_names_lowers_no_uplift() {
+        assert_eq!(
+            adjustments(json!({"regional_processing_uplift_multiplier_apac": 1.25})),
+            Adjustments::default()
+        );
     }
 
     #[rstest]
