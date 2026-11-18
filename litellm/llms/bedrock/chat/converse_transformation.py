@@ -71,6 +71,7 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
+from litellm.llms.bedrock.chat.converse_to_openai import as_json_object
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_opts_into_native_structured_output,
@@ -221,6 +222,11 @@ def _has_native_text_format(output_config: object) -> bool:
         return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
     except ValidationError:
         return False
+
+
+def _text_with_strict_format(caller_text: object) -> Mapping[str, object]:
+    text: Final = as_json_object(caller_text) or {}
+    return {**text, "format": {**(as_json_object(text.get("format")) or {}), "strict": True}}
 
 
 def _guard_content_as_system_text(block: SystemContentBlock) -> SystemContentBlock | None:
@@ -1519,8 +1525,8 @@ class AmazonConverseConfig(BaseConfig):
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
                 json_schema=dict(native_schema),
-                name=name,
-                description=description,
+                name=name if isinstance(name, str) else None,
+                description=description if isinstance(description, str) else None,
             )
             optional_params["outputConfig"] = output_config
         elif json_schema is not None:
@@ -2165,6 +2171,9 @@ class AmazonConverseConfig(BaseConfig):
                     if effort is not None:
                         self._validate_anthropic_adaptive_effort(model=model, effort=effort)
                     additional_request_params["output_config"] = anthropic_output_config
+
+        if _has_native_text_format(output_config) and self._is_openai_gpt_reasoning_model(model):
+            additional_request_params["text"] = _text_with_strict_format(additional_request_params.get("text"))
 
         return (
             inference_params,
