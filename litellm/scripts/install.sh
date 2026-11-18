@@ -86,8 +86,37 @@ if [ -z "$UV_BIN" ] || [ "${CURRENT_UV_VERSION:-}" != "$UV_VERSION" ]; then
   if [ -n "${CURRENT_UV_VERSION:-}" ]; then
     info "Upgrading uv from ${CURRENT_UV_VERSION} to ${UV_VERSION}"
   fi
-  curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_NO_MODIFY_PATH=1 sh \
-    || die "uv installation failed. Try manually: curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh"
+  # SHA-256 of each uv ${UV_VERSION} release archive, from its .sha256 file on the GitHub release. Update with UV_VERSION
+  case "$OS-$ARCH" in
+    Darwin-arm64)              UV_TARGET=aarch64-apple-darwin           UV_SHA256=a92f61e9ac9b0f29668c15f56152e4a60143fca148ff5bfadb86718472c3f376 ;;
+    Darwin-x86_64)             UV_TARGET=x86_64-apple-darwin            UV_SHA256=9cc2de7d195fa157f98b306a8a1cb151ded93f488939b93363cebc8b9d598c28 ;;
+    Linux-x86_64)              UV_TARGET=x86_64-unknown-linux-musl      UV_SHA256=433e56874739e92c7cfd661ba9e5f287b376ca612c08c8194a41a98a13158aea ;;
+    Linux-aarch64|Linux-arm64) UV_TARGET=aarch64-unknown-linux-musl     UV_SHA256=05b0d3087e913ebe11756365a90dd47c05d6728752fdbe129ad4c3ccd769826d ;;
+    Linux-i686|Linux-i386)     UV_TARGET=i686-unknown-linux-musl        UV_SHA256=1d42b0d0a037b3d658b11ec889154686db3ab269ba2b789bdbc45d36e3549f34 ;;
+    Linux-armv7l)              UV_TARGET=armv7-unknown-linux-musleabihf UV_SHA256=f702e821b80e371e14987a886d58ee103c5948b7b096fa49a552624c24d7e073 ;;
+    Linux-armv6l)              UV_TARGET=arm-unknown-linux-musleabihf   UV_SHA256=6220fa3eb5f8212cae4ec3a5053060914aaa829549cf706dde9f9cc344f75f61 ;;
+    Linux-ppc64le)             UV_TARGET=powerpc64le-unknown-linux-gnu  UV_SHA256=e804f4a7d0659e09ef806365f04bdd33c940603fab903e925402748d05dd109a ;;
+    Linux-s390x)               UV_TARGET=s390x-unknown-linux-gnu        UV_SHA256=a589d4a8930c82fa7225daec19c632651b3c84f50f770efe758056b387e5f0dd ;;
+    Linux-riscv64)             UV_TARGET=riscv64gc-unknown-linux-gnu    UV_SHA256=1541596da45855e34202130027a613a2ace7d441e04d747cb4dd9f2590461c9a ;;
+    *) die "No pinned uv ${UV_VERSION} download for ${PLATFORM}. Install uv ${UV_VERSION} (https://docs.astral.sh/uv/getting-started/installation/) and rerun." ;;
+  esac
+  UV_TMP="$(mktemp -d)"
+  trap 'rm -rf "$UV_TMP"' EXIT
+  curl -fsSL -o "$UV_TMP/uv.tar.gz" "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+    || die "Could not download uv ${UV_VERSION} for ${UV_TARGET}."
+  if command -v sha256sum >/dev/null 2>&1; then
+    UV_DOWNLOAD_SHA256="$(sha256sum "$UV_TMP/uv.tar.gz" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    UV_DOWNLOAD_SHA256="$(shasum -a 256 "$UV_TMP/uv.tar.gz" | awk '{print $1}')"
+  else
+    die "Need sha256sum or shasum to verify the uv download."
+  fi
+  [ "$UV_DOWNLOAD_SHA256" = "$UV_SHA256" ] \
+    || die "uv ${UV_VERSION} download failed its SHA-256 check (expected ${UV_SHA256}, got ${UV_DOWNLOAD_SHA256}). Nothing was installed."
+  tar -xzf "$UV_TMP/uv.tar.gz" -C "$UV_TMP" || die "Could not unpack the uv ${UV_VERSION} download."
+  mkdir -p "$HOME/.local/bin"
+  cp "$UV_TMP/uv-${UV_TARGET}/uv" "$UV_TMP/uv-${UV_TARGET}/uvx" "$HOME/.local/bin/" \
+    || die "Could not install uv into $HOME/.local/bin."
   UV_BIN="$HOME/.local/bin/uv"
 fi
 
