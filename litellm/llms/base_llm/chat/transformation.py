@@ -544,20 +544,3 @@ class BaseConfig(ABC):
         """Hook for providers to merge chunk metadata into assembled streaming responses."""
         return
 
-    def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> dict | None:
-        """
-        Calculate any additional costs beyond standard token costs.
-
-        This is used for provider-specific infrastructure costs, routing fees, etc.
-
-        Args:
-            model: The model name
-            prompt_tokens: Number of prompt tokens
-            completion_tokens: Number of completion tokens
-
-        Returns:
-            Optional dictionary with cost names and amounts, e.g.:
-            {"Infrastructure Fee": 0.001, "Routing Cost": 0.0005}
-            Returns None if no additional costs apply.
-        """
-        return None
