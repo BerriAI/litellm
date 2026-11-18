@@ -5543,6 +5543,12 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> No
         ({"extra_body": {"store": False}}, {"store": True}, True),
         ({"extra_body": {"store": True}}, {"store": False}, False),
         ({"store": False}, {}, False),
+        ({"additional_drop_params": ["store"]}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, False),
+        ({}, {"store": False, "additional_drop_params": ["store"]}, False),
+        ({}, {"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({}, {"store": True, "extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({}, {"store": False, "extra_body": {"store": True}, "additional_drop_params": ["extra_body.store"]}, True),
     ],
 )
 def test_system_placement_uses_effective_upstream_store(

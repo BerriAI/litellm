@@ -56,6 +56,7 @@ from litellm.responses.utils import (
     ResponsesAPIRequestUtils,
     normalize_responses_api_stream_options,
     opt_in_auto_reasoning_summary,
+    without_dropped_store,
 )
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
@@ -1127,6 +1128,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
+        additional_drop_params: Final = litellm_params.get(
+            "additional_drop_params", optional_params.get("additional_drop_params")
+        )
+        optional_params = without_dropped_store(optional_params, additional_drop_params)
+        litellm_params = without_dropped_store(litellm_params, additional_drop_params)
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         optional_params = self._extract_extra_body_params(optional_params)
         upstream_store: Final = (as_str_mapping(litellm_params.get("extra_body")) or {}).get(

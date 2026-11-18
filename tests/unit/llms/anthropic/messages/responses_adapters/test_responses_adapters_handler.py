@@ -66,6 +66,10 @@ def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, s
         ({"extra_body": {"store": False}}, True),
         ({"store": False, "extra_body": {"store": True}}, False),
         ({"store": True, "extra_body": {"store": False}}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({"store": True, "extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({"store": False, "extra_body": {"store": True}, "additional_drop_params": ["extra_body.store"]}, True),
     ],
 )
 @pytest.mark.parametrize("system", ["Be brief.", [{"type": "text", "text": "Be brief."}]])

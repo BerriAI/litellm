@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.responses.utils import auto_reasoning_summary
+from litellm.responses.utils import auto_reasoning_summary, without_dropped_store
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -167,7 +167,8 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
-    return extra_kwargs or {}
+    params: Final = extra_kwargs or {}
+    return without_dropped_store(params, params.get("additional_drop_params"))
 
 
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
