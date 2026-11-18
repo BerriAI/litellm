@@ -627,3 +627,36 @@ def test_prepare_request_bearer_token_never_runs_the_sigv4_credential_chain(monk
     )
 
     assert request.prepped.headers["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+def test_transform_image_edit_request_missing_image_raises_bad_request():
+    """Test that missing image raises BadRequestError with 400 status code."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    with pytest.raises(litellm.BadRequestError, match="Nova Canvas image edit requires an image input") as exc_info:
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="turn into watercolor",
+            image=None,
+            image_edit_optional_request_params={},
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "bedrock"
+
+
+def test_transform_image_edit_request_tuple_image_raises_bad_request():
+    """Test that unsupported tuple image raises BadRequestError with 400 status code."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    with pytest.raises(litellm.BadRequestError, match="does not support tuple FileTypes") as exc_info:
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="turn into watercolor",
+            image=("file.png", b"data"),  # type: ignore[arg-type]
+            image_edit_optional_request_params={},
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "bedrock"
+
