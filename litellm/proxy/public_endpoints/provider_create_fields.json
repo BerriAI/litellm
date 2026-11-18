@@ -2172,6 +2172,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "INFER",
+    "provider_display_name": "Infer by Flow7",
+    "litellm_provider": "infer",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://infer.flow7.org/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "infer/claude-opus-5-5:low-cost"
+  },
+  {
     "provider": "Infinity",
     "provider_display_name": "Infinity",
     "litellm_provider": "infinity",
