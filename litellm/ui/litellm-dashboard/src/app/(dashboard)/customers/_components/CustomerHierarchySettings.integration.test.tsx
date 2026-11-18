@@ -102,13 +102,33 @@ describe("CustomerHierarchySettings", () => {
     );
     expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("Example organization");
     expect(screen.getByRole("textbox", { name: "Identifier" })).toHaveAttribute("readonly");
-    expect(screen.getByRole("combobox", { name: "Customer monthly budget (USD)" })).toHaveValue("100");
+    expect(screen.getByRole("combobox", { name: "Customer budget (USD)" })).toHaveValue("100");
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
-  it.each(["1mo", "7d", null])("preserves limits and reset %s", async (budget_duration) => {
+  it.each([
+    ["1mo", false, "$0"],
+    ["7d", false, "$0"],
+    [null, false, "$0"],
+    ["1mo", true, "$0"],
+    ["7d", true, "$0"],
+    [null, true, "$0"],
+    ["7d", false, ""],
+    ["7d", true, ""],
+    ["7d", false, "$0", null],
+    ["7d", true, "", null],
+  ] as const)("keeps reset %s via group %s with %s", async (budget_duration, viaGroup, amount, max_budget = 100) => {
     const user = userEvent.setup();
-    const custom = { ...organization, budget: { ...organization.budget, budget_duration } };
+    const custom = {
+      ...organization,
+      budget_id: "owned",
+      budget: {
+        ...organization.budget,
+        max_budget,
+        budget_duration,
+        budget_limits: [{ max_budget: 1000, budget_duration: "12mo" }],
+      },
+    };
     fetchMock.mockResolvedValue(json(custom));
     render(
       <CustomerHierarchySettings
@@ -119,17 +139,26 @@ describe("CustomerHierarchySettings", () => {
       />,
     );
     const save = screen.getByRole("button", { name: "Save changes" });
-    const budget = screen.getByRole("combobox", { name: "Customer monthly budget (USD)" });
+    const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
     await user.clear(budget);
-    await user.type(budget, "$0");
+    if (viaGroup) {
+      await user.click(budget);
+      await user.click(screen.getByRole("option", { name: "Growth", exact: true }));
+      await user.clear(budget);
+    }
+    if (amount) await user.type(budget, amount);
     await user.click(save);
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
     expect(lastRequest().method).toBe("PATCH");
     expect(new URL(lastRequest().url).pathname).toBe("/management/v1/customer_organizations/org-1");
-    expect(await lastRequest().clone().json()).toEqual({ budget: { ...custom.budget, max_budget: 0 } });
+    expect(await lastRequest().clone().json()).toEqual({
+      alias: "Renamed",
+      ...(amount || max_budget != null ? { budget: { ...custom.budget, max_budget: amount ? 0 : null } } : {}),
+    });
   });
 
-  it.each(["$175", ""])("replaces a group with custom budget %s", async (amount) => {
+  it.each(["$175", "", "Growth"])("changes a group selection to %s", async (amount) => {
     const user = userEvent.setup();
     const grouped = { ...organization, budget_id: "shared" };
     fetchMock.mockImplementation(async () => json(grouped));
@@ -142,23 +171,37 @@ describe("CustomerHierarchySettings", () => {
       />,
     );
     const save = screen.getByRole("button", { name: "Save changes" });
-    const budget = screen.getByRole("combobox", { name: "Customer monthly budget (USD)" });
+    const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
     expect(budget).toHaveValue("Growth");
     await user.clear(budget);
-    if (amount) await user.type(budget, amount);
+    if (amount) await user.type(budget, amount === "Growth" ? "$175" : amount);
+    if (amount === "Growth") {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "300" } });
+      await user.clear(budget);
+      await user.click(screen.getByRole("option", { name: "Growth", exact: true }));
+      expect(save).toBeDisabled();
+      fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
+    }
     await user.click(save);
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({
-      budget: amount ? { ...organization.budget, max_budget: 175, budget_limits: null } : null,
-    });
+    expect(await lastRequest().clone().json()).toEqual(
+      amount === "Growth"
+        ? { alias: "Renamed" }
+        : { budget: amount ? { ...organization.budget, max_budget: 175, budget_limits: null } : null },
+    );
   });
 
-  it("preserves group assignment while the catalog is loading", async () => {
+  it.each([
+    [true, false],
+    [true, true],
+    [false, false],
+    [false, true],
+  ] as const)("protects shared=%s budget while catalog unavailable=%s", async (shared, unavailable) => {
     testQueryClient.clear();
-    const grouped = { ...organization, budget_id: "shared" };
+    const grouped = { ...organization, budget_id: shared ? "shared" : "owned", budget_is_shared: shared };
     fetchMock.mockImplementation(async (request) => {
       if (request instanceof Request && request.url.endsWith("customer_organization_budget_groups"))
-        return new Promise<Response>(() => {});
+        return unavailable ? json({ detail: "Unavailable" }, 503) : new Promise<Response>(() => {});
       return json(grouped);
     });
     render(
@@ -169,12 +212,65 @@ describe("CustomerHierarchySettings", () => {
         onDeleted={onDeleted}
       />,
     );
-    expect(screen.getByRole("combobox", { name: "Customer monthly budget (USD)" })).toBeDisabled();
-    expect(screen.queryByRole("spinbutton", { name: "Tokens per minute" })).not.toBeInTheDocument();
+    const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+    if (unavailable) await screen.findByRole("button", { name: "Retry" });
+    if (shared) {
+      expect(budget).toBeDisabled();
+      expect(screen.queryByRole("spinbutton", { name: "Tokens per minute" })).not.toBeInTheDocument();
+    } else {
+      expect(budget).toBeEnabled();
+      await userEvent.clear(budget);
+      await userEvent.type(budget, "$40");
+      await userEvent.keyboard("{Escape}");
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "300" } });
+    }
     fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({ alias: "Renamed" });
+    expect(await lastRequest().clone().json()).toEqual({
+      alias: "Renamed",
+      ...(!shared ? { budget: { ...organization.budget, max_budget: 40, tpm_limit: 300 } } : {}),
+    });
+  });
+
+  it.each([false, true])("toggles custom assignment from enabled %s", async (enabled) => {
+    const custom = {
+      ...organization,
+      budget_id: enabled ? "owned" : null,
+      budget: enabled ? organization.budget : null,
+    };
+    fetchMock.mockResolvedValue(json(custom));
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "organization", record: custom }}
+        organization={custom}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Set a budget and limits" }));
+    expect(screen.getByRole("combobox", { name: "Customer budget (USD)" })).toHaveValue("");
+    if (!enabled) {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "10" } });
+      const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+      await userEvent.type(budget, "$40");
+      await userEvent.clear(budget);
+      await userEvent.keyboard("{Escape}");
+    }
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toEqual({
+      budget: enabled
+        ? null
+        : {
+            max_budget: null,
+            soft_budget: null,
+            tpm_limit: null,
+            rpm_limit: 10,
+            budget_duration: null,
+            allowed_models: null,
+          },
+    });
   });
 
   it("should show friendly template names while sending the selected template identifier", async () => {

@@ -125,16 +125,25 @@ describe("CustomerBudgetGroups", () => {
     });
   });
 
-  it("should keep the whole draft after a rejected save and allow retry", async () => {
+  it.each([
+    [false, 409],
+    [true, 409],
+    [false, 204],
+    [true, 204],
+  ] as const)("keeps the draft after rejected save (global %s, status %s)", async (global, status) => {
     const user = userEvent.setup();
-    fetchMock.mockImplementation(async () => json({ detail: "A referenced template cannot be deleted." }, 409));
-    render(<CustomerBudgetGroups organization={organization} onSaved={onSaved} />);
+    const error = status === 204 ? "Unable to load customer" : "A referenced template cannot be deleted.";
+    const source = { ...organization, default_budget_template_id: global ? null : "standard" };
+    fetchMock.mockImplementation(async () =>
+      status === 204 ? new Response(null, { status }) : json({ detail: error }, status),
+    );
+    render(<CustomerBudgetGroups global={global} organization={source} onSaved={onSaved} />);
     fireEvent.change(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" }), {
       target: { value: "15" },
     });
     await user.click(screen.getByRole("button", { name: "Remove Old" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("A referenced template cannot be deleted.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(error);
     expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
     expect(screen.queryByDisplayValue("Old")).not.toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();

@@ -137,7 +137,7 @@ export const parseBudget = (fields: CustomerHierarchyFields): Budget | null => {
   };
 };
 
-const BUDGET_FIELDS = ["budgetEnabled", "maxBudget", "softBudget", "budgetDuration", "tpm", "rpm"] as const;
+export const BUDGET_FIELDS = ["budgetEnabled", "maxBudget", "softBudget", "budgetDuration", "tpm", "rpm"] as const;
 
 const budgetChanged = (fields: CustomerHierarchyFields, initial: CustomerHierarchyFields): boolean =>
   BUDGET_FIELDS.some((key) => fields[key] !== initial[key]) ||

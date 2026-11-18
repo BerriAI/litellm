@@ -314,7 +314,7 @@ async def test_a_key_bound_to_a_customer_gets_its_apps_surcharge_without_custome
 
 
 @pytest.mark.asyncio
-async def test_a_key_with_no_customer_and_no_app_header_still_skips_app_resolution() -> None:
+async def test_a_key_with_no_customer_resolves_its_app_but_reserves_no_surcharge() -> None:
     database: Final = AppDatabase()
     store: Final = AppStore(cast("Prisma", database), NOW)  # cast-ok: in-memory Prisma edge
     await seed_resources(database)
@@ -334,4 +334,7 @@ async def test_a_key_with_no_customer_and_no_app_header_still_skips_app_resoluti
         UserAPIKeyAuth(token="plain", team_id="chat"),
     )
 
-    assert resolved is None
+    assert resolved is not None
+    assert (resolved.app_alias, resolved.customer_org_id, resolved.app_customer_margin) == ("Chat", None, 0.05)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        assert key_customer_cost_margin(UserAPIKeyAuth(token="plain", team_id="chat"), resolved) is None

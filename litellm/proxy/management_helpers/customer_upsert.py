@@ -136,11 +136,9 @@ async def upsert_organization(
     budget_unchanged: Final = (
         existing.budget_id == patch.budget_id and patch.budget_id in group_ids
         if patch.budget_id is not None
-        else (
-            existing.budget_id not in group_ids and matches_patch(existing.budget, patch.budget)
-            if "budget" in patch.model_fields_set
-            else "budget_id" not in patch.model_fields_set or existing.budget_id is None
-        )
+        else existing.budget_id not in group_ids and matches_patch(existing.budget, patch.budget)
+        if "budget" in patch.model_fields_set
+        else "budget_id" not in patch.model_fields_set or existing.budget_id is None
     )
     if alias_unchanged and budget_unchanged and templates_match(existing, payload, default_index):
         return OrganizationOutcome(
