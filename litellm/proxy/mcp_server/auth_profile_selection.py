@@ -123,6 +123,8 @@ class AuthProfileContext(Protocol):
 
     def loaded_auth_profile_ids(self) -> AbstractSet[str]: ...
 
+    def auth_profiles_unread(self, server_id: str) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class _GrantRead:
@@ -161,7 +163,7 @@ async def resolve_effective_server(
     if server.auth_profile_id is not None:
         return server
     carriers: Final = await _request_grants(user_api_key_auth, context.auth_profile_grants)
-    if isinstance(carriers, Exception) and server.additional_auth:
+    if isinstance(carriers, Exception) and (server.additional_auth or context.auth_profiles_unread(server.server_id)):
         return UnreadableGrants()
     if isinstance(carriers, Exception) or not any(carriers):
         return server

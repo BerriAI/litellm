@@ -1318,7 +1318,7 @@ class TestListToolsRestAPI:
         assert exc_info.value.detail["error"] == "access_denied"
         assert "server-1" in exc_info.value.detail["message"]
 
-    async def test_lists_tools_for_allowed_server(self, monkeypatch):
+    async def test_lists_tools_for_allowed_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
 
@@ -1326,6 +1326,8 @@ class TestListToolsRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
@@ -1388,7 +1390,7 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["tool-1"]
         assert result["error"] is None
 
-    async def test_non_admin_ui_session_resolves_as_admitted_subject(self, monkeypatch):
+    async def test_non_admin_ui_session_resolves_as_admitted_subject(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """LIT-4861: a non-admin dashboard session must act as the admitted subject on this
         route, so server reachability AND tool ceilings bind to the user's grants exactly as
         they do for a gateway session, never to the bare session key."""
@@ -1414,6 +1416,8 @@ class TestListToolsRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
@@ -1468,7 +1472,7 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["tool-1"]
         assert result["message"] == "Successfully retrieved tools"
 
-    async def test_toolset_scoped_request_keeps_the_caller_credential(self, monkeypatch):
+    async def test_toolset_scoped_request_keeps_the_caller_credential(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """LIT-4861: the admitted subject resolves per grant source and a team source deliberately
         carries none of the caller's own object_permission, so a toolset narrowing layered on top
         would evaporate on every team-granted server. A toolset-scoped request therefore stays on
@@ -1494,6 +1498,8 @@ class TestListToolsRestAPI:
             toolset_id = "toolset-1"
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             alias = "toolset-server-1"
             server_name = "toolset-server-1"
             name = "toolset-server-1"
@@ -1690,7 +1696,7 @@ class TestListToolsRestAPI:
         assert isinstance(second_call_params, PaginatedRequestParams)
         assert second_call_params.cursor == "page-2"
 
-    async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
+    async def test_include_disabled_tools_is_admin_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """include_disabled_tools skips the allowlist filter only for PROXY_ADMIN;
         a non-admin passing it stays filtered so the REST endpoint can't be used
         to enumerate deliberately-disabled tools."""
@@ -1703,6 +1709,8 @@ class TestListToolsRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
@@ -1761,7 +1769,9 @@ class TestListToolsRestAPI:
         assert captured["apply_tool_filters"] is True
 
     @pytest.mark.parametrize("upstream_status", [401, 403])
-    async def test_upstream_auth_failure_surfaces_status_and_challenge(self, monkeypatch, upstream_status):
+    async def test_upstream_auth_failure_surfaces_status_and_challenge(
+        self, monkeypatch: pytest.MonkeyPatch, upstream_status: int
+    ) -> None:
         """A single-server pass-through request whose upstream rejects the token
         must surface the upstream status (401 or 403) plus its WWW-Authenticate
         challenge, not collapse into a 200 ``unexpected_error`` body."""
@@ -1770,6 +1780,8 @@ class TestListToolsRestAPI:
         )
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             alias = "server-1"
             server_name = "server-1"
             name = "passthrough"
@@ -1830,7 +1842,7 @@ class TestListToolsRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers == {"www-authenticate": challenge}
 
-    async def test_single_server_upstream_fault_surfaces_truthful_status(self, monkeypatch):
+    async def test_single_server_upstream_fault_surfaces_truthful_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A single-server listing whose upstream breaks (5xx, timeout, unreachable) must answer
         with the truthful gateway status instead of masking the failure as an empty-success
         {"tools": [], "error": null} body a caller cannot distinguish from a toolless server."""
@@ -1842,6 +1854,8 @@ class TestListToolsRestAPI:
         )
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             alias = "server-1"
             server_name = "server-1"
             name = "flaky"
@@ -1888,7 +1902,7 @@ class TestListToolsRestAPI:
         assert "server-1" in exc_info.value.detail["message"]
         assert "flaky" not in exc_info.value.detail["message"]
 
-    async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
+    async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The multi-server aggregate listing degrades a server whose upstream
         rejects auth to an empty contribution and still returns the healthy
         server's tools with a 200, rather than surfacing a 401. The absorbed
@@ -1901,6 +1915,9 @@ class TestListToolsRestAPI:
         )
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
+
             def __init__(self, name):
                 self.alias = name
                 self.server_name = name
@@ -2269,7 +2286,7 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["scoped-tool"]
         assert result["error"] is None
 
-    async def test_toolset_name_query_param_scopes_to_toolset_servers(self, monkeypatch):
+    async def test_toolset_name_query_param_scopes_to_toolset_servers(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """toolset_name should resolve the toolset, apply its scope to the
         caller's UserAPIKeyAuth via _apply_toolset_scope, and only list tools
         from servers the scoped auth is allowed to see."""
@@ -2287,6 +2304,8 @@ class TestListToolsRestAPI:
             toolset_id = "toolset-1"
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             alias = "toolset-server-1"
             server_name = "toolset-server-1"
             name = "toolset-server-1"
@@ -2575,7 +2594,9 @@ class TestCallToolRestAPI:
             ("math_a-math_a-foo", "math_a-foo"),
         ),
     )
-    async def test_executes_tool_when_allowed(self, monkeypatch, tool_name, native_tool_name):
+    async def test_executes_tool_when_allowed(
+        self, monkeypatch: pytest.MonkeyPatch, tool_name: str, native_tool_name: str
+    ) -> None:
         import litellm
         from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler, MCPServerAccess
         from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
@@ -2587,6 +2608,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "math_a"
             server_name = "math_a"
@@ -2837,8 +2860,12 @@ class TestCallToolRestAPI:
         ],
     )
     async def test_rest_keeps_its_serialization_shape_with_legacy_structured_admission(
-        self, monkeypatch, structured, expected_structured, expected_texts
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        structured: dict[str, int] | list[int],
+        expected_structured: dict[str, int] | None,
+        expected_texts: list[str],
+    ) -> None:
         """REST has no negotiated revision, so it admits object structuredContent only and downgrades
         anything else losslessly, while the response keeps the SDK model shape (resultType included)
         rather than being run through the MCP legacy wire serializer."""
@@ -2850,6 +2877,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
@@ -2919,7 +2948,13 @@ class TestCallToolRestAPI:
             ("oauth2", None, None),
         ],
     )
-    async def test_forwards_callers_bearer_as_oauth2_headers(self, monkeypatch, auth_type, per_user_oauth, expected):
+    async def test_forwards_callers_bearer_as_oauth2_headers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        auth_type: str,
+        per_user_oauth: dict[str, str] | None,
+        expected: dict[str, str] | None,
+    ) -> None:
         """A distinct caller Authorization rides oauth2_headers to execute_mcp_tool only for
         client-forwarded-token servers, with a per-user OAuth token still taking precedence.
         A gateway-managed oauth2 server never sees the caller's bearer."""
@@ -2928,6 +2963,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
@@ -2981,7 +3018,7 @@ class TestCallToolRestAPI:
         assert captured["oauth2_headers"] == expected
         assert captured["raw_headers"]["authorization"] == "Bearer user-subject-token"
 
-    async def test_returns_guardrail_rewritten_tool_result(self, monkeypatch):
+    async def test_returns_guardrail_rewritten_tool_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A post_mcp_call guardrail rewrite of the tool result must reach the REST caller,
         not the raw result the upstream server returned."""
 
@@ -2992,6 +3029,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
@@ -3048,7 +3087,9 @@ class TestCallToolRestAPI:
 
         assert result == masked_result
 
-    async def test_success_logging_start_time_excludes_pre_call_processing(self, monkeypatch):
+    async def test_success_logging_start_time_excludes_pre_call_processing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Pre-call hook latency (guardrails, header resolution) must not inflate the tool call's
         logged duration on success."""
         from litellm.proxy import proxy_server
@@ -3060,6 +3101,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
@@ -3140,7 +3183,9 @@ class TestCallToolRestAPI:
         fire_logging.assert_awaited_once()
 
     @pytest.mark.parametrize("upstream_status", [401, 403])
-    async def test_call_tool_rest_relays_upstream_auth_failure(self, monkeypatch, upstream_status):
+    async def test_call_tool_rest_relays_upstream_auth_failure(
+        self, monkeypatch: pytest.MonkeyPatch, upstream_status: int
+    ) -> None:
         """A pass-through call that hits an upstream 401/403 (surfaced by the manager as
         MCPUpstreamAuthError) must reach the REST caller as that status with the upstream
         WWW-Authenticate preserved, so an MCP client can run the upstream OAuth flow, instead of the
@@ -3154,6 +3199,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
@@ -3229,7 +3276,7 @@ class TestCallToolRestAPI:
         info_messages = [_rendered_log_message(c) for c in mock_logger.info.call_args_list if c.args]
         assert sum(str(upstream_status) in m for m in info_messages) == 1
 
-    async def test_local_permission_denial_keeps_error_level_logging(self, monkeypatch):
+    async def test_local_permission_denial_keeps_error_level_logging(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Only the relayed upstream 401 may be demoted to info; a locally generated HTTPException 403
         (tool permission, server access, IP filtering) raised inside the call must stay at error level
         so an authenticated user probing restrictions keeps full monitoring visibility, and must be
@@ -3242,6 +3289,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
@@ -3297,8 +3346,8 @@ class TestCallToolRestAPI:
     @pytest.mark.parametrize("raise_site", ["pre_call_hook", "execute_mcp_tool"])
     @pytest.mark.parametrize("custom_code", [False, True])
     async def test_guardrail_block_runs_failure_logging_before_http_translation(
-        self, monkeypatch, raise_site, custom_code
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, raise_site: str, custom_code: bool
+    ) -> None:
         """A pre_mcp_call guardrail block, whether raised by the pre-call hook or from inside
         execute_mcp_tool, must reach proxy_logging_obj.post_call_failure_hook (the only path that
         writes the failure spend-log row) with the logging object's failure payload already built,
@@ -3312,6 +3361,8 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            additional_auth: Final = None
+            auth_profile_id: Final = None
             server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
@@ -5104,3 +5155,233 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
         assert observed.get_nowait() == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_id", ["analytics", None], ids=["single-server", "aggregate"])
+async def test_rest_tool_listing_uses_the_profile_granted_to_the_caller(
+    monkeypatch: pytest.MonkeyPatch, server_id: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import hash_token
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    upstream: Final = AnalyticsUpstream()
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(allow_all_keys=True), upstream, BotTokenEndpoint(), "ana-bots"
+    )
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    result: Final = await rest_endpoints.list_tool_rest_api(
+        _build_request(path="/mcp-rest/tools/list", method="GET"),
+        server_id=server_id,
+        mcp_server_name=None,
+        toolset_name=None,
+        include_disabled_tools=False,
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot"), team_id="payments"),
+    )
+
+    assert [tool.name for tool in result["tools"]] == ["get_issue"], result
+    assert upstream.calls("tools/list") == ("Bearer bot-app-token-1",), upstream.requests
+
+
+@pytest.mark.asyncio
+async def test_rest_tool_listing_reports_an_unusable_profile_on_its_server_and_lists_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import hash_token
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    async def new_bots_stored_on_analytics(profile_ids: object) -> dict[str, str | None]:
+        return {"new-bots": "analytics"}
+
+    upstream: Final = AnalyticsUpstream()
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(allow_all_keys=True),
+        upstream,
+        BotTokenEndpoint(),
+        "new-bots",
+        owners=new_bots_stored_on_analytics,
+    )
+    manager.registry["tickets"] = MCPServer.model_validate(
+        {
+            "server_id": "tickets",
+            "name": "tickets",
+            "url": "https://tickets.example/mcp",
+            "transport": MCPTransport.http,
+            "allow_all_keys": True,
+        }
+    )
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    result: Final = await rest_endpoints.list_tool_rest_api(
+        _build_request(path="/mcp-rest/tools/list", method="GET"),
+        server_id=None,
+        mcp_server_name=None,
+        toolset_name=None,
+        include_disabled_tools=False,
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot")),
+    )
+
+    assert [tool.name for tool in result["tools"]] == ["get_issue"], result
+    assert result["server_outcomes"]["tickets"] == {"status": "ok", "tool_count": 1}, result
+    assert result["server_outcomes"]["analytics"]["status"] != "ok", result
+    assert upstream.calls("tools/list") == ("",), upstream.requests
+
+
+@pytest.mark.asyncio
+async def test_rest_tool_call_resolves_only_the_server_it_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import hash_token
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    async def new_bots_stored_on_analytics(profile_ids: object) -> dict[str, str | None]:
+        return {"new-bots": "analytics"}
+
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(allow_all_keys=True),
+        AnalyticsUpstream(),
+        BotTokenEndpoint(),
+        "new-bots",
+        owners=new_bots_stored_on_analytics,
+    )
+    manager.registry["tickets"] = MCPServer.model_validate(
+        {
+            "server_id": "tickets",
+            "name": "tickets",
+            "url": "https://tickets.example/mcp",
+            "transport": MCPTransport.http,
+            "allow_all_keys": True,
+        }
+    )
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    allowed, canonical_server_id = await rest_endpoints._resolve_allowed_mcp_servers_with_ip_filter(
+        _build_request(path="/mcp-rest/tools/call"), UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot")), "tickets"
+    )
+
+    assert canonical_server_id == "tickets"
+    assert sorted(server.server_id for server in allowed) == ["analytics", "tickets"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["get_issue", "analytics-get_issue"], ids=["targets-tool", "other-servers-tool"])
+async def test_rest_tool_call_never_sends_an_untargeted_servers_default_credential(
+    monkeypatch: pytest.MonkeyPatch, tool_name: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import hash_token
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    upstream: Final = AnalyticsUpstream()
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(
+            allow_all_keys=True,
+            auth_type=MCPAuth.bearer_token,
+            oauth2_flow=None,
+            authentication_token="shared-default-token",
+        ),
+        upstream,
+        BotTokenEndpoint(),
+        "ana-bots",
+    )
+    manager.registry["tickets"] = MCPServer.model_validate(
+        {
+            "server_id": "tickets",
+            "name": "tickets",
+            "url": "https://tickets.example/mcp",
+            "transport": MCPTransport.http,
+            "allow_all_keys": True,
+        }
+    )
+    manager.tool_name_to_mcp_server_name_mapping["tickets-get_issue"] = "tickets"
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot"))
+    request: Final = _build_request(path="/mcp-rest/tools/call", headers={"x-litellm-api-key": "sk-nightly-bot"})
+    allowed, canonical_server_id = await rest_endpoints._resolve_allowed_mcp_servers_with_ip_filter(
+        request, caller, "tickets"
+    )
+
+    async with manager.catalog.operation():
+        try:
+            await rest_endpoints._execute_rest_mcp_tool(
+                request=request,
+                tool_name=tool_name,
+                tool_arguments={},
+                allowed_mcp_servers=allowed,
+                canonical_server_id=canonical_server_id,
+                target_server=next(server for server in allowed if server.server_id == "tickets"),
+                user_api_key_dict=caller,
+                data={"metadata": {"user_api_key_auth": caller}},
+                logging_obj=None,
+                guardrail_auth=caller,
+            )
+        except HTTPException:
+            pass
+
+    assert "Bearer shared-default-token" not in {authorization for _, authorization in upstream.requests}
+
+
+@pytest.mark.asyncio
+async def test_rest_tool_call_targets_the_server_as_the_granted_caller_sees_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import hash_token
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    manager: Final = profile_aware_manager(
+        profiled_analytics_server(allow_all_keys=True), AnalyticsUpstream(), BotTokenEndpoint(), "ana-bots"
+    )
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    allowed, canonical_server_id = await rest_endpoints._resolve_allowed_mcp_servers_with_ip_filter(
+        _build_request(path="/mcp-rest/tools/call"),
+        UserAPIKeyAuth(api_key=hash_token("sk-nightly-bot"), team_id="payments"),
+        "analytics",
+    )
+
+    assert canonical_server_id == "analytics"
+    assert [(server.server_id, server.auth_profile_id, server.needs_user_oauth_token) for server in allowed] == [
+        ("analytics", "ana-bots", False)
+    ]

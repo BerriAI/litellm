@@ -44,6 +44,7 @@ from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
 from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
+from tests.unit.proxy.mcp_server.auth_profile_fakes import granting
 
 
 def test_mcp_available_on_sdk2():
@@ -1215,8 +1216,8 @@ async def test_mcp_read_resource_success():
 
     with (
         patch(
-            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
-            AsyncMock(return_value=[server]),
+            "litellm.proxy.mcp_server.operations._usable_and_left_out_mcp_servers",
+            AsyncMock(return_value=([server], ())),
         ) as mock_allowed,
         patch(
             "litellm.proxy.mcp_server.operations._prepare_mcp_server_headers",
@@ -1282,7 +1283,7 @@ async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, 
             "get_or_extract_auth_context",
             AsyncMock(return_value=(caller, None, ["catalog"], None, None, None, None)),
         ),
-        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream_server])),
+        patch.object(operations, "_usable_and_left_out_mcp_servers", AsyncMock(return_value=([upstream_server], ()))),
         patch.object(
             operations.global_mcp_server_manager,
             "read_resource_from_server",
@@ -6971,7 +6972,7 @@ class TestGatewayCreateInitializationOptions:
 
 
 @pytest.mark.asyncio
-async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
+async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow() -> None:
     """
     P1 Regression: list_tools path must apply _resolve_oauth2_flow to legacy DB
     rows where oauth2_flow is NULL but M2M credentials are present.
@@ -7053,6 +7054,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
+        mock_manager.auth_profile_grants = granting()
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["legacy-m2m-id"], 0))
         mock_manager.get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
 

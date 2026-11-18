@@ -66,10 +66,11 @@ class AnalyticsUpstream:
             "initialize": {
                 "protocolVersion": "2025-03-26",
                 "serverInfo": {"name": "analytics", "version": "1"},
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "resources": {}},
             },
             "tools/list": {"tools": [{"name": "get_issue", "inputSchema": {"type": "object"}}]},
             "tools/call": {"content": [{"type": "text", "text": f"issue read with {authorization}"}], "isError": False},
+            "resources/list": {"resources": []},
         }[payload.method]
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
 

@@ -27,6 +27,8 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
 
     from litellm.proxy.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
@@ -61,6 +63,16 @@ class CatalogSnapshot:
     tools: Mapping[str, MCPTool]
     routing: MutableMapping[str, str]
     auth_profile_ids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadProfiles:
+    row_updated_at: datetime | None
+    profiles: tuple[MCPAuthProfile, ...]
+    retry_at: float | None = None
+
+    def due(self, row_updated_at: datetime | None, now: float) -> bool:
+        return self.row_updated_at != row_updated_at or (self.retry_at is not None and now >= self.retry_at)
 
 
 def auth_profile_ids_of(servers: Iterable[MCPServer]) -> frozenset[str]:
@@ -117,11 +129,17 @@ def _snapshot(manager: MCPServerManager, database_identity: str) -> CatalogSnaps
     )
 
 
+_PROFILE_READ_RETRY_SECONDS: Final = 30.0
+
+
 class CatalogSnapshots:
-    def __init__(self, manager: MCPServerManager) -> None:
+    def __init__(self, manager: MCPServerManager, clock: Callable[[], float] = time.monotonic) -> None:
         self.manager = manager
+        self._clock = clock
         self._refresh_lock = asyncio.Lock()
         self._database_identity = ""
+        self._read_profiles: Mapping[str, _ReadProfiles] = MappingProxyType({})
+        self._profile_retry_at: float | None = None
         self._arrival_ticket = 0
         self._completed_ticket = 0
         self._shared_snapshot: CatalogSnapshot | None = None
@@ -134,6 +152,20 @@ class CatalogSnapshots:
         self._staged_routing: ContextVar[tuple[dict[str, str], asyncio.Event] | None] = ContextVar(
             "mcp_catalog_routing", default=None
         )
+
+    def read_profiles_of(self, server_id: str, row_updated_at: datetime | None) -> tuple[MCPAuthProfile, ...] | None:
+        read: Final = self._read_profiles.get(server_id)
+        if read is None or read.retry_at is not None or read.row_updated_at != row_updated_at:
+            return None
+        return read.profiles
+
+    def auth_profiles_unread(self, server_id: str) -> bool:
+        read: Final = self._read_profiles.get(server_id)
+        return read is not None and read.retry_at is not None
+
+    def _serves_shared_snapshot(self, revision: int | None) -> bool:
+        profile_retry_due: Final = self._profile_retry_at is not None and self._clock() >= self._profile_retry_at
+        return revision is not None and revision == self._applied_revision and not profile_retry_due
 
     def current(self) -> CatalogSnapshot | None:
         scoped: Final = self._operation.get()
@@ -165,7 +197,7 @@ class CatalogSnapshots:
 
         try:
             revision: Final = await get_mcp_catalog_revision(prisma_client)
-            if revision is not None and revision == self._applied_revision and self._shared_snapshot is not None:
+            if self._shared_snapshot is not None and self._serves_shared_snapshot(revision):
                 return self._shared_snapshot
             self._arrival_ticket += 1
             arrival: Final = self._arrival_ticket
@@ -492,7 +524,7 @@ class CatalogSnapshots:
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         # Load only "active", legacy "approved", and NULL (no approval workflow) rows.
         # Pending/rejected servers are excluded at the DB level so we never load them.
-        from litellm.proxy.mcp_server.auth_profile_db import stored_profiles_by_server
+        from litellm.proxy.mcp_server.auth_profile_db import read_stored_profiles
         from litellm.proxy.mcp_server.db import get_runtime_mcp_server_rows
 
         raw_rows: Final = await get_runtime_mcp_server_rows(prisma_client)
@@ -503,13 +535,36 @@ class CatalogSnapshots:
         ).hexdigest()
         verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
+        now: Final = self._clock()
+        known: Final = self._read_profiles
+        unread_in_row_order: Final = tuple(
+            row.server_id
+            for row in raw_rows
+            if (read := known.get(row.server_id)) is None or read.due(row.updated_at, now)
+        )
+        fresh: Final[Mapping[str, tuple[MCPAuthProfile, ...]] | None] = (
+            await read_stored_profiles(prisma_client, unread_in_row_order, use_writer=True)
+            if unread_in_row_order
+            else MappingProxyType({})
+        )
+        unread: Final = frozenset(unread_in_row_order)
+        retry_at: Final = None if fresh is not None else now + _PROFILE_READ_RETRY_SECONDS
+        read_profiles: Final = MappingProxyType(
+            {
+                row.server_id: (
+                    _ReadProfiles(row.updated_at, fresh.get(row.server_id, ()) if fresh is not None else (), retry_at)
+                    if row.server_id in unread
+                    else known[row.server_id]
+                )
+                for row in raw_rows
+            }
+        )
+
         previous_registry: Final = self.manager.registry
         new_registry: Final = await self._stage_servers(
             raw_rows,
             reuse_unchanged=reuse_unchanged,
-            auth_profiles=await stored_profiles_by_server(
-                prisma_client, [row.server_id for row in raw_rows], use_writer=True
-            ),
+            auth_profiles={server_id: read.profiles for server_id, read in read_profiles.items() if read.profiles},
         )
 
         # Assign short prefixes against the full candidate set without
@@ -546,6 +601,10 @@ class CatalogSnapshots:
                 self.manager.invalidate_server_definition_caches(server_id)
                 self.manager.invalidate_oauth_discovery_state(server_id)
         self._database_identity = database_identity
+        self._read_profiles = read_profiles
+        self._profile_retry_at = min(
+            (read.retry_at for read in read_profiles.values() if read.retry_at is not None), default=None
+        )
         self.manager.registry = registered_registry
         if not reuse_unchanged:
             self.manager.clear_initialize_instructions()

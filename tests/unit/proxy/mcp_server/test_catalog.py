@@ -40,6 +40,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer
+from tests.unit.proxy.mcp_prisma_fake import FakeMcpPrisma
 from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 CatalogKind = Literal["tools", "prompts", "resources", "templates"]
@@ -1132,10 +1133,12 @@ async def test_a_reload_after_a_failed_profile_read_restores_the_profiles(monkey
 
     store.db.litellm_mcpauthprofiletable.find_many = fails_once
     monkeypatch.setattr(proxy_server, "prisma_client", store)
-    manager: Final = MCPServerManager()
+    clock: Final = _CatalogClock()
+    manager: Final = MCPServerManager(catalog_clock=clock)
 
     await manager.reload_servers_from_database()
     first: Final = manager.registry["analytics"].additional_auth
+    clock.now += 30.0
     await manager.reload_servers_from_database()
 
     assert first is None
@@ -1167,3 +1170,348 @@ async def test_the_loaded_profile_ids_are_read_from_the_snapshot_and_follow_a_ne
     )
     async with manager.catalog.operation():
         assert manager.loaded_auth_profile_ids() == frozenset({"bots", "wiki-bots"})
+
+
+async def _store_with_servers(
+    monkeypatch: pytest.MonkeyPatch, *, profiled: bool
+) -> "tuple[FakeMcpPrisma, list[int]]":
+    from datetime import datetime, timezone
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import NewMCPServerWithProfilesRequest
+    from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles
+    from litellm.proxy.mcp_server.db import create_mcp_server_if_identifier_free
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "catalog-test-salt")
+    store: Final = FakeMcpPrisma()
+    for server_id in ("tickets", "wiki"):
+        await create_mcp_server_if_identifier_free(
+            store,
+            NewMCPServerWithProfilesRequest(
+                server_id=server_id,
+                server_name=server_id,
+                url=f"https://{server_id}.example/mcp",
+                transport=MCPTransport.http,
+            ),
+            "admin",
+            submitted_profiles=SubmittedProfiles(
+                [{"id": f"{server_id}-bots", "auth_type": "bearer_token", "authentication_token": "bot-token"}]
+                if profiled
+                else []
+            ),
+        )
+    for row in store.servers:
+        row["updated_at"] = datetime(2026, 11, 18, tzinfo=timezone.utc)
+    profile_reads: Final[list[int]] = []
+    read_profiles: Final = store.db.litellm_mcpauthprofiletable.find_many
+
+    async def counted(**kwargs: Mapping[str, object] | None) -> Sequence[object]:
+        rows: Final = await read_profiles(**kwargs)
+        profile_reads.append(len(rows))
+        return rows
+
+    monkeypatch.setattr(store.db.litellm_mcpauthprofiletable, "find_many", counted)
+    monkeypatch.setattr(proxy_server, "prisma_client", store)
+    return store, profile_reads
+
+
+@pytest.mark.asyncio
+async def test_requests_without_a_revision_row_read_the_profile_table_only_on_the_first_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import LitellmUserRoles
+
+    store, profile_reads = await _store_with_servers(monkeypatch, profiled=False)
+    server_reads: Final[list[object]] = []
+    read_servers: Final = store.db.litellm_mcpservertable.find_many
+
+    async def counted_servers(**kwargs: object) -> Sequence[object]:
+        server_reads.append(kwargs)
+        return await read_servers(**kwargs)
+
+    monkeypatch.setattr(store.db.litellm_mcpservertable, "find_many", counted_servers)
+    admin: Final = UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await mcp_operations._get_allowed_mcp_servers(admin, None)
+    profile_reads.clear()
+    server_reads.clear()
+
+    listings: Final = [await mcp_operations._get_allowed_mcp_servers(admin, None) for _ in range(3)]
+
+    assert all({"tickets", "wiki"} <= {server.server_id for server in allowed} for allowed in listings)
+    assert len(server_reads) == 3, "with no revision row every request reloads, as on main"
+    assert profile_reads == [], "an unchanged server row is never re-read for profiles"
+
+
+@pytest.mark.asyncio
+async def test_a_profile_edit_on_another_worker_is_read_for_that_server_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone
+
+    store, profile_reads = await _store_with_servers(monkeypatch, profiled=True)
+    manager: Final = MCPServerManager()
+    await manager.reload_servers_from_database()
+    profile_reads.clear()
+    edited: Final = next(row for row in store.profiles if row["server_id"] == "tickets")
+    edited["profile_id"] = edited["profile_id_normalized"] = "tickets-nightly"
+    next(row for row in store.servers if row["server_id"] == "tickets")["updated_at"] = datetime(
+        2026, 11, 19, tzinfo=timezone.utc
+    )
+
+    await manager.reload_servers_from_database()
+
+    assert profile_reads == [1], "one read, returning the edited server's one profile row and no other"
+    assert tuple(profile.id for profile in manager.registry["tickets"].additional_auth or ()) == ("tickets-nightly",)
+    assert tuple(profile.id for profile in manager.registry["wiki"].additional_auth or ()) == ("wiki-bots",)
+
+
+@pytest.mark.asyncio
+async def test_a_registry_entry_written_without_profiles_gets_them_back_on_the_next_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server.db import get_mcp_server, get_mcp_server_without_profiles
+
+    store, profile_reads = await _store_with_servers(monkeypatch, profiled=True)
+    manager: Final = MCPServerManager()
+    await manager.reload_servers_from_database()
+    profiled: Final = await get_mcp_server(store, "tickets")
+    profile_reads.clear()
+    unprofiled: Final = await get_mcp_server_without_profiles(store, "tickets")
+    assert unprofiled is not None
+    assert profiled is not None
+    assert (unprofiled.additional_auth, [profile.id for profile in profiled.additional_auth or ()]) == (
+        None,
+        ["tickets-bots"],
+    )
+    await manager.update_server(unprofiled)
+    assert manager.registry["tickets"].additional_auth is None
+
+    await manager.reload_servers_from_database()
+
+    assert profile_reads == []
+    assert tuple(profile.id for profile in manager.registry["tickets"].additional_auth or ()) == ("tickets-bots",)
+
+
+def test_the_profiles_read_for_a_row_version_are_known_only_for_that_version() -> None:
+    from datetime import datetime, timezone
+
+    manager: Final = MCPServerManager()
+    loaded_at: Final = datetime(2026, 11, 18, tzinfo=timezone.utc)
+    bots: Final = MCPAuthProfile(id="bots", auth_type=MCPAuth.bearer_token, authentication_token="t")
+    manager.catalog._read_profiles = {"tickets": catalog._ReadProfiles(loaded_at, (bots,))}  # pyright: ignore[reportPrivateUsage]  # seeds what a reload read
+
+    assert manager.catalog.read_profiles_of("tickets", loaded_at) == (bots,)
+    assert manager.catalog.read_profiles_of("tickets", datetime(2026, 11, 19, tzinfo=timezone.utc)) is None
+    assert manager.catalog.read_profiles_of("wiki", loaded_at) is None
+
+
+class _CatalogClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _store_with_a_flaky_profile_table(
+    monkeypatch: pytest.MonkeyPatch, failures: list[Exception]
+) -> "tuple[FakeMcpPrisma, list[object]]":
+    from tests.unit.proxy.mcp_prisma_fake import FakeRow
+
+    store, _ = await _store_with_servers(monkeypatch, profiled=True)
+    read_profiles: Final = store.db.litellm_mcpauthprofiletable.find_many
+    read_servers: Final = store.db.litellm_mcpservertable.find_many
+    server_reads: Final[list[object]] = []
+
+    async def failing_when_told(**kwargs: object) -> Sequence[object]:
+        if failures:
+            raise failures.pop()
+        return await read_profiles(**kwargs)
+
+    async def counted_servers(**kwargs: object) -> Sequence[object]:
+        server_reads.append(kwargs)
+        return await read_servers(**kwargs)
+
+    async def revision(**_: object) -> FakeRow:
+        return FakeRow(param_name="mcp_catalog", reload_revision=7)
+
+    monkeypatch.setattr(store.db.litellm_mcpauthprofiletable, "find_many", failing_when_told)
+    monkeypatch.setattr(store.db.litellm_mcpservertable, "find_many", counted_servers)
+    monkeypatch.setattr(store.db.litellm_config, "find_unique", revision)
+    return store, server_reads
+
+
+async def _tickets_profiles(manager: MCPServerManager) -> tuple[str, ...]:
+    async with manager.catalog.operation() as snapshot:
+        return tuple(profile.id for profile in snapshot.servers["tickets"].additional_auth or ())
+
+
+@pytest.mark.asyncio
+async def test_a_failed_first_profile_read_is_retried_once_the_retry_interval_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, server_reads = await _store_with_a_flaky_profile_table(monkeypatch, [ConnectionError("database is restarting")])
+    clock: Final = _CatalogClock()
+    manager: Final = MCPServerManager(catalog_clock=clock)
+
+    first_load: Final = await _tickets_profiles(manager)
+    clock.now += 29.0
+    before_retry: Final = await _tickets_profiles(manager)
+    clock.now += 1.0
+    after_retry: Final = await _tickets_profiles(manager)
+
+    assert (first_load, before_retry, after_retry) == ((), (), ("tickets-bots",))
+    assert len(server_reads) == 2
+
+
+async def _tickets_profiles_at(manager: MCPServerManager, clock: _CatalogClock, now: float) -> tuple[str, ...]:
+    clock.now = now
+    return await _tickets_profiles(manager)
+
+
+@pytest.mark.asyncio
+async def test_a_caller_whose_grants_are_unreadable_is_refused_while_a_servers_profiles_are_unread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server.auth_profile_selection import UnreadableGrants, resolve_effective_server
+
+    store, _ = await _store_with_servers(monkeypatch, profiled=False)
+    read_profiles: Final = store.db.litellm_mcpauthprofiletable.find_many
+    failures: Final = [ConnectionError("database is restarting")]
+
+    async def fails_once(**kwargs: Mapping[str, object] | None) -> Sequence[object]:
+        if failures:
+            raise failures.pop()
+        return await read_profiles(**kwargs)
+
+    async def unreadable_grants(user_api_key_auth: UserAPIKeyAuth | None) -> tuple[tuple[str, ...], ...]:
+        raise ConnectionError("permission table unreachable")
+
+    monkeypatch.setattr(store.db.litellm_mcpauthprofiletable, "find_many", fails_once)
+    clock: Final = _CatalogClock()
+    manager: Final = MCPServerManager(catalog_clock=clock, auth_profile_grants=unreadable_grants)
+    caller: Final = UserAPIKeyAuth(api_key="sk-nightly-bot")
+
+    async def resolved_tickets() -> object:
+        async with manager.catalog.operation() as snapshot:
+            server: Final = snapshot.servers["tickets"]
+            resolved: Final = await resolve_effective_server(server, caller, manager)
+            return resolved if resolved is not server else "default credential"
+
+    while_unread: Final = await resolved_tickets()
+    clock.now += 30.0
+    once_read: Final = await resolved_tickets()
+
+    assert (while_unread, once_read) == (UnreadableGrants(), "default credential")
+
+
+@pytest.mark.asyncio
+async def test_without_a_revision_row_a_failed_profile_read_is_not_repeated_within_the_retry_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, profile_reads = await _store_with_servers(monkeypatch, profiled=True)
+    read_profiles: Final = store.db.litellm_mcpauthprofiletable.find_many
+    read_servers: Final = store.db.litellm_mcpservertable.find_many
+    failures: Final = [ConnectionError("database is restarting")]
+    server_reads: Final[list[object]] = []
+
+    async def fails_once(**kwargs: object) -> Sequence[object]:
+        rows: Final = await read_profiles(**kwargs)
+        if failures:
+            raise failures.pop()
+        return rows
+
+    async def counted_servers(**kwargs: object) -> Sequence[object]:
+        server_reads.append(kwargs)
+        return await read_servers(**kwargs)
+
+    monkeypatch.setattr(store.db.litellm_mcpauthprofiletable, "find_many", fails_once)
+    monkeypatch.setattr(store.db.litellm_mcpservertable, "find_many", counted_servers)
+    clock: Final = _CatalogClock()
+    manager: Final = MCPServerManager(catalog_clock=clock)
+
+    within_interval: Final = [await _tickets_profiles_at(manager, clock, 1000.0 + s) for s in (0.0, 10.0, 19.0, 29.0)]
+    reads_within_interval: Final = len(profile_reads)
+    after_interval: Final = await _tickets_profiles_at(manager, clock, 1030.0)
+
+    assert within_interval == [()] * 4
+    assert (reads_within_interval, len(server_reads)) == (1, 5), "every request still reloads the server rows"
+    assert (after_interval, len(profile_reads)) == (("tickets-bots",), 2)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_profile_table_reloads_the_catalog_at_most_once_per_retry_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, server_reads = await _store_with_a_flaky_profile_table(
+        monkeypatch, [RuntimeError("relation LiteLLM_MCPAuthProfileTable does not exist") for _ in range(10)]
+    )
+    clock: Final = _CatalogClock()
+    manager: Final = MCPServerManager(catalog_clock=clock)
+
+    for _ in range(3):
+        await _tickets_profiles(manager)
+    clock.now += 30.0
+    await asyncio.gather(*(_tickets_profiles(manager) for _ in range(5)))
+    for _ in range(3):
+        await _tickets_profiles(manager)
+    reads_within_two_intervals: Final = len(server_reads)
+    clock.now += 30.0
+    await _tickets_profiles(manager)
+
+    assert (reads_within_two_intervals, len(server_reads)) == (2, 3)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_of_servers_without_profiles_applies_the_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.proxy.mcp_prisma_fake import FakeRow
+
+    store, _ = await _store_with_servers(monkeypatch, profiled=False)
+    server_reads: Final[list[object]] = []
+    read_servers: Final = store.db.litellm_mcpservertable.find_many
+
+    async def counted_servers(**kwargs: object) -> Sequence[object]:
+        server_reads.append(kwargs)
+        return await read_servers(**kwargs)
+
+    async def no_profile_table(**_: object) -> Sequence[object]:
+        raise RuntimeError("relation LiteLLM_MCPAuthProfileTable does not exist")
+
+    async def revision(**_: object) -> FakeRow:
+        return FakeRow(param_name="mcp_catalog", reload_revision=7)
+
+    monkeypatch.setattr(store.db.litellm_mcpservertable, "find_many", counted_servers)
+    monkeypatch.setattr(store.db.litellm_mcpauthprofiletable, "find_many", no_profile_table)
+    monkeypatch.setattr(store.db.litellm_config, "find_unique", revision)
+    manager: Final = MCPServerManager(catalog_clock=_CatalogClock())
+
+    for _ in range(3):
+        async with manager.catalog.operation() as snapshot:
+            assert {"tickets", "wiki"} <= snapshot.servers.keys()
+
+    assert len(server_reads) == 1, "an unchanged revision is served from the snapshot, as on main"
+
+
+@pytest.mark.asyncio
+async def test_a_profile_replaced_through_the_server_update_is_read_on_the_next_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import UpdateMCPServerWithProfilesRequest
+    from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles
+    from litellm.proxy.mcp_server.db import update_mcp_server
+
+    store, profile_reads = await _store_with_servers(monkeypatch, profiled=True)
+    manager: Final = MCPServerManager()
+    await manager.reload_servers_from_database()
+    profile_reads.clear()
+    replacement: Final = [{"id": "tickets-nightly", "auth_type": "bearer_token", "authentication_token": "night"}]
+    await update_mcp_server(
+        store,
+        UpdateMCPServerWithProfilesRequest(server_id="tickets", additional_auth=replacement),
+        "admin",
+        submitted_profiles=SubmittedProfiles(replacement),
+    )
+    profile_reads.clear()
+
+    await manager.reload_servers_from_database()
+
+    assert profile_reads == [1], "one read, returning the edited server's one profile row and no other"
+    assert tuple(profile.id for profile in manager.registry["tickets"].additional_auth or ()) == ("tickets-nightly",)

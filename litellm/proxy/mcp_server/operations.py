@@ -71,6 +71,14 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy.mcp_server.auth_profile_selection import (
+    UNUSABLE_PROFILE,
+    UnusableProfile,
+    effective_server_for,
+    raise_unusable_profile,
+    resolve_effective_server,
+    unusable_profile_detail,
+)
 from litellm.proxy.mcp_server.byok_credential_cache import (
     byok_credential_cache,
     byok_credential_cache_key,
@@ -903,6 +911,27 @@ async def _get_allowed_mcp_servers(
     mcp_servers: Sequence[str] | None,
     client_ip: str | None = None,
 ) -> list[MCPServer]:
+    usable, _ = await _usable_and_left_out_mcp_servers(user_api_key_auth, mcp_servers, client_ip)
+    return list(usable)
+
+
+@catalog_operation(lambda: global_mcp_server_manager)
+async def _usable_and_left_out_mcp_servers(
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_servers: Sequence[str] | None,
+    client_ip: str | None = None,
+) -> tuple[Sequence[MCPServer], tuple[tuple[MCPServer, UnusableProfile], ...]]:
+    usable, left_out = await _allowed_and_left_out_mcp_servers(user_api_key_auth, mcp_servers, client_ip)
+    if left_out and not usable:
+        raise_unusable_profile(left_out[0][1])
+    return usable, left_out
+
+
+async def _allowed_and_left_out_mcp_servers(
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_servers: Sequence[str] | None,
+    client_ip: str | None = None,
+) -> tuple[Sequence[MCPServer], tuple[tuple[MCPServer, UnusableProfile], ...]]:
     """Return allowed MCP servers for a request after applying filters.
 
     Args:
@@ -948,7 +977,32 @@ async def _get_allowed_mcp_servers(
             allowed_mcp_servers=allowed_mcp_servers,
         )
 
-    return allowed_mcp_servers
+    resolutions: Final = [
+        (server, await resolve_effective_server(server, user_api_key_auth, global_mcp_server_manager))
+        for server in allowed_mcp_servers
+    ]
+    left_out: Final = tuple(
+        (server, resolved) for server, resolved in resolutions if isinstance(resolved, UNUSABLE_PROFILE)
+    )
+    for server, unusable in left_out:
+        verbose_logger.warning(
+            "MCP server %s is left out of this request: %s", server.name, unusable_profile_detail(unusable)
+        )
+    return [resolved for _, resolved in resolutions if not isinstance(resolved, UNUSABLE_PROFILE)], left_out
+
+
+async def _raise_if_left_out(
+    server_name: str | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_servers: Sequence[str] | None,
+    client_ip: str | None,
+) -> None:
+    _, left_out = await _allowed_and_left_out_mcp_servers(user_api_key_auth, mcp_servers, client_ip)
+    unusable: Final = next(
+        (profile for server, profile in left_out if server_name is None or server.name == server_name), None
+    )
+    if unusable is not None:
+        raise_unusable_profile(unusable)
 
 
 def _client_has_per_server_auth_header(
@@ -2191,6 +2245,11 @@ async def execute_mcp_tool(
     return await GatewayOperations().execute(operation, context)
 
 
+async def _effective_prefix_owner(name: str, user_api_key_auth: UserAPIKeyAuth | None) -> MCPServer | None:
+    owner: Final = global_mcp_server_manager.server_owning_tool_name_prefix(name)
+    return None if owner is None else await effective_server_for(owner, user_api_key_auth, global_mcp_server_manager)
+
+
 async def _execute_mcp_tool(
     name: str,
     arguments: dict[str, object],
@@ -2249,6 +2308,10 @@ async def _execute_mcp_tool(
             (s for s in allowed_mcp_servers if s.server_id == requested_server_id),
             None,
         )
+    if requested_server is not None:
+        requested_server = await effective_server_for(  # rebind-ok: the caller's view of the requested server
+            requested_server, user_api_key_auth, global_mcp_server_manager
+        )
 
     name_is_prefixed = False
     if requested_server is not None and MCP_TOOL_PREFIX_SEPARATOR in name:
@@ -2261,7 +2324,7 @@ async def _execute_mcp_tool(
     first_call_target: Final = (
         requested_server
         if requested_server is not None and not name_is_prefixed
-        else global_mcp_server_manager.server_owning_tool_name_prefix(name)
+        else await _effective_prefix_owner(name, user_api_key_auth)
     )
     first_call_tool_name: Final = (
         name
@@ -2331,6 +2394,11 @@ async def _execute_mcp_tool(
                 mcp_server = requested_server
                 server_name = requested_server.name
                 original_tool_name = resolve_native_tool_name_for_server(name, requested_server, allowed_mcp_servers)
+
+    if mcp_server is not None:
+        mcp_server = await effective_server_for(  # rebind-ok: the caller's view of the resolved server
+            mcp_server, user_api_key_auth, global_mcp_server_manager
+        )
 
     # Only enforce server-level permissions when we can resolve a server
     if server_name:
@@ -3224,6 +3292,7 @@ async def mcp_get_prompt(
 
     server: Final = next((s for s in allowed_mcp_servers if s.name == server_name), None)
     if server is None:
+        await _raise_if_left_out(server_name, user_api_key_auth, mcp_servers, client_ip)
         raise HTTPException(
             status_code=403,
             detail="User not allowed to get this prompt.",
@@ -3269,7 +3338,7 @@ async def mcp_read_resource(
 ) -> ReadResourceResult | InputRequiredResult:
     """Read resource contents from upstream MCP servers."""
 
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed_mcp_servers, left_out = await _usable_and_left_out_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -3327,9 +3396,12 @@ async def mcp_read_resource(
             return _ResourceOwnerMissing()
         return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
 
-    if len(allowed_mcp_servers) == 1:
-        await _enforce_mcp_server_rate_limit(user_api_key_auth, allowed_mcp_servers[0])
-    resolved: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 else await resolve_owner()
+    only_server: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 and not left_out else None
+    if only_server is not None:
+        await _enforce_mcp_server_rate_limit(user_api_key_auth, only_server)
+    resolved: Final = only_server or await resolve_owner()
+    if isinstance(resolved, _ResourceOwnerMissing) and left_out:
+        raise_unusable_profile(left_out[0][1])
     if isinstance(resolved, _ResourceOwnerFailure):
         _raise_resource_owner_failure(resolved, url)
     server: Final = resolved

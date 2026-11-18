@@ -952,12 +952,17 @@ async def get_mcp_server(prisma_client: PrismaClient, server_id: str) -> LiteLLM
     """
     Returns the matching mcp server from the db iff exists
     """
+    table: Final = await get_mcp_server_without_profiles(prisma_client, server_id)
+    return None if table is None else await with_stored_profiles(prisma_client, table)
+
+
+async def get_mcp_server_without_profiles(prisma_client: PrismaClient, server_id: str) -> LiteLLM_MCPServerTable | None:
     mcp_server: Final = await _db_find_mcp_server_row(prisma_client, server_id)
     if mcp_server is None:
         return None
     table: Final = LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump())
     decrypt_global_env_var_values(table.env_vars)
-    return await with_stored_profiles(prisma_client, table)
+    return table
 
 
 async def get_mcp_servers(prisma_client: PrismaClient, server_ids: Iterable[str]) -> list[LiteLLM_MCPServerTable]:

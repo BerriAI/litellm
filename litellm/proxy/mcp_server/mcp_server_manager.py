@@ -2217,6 +2217,7 @@ class MCPServerManager:
         per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
+        catalog_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
         auth_profile_grants: AuthProfileGrantSource = no_auth_profile_grants,
         auth_profile_owners: AuthProfileOwnerSource | None = None,
@@ -2253,7 +2254,7 @@ class MCPServerManager:
         self._tools_list_cache_ttl = _mcp_tools_list_cache_ttl()
         from litellm.proxy.mcp_server.catalog import CatalogSnapshots
 
-        self.catalog = CatalogSnapshots(self)
+        self.catalog = CatalogSnapshots(self, clock=catalog_clock)
         self.registry: dict[str, MCPServer] = {}
         self._upstream_sessions: dict[_UpstreamSessionKey, PersistentMCPSession] = {}  # mutable-ok: session registry
         self._retiring_upstream_sessions: list[tuple[str, PersistentMCPSession]] = []  # mutable-ok: session registry
@@ -2580,6 +2581,9 @@ class MCPServerManager:
         if snapshot is not None:
             return snapshot.auth_profile_ids
         return auth_profile_ids_of(self.get_registry().values())
+
+    def auth_profiles_unread(self, server_id: str) -> bool:
+        return self.catalog.auth_profiles_unread(server_id)
 
     async def effective_server_for(self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> MCPServer:
         return await effective_server_for(server, user_api_key_auth, self)

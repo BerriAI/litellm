@@ -233,6 +233,13 @@ async def with_stored_profiles_of(
 async def stored_profiles_by_server(
     prisma_client: object, server_ids: Sequence[str], *, use_writer: bool = False
 ) -> Mapping[str, tuple[MCPAuthProfile, ...]]:
+    read: Final = await read_stored_profiles(prisma_client, server_ids, use_writer=use_writer)
+    return {} if read is None else read
+
+
+async def read_stored_profiles(
+    prisma_client: object, server_ids: Sequence[str], *, use_writer: bool = False
+) -> Mapping[str, tuple[MCPAuthProfile, ...]] | None:
     try:
         rows: Final = (
             await MCPAuthProfileRepository(prisma_client, use_writer=use_writer).table.find_many(
@@ -244,7 +251,7 @@ async def stored_profiles_by_server(
         )
     except Exception as error:  # noqa: BLE001  # profile storage is additive, a read failure must not fail the server read
         verbose_proxy_logger.warning("could not read MCP auth profiles for %s servers: %s", len(server_ids), error)
-        return {}
+        return None
     return {
         server_id: tuple(auth_profile_from_row(row.model_dump()) for row in rows if row.server_id == server_id)
         for server_id in {row.server_id for row in rows}

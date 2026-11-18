@@ -176,6 +176,9 @@ class _GrantlessContext:
     def loaded_auth_profile_ids(self) -> frozenset[str]:
         raise AssertionError("a caller without grants scanned the loaded profiles")
 
+    def auth_profiles_unread(self, server_id: str) -> bool:
+        raise AssertionError("a caller whose grants were read asked whether profiles were read")
+
 
 @pytest.mark.asyncio
 async def test_a_caller_without_grants_never_scans_the_loaded_profiles() -> None:
