@@ -1879,6 +1879,8 @@ def _no_spend_record():
         completion_tokens=None,
         cache_read_input_tokens=None,
         cache_creation_input_tokens=None,
+        cache_cost=None,
+        priced_cache_tokens=None,
         compression_saved_tokens=None,
         compression_savings_spend=None,
         prompt_caching_savings_spend=None,

@@ -56,8 +56,10 @@ const handleRequest = async (request: Request): Promise<Response> => {
       total_tokens: 100,
       prompt_tokens: 60,
       completion_tokens: 40,
-      cache_read_input_tokens: 10,
-      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: previous ? 12 : 10,
+      cache_creation_input_tokens: previous ? 6 : 4,
+      cache_cost: spend / 100,
+      priced_cache_tokens: previous ? 12 : 14,
       total_response_time_ms: 9000,
       timed_requests: 9,
     });
@@ -154,6 +156,12 @@ describe("customer organization overview", () => {
       "descending",
     );
     const row = screen.getByRole("row", { name: /Customer 00/ });
+    expect(within(row).getByRole("cell", { name: "100" })).toBeInTheDocument();
+    expect(within(row).getByRole("cell", { name: "60" })).toBeInTheDocument();
+    expect(within(row).getByRole("cell", { name: "40" })).toBeInTheDocument();
+    expect(within(row).getByRole("cell", { name: "10" })).toBeInTheDocument();
+    expect(within(row).getByRole("cell", { name: "4" })).toBeInTheDocument();
+    expect(within(row).getByRole("cell", { name: "$0.75" })).toBeInTheDocument();
     expect(within(row).getByText("$8.00 / $10.00")).toBeInTheDocument();
     expect(within(row).getByText("Reached limit")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
@@ -182,6 +190,10 @@ describe("customer organization overview", () => {
         within(screen.getByRole("region", { name: "Overall customer usage" })).getByText("$20.00"),
       ).toBeInTheDocument();
       expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
+      const row = within(screen.getByRole("row", { name: /Customer 00/ }));
+      expect(row.getByRole("cell", { name: "12" })).toBeInTheDocument();
+      expect(row.getByRole("cell", { name: "6" })).toBeInTheDocument();
+      expect(row.getByRole("cell", { name: /\$0\.05\s*Partial cost/ })).toBeInTheDocument();
       expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
         "href",
         "/ui/customers/usage?org=customer-00&from=2024-02-01&to=2024-02-29",

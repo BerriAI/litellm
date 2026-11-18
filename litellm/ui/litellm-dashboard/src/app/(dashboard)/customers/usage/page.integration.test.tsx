@@ -81,7 +81,13 @@ const records = [
     model: "model-a",
     key: "hash-a",
     alias: "Assistant key",
-    metrics: metrics(12, 100, 2),
+    metrics: {
+      ...metrics(12, 100, 2),
+      cache_read_input_tokens: 40,
+      cache_creation_input_tokens: 20,
+      cache_cost: 0.0123,
+      priced_cache_tokens: 60,
+    },
     date: "2026-11-01",
   },
   {
@@ -91,7 +97,7 @@ const records = [
     model: "model-b",
     key: "hash-b",
     alias: "Search key",
-    metrics: metrics(3, 600, 5),
+    metrics: { ...metrics(3, 600, 5), cache_read_input_tokens: 500 },
     date: "2026-11-02",
   },
   {
@@ -378,6 +384,25 @@ describe("CustomerHierarchyUsagePage", () => {
     );
     expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("start_date")).toBe("2026-11-01");
     expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("end_date")).toBe("2026-11-03");
+  });
+
+  it("shows cache reads, writes, total tokens and recorded cost for each model in the selected range", async () => {
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
+    const chart = await screen.findByRole("table", { name: "Token usage by model" });
+    const first = within(chart).getByRole("row", { name: /model-a/ });
+    expect(
+      within(first)
+        .getAllByRole("cell")
+        .slice(1)
+        .map((cell) => cell.textContent),
+    ).toEqual(["40", "20", "40", "100", "$0.0123"]);
+    const second = within(chart).getByRole("row", { name: /model-b/ });
+    expect(
+      within(second)
+        .getAllByRole("cell")
+        .slice(1)
+        .map((cell) => cell.textContent),
+    ).toEqual(["500", "0", "100", "600", "Unavailable"]);
   });
 
   it("should apply the global metric to sorting and shares across models, keys and teams", async () => {

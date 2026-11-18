@@ -82,6 +82,11 @@ def build_accounting_payload(
         "accounting_savings": savings._asdict(),
         "accounting_guardrail_spend": guardrail_share_of_spend(metadata, payload["spend"]),
         "accounting_customer_margin_spend": customer_margin_share_of_spend(metadata, payload["spend"]),
+        "cache_cost_breakdown": {
+            key: value
+            for key, value in (_mapping(metadata.get("cost_breakdown")) or {}).items()
+            if key in ("cache_read_cost", "cache_creation_cost")
+        },
         "accounting_model_access_groups": model_access_groups,
         "accounting_windows": windows,
     }

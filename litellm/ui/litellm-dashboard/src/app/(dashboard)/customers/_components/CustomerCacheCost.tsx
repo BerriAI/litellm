@@ -1,0 +1,32 @@
+import { useTranslation } from "react-i18next";
+
+const cacheCurrencyFormat = { style: "currency", currency: "USD", maximumFractionDigits: 6 } as const;
+
+export default function CustomerCacheCost({
+  usage,
+}: {
+  usage: {
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    cacheCost: number;
+    pricedCacheTokens: number;
+  } | null;
+}) {
+  const { t } = useTranslation();
+  if (!usage) return "—";
+  const partial = usage.pricedCacheTokens < usage.cacheReadTokens + usage.cacheWriteTokens;
+  if (partial && usage.pricedCacheTokens === 0 && usage.cacheCost === 0) {
+    return <span className="text-muted-foreground">{t("customerPortal.tokenUsage.costUnavailable")}</span>;
+  }
+  const format = (val: number) => t("format.number", { val, ...cacheCurrencyFormat });
+  return (
+    <>
+      <span>
+        {usage.cacheCost > 0 && usage.cacheCost < 0.000001 ? `<${format(0.000001)}` : format(usage.cacheCost)}
+      </span>
+      {partial && (
+        <span className="block text-xs text-muted-foreground">{t("customerPortal.tokenUsage.partialCost")}</span>
+      )}
+    </>
+  );
+}

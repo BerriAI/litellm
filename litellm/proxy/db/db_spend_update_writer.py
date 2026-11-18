@@ -89,6 +89,7 @@ from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
 from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
+from litellm.proxy.spend_tracking.customer_cache_cost import recorded_customer_cache_cost
 from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
 from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
@@ -3525,7 +3526,15 @@ class DBSpendUpdateWriter:
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
             )
-            return daily_transaction
+            if type != "customer_member":
+                return daily_transaction
+            metadata: Final[Mapping[str, object]] = _metadata
+            cache_cost, priced_cache_tokens = recorded_customer_cache_cost(
+                metadata.get("cost_breakdown"),
+                daily_transaction["cache_read_input_tokens"],
+                daily_transaction["cache_creation_input_tokens"],
+            )
+            return {**daily_transaction, "cache_cost": cache_cost, "priced_cache_tokens": priced_cache_tokens}
         except Exception as e:
             raise e
 

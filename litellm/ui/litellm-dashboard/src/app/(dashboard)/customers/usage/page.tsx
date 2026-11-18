@@ -16,6 +16,7 @@ import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage"
 import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
 import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
 import CustomerUsageAppFilter from "../_components/CustomerUsageAppFilter";
+import CustomerModelTokenChart from "../_components/CustomerModelTokenChart";
 
 const METRIC_LABELS = {
   spend: "customerPortal.analytics.spend",
@@ -132,6 +133,7 @@ export default function CustomerHierarchyUsagePage() {
             onBucketChange={setBucket}
             appFilter={<CustomerUsageAppFilter value={params.app_id} onChange={setApp} />}
           />
+          {!scope.team && !scope.member && <CustomerModelTokenChart days={results} />}
           {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {!usage.isPending && (
             <>

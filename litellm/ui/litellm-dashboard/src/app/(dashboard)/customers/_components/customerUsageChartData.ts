@@ -10,6 +10,7 @@ import type { DailyData } from "@/components/UsagePage/types";
 import i18n from "@/i18n/i18n";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
 import type { CustomerUsageDimension } from "./CustomerUsageRankings";
+import { customerModelBreakdown } from "./customerUsageTotals";
 
 const TOP_SERIES = 8;
 
@@ -41,8 +42,7 @@ export const customerUsageSeries = (
       ...day,
       breakdown: {
         ...day.breakdown,
-        model_groups:
-          Object.keys(day.breakdown.model_groups).length > 0 ? day.breakdown.model_groups : day.breakdown.models,
+        model_groups: customerModelBreakdown(day),
       },
     }));
     return seriesBy(days, "model_groups", metric, { top: TOP_SERIES, colorByKey: colorByModel });
