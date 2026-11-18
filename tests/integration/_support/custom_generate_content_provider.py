@@ -16,7 +16,7 @@ async def _relay(api_base: object, route: str, model: str) -> Mapping[str, objec
 
 
 class RelayChatProvider(CustomLLM):
-    async def acompletion(self, model: str, messages: list, api_base: str, **kwargs: object) -> ModelResponse:
+    async def acompletion(self, model: str, messages: list[object], api_base: str, **kwargs: object) -> ModelResponse:
         return ModelResponse(**await _relay(api_base, "complete", model))
 
 
