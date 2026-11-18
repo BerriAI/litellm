@@ -1774,6 +1774,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
+                    admin_mcp_stack.enter_context(GracefulShutdownManager.capture_sigterm())
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
