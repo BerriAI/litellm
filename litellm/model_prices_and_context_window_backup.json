@@ -105806,5 +105806,316 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
+    },
+    "fal_ai/fal-ai/veo3": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.40); videos without audio are $0.20 per second, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "source": "https://fal.ai/models/fal-ai/veo3",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.20 per second at 720p and 1080p and $0.40 at 4k, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_4k": 0.6,
+        "output_cost_per_second_720p": 0.4,
+        "source": "https://fal.ai/models/fal-ai/veo3.1",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/extend-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.40); videos without audio are $0.20 per second, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/extend-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/fast": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.10 per second at 720p and 1080p and $0.30 at 4k, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_4k": 0.35,
+        "output_cost_per_second_720p": 0.15,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/fast/extend-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.15); videos without audio are $0.10 per second, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/fast/extend-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/fast/first-last-frame-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.10 per second at 720p and 1080p and $0.30 at 4k, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_4k": 0.35,
+        "output_cost_per_second_720p": 0.15,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/fast/first-last-frame-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/fast/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.10 per second at 720p and 1080p and $0.30 at 4k, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_4k": 0.35,
+        "output_cost_per_second_720p": 0.15,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/fast/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/fast/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.15); videos without audio are $0.10 per second, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/fast/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/first-last-frame-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.20 per second at 720p and 1080p and $0.40 at 4k, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_4k": 0.6,
+        "output_cost_per_second_720p": 0.4,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/first-last-frame-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.20 per second at 720p and 1080p and $0.40 at 4k, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_4k": 0.6,
+        "output_cost_per_second_720p": 0.4,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/lite": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.03 per second at 720p and $0.05 at 1080p, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "output_cost_per_second_720p": 0.05,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/lite",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/lite/first-last-frame-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.03 per second at 720p and $0.05 at 1080p, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "output_cost_per_second_720p": 0.05,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/lite/first-last-frame-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/lite/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.03 per second at 720p and $0.05 at 1080p, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "output_cost_per_second_720p": 0.05,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/lite/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution with the default generate_audio=true; output_cost_per_second is the default resolution 720p rate; without audio the rates are $0.20 per second at 720p and 1080p and $0.40 at 4k, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_4k": 0.6,
+        "output_cost_per_second_720p": 0.4,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3/fast": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.15); videos without audio are $0.10 per second, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://fal.ai/models/fal-ai/veo3/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3/fast/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.15); videos without audio are $0.10 per second, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://fal.ai/models/fal-ai/veo3/fast/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.40); videos without audio are $0.20 per second, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "source": "https://fal.ai/models/fal-ai/veo3/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
