@@ -16360,6 +16360,12 @@ def _deployment_api_base(
     )
 
 
+def _inference_base_model(deployment: _TokenCountDeployment, responses_request: Mapping[str, object]) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request).get("base_model")
+    ) or _non_empty_str(deployment.get("model_info", {}).get("base_model"))
+
+
 def _deployment_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
@@ -16693,6 +16699,10 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            base_model=_inference_base_model(deployment_view, routed_request),
+            user_continue_message=_inference_params(deployment_view.get("litellm_params", {}), routed_request).get(
+                "user_continue_message"
+            ),
             deployment_params=deployment_defaults,
         )
     )
