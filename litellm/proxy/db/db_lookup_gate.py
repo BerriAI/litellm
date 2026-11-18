@@ -3,6 +3,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Final, TypeVar
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     PROXY_DB_LOOKUP_DEADLINE_SECONDS,
     PROXY_DB_LOOKUP_MAX_CONCURRENCY,
@@ -79,6 +80,7 @@ async def bounded_db_lookup(
     if task not in done:
         task.cancel()
         task.add_done_callback(_consume_abandoned_lookup)
+        verbose_proxy_logger.warning("DIAG lookup deadline hit: %s after %ss", name, timeout, stack_info=True)
         tracker.record_hit()
         raise DBLookupDeadlineExceeded(name, timeout)
     try:
@@ -86,5 +88,6 @@ async def bounded_db_lookup(
     except DBLookupDeadlineExceeded:
         raise
     except asyncio.TimeoutError as e:
+        verbose_proxy_logger.warning("DIAG lookup deadline hit: %s after %ss", name, timeout, stack_info=True)
         tracker.record_hit()
         raise DBLookupDeadlineExceeded(name, timeout) from e
