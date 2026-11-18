@@ -1284,23 +1284,9 @@ jobs:
 
           - shard: core-router-files
             test-path: |-
-              tests/unit/test_router/test_enforce_model_rate_limits.py
-              tests/unit/test_router/test_io_token_rate_limits.py
-              tests/unit/test_router/test_router_callback_hook_sequence.py
-              tests/unit/test_router/test_router_endpoints.py
-              tests/unit/test_router/test_router_entry_points.py
-              tests/unit/test_router/test_router_facade.py
-              tests/unit/test_router/test_router_fallbacks.py
-              tests/unit/test_router/test_router_fuzz_regressions_rust_only.py
-              tests/unit/test_router/test_router_get_deployments.py
-              tests/unit/test_router/test_router_helper_utils.py
-              tests/unit/test_router/test_router_host.py
-              tests/unit/test_router/test_router_max_parallel_requests.py
-              tests/unit/test_router/test_router_provider_endpoints.py
-              tests/unit/test_router/test_router_retries.py
-              tests/unit/test_router/test_router_surface_check.py
-              tests/unit/test_router/test_router_timeout.py
-              tests/unit/test_router/test_router_vector_store_endpoints.py
+              tests/unit/test_router
+              --ignore=tests/unit/test_router/core
+              --ignore=tests/unit/test_router/test_router.py
             python-version: "3.12"
             workers: 4
             reruns: 0
