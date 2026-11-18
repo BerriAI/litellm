@@ -6364,11 +6364,12 @@ class PrismaClient:
             required_view: Final = "LiteLLM_VerificationTokenView"
             expected_views_str: Final = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
-            ret: Final[Sequence[_ViewCountRow]] = await self.db.query_raw(f"""
+            ret: Final[Sequence[_ViewCountRow]] = await self.db.query_raw(
+                f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
-                    WHERE schemaname = '{pg_schema}' AND viewname IN (
+                    WHERE schemaname = $1 AND viewname IN (
                         {expected_views_str}
                     )
                 )
@@ -6376,7 +6377,9 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """)
+                """,
+                pg_schema,
+            )
             expected_total_views: Final = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")

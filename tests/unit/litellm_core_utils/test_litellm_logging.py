@@ -5307,7 +5307,9 @@ def _log_a_sync_chunk_held_open_across_the_stream_end() -> None:
     chunk_log: Final = threading.Thread(
         target=logging_obj.success_handler,
         kwargs={
-            "result": litellm.ModelResponseStream(model="gpt-4o", choices=[{"index": 0, "delta": {"content": "Hello"}}]),
+            "result": litellm.ModelResponseStream(
+                model="gpt-4o", choices=[{"index": 0, "delta": {"content": "Hello"}}]
+            ),
             "start_time": start,
             "end_time": start,
         },
@@ -16502,3 +16504,49 @@ async def test_a_sync_failure_on_the_loop_alone_still_delivers_v2_attempt_ended_
 
     assert journal == [("sync", "failure", None), ("async", "failure", None)]
     assert submitted == ["RequestScope._deliver_off_path"]
+
+
+def test_start_sentry_missing_dependency_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.litellm_logging import start_sentry
+
+    start_sentry.cache_clear()
+    real_import: Final = __import__
+
+    def mock_import(name: str, *args: object, **kwargs: object):
+        if name == "sentry_sdk":
+            raise ImportError("No module named 'sentry_sdk'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+    with pytest.raises(ImportError, match="Package 'sentry_sdk' is missing"):
+        start_sentry("https://example.com/123")
+
+
+def test_set_callbacks_slack_missing_dependency_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.litellm_logging import set_callbacks
+
+    real_import: Final = __import__
+
+    def mock_import(name: str, *args: object, **kwargs: object):
+        if name == "slack_bolt":
+            raise ImportError("No module named 'slack_bolt'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+    with pytest.raises(ImportError, match="Package 'slack_bolt' is missing"):
+        set_callbacks(["slack"])
+
+
+def test_supabase_missing_dependency_raises_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.supabase import Supabase
+
+    real_import: Final = __import__
+
+    def mock_import(name: str, *args: object, **kwargs: object):
+        if name == "supabase":
+            raise ImportError("No module named 'supabase'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+    with pytest.raises(ImportError, match="Package 'supabase' is missing"):
+        Supabase()
