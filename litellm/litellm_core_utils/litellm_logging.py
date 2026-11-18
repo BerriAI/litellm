@@ -693,6 +693,23 @@ def _callback_control_params(litellm_params: object) -> dict[str, object]:
     return litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else {}
 
 
+def _router_model_infos(litellm_params: object) -> Iterator[Mapping[str, object]]:
+    params: Final = as_str_mapping(litellm_params) or {}
+    for key in ("litellm_metadata", "metadata"):
+        yield as_str_mapping((as_str_mapping(params.get(key)) or {}).get("model_info")) or {}
+
+
+def _priced_router_model_id(litellm_params: object) -> str | None:
+    info: Final = next((info for info in _router_model_infos(litellm_params) if info.get("id") is not None), None)
+    if info is None:
+        return None
+    model_id: Final = str(info["id"])
+    original_model_id: Final = info.get("original_model_id")
+    if model_id in litellm.model_cost or not isinstance(original_model_id, str):
+        return model_id
+    return original_model_id if original_model_id in litellm.model_cost else model_id
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -1153,16 +1170,18 @@ class Logging(LiteLLMLoggingBaseClass):
         Checks both litellm_metadata and metadata for model_info.id.
         Used by cost calculators to look up custom pricing registered
         under the deployment's model_info.id in litellm.model_cost.
+
+        A request-scoped deployment created for forwarded client credentials
+        keeps the configured deployment's id in ``original_model_id`` and gets
+        a new ``id`` that the router never registers. When the new id has no
+        cost-map entry, return the original id so the configured pricing is
+        still found.
         """
         if not hasattr(self, "litellm_params"):
             return None
-        for key in ("litellm_metadata", "metadata"):
-            meta = self.litellm_params.get(key, {}) or {}
-            info = meta.get("model_info", {}) or {}
-            model_id = info.get("id")
-            if model_id is not None:
-                return model_id
-        return None
+        return _priced_router_model_id(
+            self.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
 
     def get_router_pricing_provider(self) -> str | None:
         """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""

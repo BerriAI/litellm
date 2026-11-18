@@ -1267,6 +1267,59 @@ class TestGetRouterModelId:
         logging_obj.litellm_params = {"api_base": ""}
         assert logging_obj.get_router_model_id() is None
 
+    def test_falls_back_to_original_model_id_when_clone_is_unregistered(self, logging_obj):
+        """A forwarded-credential clone has a new unregistered id; price it by its source."""
+        litellm.model_cost["configured-deploy-1"] = {
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        }
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {
+                    "id": "request-scoped-clone-1",
+                    "original_model_id": "configured-deploy-1",
+                },
+            },
+        }
+        try:
+            assert logging_obj.get_router_model_id() == "configured-deploy-1"
+        finally:
+            litellm.model_cost.pop("configured-deploy-1", None)
+
+    def test_prefers_a_registered_clone_id_over_the_original(self, logging_obj):
+        """When the clone's own pricing is registered, keep using it."""
+        litellm.model_cost["registered-clone-1"] = {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        }
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {
+                    "id": "registered-clone-1",
+                    "original_model_id": "configured-deploy-1",
+                },
+            },
+        }
+        try:
+            assert logging_obj.get_router_model_id() == "registered-clone-1"
+        finally:
+            litellm.model_cost.pop("registered-clone-1", None)
+
+    def test_returns_clone_id_when_neither_id_is_registered(self, logging_obj):
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {
+                    "id": "unknown-clone-1",
+                    "original_model_id": "unknown-configured-1",
+                },
+            },
+        }
+        assert logging_obj.get_router_model_id() == "unknown-clone-1"
+
     def test_returns_none_when_no_litellm_params(self):
         """Should return None when litellm_params is not set."""
         from litellm.litellm_core_utils.litellm_logging import (
