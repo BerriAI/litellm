@@ -262,9 +262,13 @@ def _unreadable_vector_store_index(index_name: str) -> HTTPException:
     return HTTPException(status_code=503, detail=unreadable)
 
 
-def _unroutable_search_index(index_name: str, lookup: VectorStoreIndexLookup) -> HTTPException | None:
+def _unroutable_search_index(
+    index_name: str, lookup: VectorStoreIndexLookup, relay_configured: bool
+) -> HTTPException | None:
     match lookup:
         case "managed":
+            return None
+        case "unmanaged" if relay_configured:
             return None
         case "unmanaged":
             not_registered: Final[RelayRejection] = {
@@ -2905,8 +2909,8 @@ async def azure_proxy_route(
 
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     unroutable_index: Final = (
-        _unroutable_search_index(search_index_name, search_index_lookup)
-        if base_target_url is None and search_index_name is not None and search_index_lookup is not None
+        _unroutable_search_index(search_index_name, search_index_lookup, relay_configured=base_target_url is not None)
+        if search_index_name is not None and search_index_lookup is not None
         else None
     )
     if unroutable_index is not None:

@@ -6022,11 +6022,31 @@ class TestManagedIndexCreatedOnAnotherReplica:
         )
         assert upstream.calls.call_count == 0
 
-    def test_azure_ai_search_on_a_relay_proxy_still_relays_when_the_index_table_read_fails(
+    def test_azure_ai_search_on_a_relay_proxy_answers_503_when_the_index_table_read_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         client: Final = _serve_proxy_with_vector_store_tables(
             monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+        monkeypatch.setenv("AZURE_API_BASE", "https://relay.search.windows.net")
+        monkeypatch.setenv("AZURE_API_KEY", "relay-key")
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "Could not read vector store index 'kb-new' from the database in time. Retry the request"
+        )
+        assert upstream.calls.call_count == 0
+
+    def test_azure_ai_search_on_a_relay_proxy_relays_an_index_the_table_read_did_not_find(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(return_value=[]), AsyncMock(return_value=[])
         )
         monkeypatch.setenv("AZURE_API_BASE", "https://relay.search.windows.net")
         monkeypatch.setenv("AZURE_API_KEY", "relay-key")
@@ -6036,11 +6056,11 @@ class TestManagedIndexCreatedOnAnotherReplica:
                 return_value=httpx.Response(200, json={"value": [{"id": "doc-relay"}]})
             )
             response: Final = client.post(
-                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+                "/azure_ai/indexes/kb-unmanaged/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
             )
 
         assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-relay"}]})
-        assert relayed.calls.last.request.url.path.endswith("/indexes/kb-new/docs/search")
+        assert relayed.calls.last.request.url.path.endswith("/indexes/kb-unmanaged/docs/search")
 
     def test_milvus_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
