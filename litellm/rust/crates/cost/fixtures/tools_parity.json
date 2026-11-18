@@ -1,0 +1,1374 @@
+{
+ "cases": [
+  {
+   "expected": 0.035,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": 3,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "gemini/gemini-2.5-flash",
+     "provider": "gemini",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_gemini_per_prompt",
+   "rows": {
+    "row": {
+     "google_maps_grounding_cost_per_query": 0.025,
+     "input_cost_per_token": 3e-07,
+     "key": "gemini/gemini-2.5-flash",
+     "output_cost_per_token": 2.5e-06,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.035,
+      "search_context_size_low": 0.035,
+      "search_context_size_medium": 0.035
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.042,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": 3,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "gemini-3-x",
+     "provider": "gemini",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_gemini_per_query",
+   "rows": {
+    "row": {
+     "key": "gemini-3-x",
+     "search_context_cost_per_query": {
+      "search_context_size_medium": 0.014
+     },
+     "web_search_billing_unit": "per_query"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.028,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": 0,
+      "search_calls": 0,
+      "server_requests": 2,
+      "stated_cost": false
+     },
+     "model_key": "gemini-3-x",
+     "provider": "gemini",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_gemini_server_requests_when_prompt_zero",
+   "rows": {
+    "row": {
+     "key": "gemini-3-x",
+     "search_context_cost_per_query": {
+      "search_context_size_medium": 0.014
+     },
+     "web_search_billing_unit": "per_query"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.035,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": 2,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "gemini-plain",
+     "provider": "gemini",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_gemini_default_rate",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 1e-06,
+     "key": "gemini-plain"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "gemini/gemini-2.5-flash",
+     "provider": "gemini",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_gemini_no_requests",
+   "rows": {
+    "row": {
+     "google_maps_grounding_cost_per_query": 0.025,
+     "input_cost_per_token": 3e-07,
+     "key": "gemini/gemini-2.5-flash",
+     "output_cost_per_token": 2.5e-06,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.035,
+      "search_context_size_low": 0.035,
+      "search_context_size_medium": 0.035
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.056,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 4,
+      "stated_cost": false
+     },
+     "model_key": "gemini-3-x",
+     "provider": "vertex_ai-language-models",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_vertex_gemini",
+   "rows": {
+    "row": {
+     "key": "gemini-3-x",
+     "search_context_cost_per_query": {
+      "search_context_size_medium": 0.014
+     },
+     "web_search_billing_unit": "per_query"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.036000000000000004,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 3,
+      "stated_cost": false
+     },
+     "model_key": "vertex_ai/claude-x",
+     "provider": "vertex_ai-anthropic_models",
+     "response_model": "claude-x@1",
+     "served": true
+    },
+    "per_call": null
+   },
+   "name": "dispatch_vertex_claude_served_row",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 3e-06,
+     "key": "vertex_ai/claude-x"
+    },
+    "served": {
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.02,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.012
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 3,
+      "stated_cost": false
+     },
+     "model_key": "vertex_ai/claude-x",
+     "provider": "vertex_ai",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_vertex_claude_by_key",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 3e-06,
+     "key": "vertex_ai/claude-x"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.02,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 2,
+      "stated_cost": false
+     },
+     "model_key": "claude-sonnet-4-5",
+     "provider": "anthropic",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_anthropic",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 3e-06,
+     "key": "claude-sonnet-4-5",
+     "output_cost_per_token": 1.5e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.01,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.06,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 5,
+      "stated_cost": false
+     },
+     "model_key": "claude-new",
+     "provider": "anthropic",
+     "response_model": "claude-new-2",
+     "served": true
+    },
+    "per_call": null
+   },
+   "name": "dispatch_anthropic_served_row",
+   "rows": {
+    "row": {
+     "key": "claude-new"
+    },
+    "served": {
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.02,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.012
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "claude-sonnet-4-5",
+     "provider": "anthropic",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_anthropic_no_requests",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 3e-06,
+     "key": "claude-sonnet-4-5",
+     "output_cost_per_token": 1.5e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.01,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.02,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 2,
+      "stated_cost": false
+     },
+     "model_key": "azure_ai/claude-opus-4-5",
+     "provider": "azure_ai",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_azure_ai_claude",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 5e-06,
+     "key": "azure_ai/claude-opus-4-5",
+     "output_cost_per_token": 2.5e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.01,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": null,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "azure_ai/mistral",
+     "provider": "azure_ai",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_azure_ai_other_without_requests",
+   "rows": {
+    "row": {
+     "key": "azure_ai/mistral"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.024,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 2,
+      "stated_cost": false
+     },
+     "model_key": "azure_ai/mistral",
+     "provider": "azure_ai",
+     "response_model": "m",
+     "served": true
+    },
+    "per_call": null
+   },
+   "name": "dispatch_azure_ai_other_with_requests",
+   "rows": {
+    "row": {
+     "key": "azure_ai/mistral"
+    },
+    "served": {
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.02,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.012
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": 4,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "gemini/gemini-2.5-flash",
+     "provider": "perplexity",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_perplexity",
+   "rows": {
+    "row": {
+     "google_maps_grounding_cost_per_query": 0.025,
+     "input_cost_per_token": 3e-07,
+     "key": "gemini/gemini-2.5-flash",
+     "output_cost_per_token": 2.5e-06,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.035,
+      "search_context_size_low": 0.035,
+      "search_context_size_medium": 0.035
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.021,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 3,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "xai-x",
+     "provider": "xai",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_xai_first_positive_rate",
+   "rows": {
+    "row": {
+     "key": "xai-x",
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.007,
+      "search_context_size_low": 0.0,
+      "search_context_size_medium": 0.0
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.01,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 2,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "gemini-plain",
+     "provider": "xai",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_xai_default_rate",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 1e-06,
+     "key": "gemini-plain"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 2,
+      "server_requests": null,
+      "stated_cost": true
+     },
+     "model_key": "xai-x",
+     "provider": "xai",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_xai_stated_cost",
+   "rows": {
+    "row": {
+     "key": "xai-x",
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.007,
+      "search_context_size_low": 0.0,
+      "search_context_size_medium": 0.0
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.013000000000000001,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": 3,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 2,
+      "stated_cost": false
+     },
+     "model_key": "groq/openai/gpt-oss-120b",
+     "provider": "groq",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_groq",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 1.5e-07,
+     "key": "groq/openai/gpt-oss-120b",
+     "output_cost_per_token": 6e-07,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.005,
+      "search_context_size_low": 0.005,
+      "search_context_size_medium": 0.005
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.004,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": 4,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": null,
+      "stated_cost": false
+     },
+     "model_key": "gemini-plain",
+     "provider": "groq",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_groq_opens_only",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 1e-06,
+     "key": "gemini-plain"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": null,
+   "facts": {
+    "dispatch": {
+     "counts": {
+      "browser_opens": null,
+      "prompt_requests": null,
+      "search_calls": 0,
+      "server_requests": 1,
+      "stated_cost": false
+     },
+     "model_key": "gpt-4o-search-preview",
+     "provider": "openai",
+     "response_model": null,
+     "served": false
+    },
+    "per_call": null
+   },
+   "name": "dispatch_openai_has_no_calculator",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 2.5e-06,
+     "key": "gpt-4o-search-preview",
+     "output_cost_per_token": 1e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.025,
+      "search_context_size_low": 0.025,
+      "search_context_size_medium": 0.025
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.025,
+   "facts": {
+    "dispatch": null,
+    "per_call": {
+     "calls": 1,
+     "context": null,
+     "row": true
+    }
+   },
+   "name": "per_call_medium_default",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 2.5e-06,
+     "key": "gpt-4o-search-preview",
+     "output_cost_per_token": 1e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.025,
+      "search_context_size_low": 0.025,
+      "search_context_size_medium": 0.025
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.05,
+   "facts": {
+    "dispatch": null,
+    "per_call": {
+     "calls": 2,
+     "context": "low",
+     "row": true
+    }
+   },
+   "name": "per_call_low",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 2.5e-06,
+     "key": "gpt-4o-search-preview",
+     "output_cost_per_token": 1e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.025,
+      "search_context_size_low": 0.025,
+      "search_context_size_medium": 0.025
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.07500000000000001,
+   "facts": {
+    "dispatch": null,
+    "per_call": {
+     "calls": 3,
+     "context": "high",
+     "row": true
+    }
+   },
+   "name": "per_call_high",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 2.5e-06,
+     "key": "gpt-4o-search-preview",
+     "output_cost_per_token": 1e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.025,
+      "search_context_size_low": 0.025,
+      "search_context_size_medium": 0.025
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.025,
+   "facts": {
+    "dispatch": null,
+    "per_call": {
+     "calls": 1,
+     "context": null,
+     "row": true
+    }
+   },
+   "name": "per_call_unknown_size_is_medium",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 2.5e-06,
+     "key": "gpt-4o-search-preview",
+     "output_cost_per_token": 1e-05,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.025,
+      "search_context_size_low": 0.025,
+      "search_context_size_medium": 0.025
+     }
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "dispatch": null,
+    "per_call": {
+     "calls": 4,
+     "context": "low",
+     "row": false
+    }
+   },
+   "name": "per_call_no_row",
+   "rows": {},
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "dispatch": null,
+    "per_call": {
+     "calls": 2,
+     "context": "high",
+     "row": true
+    }
+   },
+   "name": "per_call_row_without_search",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 1e-06,
+     "key": "gemini-plain"
+    }
+   },
+   "tool": "web_search"
+  },
+  {
+   "expected": 0.025,
+   "facts": {
+    "provider": "gemini",
+    "requests": 3
+   },
+   "name": "maps_gemini_per_prompt_listed",
+   "rows": {
+    "row": {
+     "google_maps_grounding_cost_per_query": 0.025,
+     "input_cost_per_token": 3e-07,
+     "key": "gemini/gemini-2.5-flash",
+     "output_cost_per_token": 2.5e-06,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.035,
+      "search_context_size_low": 0.035,
+      "search_context_size_medium": 0.035
+     }
+    }
+   },
+   "tool": "maps_grounding"
+  },
+  {
+   "expected": 0.06,
+   "facts": {
+    "provider": "vertex_ai-language-models",
+    "requests": 3
+   },
+   "name": "maps_vertex_per_query_listed",
+   "rows": {
+    "row": {
+     "google_maps_grounding_cost_per_query": 0.02,
+     "key": "gemini-3-x",
+     "search_context_cost_per_query": {
+      "search_context_size_medium": 0.014
+     },
+     "web_search_billing_unit": "per_query"
+    }
+   },
+   "tool": "maps_grounding"
+  },
+  {
+   "expected": 0.028,
+   "facts": {
+    "provider": "gemini",
+    "requests": 2
+   },
+   "name": "maps_per_query_default",
+   "rows": {
+    "row": {
+     "key": "gemini-3-x",
+     "search_context_cost_per_query": {
+      "search_context_size_medium": 0.014
+     },
+     "web_search_billing_unit": "per_query"
+    }
+   },
+   "tool": "maps_grounding"
+  },
+  {
+   "expected": 0.025,
+   "facts": {
+    "provider": "gemini",
+    "requests": 4
+   },
+   "name": "maps_per_prompt_default",
+   "rows": {
+    "row": {
+     "input_cost_per_token": 1e-06,
+     "key": "gemini-plain"
+    }
+   },
+   "tool": "maps_grounding"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "provider": "gemini",
+    "requests": 0
+   },
+   "name": "maps_zero_requests",
+   "rows": {
+    "row": {
+     "google_maps_grounding_cost_per_query": 0.025,
+     "input_cost_per_token": 3e-07,
+     "key": "gemini/gemini-2.5-flash",
+     "output_cost_per_token": 2.5e-06,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.035,
+      "search_context_size_low": 0.035,
+      "search_context_size_medium": 0.035
+     }
+    }
+   },
+   "tool": "maps_grounding"
+  },
+  {
+   "expected": null,
+   "facts": {
+    "provider": "openai",
+    "requests": 2
+   },
+   "name": "maps_other_provider",
+   "rows": {
+    "row": {
+     "google_maps_grounding_cost_per_query": 0.025,
+     "input_cost_per_token": 3e-07,
+     "key": "gemini/gemini-2.5-flash",
+     "output_cost_per_token": 2.5e-06,
+     "search_context_cost_per_query": {
+      "search_context_size_high": 0.035,
+      "search_context_size_low": 0.035,
+      "search_context_size_medium": 0.035
+     }
+    }
+   },
+   "tool": "maps_grounding"
+  },
+  {
+   "expected": 0.07,
+   "facts": {
+    "provider": null,
+    "requests": 5
+   },
+   "name": "maps_without_provider",
+   "rows": {
+    "row": {
+     "key": "gemini-3-x",
+     "search_context_cost_per_query": {
+      "search_context_size_medium": 0.014
+     },
+     "web_search_billing_unit": "per_query"
+    }
+   },
+   "tool": "maps_grounding"
+  },
+  {
+   "expected": 0.0025,
+   "facts": {
+    "days": null,
+    "provider": "openai",
+    "row": false,
+    "storage_gb": null
+   },
+   "name": "file_search_openai_default",
+   "rows": {},
+   "tool": "file_search"
+  },
+  {
+   "expected": 2.45,
+   "facts": {
+    "days": 7.0,
+    "provider": "azure",
+    "row": false,
+    "storage_gb": 3.5
+   },
+   "name": "file_search_azure_storage",
+   "rows": {},
+   "tool": "file_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "days": 2.0,
+    "provider": "azure",
+    "row": false,
+    "storage_gb": null
+   },
+   "name": "file_search_azure_without_storage",
+   "rows": {},
+   "tool": "file_search"
+  },
+  {
+   "expected": 1.5,
+   "facts": {
+    "days": 3.0,
+    "provider": "azure",
+    "row": true,
+    "storage_gb": 2.0
+   },
+   "name": "file_search_azure_row_storage",
+   "rows": {
+    "row": {
+     "file_search_cost_per_gb_per_day": 0.25
+    }
+   },
+   "tool": "file_search"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "days": null,
+    "provider": "azure",
+    "row": true,
+    "storage_gb": 2.0
+   },
+   "name": "file_search_azure_row_storage_without_days",
+   "rows": {
+    "row": {
+     "file_search_cost_per_1k_calls": 9.0,
+     "file_search_cost_per_gb_per_day": 0.25
+    }
+   },
+   "tool": "file_search"
+  },
+  {
+   "expected": 0.004,
+   "facts": {
+    "days": null,
+    "provider": "openai",
+    "row": true,
+    "storage_gb": null
+   },
+   "name": "file_search_row_per_thousand_calls",
+   "rows": {
+    "row": {
+     "file_search_cost_per_1k_calls": 0.004
+    }
+   },
+   "tool": "file_search"
+  },
+  {
+   "expected": 0.003,
+   "facts": {
+    "days": 3.0,
+    "provider": "openai",
+    "row": true,
+    "storage_gb": 2.0
+   },
+   "name": "file_search_storage_row_off_azure_reads_calls",
+   "rows": {
+    "row": {
+     "file_search_cost_per_1k_calls": 0.003,
+     "file_search_cost_per_gb_per_day": 0.25
+    }
+   },
+   "tool": "file_search"
+  },
+  {
+   "expected": 0.0025,
+   "facts": {
+    "days": null,
+    "provider": null,
+    "row": false,
+    "storage_gb": null
+   },
+   "name": "file_search_no_provider",
+   "rows": {},
+   "tool": "file_search"
+  },
+  {
+   "expected": 4.5,
+   "facts": {
+    "days": 30.0,
+    "provider": "azure",
+    "row": false,
+    "storage_gb": 1.5
+   },
+   "name": "vector_store_azure_default",
+   "rows": {},
+   "tool": "vector_store"
+  },
+  {
+   "expected": 2.0,
+   "facts": {
+    "days": 5.0,
+    "provider": "openai",
+    "row": true,
+    "storage_gb": 2.0
+   },
+   "name": "vector_store_row_rate_any_provider",
+   "rows": {
+    "row": {
+     "vector_store_cost_per_gb_per_day": 0.2
+    }
+   },
+   "tool": "vector_store"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "days": 5.0,
+    "provider": "openai",
+    "row": false,
+    "storage_gb": 2.0
+   },
+   "name": "vector_store_openai_free",
+   "rows": {},
+   "tool": "vector_store"
+  },
+  {
+   "expected": 10.506,
+   "facts": {
+    "input_tokens": 1234,
+    "output_tokens": 567,
+    "provider": "azure",
+    "row": false
+   },
+   "name": "computer_use_azure_default",
+   "rows": {},
+   "tool": "computer_use"
+  },
+  {
+   "expected": 5.0,
+   "facts": {
+    "input_tokens": 1500,
+    "output_tokens": 250,
+    "provider": "azure",
+    "row": true
+   },
+   "name": "computer_use_azure_row_rates",
+   "rows": {
+    "row": {
+     "computer_use_input_cost_per_1k_tokens": 2.0,
+     "computer_use_output_cost_per_1k_tokens": 8.0
+    }
+   },
+   "tool": "computer_use"
+  },
+  {
+   "expected": 2.0,
+   "facts": {
+    "input_tokens": 1500,
+    "output_tokens": 250,
+    "provider": "azure",
+    "row": true
+   },
+   "name": "computer_use_azure_row_output_only",
+   "rows": {
+    "row": {
+     "computer_use_output_cost_per_1k_tokens": 8.0
+    }
+   },
+   "tool": "computer_use"
+  },
+  {
+   "expected": 3.009,
+   "facts": {
+    "input_tokens": 999,
+    "output_tokens": 1,
+    "provider": "azure",
+    "row": true
+   },
+   "name": "computer_use_azure_row_zero_rates_use_default",
+   "rows": {
+    "row": {
+     "computer_use_input_cost_per_1k_tokens": 0.0
+    }
+   },
+   "tool": "computer_use"
+  },
+  {
+   "expected": 6.0,
+   "facts": {
+    "input_tokens": 2000,
+    "output_tokens": 0,
+    "provider": "azure",
+    "row": false
+   },
+   "name": "computer_use_azure_input_only",
+   "rows": {},
+   "tool": "computer_use"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "input_tokens": 1000,
+    "output_tokens": 1000,
+    "provider": "openai",
+    "row": false
+   },
+   "name": "computer_use_openai_free",
+   "rows": {},
+   "tool": "computer_use"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "provider": "azure",
+    "row": false
+   },
+   "name": "computer_use_azure_no_tokens",
+   "rows": {},
+   "tool": "computer_use"
+  },
+  {
+   "expected": 0.15000000000000002,
+   "facts": {
+    "container": true,
+    "row": true,
+    "sessions": 3
+   },
+   "name": "code_interpreter_row_rate",
+   "rows": {
+    "container": {
+     "code_interpreter_cost_per_session": 0.03
+    },
+    "row": {
+     "code_interpreter_cost_per_session": 0.05
+    }
+   },
+   "tool": "code_interpreter"
+  },
+  {
+   "expected": 0.066,
+   "facts": {
+    "container": true,
+    "row": false,
+    "sessions": 2
+   },
+   "name": "code_interpreter_azure_container",
+   "rows": {
+    "container": {
+     "code_interpreter_cost_per_session": 0.033
+    }
+   },
+   "tool": "code_interpreter"
+  },
+  {
+   "expected": 0.12,
+   "facts": {
+    "container": true,
+    "row": false,
+    "sessions": 4
+   },
+   "name": "code_interpreter_openai_container",
+   "rows": {
+    "container": {
+     "code_interpreter_cost_per_session": 0.03
+    }
+   },
+   "tool": "code_interpreter"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "container": true,
+    "row": false,
+    "sessions": 0
+   },
+   "name": "code_interpreter_no_sessions",
+   "rows": {
+    "container": {
+     "code_interpreter_cost_per_session": 0.033
+    }
+   },
+   "tool": "code_interpreter"
+  },
+  {
+   "expected": 0.0,
+   "facts": {
+    "container": false,
+    "row": false,
+    "sessions": 2
+   },
+   "name": "code_interpreter_no_provider",
+   "rows": {},
+   "tool": "code_interpreter"
+  },
+  {
+   "expected": 0.001582,
+   "facts": {
+    "items": [
+     {
+      "pixels": 1048576,
+      "row": "low/1024-x-1024/gpt-image-1"
+     }
+    ],
+    "tokens": {
+     "image_input": 4,
+     "image_output": 50,
+     "text_input": 10,
+     "text_output": 3
+    }
+   },
+   "name": "image_generation_tokens",
+   "rows": {
+    "low/1024-x-1024/gpt-image-1": {
+     "input_cost_per_image": 0.011,
+     "input_cost_per_pixel": 1.0490417e-08
+    },
+    "tool": {
+     "input_cost_per_image_token": 8e-06,
+     "input_cost_per_token": 5e-06,
+     "key": "gpt-image-2",
+     "output_cost_per_image_token": 3e-05,
+     "output_cost_per_token": 0
+    }
+   },
+   "tool": "image_generation"
+  },
+  {
+   "expected": 0.183,
+   "facts": {
+    "items": [
+     {
+      "pixels": 1048576,
+      "row": "high/1024-x-1024/gpt-image-1"
+     },
+     {
+      "pixels": 1572864,
+      "row": "low/1536-x-1024/gpt-image-1"
+     }
+    ],
+    "tokens": null
+   },
+   "name": "image_generation_items",
+   "rows": {
+    "high/1024-x-1024/gpt-image-1": {
+     "input_cost_per_image": 0.167,
+     "input_cost_per_pixel": 1.59263611e-07
+    },
+    "low/1536-x-1024/gpt-image-1": {
+     "input_cost_per_image": 0.016,
+     "input_cost_per_pixel": 1.0172526e-08
+    },
+    "tool": {
+     "input_cost_per_image_token": 1e-05,
+     "input_cost_per_token": 5e-06,
+     "key": "gpt-image-1",
+     "output_cost_per_image_token": 4e-05,
+     "output_cost_per_token": 0
+    }
+   },
+   "tool": "image_generation"
+  },
+  {
+   "expected": 0.063,
+   "facts": {
+    "items": [
+     {
+      "pixels": 1572864,
+      "row": "medium/1024-x-1536/gpt-image-1"
+     }
+    ],
+    "tokens": null
+   },
+   "name": "image_generation_zero_tokens_fall_back_to_items",
+   "rows": {
+    "medium/1024-x-1536/gpt-image-1": {
+     "input_cost_per_image": 0.063,
+     "input_cost_per_pixel": 4.0054321e-08
+    },
+    "tool": {
+     "input_cost_per_image_token": 1e-05,
+     "input_cost_per_token": 5e-06,
+     "key": "gpt-image-1",
+     "output_cost_per_image_token": 4e-05,
+     "output_cost_per_token": 0
+    }
+   },
+   "tool": "image_generation"
+  },
+  {
+   "expected": 0.011,
+   "facts": {
+    "items": [
+     null,
+     {
+      "pixels": 1048576,
+      "row": "low/1024-x-1024/gpt-image-1"
+     }
+    ],
+    "tokens": null
+   },
+   "name": "image_generation_unpriced_item_bills_nothing",
+   "rows": {
+    "low/1024-x-1024/gpt-image-1": {
+     "input_cost_per_image": 0.011,
+     "input_cost_per_pixel": 1.0490417e-08
+    },
+    "tool": {
+     "input_cost_per_image_token": 1e-05,
+     "input_cost_per_token": 5e-06,
+     "key": "gpt-image-1",
+     "output_cost_per_image_token": 4e-05,
+     "output_cost_per_token": 0
+    }
+   },
+   "tool": "image_generation"
+  }
+ ],
+ "source": "main 532df6ef85 llm_cost_calc/tool_call_cost_tracking.py, llms/__init__.py"
+}

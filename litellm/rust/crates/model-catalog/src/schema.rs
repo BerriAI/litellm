@@ -72,6 +72,8 @@ pub(crate) const FLAT_KEY_PATTERN: &str = concat!(
     r"|annotation_cost_per_page|citation_cost_per_token|code_interpreter_cost_per_session",
     r"|google_maps_grounding_cost_per_query|ocr_cost_per_credit|ocr_cost_per_page|cost_per_second",
     r"|browser_open_cost_per_request|cost_per_additional_result",
+    r"|file_search_cost_per_1k_calls|file_search_cost_per_gb_per_day|vector_store_cost_per_gb_per_day",
+    r"|computer_use_(input|output)_cost_per_1k_tokens",
     r")(_above_\d+k?_tokens)?(_(priority|flex|ultrafast|balanced|batches|decisions))?$",
 );
 
@@ -208,6 +210,8 @@ mod tests {
     #[case::video("output_cost_per_video")]
     #[case::video_is_output_only("input_cost_per_video")]
     #[case::wall_clock("cost_per_second")]
+    #[case::file_search_storage("file_search_cost_per_gb_per_day")]
+    #[case::computer_use_output("computer_use_output_cost_per_1k_tokens")]
     #[case::unused_meter("cost_per_token")]
     #[case::other_currency("input_dbu_cost_per_token")]
     #[case::typo("input_cost_per_tokne")]

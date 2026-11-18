@@ -83,6 +83,16 @@ pub enum Feature {
     BrowserOpen,
     /// `cost_per_additional_result`, Parallel AI results past the ones the query price includes
     AdditionalResult,
+    /// `file_search_cost_per_1k_calls`, which main bills whole once per call that searched files
+    FileSearchThousandCalls,
+    /// `file_search_cost_per_gb_per_day`, Azure file search storage
+    FileSearchGigabyteDay,
+    /// `vector_store_cost_per_gb_per_day`, Azure vector store storage
+    VectorStoreGigabyteDay,
+    /// `computer_use_input_cost_per_1k_tokens`, Azure computer use input
+    ComputerUseInputThousandTokens,
+    /// `computer_use_output_cost_per_1k_tokens`, Azure computer use output
+    ComputerUseOutputThousandTokens,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
