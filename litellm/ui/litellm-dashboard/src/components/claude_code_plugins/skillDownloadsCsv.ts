@@ -4,16 +4,15 @@ import type { PluginDownloadEvent } from "./types";
 export const buildSkillDownloadsCsv = (downloads: readonly PluginDownloadEvent[]): string =>
   Papa.unparse(
     {
-      fields: ["downloaded_at", "user_id", "user_email", "key", "team", "version", "authenticated", "download_id"],
+      fields: ["download_id", "downloaded_at", "user_email", "user_id", "team", "key", "version"],
       data: downloads.map((event) => [
-        new Date(event.downloaded_at).toISOString(),
-        event.user_id,
-        event.user_email,
-        event.key_alias,
-        event.team_alias || event.team_id,
-        event.version,
-        event.authenticated,
         event.id,
+        new Date(event.downloaded_at).toISOString(),
+        event.user_email,
+        event.user_id,
+        event.team_alias || event.team_id,
+        event.key_alias,
+        event.version,
       ]),
     },
     { escapeFormulae: true },

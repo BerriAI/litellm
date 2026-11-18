@@ -22,22 +22,19 @@ describe("buildSkillDownloadsCsv", () => {
     expect(result.errors).toEqual([]);
     expect(result.data).toEqual([
       {
-        downloaded_at: "2026-10-01T10:00:00.000Z",
-        user_id: "reader",
-        user_email: "reader@example.test",
-        key: "key",
-        team: "Team",
-        version: "1.0",
-        authenticated: "true",
         download_id: "123",
+        downloaded_at: "2026-10-01T10:00:00.000Z",
+        user_email: "reader@example.test",
+        user_id: "reader",
+        team: "Team",
+        key: "key",
+        version: "1.0",
       },
     ]);
   });
 
   it("exports headers for empty history", () => {
-    expect(buildSkillDownloadsCsv([])).toBe(
-      "downloaded_at,user_id,user_email,key,team,version,authenticated,download_id\r\n",
-    );
+    expect(buildSkillDownloadsCsv([])).toBe("download_id,downloaded_at,user_email,user_id,team,key,version\r\n");
   });
 
   it.each(["=SUM(1,2)", "+123", "-123", "@name", "\tformula", "\rformula"])("neutralizes formula %s", (key_alias) => {
