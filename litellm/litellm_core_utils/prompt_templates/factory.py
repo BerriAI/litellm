@@ -1659,11 +1659,12 @@ def convert_to_gemini_tool_call_result(
                         # Convert file to base64 blob format for Gemini
                         try:
                             file_obj = convert_to_anthropic_image_obj(file_data, format=None)
-                            inline_data = BlobType(data=file_obj["data"], mime_type=file_obj["media_type"])
-                            if metadata and not supports_media_in_tool_response:
-                                sibling_parts.append({"inline_data": inline_data, **metadata})
-                            else:
-                                media_parts.append({"inline_data": inline_data, **metadata})
+                            (sibling_parts if metadata and not supports_media_in_tool_response else media_parts).append(
+                                {
+                                    "inline_data": BlobType(data=file_obj["data"], mime_type=file_obj["media_type"]),
+                                    **metadata,
+                                }
+                            )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
     name: str | None = message.get("name", "")
