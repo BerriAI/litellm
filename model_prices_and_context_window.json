@@ -51460,7 +51460,37 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "metadata": {
+            "notes": "Audio input, vision and variable reasoning effort documented at https://www.together.ai/models/inkling, read 2026-11-17."
+        }
+    },
+    "together_ai/thinkingmachines/inkling": {
+        "cache_read_input_token_cost": 1.7e-07,
+        "deprecation_date": "2026-11-06",
+        "deprecation_source": "https://docs.together.ai/docs/deprecations",
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 4.05e-06,
+        "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/meta-models/Muse-Spark-Open-816B-A42B",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_audio_input": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "metadata": {
+            "notes": "Audio input, vision and variable reasoning effort documented at https://www.together.ai/models/inkling, read 2026-11-17."
+        }
     },
     "together_ai/zai-org/GLM-5.2": {
         "cache_read_input_token_cost": 2.6e-07,
