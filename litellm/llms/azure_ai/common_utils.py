@@ -270,9 +270,9 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
 
 def _is_foundry_v1_base(api_base: str) -> bool:
     base_url: Final = httpx.URL(api_base)
-    if foundry_project_root(base_url):
-        return True
-    return base_url.host.endswith(FOUNDRY_HOST_SUFFIX) and foundry_v1_root(base_url) is not None
+    if not base_url.host.endswith(FOUNDRY_HOST_SUFFIX):
+        return False
+    return bool(foundry_project_root(base_url)) or foundry_v1_root(base_url) is not None
 
 
 def is_foundry_v1_model_router(model: str | None, api_base: str | None) -> bool:

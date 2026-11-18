@@ -20,8 +20,9 @@ from litellm.llms.azure_ai.common_utils import (
     without_api_version,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import (
+    CustomToolKey,
     convert_custom_tool_to_function_tool,
-    extract_custom_tool_names,
+    extract_custom_tool_keys,
     unwrap_custom_tool_arguments,
 )
 from litellm.types.llms.azure_ai import FoundryAgentReference
@@ -156,17 +157,24 @@ class _RequestedTools(BaseModel):
     tools: tuple[object, ...] | None = None
 
 
-def _custom_tool_names(model: str, logging_obj: "LiteLLMLoggingObj") -> frozenset[str]:
+def _custom_tool_keys(model: str, logging_obj: "LiteLLMLoggingObj") -> frozenset[CustomToolKey]:
     if AzureFoundryModelInfo.get_azure_ai_route(model) != "model_router":
         return frozenset()
     requested: Final = _RequestedTools.model_validate(logging_obj.model_call_details.get("optional_params") or {})
-    return frozenset(extract_custom_tool_names(requested.tools))
+    return extract_custom_tool_keys(requested.tools)
 
 
-def _caller_output_item(item: object, custom_tool_names: frozenset[str]) -> object:
+def _call_key(fields: Mapping[str, object], name: str) -> CustomToolKey:
+    namespace: Final = fields.get("namespace")
+    return (namespace if isinstance(namespace, str) else None, name)
+
+
+def _caller_output_item(item: object, custom_tool_keys: frozenset[CustomToolKey]) -> object:
     match item:
-        case {"type": "function_call", "name": str() as name} if name in custom_tool_names:
+        case {"type": "function_call", "name": str() as name}:
             fields: Final = _RESPONSE_FIELDS.validate_python(item)
+            if _call_key(fields, name) not in custom_tool_keys:
+                return item
             arguments: Final = fields.get("arguments")
             return {
                 **{key: value for key, value in fields.items() if key != "arguments"},
@@ -177,18 +185,20 @@ def _caller_output_item(item: object, custom_tool_names: frozenset[str]) -> obje
             return item
 
 
-def _caller_response(response: Mapping[str, object], custom_tool_names: frozenset[str]) -> Mapping[str, object]:
+def _caller_response(
+    response: Mapping[str, object], custom_tool_keys: frozenset[CustomToolKey]
+) -> Mapping[str, object]:
     output: Final = response.get("output")
-    if not custom_tool_names or not isinstance(output, list):
+    if not custom_tool_keys or not isinstance(output, list):
         return response
     return {
         **response,
-        "output": [_caller_output_item(item, custom_tool_names) for item in _ITEMS.validate_python(output)],
+        "output": [_caller_output_item(item, custom_tool_keys) for item in _ITEMS.validate_python(output)],
     }
 
 
-def _with_custom_tool_calls(raw_response: httpx.Response, custom_tool_names: frozenset[str]) -> httpx.Response:
-    if not custom_tool_names:
+def _with_custom_tool_calls(raw_response: httpx.Response, custom_tool_keys: frozenset[CustomToolKey]) -> httpx.Response:
+    if not custom_tool_keys:
         return raw_response
     try:
         body: Final = _RESPONSE_FIELDS.validate_json(raw_response.content)
@@ -197,7 +207,7 @@ def _with_custom_tool_calls(raw_response: httpx.Response, custom_tool_names: fro
     return httpx.Response(
         status_code=raw_response.status_code,
         headers={key: value for key, value in raw_response.headers.items() if key.lower() not in _UNENCODED_HEADERS},
-        json=_caller_response(body, custom_tool_names),
+        json=_caller_response(body, custom_tool_keys),
         request=raw_response.request,
     )
 
@@ -205,10 +215,10 @@ def _with_custom_tool_calls(raw_response: httpx.Response, custom_tool_names: fro
 def _caller_event(model: str, event: Mapping[str, object], logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
     match event:
         case {"type": "response.output_item.done", "item": item}:
-            return {**event, "item": _caller_output_item(item, _custom_tool_names(model, logging_obj))}
+            return {**event, "item": _caller_output_item(item, _custom_tool_keys(model, logging_obj))}
         case {"response": Mapping()}:
             fields: Final = _RESPONSE_FIELDS.validate_python(event["response"])
-            return {**event, "response": _caller_response(fields, _custom_tool_names(model, logging_obj))}
+            return {**event, "response": _caller_response(fields, _custom_tool_keys(model, logging_obj))}
         case _:
             return event
 
@@ -315,7 +325,7 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         response: Final = _without_agent_instructions(
             super().transform_response_api_response(
-                model, _with_custom_tool_calls(raw_response, _custom_tool_names(model, logging_obj)), logging_obj
+                model, _with_custom_tool_calls(raw_response, _custom_tool_keys(model, logging_obj)), logging_obj
             )
         )
         _stamp_routed_model(model, response)

@@ -138,9 +138,9 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
     [
         (FOUNDRY_PROJECT_BASE, AzureAIResponsesAPIConfig),
         (f"{FOUNDRY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
-        (GATEWAY_PROJECT_BASE, AzureAIResponsesAPIConfig),
-        (f"{GATEWAY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
-        ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", AzureAIResponsesAPIConfig),
+        (GATEWAY_PROJECT_BASE, NoneType),
+        (f"{GATEWAY_PROJECT_BASE}/openai/v1", NoneType),
+        ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", NoneType),
         (RESOURCE_V1_BASE, AzureAIResponsesAPIConfig),
         ("https://res.openai.azure.com/openai/v1", NoneType),
         ("https://res.openai.azure.com/openai/v1/responses", NoneType),
@@ -376,7 +376,6 @@ async def test_router_aresponses_sends_bare_deployment_name(model, api_base, exp
     "api_base,expected_url,auth_header,auth_value",
     [
         (f"{FOUNDRY_PROJECT_BASE}/openai/v1", FOUNDRY_RESPONSES_URL, "authorization", "Bearer fake-key"),
-        (GATEWAY_PROJECT_BASE, GATEWAY_RESPONSES_URL, "authorization", "Bearer fake-key"),
         (RESOURCE_V1_BASE, f"{RESOURCE_V1_BASE}/responses", "api-key", "fake-key"),
     ],
 )
@@ -610,6 +609,30 @@ async def test_a_model_router_answers_a_custom_tool_call_as_one(model, tools, ex
     )
 
     assert _dumped_output(response) == expected_output
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_model_router_answers_only_the_namespaced_call_as_custom_beside_a_function_of_that_name():
+    namespaced_call: Final = {**ROUTER_PATCH_CALL, "namespace": "editor"}
+    respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(
+            200, json={**_responses_payload("gpt-5-nano"), "output": [namespaced_call, ROUTER_PATCH_CALL]}
+        )
+    )
+
+    response: Final = await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="Fix the typo in README.md",
+        tools=[
+            {**WEATHER_TOOL, "name": "apply_patch"},
+            {"type": "namespace", "name": "editor", "description": "Edit files", "tools": [CUSTOM_TOOL]},
+        ],
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    assert _dumped_output(response) == [{**CUSTOM_PATCH_CALL, "namespace": "editor"}, ROUTER_PATCH_CALL]
 
 
 @pytest.mark.asyncio
