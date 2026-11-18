@@ -149,6 +149,17 @@ async def test_aget_credentials_returns_plaintext_and_caches_ciphertext(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_a_database_outage_is_raised_instead_of_reading_as_not_connected(monkeypatch):
+    table: Final = MagicMock()
+    table.find_many = AsyncMock(side_effect=ConnectionError("database is down"))
+    prisma_client: Final = _prisma(table)
+    cache: Final = _auth_cache(_fake_redis(monkeypatch))
+
+    with pytest.raises(ConnectionError, match="database is down"):
+        await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"])
+
+
+@pytest.mark.asyncio
 async def test_aget_connections_preserves_github_host(monkeypatch):
     payload: Final = GithubCopilotUserConnectionPayload(
         access_token="gho_secret",
