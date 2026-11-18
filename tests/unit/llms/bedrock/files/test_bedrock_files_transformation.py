@@ -4527,6 +4527,33 @@ async def test_create_file_refuses_a_batch_line_with_s3_media_with_a_400_before_
 
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.asyncio
+async def test_create_file_names_the_file_line_of_s3_media_after_a_blank_line(
+    respx_mock: respx.MockRouter,
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await litellm.acreate_file(
+            file=(
+                "batch.jsonl",
+                f"{_VALID_BATCH_LINE}\n\n{_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+                "application/jsonl",
+            ),
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="litellm-batch-bucket",
+            aws_region_name="us-west-2",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == _BATCH_S3_MEDIA_REFUSAL.replace("line 2", "line 3")
+    assert not put_route.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
 async def test_create_file_names_the_batch_line_whose_developer_message_has_no_content(
     respx_mock: respx.MockRouter,
 ) -> None:
