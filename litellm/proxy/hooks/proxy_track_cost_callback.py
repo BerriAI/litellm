@@ -51,8 +51,9 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_callback_customer_cost_margin,
-    apply_customer_cost_margin_to_estimate,
+    failed_request_customer_attribution,
     request_customer_cost_margin,
+    snapshotless_cost_with_customer_margin,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
@@ -70,6 +71,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
     spend_log_error,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
+    SNAPSHOTLESS_COST_BREAKDOWN_KEY,
     _sanitize_error_information_for_spend_logs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     deployment_params_provider,
     get_request_model_access_groups,
@@ -326,13 +328,13 @@ def _failure_row_with_customer_surcharge(
     row_cost: float, row_kwargs: Mapping[str, object]
 ) -> tuple[float, Mapping[str, object]]:
     """A failure row the provider billed is charged to the customer like a completed request, surcharge included."""
-    metadata: Final = _str_keyed_fields(_str_keyed_fields(row_kwargs.get("litellm_params")).get("metadata"))
-    margin: Final = request_customer_cost_margin(metadata)
+    margin: Final = request_customer_cost_margin(failed_request_customer_attribution(row_kwargs.get("litellm_params")))
     if margin is None or row_cost <= 0:
         return row_cost, row_kwargs
     snapshot: Final = row_kwargs.get("standard_logging_object")
     if not isinstance(snapshot, dict):
-        return apply_customer_cost_margin_to_estimate(row_cost, margin) or row_cost, row_kwargs
+        cost: Final = snapshotless_cost_with_customer_margin(row_cost, margin)
+        return cost.amount, {**row_kwargs, SNAPSHOTLESS_COST_BREAKDOWN_KEY: cost.logging_breakdown()}
     payload: Final = cast("StandardLoggingPayload", {**snapshot})  # cast-ok: a copy of the failure snapshot dict
     surcharged_cost: Final = apply_callback_customer_cost_margin(payload, row_cost, margin)
     return (

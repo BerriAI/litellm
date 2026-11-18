@@ -24,6 +24,7 @@ class _RecordedSurcharge(BaseModel):
 
 
 _RECORDED_SURCHARGE: Final = TypeAdapter(_RecordedSurcharge)
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 CUSTOMER_MARGIN_KEY: Final = "customer"
 MAX_CUSTOMER_MARGIN: Final = 10
 
@@ -81,6 +82,35 @@ def _has_customer_usage_attribution(metadata: Mapping[str, object]) -> bool:
 def request_has_customer(metadata: Mapping[str, object]) -> bool:
     """Whether the request is charged to a customer organization, by request identity or by the key's binding."""
     return bool(metadata.get("user_api_key_customer_org_id")) or _has_customer_usage_attribution(metadata)
+
+
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+def request_customer_attribution(litellm_params: object, identity: Mapping[str, object]) -> Mapping[str, object]:
+    """``identity`` plus the key's customer binding, which the proxy stamps into ``litellm_metadata`` on routes
+    whose ``metadata`` belongs to the caller."""
+    buckets: Final = _request_fields(litellm_params)
+    bindings: Final = tuple(
+        _request_fields(buckets.get(bucket)).get(CUSTOMER_USAGE_METADATA_KEY)
+        for bucket in ("litellm_metadata", "metadata")
+    )
+    return {
+        CUSTOMER_USAGE_METADATA_KEY: next((binding for binding in bindings if binding is not None), None),
+        **identity,
+    }
+
+
+def failed_request_customer_attribution(litellm_params: object) -> Mapping[str, object]:
+    buckets: Final = _request_fields(litellm_params)
+    return request_customer_attribution(
+        buckets,
+        {**_request_fields(buckets.get("metadata")), **_request_fields(buckets.get("litellm_metadata"))},
+    )
 
 
 def key_customer_cost_margin(valid_token: object, hierarchy: CustomerHierarchyAuth | None) -> float | None:
@@ -143,6 +173,11 @@ def apply_callback_customer_cost_margin(
     payload["response_cost"] = cost.amount  # rebind-ok: the legacy spend writer consumes this callback payload
     payload["cost_breakdown"] = cost.logging_breakdown()  # rebind-ok: persist reconciliation with the billed cost
     return cost.amount
+
+
+def snapshotless_cost_with_customer_margin(amount: float, margin: float | None) -> FinalizedCost:
+    """A billed cost that has no logging payload to carry its breakdown, surcharged with the surcharge recorded."""
+    return apply_customer_cost_margin(finalize_cost(amount, None), margin)
 
 
 def customer_margin_share_of_spend(spend_log_metadata: Mapping[str, object], spend: float) -> float:
